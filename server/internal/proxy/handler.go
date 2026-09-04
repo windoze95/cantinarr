@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -10,11 +11,15 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 )
 
 type Handler struct {
 	store *instance.Store
+	// contentPolicy is the kids-account service; a child's Radarr/Sonarr
+	// reads are cut to what the account may see (contentgate.go).
+	contentPolicy *contentpolicy.Service
 }
 
 func NewHandler(store *instance.Store) *Handler {
@@ -62,8 +67,18 @@ func (h *Handler) InstanceProxy() http.HandlerFunc {
 			return
 		}
 
+		// A kids account's reads are gated by the record's own certification;
+		// a policy that cannot be read or ranked is answered like any other
+		// transient fault rather than let through.
+		gate, err := h.childGate(r, inst.ServiceType)
+		if err != nil {
+			log.Printf("instance proxy: content policy unavailable: %v", err)
+			http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+			return
+		}
+
 		stripPrefix := "/api/instances/" + instanceID
-		h.proxyRequest(w, r, target, inst.APIKey, stripPrefix)
+		h.proxyRequest(w, r, target, inst.APIKey, stripPrefix, gate)
 	}
 }
 
@@ -73,7 +88,7 @@ func isUnsafeProxyMethod(method string) bool {
 		strings.EqualFold(method, "TRACK")
 }
 
-func (h *Handler) proxyRequest(w http.ResponseWriter, r *http.Request, target *url.URL, apiKey, stripPrefix string) {
+func (h *Handler) proxyRequest(w http.ResponseWriter, r *http.Request, target *url.URL, apiKey, stripPrefix string, gate *arrGate) {
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(proxyRequest *httputil.ProxyRequest) {
 			req := proxyRequest.Out
@@ -111,10 +126,13 @@ func (h *Handler) proxyRequest(w http.ResponseWriter, r *http.Request, target *u
 			// the arr for an identity representation so a compressed body cannot
 			// bypass the response sanitizer.
 			req.Header.Set("Accept-Encoding", "identity")
+			if gate != nil {
+				gate.forceIncludes(req)
+			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			remapUpstreamRedirect(resp, target, stripPrefix)
-			return sanitizeProxyTransportResponse(resp)
+			return sanitizeProxyTransportResponseGated(resp, gate)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			// ModifyResponse errors are intentionally opaque: an upstream parse
@@ -219,11 +237,26 @@ func replaceWithOffOriginRedirectError(resp *http.Response) {
 // response trailers. Transport populates Response.Trailer only after Body reaches
 // EOF, so the body wrapper clears it after every read as well as at Close.
 func sanitizeProxyTransportResponse(resp *http.Response) error {
+	return sanitizeProxyTransportResponseGated(resp, nil)
+}
+
+// sanitizeProxyTransportResponseGated is sanitizeProxyTransportResponse with
+// a kids account's gate applied to the scrubbed body. A single record the
+// gate hides is answered as not found rather than as a proxy failure.
+func sanitizeProxyTransportResponseGated(resp *http.Response, gate *arrGate) error {
 	if resp.StatusCode == http.StatusSwitchingProtocols {
 		sanitizeResponseHeaders(resp.Header)
 		return errUnsanitizableUpgrade
 	}
-	if err := sanitizeProxyResponse(resp); err != nil {
+	var transform func(any) (any, error)
+	if gate != nil {
+		transform = gate.transformFor(resp)
+	}
+	if err := sanitizeProxyResponseWith(resp, transform); err != nil {
+		if errors.Is(err, errContentPolicyBlocked) {
+			replaceWithHiddenRecord(resp)
+			return nil
+		}
 		return err
 	}
 

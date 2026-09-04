@@ -30,6 +30,9 @@ class SettingsSearchGates {
   /// `connection.services.chaptarr` — gates book-related entries.
   final bool chaptarrEnabled;
 
+  /// `connection.services.lidarr` — gates music-related entries.
+  final bool lidarrEnabled;
+
   /// Platform gate for the Donate tile (hidden in store binaries).
   final bool donateVisible;
 
@@ -44,6 +47,7 @@ class SettingsSearchGates {
   const SettingsSearchGates({
     required this.user,
     this.chaptarrEnabled = false,
+    this.lidarrEnabled = false,
     this.donateVisible = false,
     this.phoneAppsVisible = false,
     this.mediaServersVisible = false,
@@ -63,6 +67,7 @@ bool gateAiChat(SettingsSearchGates g) =>
 bool gatePasskey(SettingsSearchGates g) => g.user?.canUsePasskey == true;
 bool gatePassword(SettingsSearchGates g) => g.user?.canUsePassword == true;
 bool gateChaptarr(SettingsSearchGates g) => g.chaptarrEnabled;
+bool gateLidarr(SettingsSearchGates g) => g.lidarrEnabled;
 bool gateDonate(SettingsSearchGates g) => g.donateVisible;
 bool gatePhoneApps(SettingsSearchGates g) => g.phoneAppsVisible;
 bool gateMediaServers(SettingsSearchGates g) => g.mediaServersVisible;
@@ -210,8 +215,12 @@ const List<SettingsSearchEntry> _rootEntries = [
       'radarr',
       'sonarr',
       'chaptarr',
+      'lidarr',
+      'music',
       'download client',
       'tautulli',
+      'tracearr',
+      'monitoring',
       'jellyfin',
       'emby',
       'media server',
@@ -254,6 +263,11 @@ const List<SettingsSearchEntry> _rootEntries = [
       'new user',
       'add user',
       'permissions',
+      'kids',
+      'kids account',
+      'child',
+      'parental',
+      'ratings',
       'access',
     ],
     gate: gateAdmin,
@@ -893,6 +907,16 @@ const List<SettingsSearchEntry> _notificationEntries = [
     keywords: ['push', 'chaptarr', 'downloaded'],
     gate: gateChaptarr,
     anchorId: SettingsAnchors.notificationsNewBook,
+  ),
+  SettingsSearchEntry(
+    id: SettingsAnchors.notificationsNewMusic,
+    title: 'New music available',
+    icon: Icons.notifications_outlined,
+    route: '/settings/notifications',
+    screenTitle: 'Notification Preferences',
+    keywords: ['push', 'lidarr', 'album', 'downloaded'],
+    gate: gateLidarr,
+    anchorId: SettingsAnchors.notificationsNewMusic,
   ),
   SettingsSearchEntry(
     id: SettingsAnchors.notificationsPlexInviteSent,

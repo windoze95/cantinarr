@@ -1,13 +1,15 @@
 import 'package:cantinarr/features/settings/data/setup_status_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-Map<String, dynamic> _item(String key, bool configured, {bool optional = true}) =>
+Map<String, dynamic> _item(String key, bool configured,
+        {bool optional = true, bool skipped = false}) =>
     {
       'key': key,
       'title': key,
       'description': 'about $key',
       'configured': configured,
       'optional': optional,
+      if (skipped) 'skipped': true,
     };
 
 SetupStatus _status(List<Map<String, dynamic>> items) => SetupStatus.fromJson({
@@ -138,6 +140,49 @@ void main() {
       final status = _status([_item('from_a_newer_build', false, optional: false)]);
 
       expect(status.isUrgent(itemNamed(status, 'from_a_newer_build')), isTrue);
+    });
+  });
+
+  group('skipped items', () {
+    test('a skipped row leaves the progress math entirely', () {
+      final status = _status([
+        _item('radarr', true, optional: false),
+        _item('tmdb', true, optional: false),
+        _item('books', false),
+        _item('music', false, skipped: true),
+      ]);
+
+      // Denominator and remaining both shed the skip, so "2 of 3 configured"
+      // stays a true sentence and nothing nags for the acknowledged row.
+      expect(status.skippedCount, 1);
+      expect(status.effectiveTotal, 3);
+      expect(status.remaining, 1);
+    });
+
+    test('a skipped row that later becomes configured counts as configured',
+        () {
+      final status = _status([
+        _item('radarr', true, optional: false),
+        _item('tmdb', true, optional: false),
+        _item('music', true, skipped: true),
+      ]);
+
+      expect(status.skippedCount, 0);
+      expect(status.effectiveTotal, 3);
+      expect(status.remaining, 0);
+    });
+
+    test('skipping never repairs a missing core capability', () {
+      // Capability is about what the server can do, not about tidiness — and
+      // the server never stamps skipped onto an essential anyway; this pins
+      // the client honoring the same rule if a malformed payload tried.
+      final status = _status([
+        _item('radarr', false, optional: false, skipped: true),
+        _item('sonarr', false, optional: false),
+        _item('tmdb', true, optional: false),
+      ]);
+
+      expect(status.missingCoreCapability, isTrue);
     });
   });
 }

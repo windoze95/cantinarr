@@ -252,13 +252,15 @@ class PendingRequestItem {
 
   bool get isTv => mediaType == 'tv';
   bool get isBook => mediaType == 'book';
+  bool get isMusic => mediaType == 'music';
 
   /// Route to the content this request is for, or null when the row can't
   /// address one (a legacy book row stored without its foreign id, a movie row
-  /// with no TMDB id). Books pin the library the request named — an approval can
-  /// outlive the admin switching their drawer to another Chaptarr instance.
+  /// with no TMDB id). Books and albums pin the library the request named — an
+  /// approval can outlive the admin switching their drawer to another
+  /// instance.
   String? get detailRoute {
-    if (isBook) {
+    if (isBook || isMusic) {
       final id = foreignId.trim();
       if (id.isEmpty) return null;
       final query = <String>[
@@ -268,7 +270,8 @@ class PendingRequestItem {
           'instance_id=${Uri.encodeQueryComponent(instanceId.trim())}',
       ];
       final suffix = query.isEmpty ? '' : '?${query.join('&')}';
-      return '/detail/book/${Uri.encodeComponent(id)}$suffix';
+      final type = isBook ? 'book' : 'album';
+      return '/detail/$type/${Uri.encodeComponent(id)}$suffix';
     }
     if (tmdbId <= 0) return null;
     return '/detail/${isTv ? 'tv' : 'movie'}/$tmdbId';
@@ -276,6 +279,7 @@ class PendingRequestItem {
   String get mediaLabel => switch (mediaType) {
         'tv' => 'TV',
         'book' => 'Book',
+        'music' => 'Album',
         _ => 'Movie',
       };
   BookRequestFormat? get requestedBookFormat =>
@@ -298,7 +302,8 @@ class PendingRequestItem {
         mediaType: json['media_type'] as String? ?? 'movie',
         title: json['title'] as String? ?? '',
         posterPath: json['poster_path'] as String? ?? '',
-        bookFormat: json['book_format'] as String? ?? 'both',
+        bookFormat: json['book_format'] as String? ??
+            ((json['media_type'] as String?) == 'book' ? 'both' : ''),
         instanceId: json['instance_id'] as String? ?? '',
         instanceName: json['instance_name'] as String? ?? '',
         requesterCount: _positiveRequesterCount(json['requester_count']),

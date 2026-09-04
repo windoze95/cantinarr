@@ -6,6 +6,10 @@ class RadarrMovie {
   final String title;
   final int year;
   final int? tmdbId;
+
+  /// Radarr's copy of the IMDb id (`tt…`), when it knows one. Blank on the
+  /// wire reads as unknown.
+  final String? imdbId;
   final String? overview;
   final String? titleSlug;
   final bool monitored;
@@ -24,6 +28,9 @@ class RadarrMovie {
   final DateTime? digitalRelease;
   final int sizeOnDisk;
 
+  /// Ids of the instance's tags applied to this movie (see [RadarrTag]).
+  final List<int> tags;
+
   /// True when the movie has reached its minimum availability (i.e. Radarr will
   /// actively search for it). Drives the "Available"/"Not yet available" line.
   final bool isAvailable;
@@ -33,6 +40,7 @@ class RadarrMovie {
     required this.title,
     required this.year,
     this.tmdbId,
+    this.imdbId,
     this.overview,
     this.titleSlug,
     this.monitored = true,
@@ -50,6 +58,7 @@ class RadarrMovie {
     this.physicalRelease,
     this.digitalRelease,
     this.sizeOnDisk = 0,
+    this.tags = const [],
     this.isAvailable = false,
   });
 
@@ -58,6 +67,7 @@ class RadarrMovie {
         title: json['title'] as String? ?? 'Untitled',
         year: json['year'] as int? ?? 0,
         tmdbId: json['tmdbId'] as int?,
+        imdbId: _nonBlank(json['imdbId'] as String?),
         overview: json['overview'] as String?,
         titleSlug: json['titleSlug'] as String?,
         monitored: json['monitored'] as bool? ?? true,
@@ -87,6 +97,8 @@ class RadarrMovie {
         digitalRelease:
             DateTime.tryParse(json['digitalRelease'] as String? ?? ''),
         sizeOnDisk: (json['sizeOnDisk'] as num?)?.toInt() ?? 0,
+        tags: (json['tags'] as List<dynamic>?)?.map((t) => t as int).toList() ??
+            const [],
         isAvailable: json['isAvailable'] as bool? ?? false,
       );
 
@@ -95,6 +107,7 @@ class RadarrMovie {
         'title': title,
         'year': year,
         'tmdbId': tmdbId,
+        'imdbId': imdbId,
         'overview': overview,
         'titleSlug': titleSlug,
         'monitored': monitored,
@@ -104,6 +117,7 @@ class RadarrMovie {
         'minimumAvailability': minimumAvailability,
         'images': images.map((i) => i.toJson()).toList(),
         'qualityProfileId': qualityProfileId,
+        'tags': tags,
       };
 
   /// Gets the poster URL from Radarr images.
@@ -121,6 +135,22 @@ class RadarrMovie {
   /// movie file's size (the list endpoint omits one or the other at times).
   String get sizeOnDiskFormatted =>
       _formatBytes(sizeOnDisk > 0 ? sizeOnDisk : (movieFile?.size ?? 0));
+}
+
+String? _nonBlank(String? value) =>
+    value == null || value.trim().isEmpty ? null : value.trim();
+
+/// One of the instance's tags (id + label), as `/api/v3/tag` lists them.
+class RadarrTag {
+  final int id;
+  final String label;
+
+  const RadarrTag({required this.id, required this.label});
+
+  factory RadarrTag.fromJson(Map<String, dynamic> json) => RadarrTag(
+        id: json['id'] as int? ?? 0,
+        label: json['label'] as String? ?? '',
+      );
 }
 
 class RadarrImage {

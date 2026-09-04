@@ -50,6 +50,7 @@ func sanitizeFailureReason(err error) string {
 		errStreamingJSONResponse,
 		errJSONResponseSniffFailed,
 		errUnsanitizableUpgrade,
+		errContentPolicyUnfilterable,
 	} {
 		if errors.Is(err, sentinel) {
 			return sentinel.Error()
@@ -63,6 +64,15 @@ func sanitizeFailureReason(err error) string {
 // history records can contain a downloadUrl copied from an indexer, including
 // that indexer's API key.
 func sanitizeProxyResponse(resp *http.Response) error {
+	return sanitizeProxyResponseWith(resp, nil)
+}
+
+// sanitizeProxyResponseWith is sanitizeProxyResponse with an optional
+// transform applied to the decoded body after the credential scrub (so the
+// transform never sees a secret) and before re-encoding. A transform on a
+// body that is not JSON is a gated read the gate cannot judge, which fails
+// like any other unsanitizable response.
+func sanitizeProxyResponseWith(resp *http.Response, transform func(any) (any, error)) error {
 	sanitizeResponseHeaders(resp.Header)
 	// An arr sits behind Cantinarr's authenticated boundary; its responses are
 	// per-user and must never be stored by a shared cache. Strip upstream
@@ -72,6 +82,9 @@ func sanitizeProxyResponse(resp *http.Response) error {
 	enforcePrivateProxyCachePolicy(resp.Header)
 
 	if responseHasNoBody(resp) {
+		if transform != nil {
+			return errContentPolicyUnfilterable
+		}
 		return nil
 	}
 	sanitize, err := shouldSanitizeJSON(resp)
@@ -79,6 +92,9 @@ func sanitizeProxyResponse(resp *http.Response) error {
 		return err
 	}
 	if !sanitize {
+		if transform != nil {
+			return errContentPolicyUnfilterable
+		}
 		return nil
 	}
 	if encoding := strings.TrimSpace(resp.Header.Get("Content-Encoding")); encoding != "" && !strings.EqualFold(encoding, "identity") {
@@ -97,13 +113,16 @@ func sanitizeProxyResponse(resp *http.Response) error {
 		return errJSONResponseTooLarge
 	}
 	if len(body) == 0 {
+		if transform != nil {
+			return errContentPolicyUnfilterable
+		}
 		resp.Body = http.NoBody
 		resp.ContentLength = 0
 		resp.Header.Set("Content-Length", "0")
 		return nil
 	}
 
-	sanitized, err := sanitizeJSON(body)
+	sanitized, err := sanitizeJSONWith(body, transform)
 	if err != nil {
 		return err
 	}
@@ -388,6 +407,10 @@ func structuredJSONStart(prefix []byte) (found, jsonLike bool) {
 }
 
 func sanitizeJSON(body []byte) ([]byte, error) {
+	return sanitizeJSONWith(body, nil)
+}
+
+func sanitizeJSONWith(body []byte, transform func(any) (any, error)) ([]byte, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	var value any
@@ -398,7 +421,15 @@ func sanitizeJSON(body []byte) ([]byte, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return nil, errInvalidJSONResponse
 	}
-	return json.Marshal(sanitizeJSONValue(value))
+	value = sanitizeJSONValue(value)
+	if transform != nil {
+		var err error
+		value, err = transform(value)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return json.Marshal(value)
 }
 
 func sanitizeJSONValue(value any) any {

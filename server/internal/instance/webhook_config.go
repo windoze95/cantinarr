@@ -40,7 +40,7 @@ func (h *Handler) ConfigureWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !SupportsManagedWebhook(inst.ServiceType) {
-		http.Error(w, `{"error":"webhooks are supported only for radarr, sonarr, and chaptarr"}`, http.StatusBadRequest)
+		http.Error(w, `{"error":"webhooks are supported only for radarr, sonarr, chaptarr, and lidarr"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -275,7 +275,7 @@ func newArrConfigurationClient(baseURL, apiKey string, redact ...string) *arrCon
 // which instances may call back.
 func SupportsManagedWebhook(serviceType string) bool {
 	switch serviceType {
-	case "radarr", "sonarr", "chaptarr":
+	case "radarr", "sonarr", "chaptarr", "lidarr":
 		return true
 	default:
 		return false
@@ -283,9 +283,9 @@ func SupportsManagedWebhook(serviceType string) bool {
 }
 
 // arrNotificationAPIVersion is the arr's Connect/notification API version.
-// Chaptarr follows the Readarr lineage at v1; Radarr and Sonarr are v3.
+// Chaptarr (Readarr lineage) and Lidarr are v1; Radarr and Sonarr are v3.
 func arrNotificationAPIVersion(serviceType string) string {
-	if serviceType == "chaptarr" {
+	if serviceType == "chaptarr" || serviceType == "lidarr" {
 		return "v1"
 	}
 	return "v3"
@@ -427,6 +427,17 @@ var chaptarrImportToggles = []string{"onReleaseImport"}
 // job, never this webhook's.
 var chaptarrOptionalToggles = []string{"onGrab", "onUpgrade", "onAuthorAdded", "onBookAdded", "onBookDelete", "onAuthorDelete", "onBookFileDelete"}
 
+// lidarrImportToggles are the event flags that make Lidarr announce a
+// completed import; the names are verified against Lidarr's open source
+// (NotificationResource: onReleaseImport carries the Download payload).
+var lidarrImportToggles = []string{"onReleaseImport"}
+
+// lidarrOptionalToggles are best-effort: enabling them keeps the app's view
+// fresh (grabs, upgrades, artist/album lifecycle) but none gate the alert
+// path. Lidarr has no onTrackFileDelete toggle — upgrade-deletes surface via
+// the import payload's isUpgrade/deletedFiles and history instead.
+var lidarrOptionalToggles = []string{"onGrab", "onUpgrade", "onArtistAdd", "onAlbumDelete", "onArtistDelete", "onTrackRetag", "onDownloadFailure", "onImportFailure"}
+
 func configureWebhookResource(resource map[string]any, serviceType, callbackURL, token string) error {
 	resource["name"] = managedWebhookName
 	if resource["tags"] == nil {
@@ -443,6 +454,9 @@ func configureWebhookResource(resource map[string]any, serviceType, callbackURL,
 		// write only what that schema declares and leave its settings
 		// fields (which have no headers entry) untouched.
 		return configureChaptarrWebhookEvents(resource)
+	}
+	if serviceType == "lidarr" {
+		return configureLidarrWebhookEvents(resource)
 	}
 
 	resource["onGrab"] = true
@@ -486,6 +500,27 @@ func configureChaptarrWebhookEvents(resource map[string]any) error {
 		setSupportedWebhookEvent(resource, name, true)
 	}
 	setSupportedWebhookEvent(resource, "onBookFileDeleteForUpgrade", false)
+	return nil
+}
+
+// configureLidarrWebhookEvents enables the event flags Lidarr's own schema
+// template advertises, under the same schema-is-authority rule as Chaptarr:
+// nothing is invented, and a schema with no import toggle fails loudly at
+// configure time instead of saving a webhook that would never fire.
+func configureLidarrWebhookEvents(resource map[string]any) error {
+	applied := false
+	for _, name := range lidarrImportToggles {
+		if setSupportedWebhookEvent(resource, name, true) {
+			applied = true
+		}
+	}
+	if !applied {
+		return fmt.Errorf("the notification schema exposes no supported music-import event toggle (looked for %s)",
+			strings.Join(lidarrImportToggles, ", "))
+	}
+	for _, name := range lidarrOptionalToggles {
+		setSupportedWebhookEvent(resource, name, true)
+	}
 	return nil
 }
 

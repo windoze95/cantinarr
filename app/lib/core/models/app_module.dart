@@ -6,8 +6,9 @@ enum ModuleType {
   radarr,
   sonarr,
   chaptarr,
+  lidarr,
   downloads,
-  tautulli,
+  monitoring,
   assistant
 }
 
@@ -47,9 +48,11 @@ class ModulePage {
 /// Pages for [type], in the same order as the module's StatefulShellRoute
 /// branches in app_router.dart (bottom-nav index == branch index).
 /// [includeBooks] adds the dashboard Books tab, which exists only for users
-/// with Chaptarr access (services.chaptarr); it is last so its presence never
-/// shifts the other tabs' indices.
-List<ModulePage> modulePagesFor(ModuleType type, {bool includeBooks = false}) {
+/// with Chaptarr access (services.chaptarr), and [includeMusic] the Music tab
+/// (services.lidarr); both trail the fixed tabs — Books before Music — so
+/// their presence never shifts the other tabs' indices.
+List<ModulePage> modulePagesFor(ModuleType type,
+    {bool includeBooks = false, bool includeMusic = false}) {
   switch (type) {
     case ModuleType.dashboard:
       return [
@@ -77,6 +80,13 @@ List<ModulePage> modulePagesFor(ModuleType type, {bool includeBooks = false}) {
             icon: Icons.menu_book_outlined,
             activeIcon: Icons.menu_book,
             route: '/dashboard/books',
+          ),
+        if (includeMusic)
+          const ModulePage(
+            label: 'Music',
+            icon: Icons.library_music_outlined,
+            activeIcon: Icons.library_music,
+            route: '/dashboard/music',
           ),
       ];
     case ModuleType.radarr:
@@ -172,6 +182,39 @@ List<ModulePage> modulePagesFor(ModuleType type, {bool includeBooks = false}) {
           route: '/chaptarr/wanted',
         ),
       ];
+    case ModuleType.lidarr:
+      return const [
+        ModulePage(
+          label: 'Library',
+          icon: Icons.library_music_outlined,
+          activeIcon: Icons.library_music,
+          route: '/lidarr/library',
+        ),
+        ModulePage(
+          label: 'Queue',
+          icon: Icons.downloading_outlined,
+          activeIcon: Icons.downloading,
+          route: '/lidarr/queue',
+        ),
+        ModulePage(
+          label: 'History',
+          icon: Icons.history_outlined,
+          activeIcon: Icons.history,
+          route: '/lidarr/history',
+        ),
+        ModulePage(
+          label: 'Wanted',
+          icon: Icons.warning_amber_outlined,
+          activeIcon: Icons.warning_amber,
+          route: '/lidarr/wanted',
+        ),
+        ModulePage(
+          label: 'Calendar',
+          icon: Icons.calendar_month_outlined,
+          activeIcon: Icons.calendar_month,
+          route: '/lidarr/calendar',
+        ),
+      ];
     case ModuleType.downloads:
       return const [
         ModulePage(
@@ -187,25 +230,25 @@ List<ModulePage> modulePagesFor(ModuleType type, {bool includeBooks = false}) {
           route: '/downloads/history',
         ),
       ];
-    case ModuleType.tautulli:
+    case ModuleType.monitoring:
       return const [
         ModulePage(
           label: 'Activity',
           icon: Icons.play_circle_outline,
           activeIcon: Icons.play_circle,
-          route: '/tautulli/activity',
+          route: '/monitoring/activity',
         ),
         ModulePage(
           label: 'History',
           icon: Icons.history_outlined,
           activeIcon: Icons.history,
-          route: '/tautulli/history',
+          route: '/monitoring/history',
         ),
         ModulePage(
           label: 'Stats',
           icon: Icons.insights_outlined,
           activeIcon: Icons.insights,
-          route: '/tautulli/stats',
+          route: '/monitoring/stats',
         ),
       ];
     case ModuleType.assistant:

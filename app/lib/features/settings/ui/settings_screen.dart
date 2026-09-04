@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
+import '../../../core/models/user_profile.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
@@ -80,6 +81,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final gates = SettingsSearchGates(
       user: user,
       chaptarrEnabled: connection?.services.chaptarr ?? false,
+      lidarrEnabled: connection?.services.lidarr ?? false,
       donateVisible: _donateVisible,
       phoneAppsVisible: phoneAppsVisible,
       mediaServersVisible: mediaServersVisible,
@@ -160,7 +162,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             _SettingsTile(
               icon: Icons.person_outline,
               title: user?.username ?? 'Unknown',
-              subtitle: user?.isAdmin == true ? 'Administrator' : 'User',
+              subtitle: _accountSubtitle(user),
             ),
             if (user?.canUsePassword == true)
               _SettingsTile(
@@ -388,7 +390,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 value: ref.watch(requestNotificationsEnabledProvider),
                 onChanged: (v) =>
                     ref.read(requestNotificationsEnabledProvider.notifier).set(v),
-                activeThumbColor: AppTheme.accent,
                 secondary: const Icon(Icons.notifications_active_outlined,
                     color: AppTheme.textSecondary),
                 title: const Text('Request updates',
@@ -778,12 +779,15 @@ IconData _serviceIcon(String serviceType) {
       return Icons.tv_outlined;
     case 'chaptarr':
       return Icons.menu_book;
+    case 'lidarr':
+      return Icons.library_music_outlined;
     case 'sabnzbd':
     case 'qbittorrent':
     case 'nzbget':
     case 'transmission':
       return Icons.download_outlined;
     case 'tautulli':
+    case 'tracearr':
       return Icons.monitor_heart_outlined;
     case 'jellyfin':
     case 'emby':
@@ -801,6 +805,8 @@ String _serviceLabel(String serviceType) {
       return 'Sonarr';
     case 'chaptarr':
       return 'Chaptarr';
+    case 'lidarr':
+      return 'Lidarr';
     case 'sabnzbd':
       return 'SABnzbd';
     case 'qbittorrent':
@@ -811,6 +817,8 @@ String _serviceLabel(String serviceType) {
       return 'Transmission';
     case 'tautulli':
       return 'Tautulli';
+    case 'tracearr':
+      return 'Tracearr';
     case 'jellyfin':
       return 'Jellyfin';
     case 'emby':
@@ -818,6 +826,20 @@ String _serviceLabel(String serviceType) {
     default:
       return serviceType;
   }
+}
+
+/// The role line under the username. A kids account says so, with its
+/// limits when the profile carries them, in the account's own words.
+String _accountSubtitle(UserProfile? user) {
+  if (user == null) return 'User';
+  if (user.isAdmin) return 'Administrator';
+  if (user.child) {
+    final limits = user.contentLimits;
+    if (limits == null) return 'Kids account';
+    return 'Kids account · movies up to ${limits.maxMovieRating} · '
+        'shows up to ${limits.maxTvRating}';
+  }
+  return 'User';
 }
 
 String _aiAccessSubtitle(AiSettings? settings) {
@@ -906,7 +928,7 @@ Widget _setupChecklistTile(BuildContext context, SetupStatus? status) {
       onTap: open,
     );
   }
-  final tail = ' of ${status.total} features configured';
+  final tail = ' of ${status.effectiveTotal} features configured';
   final countColor = status.missingCoreCapability
       ? AppTheme.danger
       : status.remaining > 0

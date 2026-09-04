@@ -17,6 +17,10 @@ class AppConfig {
 
   /// TMDB image base URLs (public CDN, no key needed).
   static const String tmdbImageBase = 'https://image.tmdb.org/t/p';
+  /// Streaming-service logos; `w92` is TMDB's nearest size to a 24px chip
+  /// avatar at 3x. Empty for a missing path so the image widget falls back.
+  static String tmdbLogo(String? path, {int width = 92}) =>
+      path != null ? '$tmdbImageBase/w$width$path' : '';
   static String tmdbPoster(String? path, {int width = 500}) =>
       path != null ? '$tmdbImageBase/w$width$path' : '';
   static String tmdbBackdrop(String? path, {int width = 780}) =>

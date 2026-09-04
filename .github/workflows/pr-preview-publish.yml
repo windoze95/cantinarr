@@ -1,0 +1,109 @@
+# Fork PRs build and smoke-test their Docker image like any PR, but their
+# GITHUB_TOKEN is read-only, so docker.yml cannot push the pr-N preview tag
+# from that run. This workflow closes the gap: it fires when a fork PR's
+# docker run completes, downloads the image tarball that run uploaded as an
+# artifact, and pushes it from base-repo context, where the token can write
+# packages.
+#
+# Security model — the triggering run executed the FORK'S workflow file, so
+# nothing in the artifact can be trusted to aim the push:
+#   - The tag is derived from the PR looked up via the API by the run's head
+#     repo and branch, never from anything inside the artifact. A hostile
+#     tarball whose embedded ref says `latest` still lands only on pr-N.
+#   - The tarball must load exactly one image, and only that image ID is
+#     tagged and pushed.
+#   - The image CONTENT is the contributor's code — exactly as trusted as any
+#     pr-N preview of an unreviewed PR, which is what a preview tag is for.
+#
+# workflow_run listeners only take effect from the default branch, so changes
+# here prove out on the first fork PR after they land on main.
+name: Publish fork PR preview image
+
+on:
+  workflow_run:
+    workflows: ["Build and Push Docker Image"]
+    types: [completed]
+
+# One publish at a time per fork branch; a newer push's run supersedes the
+# older one the same way docker.yml's own concurrency group does.
+concurrency:
+  group: pr-preview-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    # Same-repo PR runs push pr-N inline in docker.yml, and pushes/tags
+    # publish their own channels there; only a successful fork PR run needs
+    # the handoff.
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name != github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read # download the triggering run's artifact
+      contents: read
+      packages: write
+    steps:
+      - name: Resolve the pull request behind this run
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          # The PR number names the tag, so it comes from the API — never
+          # from the artifact, whose contents fork code controls.
+          pr=$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&head=${HEAD_OWNER}:${HEAD_BRANCH}" \
+            --jq '.[0] | if . == null then "" else "\(.number) \(.head.sha)" end')
+          if [ -z "$pr" ]; then
+            echo "No open PR for ${HEAD_OWNER}:${HEAD_BRANCH}; nothing to publish."
+            echo "number=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          number=${pr%% *}
+          sha=${pr##* }
+          if [ "$sha" != "$HEAD_SHA" ]; then
+            # A newer push superseded this run; that push's own run publishes.
+            echo "Run is for ${HEAD_SHA} but the PR is at ${sha}; skipping stale publish."
+            echo "number=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "number=${number}" >> "$GITHUB_OUTPUT"
+
+      - name: Download preview image artifact
+        if: steps.pr.outputs.number != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: pr-preview-image
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/preview
+
+      - name: Log in to GHCR
+        if: steps.pr.outputs.number != ''
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the preview image as pr-${{ steps.pr.outputs.number }}
+        if: steps.pr.outputs.number != ''
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          before=$(docker images -q | sort -u)
+          zstd -dc "${RUNNER_TEMP}/preview/pr-preview-image.tar.zst" | docker load
+          after=$(docker images -q | sort -u)
+          new=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | grep . || true)
+          count=$(printf '%s' "$new" | grep -c . || true)
+          if [ "$count" -ne 1 ]; then
+            echo "::error::Artifact loaded ${count} new images; expected exactly one. Refusing to publish."
+            exit 1
+          fi
+          docker tag "$new" "ghcr.io/windoze95/cantinarr:pr-${PR_NUMBER}"
+          docker push "ghcr.io/windoze95/cantinarr:pr-${PR_NUMBER}"

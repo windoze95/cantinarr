@@ -12,7 +12,9 @@
 //   - settings/data/request_settings_service.dart (approval queue)
 //
 // Poster/backdrop paths are real TMDB CDN paths (July 2026); the app loads
-// images from image.tmdb.org directly, so they resolve in the browser.
+// images from image.tmdb.org directly, so they resolve in the browser. Book
+// covers and author portraits come from the Open Library CDN for the same
+// reason — see the Books section below.
 library;
 
 // ─── Image helpers ──────────────────────────────────────────────────────────
@@ -622,6 +624,23 @@ Map<String, dynamic> _arrQueueRecord({
       'statusMessages': const [],
     };
 
+/// Calendar demo dates are anchored to the run date, not written down: a
+/// hard-coded date silently ages out of the Releases screens' upcoming window
+/// and shoots an empty screen months later, with nothing to say it went stale.
+final DateTime _calToday = DateTime.now();
+
+/// Midnight UTC [days] from today, as a calendar date string (movie releases).
+String _calDay(int days) =>
+    DateTime.utc(_calToday.year, _calToday.month, _calToday.day)
+        .add(Duration(days: days))
+        .toIso8601String();
+
+/// [days] from today at [hourUtc] UTC, as an instant (episode air times).
+String _calAir(int days, int hourUtc) =>
+    DateTime.utc(_calToday.year, _calToday.month, _calToday.day, hourUtc)
+        .add(Duration(days: days))
+        .toIso8601String();
+
 /// Radarr calendar (GET /calendar) -> RadarrMovie-shaped entries with release
 /// dates. Feeds the Releases-tab movie events.
 List<Map<String, dynamic>> _radarrCalendar() => [
@@ -632,8 +651,8 @@ List<Map<String, dynamic>> _radarrCalendar() => [
           poster: '/fCAURTUx3YfsJ8k9I0UamjSILiR.jpg',
           year: 2026,
           hasFile: false,
-          inCinemas: '2026-07-17T00:00:00Z',
-          digitalRelease: '2026-08-21T00:00:00Z'),
+          inCinemas: _calDay(-45),
+          digitalRelease: _calDay(21)),
       _radarrMovie(
           id: 207,
           tmdbId: 1081003,
@@ -641,7 +660,7 @@ List<Map<String, dynamic>> _radarrCalendar() => [
           poster: '/niSvU02l2BONH9ivubV6K1a5QiK.jpg',
           year: 2026,
           hasFile: false,
-          digitalRelease: '2026-07-24T00:00:00Z'),
+          digitalRelease: _calDay(3)),
       _radarrMovie(
           id: 210,
           tmdbId: 936075,
@@ -649,7 +668,7 @@ List<Map<String, dynamic>> _radarrCalendar() => [
           poster: '/zm0KAbOjlt9eR5y7vDiL2dEOwMl.jpg',
           year: 2026,
           hasFile: false,
-          digitalRelease: '2026-08-07T00:00:00Z'),
+          digitalRelease: _calDay(7)),
       _radarrMovie(
           id: 211,
           tmdbId: 1339713,
@@ -657,7 +676,7 @@ List<Map<String, dynamic>> _radarrCalendar() => [
           poster: '/bRwnj8WEKBCvmfeUNOukJPwB43K.jpg',
           year: 2026,
           hasFile: false,
-          digitalRelease: '2026-08-14T00:00:00Z'),
+          digitalRelease: _calDay(14)),
       _radarrMovie(
           id: 201,
           tmdbId: 687163,
@@ -665,7 +684,7 @@ List<Map<String, dynamic>> _radarrCalendar() => [
           poster: _phm.poster,
           year: 2026,
           hasFile: true,
-          digitalRelease: '2026-07-10T00:00:00Z'),
+          digitalRelease: _calDay(-21)),
       _radarrMovie(
           id: 212,
           tmdbId: 1127384,
@@ -673,7 +692,7 @@ List<Map<String, dynamic>> _radarrCalendar() => [
           poster: '/kjcuS7xaRyqRjVaVcH4t0qHshuX.jpg',
           year: 2026,
           hasFile: false,
-          digitalRelease: '2026-07-31T00:00:00Z'),
+          digitalRelease: _calDay(1)),
     ];
 
 // ─── Sonarr (verbatim v3 proxy): library, calendar ───────────────────────────
@@ -894,40 +913,40 @@ Map<String, dynamic> _sonarrSeriesHotd() {
 /// the Releases timeline. Dates span July 2026 for a populated current month.
 List<Map<String, dynamic>> _sonarrCalendar() => [
       _sonarrCalEntry(101, 'House of the Dragon', 3, 3, 'The Red Sowing',
-          '2026-07-02T01:00:00Z', true),
+          _calAir(-18, 1), true),
       _sonarrCalEntry(101, 'House of the Dragon', 3, 4, 'A Dance of Dragons',
-          '2026-07-06T01:00:00Z', false),
+          _calAir(-11, 1), false),
       _sonarrCalEntry(101, 'House of the Dragon', 3, 5, 'The Sowing of Seeds',
-          '2026-07-13T01:00:00Z', false),
+          _calAir(-4, 1), false),
       _sonarrCalEntry(101, 'House of the Dragon', 3, 6, 'Fire and Blood',
-          '2026-07-20T01:00:00Z', false),
+          _calAir(3, 1), false),
       _sonarrCalEntry(101, 'House of the Dragon', 3, 7, 'The Green Council',
-          '2026-07-27T01:00:00Z', false),
+          _calAir(10, 1), false),
       _sonarrCalEntry(
           102, 'The Boys', 5, 1, 'Department of Dirty Tricks',
-          '2026-07-08T02:00:00Z', false),
+          _calAir(-13, 2), false),
       _sonarrCalEntry(102, 'The Boys', 5, 2, 'Kill Your Heroes',
-          '2026-07-15T02:00:00Z', false),
+          _calAir(-6, 2), false),
       _sonarrCalEntry(102, 'The Boys', 5, 3, 'Diabolical',
-          '2026-07-22T02:00:00Z', false),
+          _calAir(1, 2), false),
       _sonarrCalEntry(102, 'The Boys', 5, 4, 'Assembly Required',
-          '2026-07-29T02:00:00Z', false),
+          _calAir(8, 2), false),
       _sonarrCalEntry(106, "Grey's Anatomy", 21, 15, 'Wishin and Hopin',
-          '2026-07-09T01:00:00Z', false),
+          _calAir(-9, 1), false),
       _sonarrCalEntry(106, "Grey's Anatomy", 21, 16, 'Under Pressure',
-          '2026-07-16T01:00:00Z', false),
+          _calAir(5, 1), false),
       _sonarrCalEntry(111, 'The Rookie', 7, 9, 'Crossfire',
-          '2026-07-14T01:00:00Z', false),
+          _calAir(2, 1), false),
       _sonarrCalEntry(111, 'The Rookie', 7, 10, 'The Squad',
-          '2026-07-21T01:00:00Z', false),
+          _calAir(9, 1), false),
       _sonarrCalEntry(108, 'The Simpsons', 36, 12, 'Treehouse of Horror',
-          '2026-07-12T00:00:00Z', false),
+          _calAir(6, 0), false),
       _sonarrCalEntry(110, 'Dutton Ranch', 1, 1, 'Homecoming',
-          '2026-07-30T01:00:00Z', false),
+          _calAir(4, 1), false),
       _sonarrCalEntry(102, 'The Boys', 5, 5, 'The Big Ride',
-          '2026-08-05T02:00:00Z', false),
+          _calAir(15, 2), false),
       _sonarrCalEntry(101, 'House of the Dragon', 3, 8, 'The Dying of the Light',
-          '2026-08-03T01:00:00Z', false),
+          _calAir(17, 1), false),
     ];
 
 /// Poster per series id, joined into embedded `series` objects (calendar and
@@ -1204,6 +1223,244 @@ List<Map<String, dynamic>> _pendingRequests() => [
       },
     ];
 
+// ─── Books (Chaptarr requester surface: /api/requests/book-*) ────────────────
+
+/// Open Library cover art. Book covers have no TMDB equivalent, and the
+/// harness needs an absolute url the browser can load with no server behind
+/// it — [chaptarrImageSource] passes an `http` url straight through, where a
+/// real `/MediaCover/...` path would be proxied through the backend.
+String _olCover(int coverId) =>
+    'https://covers.openlibrary.org/b/id/$coverId-L.jpg';
+
+/// An author portrait, addressed by Open Library author id.
+String _olPortrait(String olid) =>
+    'https://covers.openlibrary.org/a/olid/$olid-L.jpg';
+
+/// [ago] before now, as an instant. Import times are relative for the same
+/// reason the calendars are: a Recently Added row is a claim about recency.
+String _importedAgo(Duration ago) =>
+    DateTime.now().toUtc().subtract(ago).toIso8601String();
+
+/// One book in the demo library: how Chaptarr addresses it, plus the art.
+class _Bk {
+  /// The metadata provider's id, which every book surface joins on.
+  final String foreignId;
+
+  /// The Chaptarr record id.
+  final int bookId;
+  final String title;
+  final String author;
+  final int year;
+  final int cover;
+
+  const _Bk(this.foreignId, this.bookId, this.title, this.author, this.year,
+      this.cover);
+}
+
+const _phmBook =
+    _Bk('9401821', 8101, 'Project Hail Mary', 'Andy Weir', 2021, 11200092);
+const _wayOfKings = _Bk(
+    '9412207', 8102, 'The Way of Kings', 'Brandon Sanderson', 2010, 14658316);
+const _wordsOfRadiance = _Bk('9412208', 8103, 'Words of Radiance',
+    'Brandon Sanderson', 2014, 14658334);
+const _finalEmpire = _Bk('9412210', 8104, 'Mistborn: The Final Empire',
+    'Brandon Sanderson', 2006, 11329782);
+const _wellOfAscension = _Bk('9412211', 8105, 'The Well of Ascension',
+    'Brandon Sanderson', 2007, 14658341);
+const _leviathanWakes = _Bk(
+    '9420015', 8106, 'Leviathan Wakes', 'James S. A. Corey', 2011, 7314237);
+const _calibansWar = _Bk(
+    '9420016', 8107, "Caliban's War", 'James S. A. Corey', 2012, 7314238);
+const _abaddonsGate = _Bk(
+    '9420017', 8108, "Abaddon's Gate", 'James S. A. Corey', 2013, 8624248);
+const _allSystemsRed =
+    _Bk('9433401', 8109, 'All Systems Red', 'Martha Wells', 2017, 9157148);
+const _artificialCondition = _Bk(
+    '9433402', 8110, 'Artificial Condition', 'Martha Wells', 2018, 10537139);
+const _dune = _Bk('9440100', 8111, 'Dune', 'Frank Herbert', 1965, 11481354);
+const _redRising =
+    _Bk('9451820', 8112, 'Red Rising', 'Pierce Brown', 2014, 7316188);
+const _goldenSon =
+    _Bk('9451821', 8113, 'Golden Son', 'Pierce Brown', 2015, 8454351);
+const _fifthSeason =
+    _Bk('9460330', 8114, 'The Fifth Season', 'N. K. Jemisin', 2015, 8133598);
+const _obeliskGate =
+    _Bk('9460331', 8115, 'The Obelisk Gate', 'N. K. Jemisin', 2016, 8138324);
+const _childrenOfTime = _Bk(
+    '9470912', 8116, 'Children of Time', 'Adrian Tchaikovsky', 2015, 8264706);
+const _psalm = _Bk('9481144', 8117, 'A Psalm for the Wild-Built',
+    'Becky Chambers', 2021, 10476616);
+const _guardsGuards =
+    _Bk('9490501', 8118, 'Guards! Guards!', 'Terry Pratchett', 1989, 13095550);
+const _mort = _Bk('9490502', 8119, 'Mort', 'Terry Pratchett', 1987, 14648805);
+const _goingPostal =
+    _Bk('9490503', 8120, 'Going Postal', 'Terry Pratchett', 2004, 14646992);
+
+/// One row of the ownership digest (`GET /api/requests/book-library`).
+///
+/// The four flags are what every book pill is computed from: an ebook and an
+/// audiobook are separate Chaptarr records sharing a foreignBookId, so a title
+/// can be downloaded in one format while the other is still being fetched.
+Map<String, dynamic> _ownedBook(
+  _Bk book, {
+  bool ebookDownloaded = false,
+  bool ebookMonitored = false,
+  bool audiobookDownloaded = false,
+  bool audiobookMonitored = false,
+}) =>
+    {
+      'title': book.title,
+      'author': book.author,
+      'year': book.year,
+      'cover': _olCover(book.cover),
+      'foreign_book_id': book.foreignId,
+      'ebook': {
+        'monitored': ebookMonitored || ebookDownloaded,
+        'downloaded': ebookDownloaded,
+      },
+      'audiobook': {
+        'monitored': audiobookMonitored || audiobookDownloaded,
+        'downloaded': audiobookDownloaded,
+      },
+      'status_known': true,
+    };
+
+/// The owned-books digest. Deliberately covers all three requester verdicts:
+/// both formats on disk reads Available, a format still being fetched reads
+/// Requested, and one format on disk with nothing pending reads Partial.
+List<Map<String, dynamic>> _bookLibraryTitles() => [
+      _ownedBook(_phmBook, ebookDownloaded: true, audiobookDownloaded: true),
+      _ownedBook(_wayOfKings,
+          ebookDownloaded: true, audiobookDownloaded: true),
+      _ownedBook(_allSystemsRed,
+          ebookDownloaded: true, audiobookMonitored: true),
+      _ownedBook(_leviathanWakes, ebookDownloaded: true),
+      _ownedBook(_psalm, ebookDownloaded: true, audiobookDownloaded: true),
+      _ownedBook(_childrenOfTime, audiobookDownloaded: true),
+      _ownedBook(_fifthSeason,
+          ebookDownloaded: true, audiobookDownloaded: true),
+      _ownedBook(_redRising, ebookDownloaded: true, audiobookMonitored: true),
+      _ownedBook(_dune, audiobookDownloaded: true),
+      _ownedBook(_goingPostal,
+          ebookDownloaded: true, audiobookDownloaded: true),
+      _ownedBook(_wordsOfRadiance, ebookDownloaded: true),
+      _ownedBook(_finalEmpire,
+          ebookDownloaded: true, audiobookDownloaded: true),
+      _ownedBook(_wellOfAscension, ebookDownloaded: true),
+      _ownedBook(_calibansWar, ebookDownloaded: true),
+      _ownedBook(_abaddonsGate, ebookMonitored: true),
+      _ownedBook(_artificialCondition,
+          ebookDownloaded: true, audiobookDownloaded: true),
+      _ownedBook(_obeliskGate, ebookDownloaded: true),
+      _ownedBook(_goldenSon, ebookMonitored: true),
+      _ownedBook(_guardsGuards, ebookDownloaded: true),
+      _ownedBook(_mort, ebookDownloaded: true, audiobookDownloaded: true),
+    ];
+
+Map<String, dynamic> _recentBook(_Bk book, String format, Duration ago) => {
+      'book_id': book.bookId,
+      'foreign_book_id': book.foreignId,
+      'title': book.title,
+      'format': format,
+      'cover': _olCover(book.cover),
+      'imported_at': _importedAgo(ago),
+    };
+
+/// `GET /api/requests/book-recent` — what actually landed, newest first.
+List<Map<String, dynamic>> _bookRecent() => [
+      _recentBook(_phmBook, 'audiobook', const Duration(hours: 2)),
+      _recentBook(_allSystemsRed, 'ebook', const Duration(hours: 6)),
+      _recentBook(_wayOfKings, 'audiobook', const Duration(hours: 20)),
+      _recentBook(_leviathanWakes, 'ebook', const Duration(days: 1)),
+      _recentBook(_childrenOfTime, 'audiobook', const Duration(days: 2)),
+      _recentBook(_psalm, 'ebook', const Duration(days: 3)),
+      _recentBook(_redRising, 'ebook', const Duration(days: 4)),
+      _recentBook(_fifthSeason, 'ebook', const Duration(days: 5)),
+      _recentBook(_dune, 'audiobook', const Duration(days: 6)),
+      _recentBook(_goingPostal, 'ebook', const Duration(days: 8)),
+    ];
+
+Map<String, dynamic> _libraryAuthor(
+        String olid, String name, int titles, int available, int addedDaysAgo) =>
+    {
+      'foreign_author_id': olid,
+      'name': name,
+      'image': _olPortrait(olid),
+      'title_count': titles,
+      'available_count': available,
+      'added': _importedAgo(Duration(days: addedDaysAgo)),
+    };
+
+/// `GET /api/requests/book-authors`. The row is capped server-side, so `total`
+/// is deliberately larger than the list — that gap is what the row's
+/// truncation note reports.
+List<Map<String, dynamic>> _bookAuthors() => [
+      _libraryAuthor('OL25712A', 'Terry Pratchett', 21, 21, 240),
+      _libraryAuthor('OL1394865A', 'Brandon Sanderson', 14, 11, 61),
+      _libraryAuthor('OL6982995A', 'James S. A. Corey', 9, 7, 96),
+      _libraryAuthor('OL221294A', 'Martha Wells', 7, 7, 34),
+      _libraryAuthor('OL7468980A', 'Adrian Tchaikovsky', 6, 4, 12),
+      _libraryAuthor('OL6575473A', 'N. K. Jemisin', 5, 5, 150),
+      _libraryAuthor('OL7621609A', 'Pierce Brown', 5, 3, 7),
+      _libraryAuthor('OL7387940A', 'Becky Chambers', 4, 4, 19),
+      _libraryAuthor('OL79034A', 'Frank Herbert', 3, 2, 400),
+    ];
+
+/// The authors row in the order the API was asked for. The server sorts before
+/// capping, so honouring `sort` here keeps the demo honest about what changing
+/// the order actually does.
+Map<String, dynamic> _bookAuthorsPage(String sort) {
+  final authors = _bookAuthors();
+  switch (sort) {
+    case 'name':
+      authors.sort((a, b) =>
+          (a['name'] as String).compareTo(b['name'] as String));
+      break;
+    case 'added':
+      authors.sort((a, b) =>
+          (b['added'] as String).compareTo(a['added'] as String));
+      break;
+    default:
+      break;
+  }
+  return {'authors': authors, 'total': 23};
+}
+
+Map<String, dynamic> _librarySeries(
+        String name, List<_Bk> covers, int titles, int available) =>
+    {
+      'name': name,
+      'covers': [for (final book in covers) _olCover(book.cover)],
+      'title_count': titles,
+      'available_count': available,
+    };
+
+/// `GET /api/requests/book-series`. Covers are the earliest books of the run,
+/// in reading order — the card stacks them.
+List<Map<String, dynamic>> _bookSeries() => [
+      _librarySeries(
+          'Discworld', [_mort, _guardsGuards, _goingPostal], 21, 21),
+      _librarySeries('The Expanse',
+          [_leviathanWakes, _calibansWar, _abaddonsGate], 9, 7),
+      _librarySeries('The Murderbot Diaries',
+          [_allSystemsRed, _artificialCondition], 7, 7),
+      _librarySeries('Mistborn', [_finalEmpire, _wellOfAscension], 7, 5),
+      _librarySeries('The Stormlight Archive',
+          [_wayOfKings, _wordsOfRadiance], 5, 4),
+      _librarySeries('Red Rising', [_redRising, _goldenSon], 5, 3),
+      _librarySeries('The Broken Earth', [_fifthSeason, _obeliskGate], 3, 3),
+      _librarySeries('Dune', [_dune], 3, 2),
+    ];
+
+Map<String, dynamic> _bookSeriesPage(String sort) {
+  final series = _bookSeries();
+  if (sort == 'name') {
+    series.sort(
+        (a, b) => (a['name'] as String).compareTo(b['name'] as String));
+  }
+  return {'series': series, 'total': 14};
+}
+
 // ─── Path router ─────────────────────────────────────────────────────────────
 
 /// Maps a backend request (path + query) to a populated demo body, or null to
@@ -1254,6 +1511,20 @@ Object? screenshotBodyFor(String rawPath, Map<String, dynamic> query) {
 
   // ── Request surface ──
   if (path.endsWith('/api/requests/options')) return _requestOptions();
+
+  // ── Books (Chaptarr requester surface) ──
+  if (path.endsWith('/api/requests/book-library')) {
+    return {'titles': _bookLibraryTitles()};
+  }
+  if (path.endsWith('/api/requests/book-recent')) {
+    return {'items': _bookRecent()};
+  }
+  if (path.endsWith('/api/requests/book-authors')) {
+    return _bookAuthorsPage((query['sort'] as String?) ?? 'books');
+  }
+  if (path.endsWith('/api/requests/book-series')) {
+    return _bookSeriesPage((query['sort'] as String?) ?? 'books');
+  }
   if (path.contains('/api/requests/') && path.endsWith('/status')) {
     final id = _intSegmentBefore(path, 'status');
     return _requestStatus(id ?? 0);

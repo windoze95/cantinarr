@@ -574,6 +574,7 @@ func TestValidateConnectionDoesNotFollowServiceRedirects(t *testing.T) {
 		"nzbget",
 		"transmission",
 		"tautulli",
+		"tracearr",
 		"jellyfin",
 		"emby",
 		"plex",
@@ -608,5 +609,147 @@ func TestValidateConnectionDoesNotFollowServiceRedirects(t *testing.T) {
 				t.Fatalf("redirect destination received %d requests, want 0", got)
 			}
 		})
+	}
+}
+
+// TestQbittorrentCredentialShapes pins qBittorrent's two credential shapes
+// through the HTTP surface: an API key alone or a username and password
+// alone is accepted and neither is refused; a save carrying one shape clears
+// the stored other while a save carrying neither keeps what is stored; the
+// test endpoint falls back to the stored key and names a rejected one; and
+// the admin list says which shape is stored without revealing the key.
+func TestQbittorrentCredentialShapes(t *testing.T) {
+	const key, rotated = "qbit-key-1", "qbit-key-2"
+	qbit := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			if r.Header.Get("Authorization") != "" {
+				// qBittorrent refuses auth/* under a Bearer key.
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			_ = r.ParseForm()
+			if r.PostForm.Get("username") != "admin" || r.PostForm.Get("password") != "secret" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			http.SetCookie(w, &http.Cookie{Name: "SID", Value: "sid"})
+			w.WriteHeader(http.StatusNoContent)
+		case "/api/v2/app/version":
+			auth := r.Header.Get("Authorization")
+			cookie, _ := r.Cookie("SID")
+			keyed := auth == "Bearer "+key || auth == "Bearer "+rotated
+			if !keyed && (cookie == nil || cookie.Value != "sid") {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			_, _ = w.Write([]byte("v5.2.0"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(qbit.Close)
+
+	for _, tc := range []struct {
+		name    string
+		inst    Instance
+		wantErr bool
+	}{
+		{"key only", Instance{APIKey: key}, false},
+		{"password only", Instance{Username: "admin", Password: "secret"}, false},
+		{"nothing", Instance{}, true},
+		{"username without password", Instance{Username: "admin"}, true},
+	} {
+		inst := tc.inst
+		inst.ServiceType, inst.Name, inst.URL = "qbittorrent", "Torrents", qbit.URL
+		err := validateRequiredFields(&inst)
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("validateRequiredFields(%s) = %v, wantErr %t", tc.name, err, tc.wantErr)
+		}
+		if err != nil && !strings.Contains(err.Error(), "API key") {
+			t.Fatalf("validateRequiredFields(%s) = %v, want the API key named as an option", tc.name, err)
+		}
+	}
+
+	store := newTestStore(t)
+	h := NewHandler(store, NewRegistry(store))
+	router := chi.NewRouter()
+	router.Post("/instances", h.Create)
+	router.Put("/instances/{instanceID}", h.Update)
+	router.Post("/instances/test", h.TestConnection)
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return rec
+	}
+	stored := func(id string) *Instance {
+		t.Helper()
+		inst, err := store.Get(id)
+		if err != nil || inst == nil {
+			t.Fatalf("store.Get(%s) = %v, %v", id, inst, err)
+		}
+		return inst
+	}
+
+	// Created with a key (and a stray username/password an old client might
+	// still send): stored as a key alone, reported as one, never revealed.
+	rec := do(http.MethodPost, "/instances", `{"service_type":"qbittorrent","name":"Torrents","url":"`+qbit.URL+`","api_key":"`+key+`","username":"stale","password":"stale"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create with key = %d %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	var created instanceResponse
+	if err := json.Unmarshal([]byte(body), &created); err != nil {
+		t.Fatal(err)
+	}
+	if !created.HasAPIKey || created.Username != "" || strings.Contains(body, key) {
+		t.Fatalf("create response = %s, want has_api_key with no username and no key", body)
+	}
+	if inst := stored(created.ID); inst.APIKey != key || inst.Username != "" || inst.Password != "" {
+		t.Fatalf("stored after key create = %+v, want the key alone", inst)
+	}
+
+	// The test endpoint falls back to the stored key, and names a rejected one.
+	if rec := do(http.MethodPost, "/instances/test", `{"id":"`+created.ID+`","url":"`+qbit.URL+`","api_key":""}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("test with stored key = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = do(http.MethodPost, "/instances/test", `{"id":"`+created.ID+`","url":"`+qbit.URL+`","api_key":"wrong"}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "API key") {
+		t.Fatalf("test with wrong key = %d %s, want 400 naming the API key", rec.Code, rec.Body.String())
+	}
+
+	// Switching to a password clears the stored key.
+	rec = do(http.MethodPut, "/instances/"+created.ID, `{"name":"Torrents","url":"`+qbit.URL+`","api_key":"","username":"admin","password":"secret"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update to password = %d %s", rec.Code, rec.Body.String())
+	}
+	var updated instanceResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.HasAPIKey || updated.Username != "admin" {
+		t.Fatalf("update response = %s, want a username and no has_api_key", rec.Body.String())
+	}
+	if inst := stored(created.ID); inst.APIKey != "" || inst.Username != "admin" || inst.Password != "secret" {
+		t.Fatalf("stored after password update = %+v, want the password alone", inst)
+	}
+
+	// Switching back to a key clears the password.
+	rec = do(http.MethodPut, "/instances/"+created.ID, `{"name":"Torrents","url":"`+qbit.URL+`","api_key":"`+rotated+`","username":"","password":""}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update back to key = %d %s", rec.Code, rec.Body.String())
+	}
+	if inst := stored(created.ID); inst.APIKey != rotated || inst.Username != "" || inst.Password != "" {
+		t.Fatalf("stored after key update = %+v, want the rotated key alone", inst)
+	}
+
+	// An edit that carries no credential at all keeps the stored shape.
+	rec = do(http.MethodPut, "/instances/"+created.ID, `{"name":"Renamed","url":"`+qbit.URL+`","api_key":"","username":"","password":""}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("credential-less update = %d %s", rec.Code, rec.Body.String())
+	}
+	if inst := stored(created.ID); inst.APIKey != rotated || inst.Name != "Renamed" {
+		t.Fatalf("stored after credential-less update = %+v, want the key kept and the name changed", inst)
 	}
 }

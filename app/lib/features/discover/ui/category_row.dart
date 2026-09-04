@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
 import '../../../core/widgets/section_header.dart';
+import '../../../core/widgets/see_all_button.dart';
 import '../data/tmdb_models.dart';
 import '../logic/search_library_status.dart';
 
@@ -31,6 +32,10 @@ class CategoryRow extends StatelessWidget {
   /// simply renders no badge on any of its posters.
   final Map<(MediaType, int), LibraryStatus> libraryStatus;
 
+  /// Opens the row's feed as a full grid. Null for a row that is a preview
+  /// of something else (the library rows) rather than the head of a feed.
+  final VoidCallback? onSeeAll;
+
   const CategoryRow({
     super.key,
     required this.title,
@@ -39,6 +44,7 @@ class CategoryRow extends StatelessWidget {
     required this.isTvRow,
     this.onLoadMore,
     this.libraryStatus = const {},
+    this.onSeeAll,
   });
 
   @override
@@ -65,7 +71,12 @@ class CategoryRow extends StatelessWidget {
             padding: EdgeInsets.symmetric(
               horizontal: MediaQuery.sizeOf(context).width >= 900 ? 24 : 16,
             ),
-            child: SectionHeader(title: title),
+            child: SectionHeader(
+              title: title,
+              trailing: onSeeAll == null
+                  ? null
+                  : SeeAllButton(rowTitle: title, onPressed: onSeeAll!),
+            ),
           ),
           const SizedBox(height: 12),
           HorizontalItemRow<MediaItem>(

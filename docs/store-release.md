@@ -121,6 +121,13 @@ Store screenshots are generated, not hand-taken:
 4. Copy the outputs into the two fastlane screenshot directories above and commit; the merge
    syncs them to the consoles.
 
+The stores cap what they will show: **10 screenshots per App Store device size, 8 per Play
+device type**. A shot's `skip` list in `routes.js` is how the two sets diverge — the numbering is
+assigned per device after skips, so each store gets a contiguous run. Demo dates (calendars,
+import times) are anchored to the run date rather than written down, because the Releases and
+Recently Added screens filter by recency: a hard-coded date eventually shoots an empty screen
+that looks like a real answer.
+
 The Play 512 icon and the 1024×500 feature graphic derive from the committed 1024px icon art
 (`app/ios/.../appicon.png`, `app/assets/splash_icon.png`).
 

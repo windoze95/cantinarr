@@ -29,7 +29,28 @@ type FormatOwnership struct {
 type LibraryTitle struct {
 	Title  string `json:"title"`
 	Author string `json:"author"`
-	Year   int    `json:"year"`
+	// AuthorForeignID is the library's OWN author identity — the id
+	// /detail/author/{id} is addressed by, and the same one the Books page's
+	// authors row already navigates with. It is deliberately taken from the
+	// library's author record rather than from a metadata lookup or a live
+	// book record: those disagree across providers (a Hardcover-seeded
+	// library row against Goodreads lookup results), and the library's own
+	// answer is the only one its author page can resolve. Empty when the
+	// library states no author for this title.
+	AuthorForeignID string `json:"author_foreign_id"`
+	Year            int    `json:"year"`
+	// Series is the series name parsed by parseSeriesTitle (library_series.go)
+	// from the record's raw seriesTitle string — the identity
+	// /api/requests/book-series-detail is addressed by. Empty when the library
+	// states no series for this title.
+	Series string `json:"series"`
+	// SeriesPosition is the raw position string passed through exactly as the
+	// library states it ("2", "2A", "1.5, 1.6, 1.7"), never normalised. Note
+	// SeriesTitle (library_series.go) keeps its own "position" key on the
+	// book-series-detail row — that redundancy is deliberate; renaming or
+	// moving SeriesTitle.Position would change an existing wire key and break
+	// the series page.
+	SeriesPosition string `json:"series_position"`
 	// ForeignBookID lets the app request the missing format of an owned book: the
 	// request carries it back and the backend completes the existing record.
 	ForeignBookID string `json:"foreign_book_id"`
@@ -111,6 +132,17 @@ func reduceLibrary(books []chaptarr.Book) BookLibraryDigest {
 		}
 		if g.title.ForeignBookID == "" {
 			g.title.ForeignBookID = book.ForeignBookID
+		}
+		// First record in the group that states a series wins; a later record
+		// simply not repeating it is not a claim that there is none — the two
+		// records are the same work. Guarded on the parsed name, not the raw
+		// string, so a record whose seriesTitle fails to parse to a name never
+		// clears what an earlier record already established.
+		if g.title.Series == "" {
+			if name, position := parseSeriesTitle(book.SeriesTitle); name != "" {
+				g.title.Series = name
+				g.title.SeriesPosition = position
+			}
 		}
 
 		own := FormatOwnership{
@@ -308,12 +340,84 @@ func (s *Service) GetBookLibraryDigestForInstance(userID int64, requestedInstanc
 	}
 	digest := reduceLibrary(books)
 
+	// The full-library book list carries no embedded author object (Chaptarr
+	// only nests it on per-author reads), so the name is joined from the
+	// library's own author records. This is the opposite of
+	// GetLibraryAuthorsForInstance, which fails closed on the same read: there,
+	// a missing book list would yield a confident wrong *count* ("0 books" on
+	// an author whose shelf is full). Here, a missing author list yields an
+	// absent author *name* — no claim at all. Ownership truth is this digest's
+	// job and is unaffected, so the error is not returned (AGENTS.md
+	// absence-vs-blindness; D-04). Nothing derived from it reaches the
+	// response, so an upstream host in an error string can never surface here.
+	if authors, err := client.GetAllAuthors(); err == nil {
+		stampAuthorsFromLibrary(digest.Titles, books, authors)
+	}
+
 	if s.libraryCache != nil {
 		if data, err := json.Marshal(digest); err == nil {
 			s.libraryCache.Set(cacheKey, data, bookLibraryCacheTTL)
 		}
 	}
 	return &digest, nil
+}
+
+// stampAuthorsFromLibrary fills each reduced title's empty Author by joining
+// the books it was reduced from to the library's author records via
+// authorId. Per D-04, an author name a record already stated is never
+// overwritten — mirrors stampAuthorName's guard.
+//
+// The join is keyed on ForeignBookID only: a record with no foreignBookId
+// groups under the per-record "id:" key (see groupKey), which LibraryTitle
+// does not carry, so that title is left with an empty author rather than
+// being matched by slice position — an absent name is honest, a
+// positionally guessed one is not.
+func stampAuthorsFromLibrary(titles []LibraryTitle, books []chaptarr.Book, authors []chaptarr.Author) {
+	authorIDByForeignBookID := make(map[string]int, len(books))
+	for _, book := range books {
+		id := strings.TrimSpace(book.ForeignBookID)
+		if id == "" || book.AuthorID <= 0 {
+			continue
+		}
+		if _, seen := authorIDByForeignBookID[id]; !seen {
+			authorIDByForeignBookID[id] = book.AuthorID
+		}
+	}
+	nameByAuthorID := make(map[int]string, len(authors))
+	foreignIDByAuthorID := make(map[int]string, len(authors))
+	for _, author := range authors {
+		nameByAuthorID[author.ID] = strings.TrimSpace(author.AuthorName)
+		foreignIDByAuthorID[author.ID] = strings.TrimSpace(author.ForeignAuthorID)
+	}
+	for i := range titles {
+		// The name and the foreign id are stamped independently: a title that
+		// already carries an embedded author NAME still needs the id before its
+		// author line can be tapped, so an early `continue` on a non-empty name
+		// would silently leave those rows unlinkable.
+		haveName := strings.TrimSpace(titles[i].Author) != ""
+		haveForeignID := strings.TrimSpace(titles[i].AuthorForeignID) != ""
+		if haveName && haveForeignID {
+			continue
+		}
+		id := strings.TrimSpace(titles[i].ForeignBookID)
+		if id == "" {
+			continue
+		}
+		authorID, ok := authorIDByForeignBookID[id]
+		if !ok {
+			continue
+		}
+		if !haveName {
+			if name := nameByAuthorID[authorID]; name != "" {
+				titles[i].Author = name
+			}
+		}
+		if !haveForeignID {
+			if foreignID := foreignIDByAuthorID[authorID]; foreignID != "" {
+				titles[i].AuthorForeignID = foreignID
+			}
+		}
+	}
 }
 
 // getChaptarrWithID resolves the same Chaptarr client as getChaptarr but also

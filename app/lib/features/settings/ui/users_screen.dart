@@ -799,10 +799,17 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
             onDelete: () => _deleteUser(user),
             onResendInvite: () => _resendInvite(user),
             onSendTestPush: () => _sendTestPush(user),
-            onRequestSettings: () => context.push(
-              '/settings/users/${user.id}/request-settings',
+            // The per-user screen leads with the kids account switch, so
+            // the row's Child tag is re-read once it pops.
+            onRequestSettings: () => context
+                .push(
+              '/settings/users/${user.id}/request-settings'
+              '${user.isAdmin ? '?admin=1' : ''}',
               extra: user.username,
-            ),
+            )
+                .then((_) {
+              if (mounted) _loadUsers();
+            }),
             onSetAuthMethods: ({bool? passwordEnabled, bool? passkeyEnabled}) =>
                 _setAuthMethods(
               user,
@@ -905,6 +912,7 @@ class _UserTile extends StatelessWidget {
               label: user.isAdmin ? 'Admin' : 'User',
               color: user.isAdmin ? AppTheme.accent : AppTheme.textSecondary,
             ),
+            if (user.child) const _Tag(label: 'Child', color: AppTheme.info),
             if (user.hasPendingInvite)
               const _Tag(label: 'Invited', color: AppTheme.requested)
             else if (_needsInvite)
@@ -1051,7 +1059,6 @@ class _UserTile extends StatelessWidget {
               child: Switch(
                 value: user.sharedAiEnabled,
                 onChanged: (_) {},
-                activeThumbColor: AppTheme.accent,
               ),
             ),
             contentPadding: EdgeInsets.zero,

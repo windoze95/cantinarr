@@ -22,17 +22,21 @@ const featuredLimit = 20
 // instead of an open-ended walk when a feed happens to be mostly non-English.
 const maxFeaturedPages = 3
 
-// traktFeaturedFetch over-asks Trakt because entries are dropped before they
-// reach the row: one without a TMDB id has nothing to open or request, and the
-// English-only filter removes more.
+// traktFeaturedFetch over-asks Trakt for the row because entries are dropped
+// before they reach it: one without a TMDB id has nothing to open or request,
+// and the English-only filter removes more.
 const traktFeaturedFetch = 40
+
+// traktPageSize is what one page past the row asks Trakt for: the same twenty
+// a TMDB page carries, so the grid under the row pages both sources alike.
+const traktPageSize = 20
 
 var (
 	errTMDBNotConfigured  = errors.New("TMDB is not configured")
 	errTraktNotConfigured = errors.New("trakt not configured")
 )
 
-// featuredPage is the headline-row envelope. It mirrors the TMDB list shape so
+// featuredPage is the headline-feed envelope. It mirrors the TMDB list shape so
 // one client parser handles every source, plus a `source` field so the row can
 // name what it is actually showing.
 type featuredPage struct {
@@ -43,17 +47,33 @@ type featuredPage struct {
 	TotalResults int               `json:"total_results"`
 }
 
-// FeaturedTV serves the configured headline TV feed.
+// listPage is one page of a feed after the drops: the entries plus how far
+// the feed goes.
+type listPage struct {
+	results    []json.RawMessage
+	totalPages int
+}
+
+// rawGetter is the one method the feeds need from either upstream client.
+type rawGetter interface {
+	DoGetRaw(path string, params url.Values) ([]byte, error)
+}
+
+// FeaturedTV serves the configured headline TV feed. Page one is the row;
+// later pages continue the same feed for the grid under it.
 func (h *Handler) FeaturedTV(w http.ResponseWriter, r *http.Request) {
-	h.featured(w, "tv")
+	h.featured(w, r, "tv", queryPage(r))
 }
 
 // FeaturedMovies serves the configured headline movie feed.
 func (h *Handler) FeaturedMovies(w http.ResponseWriter, r *http.Request) {
-	h.featured(w, "movie")
+	h.featured(w, r, "movie", queryPage(r))
 }
 
-func (h *Handler) featured(w http.ResponseWriter, mediaType string) {
+// featured builds or reads the cached page, then hands it to the caller's
+// content policy like every other feed: the cache holds everyone's row, a
+// kids account sees its own cut of it.
+func (h *Handler) featured(w http.ResponseWriter, r *http.Request, mediaType string, page int) {
 	source, englishOnly := h.discoveryPrefs()
 
 	// Trakt is optional. Falling back keeps the landing screen populated
@@ -63,19 +83,19 @@ func (h *Handler) featured(w http.ResponseWriter, mediaType string) {
 		source = serversettings.DiscoverySourceTMDBTrending
 	}
 
-	key := fmt.Sprintf("featured:%s:%s:%t", mediaType, source, englishOnly)
+	key := fmt.Sprintf("featured:%s:%s:%t:%d", mediaType, source, englishOnly, page)
 	if data, ok := h.cache.Get(key); ok {
-		writeJSON(w, data)
+		h.writeForCaller(w, r, listShape(mediaType), data)
 		return
 	}
 
 	var (
-		results []json.RawMessage
-		err     error
+		result listPage
+		err    error
 	)
 	switch source {
 	case serversettings.DiscoverySourceTraktTrending:
-		results, err = h.traktFeatured(mediaType, englishOnly)
+		result, err = h.traktFeatured(mediaType, page, englishOnly)
 		if err != nil {
 			// A third-party API that is simply down is not the admin's
 			// configuration problem, and the row it backs is the landing
@@ -90,12 +110,12 @@ func (h *Handler) featured(w http.ResponseWriter, mediaType string) {
 			// and recovery is picked up on the next miss.
 			log.Printf("discover: trakt featured %s failed, serving TMDB weekly trending instead: %v", mediaType, err)
 			source = serversettings.DiscoverySourceTMDBTrending
-			results, err = h.tmdbFeatured(fmt.Sprintf("/trending/%s/week", mediaType), englishOnly)
+			result, err = h.tmdbFeatured(fmt.Sprintf("/trending/%s/week", mediaType), page, englishOnly)
 		}
 	case serversettings.DiscoverySourceTMDBPopular:
-		results, err = h.tmdbFeatured(fmt.Sprintf("/%s/popular", mediaType), englishOnly)
+		result, err = h.tmdbFeatured(fmt.Sprintf("/%s/popular", mediaType), page, englishOnly)
 	default:
-		results, err = h.tmdbFeatured(fmt.Sprintf("/trending/%s/week", mediaType), englishOnly)
+		result, err = h.tmdbFeatured(fmt.Sprintf("/trending/%s/week", mediaType), page, englishOnly)
 	}
 	if err != nil {
 		if errors.Is(err, errTMDBNotConfigured) || errors.Is(err, errTraktNotConfigured) {
@@ -108,50 +128,63 @@ func (h *Handler) featured(w http.ResponseWriter, mediaType string) {
 
 	payload, err := json.Marshal(featuredPage{
 		Source:       source,
-		Page:         1,
-		Results:      results,
-		TotalPages:   1,
-		TotalResults: len(results),
+		Page:         page,
+		Results:      result.results,
+		TotalPages:   result.totalPages,
+		TotalResults: len(result.results),
 	})
 	if err != nil {
 		http.Error(w, `{"error":"encode featured feed"}`, http.StatusInternalServerError)
 		return
 	}
 	h.cache.Set(key, payload, ttlTrending)
-	writeJSON(w, payload)
+	h.writeForCaller(w, r, listShape(mediaType), payload)
 }
 
-// tmdbFeatured collects up to featuredLimit entries from a TMDB list endpoint,
-// walking further pages only when the English-only filter has thinned the row.
-// Entries pass through verbatim — the row keeps every field TMDB sent.
-func (h *Handler) tmdbFeatured(path string, englishOnly bool) ([]json.RawMessage, error) {
+// tmdbFeatured serves one page of a TMDB list feed. Page one is the row,
+// refilled when the English-only filter thins it; later pages are the plain
+// upstream page, filtered but never refilled. Refilling a later page would
+// borrow entries from the page after it, which the next request then serves
+// again, and the client dedupes by id anyway. Entries pass through verbatim.
+func (h *Handler) tmdbFeatured(path string, page int, englishOnly bool) (listPage, error) {
 	client := h.creds.TMDB()
 	if client == nil {
-		return nil, errTMDBNotConfigured
+		return listPage{}, errTMDBNotConfigured
 	}
+	if page > 1 {
+		return tmdbPlainPage(client, path, page, englishOnly)
+	}
+	return tmdbRow(client, path, englishOnly)
+}
 
+// tmdbRow collects up to featuredLimit entries from the first page of a feed,
+// walking further pages only when the English-only filter has thinned the row.
+func tmdbRow(client rawGetter, path string, englishOnly bool) (listPage, error) {
 	pages := 1
 	if englishOnly {
 		pages = maxFeaturedPages
 	}
 
-	kept := make([]json.RawMessage, 0, featuredLimit)
-	for page := 1; page <= pages && len(kept) < featuredLimit; page++ {
+	row := listPage{results: make([]json.RawMessage, 0, featuredLimit)}
+	for page := 1; page <= pages && len(row.results) < featuredLimit; page++ {
 		data, err := client.DoGetRaw(path, url.Values{"page": {strconv.Itoa(page)}})
 		if err != nil {
 			// A first-page failure has nothing to show; a later one still
 			// leaves a usable, if shorter, row.
 			if page == 1 {
-				return nil, err
+				return listPage{}, err
 			}
 			break
 		}
-		results, err := decodeResults(data)
+		results, totalPages, err := decodeListPage(data)
 		if err != nil {
 			if page == 1 {
-				return nil, err
+				return listPage{}, err
 			}
 			break
+		}
+		if page == 1 {
+			row.totalPages = totalPages
 		}
 		if len(results) == 0 {
 			break
@@ -160,43 +193,74 @@ func (h *Handler) tmdbFeatured(path string, englishOnly bool) ([]json.RawMessage
 			if englishOnly && !isEnglishOriginal(item) {
 				continue
 			}
-			kept = append(kept, item)
-			if len(kept) == featuredLimit {
+			row.results = append(row.results, item)
+			if len(row.results) == featuredLimit {
 				break
 			}
 		}
 	}
-	return kept, nil
+	return row, nil
 }
 
-// traktFeatured maps Trakt's trending feed onto the TMDB list shape so the row
-// renders identically whichever source is configured.
-func (h *Handler) traktFeatured(mediaType string, englishOnly bool) ([]json.RawMessage, error) {
+// tmdbPlainPage is one upstream page past the row: filtered, never refilled.
+func tmdbPlainPage(client rawGetter, path string, page int, englishOnly bool) (listPage, error) {
+	data, err := client.DoGetRaw(path, url.Values{"page": {strconv.Itoa(page)}})
+	if err != nil {
+		return listPage{}, err
+	}
+	results, totalPages, err := decodeListPage(data)
+	if err != nil {
+		return listPage{}, err
+	}
+	out := listPage{results: make([]json.RawMessage, 0, len(results)), totalPages: totalPages}
+	for _, item := range results {
+		if englishOnly && !isEnglishOriginal(item) {
+			continue
+		}
+		out.results = append(out.results, item)
+	}
+	return out, nil
+}
+
+// traktFeatured serves one page of Trakt's trending feed mapped onto the TMDB
+// list shape, so the row and the grid under it render identically whichever
+// source is configured. The row over-asks so the drops still leave it full;
+// later pages are one Trakt page each. Trakt's own page count is not read:
+// the feed reports another page for as long as the one asked for had entries,
+// and the client stops at the first empty one.
+func (h *Handler) traktFeatured(mediaType string, page int, englishOnly bool) (listPage, error) {
 	client := h.creds.Trakt()
 	if client == nil {
-		return nil, errTraktNotConfigured
+		return listPage{}, errTraktNotConfigured
 	}
 
 	traktType := "shows"
 	if mediaType == "movie" {
 		traktType = "movies"
 	}
+	limit, rowCap := traktPageSize, 0
+	if page == 1 {
+		limit, rowCap = traktFeaturedFetch, featuredLimit
+	}
 	params := url.Values{
-		"page":     {"1"},
-		"limit":    {strconv.Itoa(traktFeaturedFetch)},
+		"page":     {strconv.Itoa(page)},
+		"limit":    {strconv.Itoa(limit)},
 		"extended": {"full"},
 	}
 	data, err := client.DoGetRaw(fmt.Sprintf("/%s/trending", traktType), params)
 	if err != nil {
-		return nil, err
+		return listPage{}, err
 	}
 
 	var entries []traktTrendingEntry
 	if err := json.Unmarshal(data, &entries); err != nil {
-		return nil, fmt.Errorf("decode trakt trending: %w", err)
+		return listPage{}, fmt.Errorf("decode trakt trending: %w", err)
 	}
 
-	kept := make([]json.RawMessage, 0, featuredLimit)
+	out := listPage{results: make([]json.RawMessage, 0, len(entries)), totalPages: page}
+	if len(entries) > 0 {
+		out.totalPages = page + 1
+	}
 	for _, entry := range entries {
 		media := entry.Show
 		if mediaType == "movie" {
@@ -214,12 +278,12 @@ func (h *Handler) traktFeatured(mediaType string, englishOnly bool) ([]json.RawM
 		if err != nil {
 			continue
 		}
-		kept = append(kept, item)
-		if len(kept) == featuredLimit {
+		out.results = append(out.results, item)
+		if rowCap > 0 && len(out.results) == rowCap {
 			break
 		}
 	}
-	return kept, nil
+	return out, nil
 }
 
 // traktTrendingEntry is one row of Trakt's trending feed; exactly one of the
@@ -317,14 +381,24 @@ func traktImageURL(images []string) string {
 	return ""
 }
 
-// decodeResults pulls the entries out of a TMDB list payload, leaving each one
-// as raw JSON so nothing is lost re-encoding it.
-func decodeResults(data []byte) ([]json.RawMessage, error) {
+// decodeListPage pulls the entries and the page count out of a TMDB list
+// payload, leaving each entry as raw JSON so nothing is lost re-encoding it.
+// The page count is clamped to what TMDB will actually serve, and a payload
+// without one is a single page.
+func decodeListPage(data []byte) ([]json.RawMessage, int, error) {
 	var envelope struct {
-		Results []json.RawMessage `json:"results"`
+		Results    []json.RawMessage `json:"results"`
+		TotalPages int               `json:"total_pages"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
-		return nil, fmt.Errorf("decode tmdb results: %w", err)
+		return nil, 0, fmt.Errorf("decode tmdb results: %w", err)
 	}
-	return envelope.Results, nil
+	totalPages := envelope.TotalPages
+	if totalPages > MaxTMDBPage {
+		totalPages = MaxTMDBPage
+	}
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	return envelope.Results, totalPages, nil
 }

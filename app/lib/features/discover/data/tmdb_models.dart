@@ -135,18 +135,191 @@ class WatchProvider {
   final String providerName;
   final String? logoPath;
 
+  /// TMDB's ordering hint for the region; lower comes first.
+  final int displayPriority;
+
   const WatchProvider({
     required this.providerId,
     required this.providerName,
     this.logoPath,
+    this.displayPriority = 0,
   });
 
   factory WatchProvider.fromJson(Map<String, dynamic> json) => WatchProvider(
         providerId: json['provider_id'] as int,
         providerName: json['provider_name'] as String,
         logoPath: json['logo_path'] as String?,
+        displayPriority: json['display_priority'] as int? ?? 0,
       );
 }
+
+/// A language TMDB can filter on, labelled for a picker.
+class TmdbLanguage {
+  final String code;
+  final String englishName;
+
+  const TmdbLanguage({required this.code, required this.englishName});
+
+  factory TmdbLanguage.fromJson(Map<String, dynamic> json) {
+    final code = json['iso_639_1'] as String;
+    final english = json['english_name'] as String?;
+    final native = json['name'] as String?;
+    return TmdbLanguage(
+      code: code,
+      englishName: english != null && english.isNotEmpty
+          ? english
+          : (native != null && native.isNotEmpty ? native : code),
+    );
+  }
+}
+
+/// A country TMDB tracks streaming availability for.
+class WatchRegion {
+  final String code;
+  final String name;
+
+  const WatchRegion({required this.code, required this.name});
+
+  factory WatchRegion.fromJson(Map<String, dynamic> json) {
+    final code = json['iso_3166_1'] as String;
+    final english = json['english_name'] as String?;
+    final native = json['native_name'] as String?;
+    return WatchRegion(
+      code: code,
+      name: english != null && english.isNotEmpty
+          ? english
+          : (native != null && native.isNotEmpty ? native : code),
+    );
+  }
+}
+
+/// A TMDB keyword or production company: the id a filter sends and the name
+/// a chip shows. The name is null when only the id is known (a browse link),
+/// and a surface then names it by number.
+class TaggedId {
+  final int id;
+  final String? name;
+
+  const TaggedId({required this.id, this.name});
+
+  factory TaggedId.fromJson(Map<String, dynamic> json) => TaggedId(
+        id: json['id'] as int,
+        name: json['name'] as String?,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      other is TaggedId && other.id == id && other.name == name;
+
+  @override
+  int get hashCode => Object.hash(id, name);
+
+  @override
+  String toString() => 'TaggedId($id, $name)';
+}
+
+/// One credited performer on a title (`credits.cast[]`): who they are, who
+/// they played, and TMDB's billing order.
+class CastMember {
+  final int id;
+  final String name;
+  final String? character;
+  final String? profilePath;
+  final int order;
+
+  const CastMember({
+    required this.id,
+    required this.name,
+    this.character,
+    this.profilePath,
+    this.order = 0,
+  });
+
+  factory CastMember.fromJson(Map<String, dynamic> json) => CastMember(
+        id: json['id'] as int,
+        name: (json['name'] ?? 'Unknown') as String,
+        character: _blankToNull(json['character'] as String?),
+        profilePath: json['profile_path'] as String?,
+        order: json['order'] as int? ?? 0,
+      );
+}
+
+/// One credited crew member on a title (`credits.crew[]`): TMDB files each
+/// job under a department ("Directing" / "Director"), which is how the full
+/// cast and crew sheet groups them.
+class CrewMember {
+  final int id;
+  final String name;
+  final String job;
+  final String department;
+  final String? profilePath;
+
+  const CrewMember({
+    required this.id,
+    required this.name,
+    required this.job,
+    required this.department,
+    this.profilePath,
+  });
+
+  factory CrewMember.fromJson(Map<String, dynamic> json) => CrewMember(
+        id: json['id'] as int,
+        name: (json['name'] ?? 'Unknown') as String,
+        job: (json['job'] ?? '') as String,
+        department: (json['department'] ?? '') as String,
+        profilePath: json['profile_path'] as String?,
+      );
+}
+
+/// A title's `credits` append: its cast in billing order and its crew as
+/// TMDB lists them. [empty] is what a body without the append yields.
+class TitleCredits {
+  final List<CastMember> cast;
+  final List<CrewMember> crew;
+
+  const TitleCredits({this.cast = const [], this.crew = const []});
+
+  static const empty = TitleCredits();
+
+  /// Reads the nested `credits` append off a detail body. Tolerates a
+  /// missing or wrongly-shaped key, and entries without a numeric id, by
+  /// leaving them out rather than throwing: a server still serving a cached
+  /// pre-change body sends exactly that shape, and it must not blank the
+  /// rest of the page.
+  factory TitleCredits.fromJson(Map<String, dynamic> json) {
+    final data = json['credits'];
+    if (data is! Map<String, dynamic>) return empty;
+    final cast = _entries(data['cast']).map(CastMember.fromJson).toList()
+      ..sort((a, b) => a.order.compareTo(b.order));
+    return TitleCredits(
+      cast: cast,
+      crew: _entries(data['crew']).map(CrewMember.fromJson).toList(),
+    );
+  }
+
+  bool get isEmpty => cast.isEmpty && crew.isEmpty;
+}
+
+/// The well-formed entries of a TMDB list: maps carrying an integer `id`.
+Iterable<Map<String, dynamic>> _entries(Object? list) => list is List
+    ? list.whereType<Map<String, dynamic>>().where((m) => m['id'] is int)
+    : const [];
+
+List<TaggedId> _tagged(Object? list) =>
+    _entries(list).map(TaggedId.fromJson).toList();
+
+/// `production_countries[].name`, skipping entries without one.
+List<String> _countryNames(Object? list) => list is List
+    ? list
+        .whereType<Map<String, dynamic>>()
+        .map((m) => m['name'])
+        .whereType<String>()
+        .where((name) => name.isNotEmpty)
+        .toList()
+    : const [];
+
+String? _blankToNull(String? value) =>
+    value == null || value.trim().isEmpty ? null : value;
 
 /// Full movie detail from TMDB.
 class MovieDetail {
@@ -164,6 +337,18 @@ class MovieDetail {
   final List<Video> videos;
   final int? budget;
   final int? revenue;
+  final List<TmdbReleaseDateRegion> releaseDates;
+  final TitleCredits credits;
+
+  /// `production_companies`, in TMDB's order.
+  final List<TaggedId> companies;
+
+  /// `production_countries[].name`, in TMDB's order.
+  final List<String> countries;
+
+  /// TMDB's own copy of the IMDb id (`imdb_id`), when it knows one. A show
+  /// carries its IMDb id under [TVDetail.externalIds] instead.
+  final String? imdbId;
 
   const MovieDetail({
     required this.id,
@@ -180,6 +365,11 @@ class MovieDetail {
     this.videos = const [],
     this.budget,
     this.revenue,
+    this.releaseDates = const [],
+    this.credits = TitleCredits.empty,
+    this.companies = const [],
+    this.countries = const [],
+    this.imdbId,
   });
 
   factory MovieDetail.fromJson(Map<String, dynamic> json) => MovieDetail(
@@ -200,6 +390,11 @@ class MovieDetail {
         videos: _parseVideos(json),
         budget: json['budget'] as int?,
         revenue: json['revenue'] as int?,
+        releaseDates: _parseReleaseDates(json),
+        credits: TitleCredits.fromJson(json),
+        companies: _tagged(json['production_companies']),
+        countries: _countryNames(json['production_countries']),
+        imdbId: _blankToNull(json['imdb_id'] as String?),
       );
 
   String? get trailerKey {
@@ -229,6 +424,20 @@ class TVDetail {
   final List<Video> videos;
   final List<Season> seasons;
   final ExternalIds? externalIds;
+  final TitleCredits credits;
+
+  /// `created_by`, as crew filed under a "Creators" department so the cast
+  /// and crew sheet lists them first.
+  final List<CrewMember> createdBy;
+
+  /// `networks`, in TMDB's order.
+  final List<TaggedId> networks;
+
+  /// `production_companies`, in TMDB's order.
+  final List<TaggedId> companies;
+
+  /// `production_countries[].name`, in TMDB's order.
+  final List<String> countries;
 
   const TVDetail({
     required this.id,
@@ -246,6 +455,11 @@ class TVDetail {
     this.videos = const [],
     this.seasons = const [],
     this.externalIds,
+    this.credits = TitleCredits.empty,
+    this.createdBy = const [],
+    this.networks = const [],
+    this.companies = const [],
+    this.countries = const [],
   });
 
   factory TVDetail.fromJson(Map<String, dynamic> json) => TVDetail(
@@ -272,6 +486,19 @@ class TVDetail {
         externalIds: json['external_ids'] is Map<String, dynamic>
             ? ExternalIds.fromJson(json['external_ids'] as Map<String, dynamic>)
             : null,
+        credits: TitleCredits.fromJson(json),
+        createdBy: _entries(json['created_by'])
+            .map((m) => CrewMember(
+                  id: m['id'] as int,
+                  name: (m['name'] ?? 'Unknown') as String,
+                  job: 'Creator',
+                  department: 'Creators',
+                  profilePath: m['profile_path'] as String?,
+                ))
+            .toList(),
+        networks: _tagged(json['networks']),
+        companies: _tagged(json['production_companies']),
+        countries: _countryNames(json['production_countries']),
       );
 
   String? get trailerKey {
@@ -294,6 +521,47 @@ class ExternalIds {
   factory ExternalIds.fromJson(Map<String, dynamic> json) => ExternalIds(
         tvdbId: json['tvdb_id'] as int?,
         imdbId: json['imdb_id'] as String?,
+      );
+}
+
+/// One country's entries from TMDB's `release_dates` append
+/// (`release_dates.results[]`): an ISO-3166-1 country code plus its raw
+/// milestone list. Kept as transport shape only — interpreting which
+/// milestones matter and how to label them is
+/// `media_detail/logic/release_schedule.dart`'s job, not this file's.
+class TmdbReleaseDateRegion {
+  final String countryCode;
+  final List<TmdbReleaseDateEntry> entries;
+
+  const TmdbReleaseDateRegion({
+    required this.countryCode,
+    this.entries = const [],
+  });
+
+  factory TmdbReleaseDateRegion.fromJson(Map<String, dynamic> json) =>
+      TmdbReleaseDateRegion(
+        countryCode: (json['iso_3166_1'] ?? '') as String,
+        entries: (json['release_dates'] as List<dynamic>?)
+                ?.map((e) =>
+                    TmdbReleaseDateEntry.fromJson(e as Map<String, dynamic>))
+                .toList() ??
+            [],
+      );
+}
+
+/// One release milestone entry within a region: TMDB's integer `type` (1
+/// Premiere .. 6 TV) plus its parsed calendar date, or null when TMDB itself
+/// doesn't know the date for that entry.
+class TmdbReleaseDateEntry {
+  final int type;
+  final DateTime? date;
+
+  const TmdbReleaseDateEntry({required this.type, this.date});
+
+  factory TmdbReleaseDateEntry.fromJson(Map<String, dynamic> json) =>
+      TmdbReleaseDateEntry(
+        type: json['type'] as int? ?? 0,
+        date: _parseTmdbCalendarDate(json['release_date'] as String?),
       );
 }
 
@@ -456,4 +724,37 @@ List<Video> _parseVideos(Map<String, dynamic> json) {
         [];
   }
   return [];
+}
+
+/// Helper to parse the nested `release_dates` append. Tolerates a missing or
+/// wrongly-shaped key by yielding an empty list rather than throwing: a
+/// server that hasn't yet added the append, or is serving a cached
+/// pre-change body, sends exactly that shape, and this must not blank the
+/// rest of the detail page over it.
+List<TmdbReleaseDateRegion> _parseReleaseDates(Map<String, dynamic> json) {
+  final releaseDatesData = json['release_dates'];
+  if (releaseDatesData is Map<String, dynamic>) {
+    return (releaseDatesData['results'] as List<dynamic>?)
+            ?.whereType<Map<String, dynamic>>()
+            .map((r) => TmdbReleaseDateRegion.fromJson(r))
+            .toList() ??
+        [];
+  }
+  return [];
+}
+
+/// Parses a `YYYY-MM-DDTHH:mm:ss.SSSZ` TMDB release-date string into local
+/// midnight, reading only the `YYYY-MM-DD` calendar prefix. TMDB's release
+/// dates carry no meaningful time-of-day, so `DateTime.parse(...).toLocal()`
+/// would shift a midnight-UTC date onto the previous day for anyone west of
+/// UTC — the same trap `radarr/client.go` and
+/// `request_service.dart:_parseCalendarDate` already document. Returns null
+/// for a missing or unparseable value.
+DateTime? _parseTmdbCalendarDate(String? value) {
+  if (value == null || value.length < 10) return null;
+  final year = int.tryParse(value.substring(0, 4));
+  final month = int.tryParse(value.substring(5, 7));
+  final day = int.tryParse(value.substring(8, 10));
+  if (year == null || month == null || day == null) return null;
+  return DateTime(year, month, day);
 }

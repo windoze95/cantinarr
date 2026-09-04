@@ -7,13 +7,14 @@ import (
 	"sync"
 
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/nzbget"
 	"github.com/windoze95/cantinarr-server/internal/qbittorrent"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sabnzbd"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
-	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/transmission"
+	"github.com/windoze95/cantinarr-server/internal/watchhistory"
 )
 
 // Registry lazily creates and caches service clients keyed by instance ID.
@@ -23,11 +24,15 @@ type Registry struct {
 	radarrClients       map[string]*radarr.Client
 	sonarrClients       map[string]*sonarr.Client
 	chaptarrClients     map[string]*chaptarr.Client
+	lidarrClients       map[string]*lidarr.Client
 	sabnzbdClients      map[string]*sabnzbd.Client
 	qbittorrentClients  map[string]*qbittorrent.Client
 	nzbgetClients       map[string]*nzbget.Client
 	transmissionClients map[string]*transmission.Client
-	tautulliClients     map[string]*tautulli.Client
+	// watchHistoryProviders holds Tautulli and Tracearr providers; a
+	// Tracearr provider carries a stats cache, which InvalidateClient drops
+	// with it whenever the instance is edited.
+	watchHistoryProviders map[string]watchhistory.Provider
 }
 
 // NewRegistry creates a new client registry.
@@ -37,11 +42,13 @@ func NewRegistry(store *Store) *Registry {
 		radarrClients:       make(map[string]*radarr.Client),
 		sonarrClients:       make(map[string]*sonarr.Client),
 		chaptarrClients:     make(map[string]*chaptarr.Client),
+		lidarrClients:       make(map[string]*lidarr.Client),
 		sabnzbdClients:      make(map[string]*sabnzbd.Client),
 		qbittorrentClients:  make(map[string]*qbittorrent.Client),
 		nzbgetClients:       make(map[string]*nzbget.Client),
 		transmissionClients: make(map[string]*transmission.Client),
-		tautulliClients:     make(map[string]*tautulli.Client),
+
+		watchHistoryProviders: make(map[string]watchhistory.Provider),
 	}
 }
 
@@ -124,6 +131,14 @@ func (r *Registry) GetFreshChaptarrClient(instanceID string) (*chaptarr.Client, 
 		return nil, ArrSettingsFingerprint{}, err
 	}
 	return chaptarr.NewClient(inst.URL, inst.APIKey), fingerprintArrSettings(inst), nil
+}
+
+func (r *Registry) GetFreshLidarrClient(instanceID string) (*lidarr.Client, ArrSettingsFingerprint, error) {
+	inst, err := r.getInstanceOfType(instanceID, "lidarr")
+	if err != nil {
+		return nil, ArrSettingsFingerprint{}, err
+	}
+	return lidarr.NewClient(inst.URL, inst.APIKey), fingerprintArrSettings(inst), nil
 }
 
 // ListInstanceSummaries returns identity-only views of the configured
@@ -231,6 +246,32 @@ func (r *Registry) GetChaptarrClient(instanceID string) (*chaptarr.Client, error
 	return client, nil
 }
 
+// GetLidarrClient returns a cached or new Lidarr client for the given instance ID.
+func (r *Registry) GetLidarrClient(instanceID string) (*lidarr.Client, error) {
+	r.mu.RLock()
+	if client, ok := r.lidarrClients[instanceID]; ok {
+		r.mu.RUnlock()
+		return client, nil
+	}
+	r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if client, ok := r.lidarrClients[instanceID]; ok {
+		return client, nil
+	}
+
+	inst, err := r.getInstanceOfType(instanceID, "lidarr")
+	if err != nil {
+		return nil, err
+	}
+
+	client := lidarr.NewClient(inst.URL, inst.APIKey)
+
+	r.lidarrClients[instanceID] = client
+
+	return client, nil
+}
+
 // GetSabnzbdClient returns a cached or new SABnzbd client for the given instance ID.
 func (r *Registry) GetSabnzbdClient(instanceID string) (*sabnzbd.Client, error) {
 	r.mu.RLock()
@@ -254,6 +295,17 @@ func (r *Registry) GetSabnzbdClient(instanceID string) (*sabnzbd.Client, error) 
 	return client, nil
 }
 
+// newQbittorrentClient builds the client an instance's stored credentials
+// call for: an API key when one is stored (qBittorrent 5.2+), otherwise the
+// WebUI username and password. Storage holds exactly one of the two (see
+// applyQbittorrentAuthMode), so the choice is never ambiguous.
+func newQbittorrentClient(inst *Instance) *qbittorrent.Client {
+	if inst.APIKey != "" {
+		return qbittorrent.NewAPIKeyClient(inst.URL, inst.APIKey)
+	}
+	return qbittorrent.NewClient(inst.URL, inst.Username, inst.Password)
+}
+
 // GetQbittorrentClient returns a cached or new qBittorrent client for the given instance ID.
 func (r *Registry) GetQbittorrentClient(instanceID string) (*qbittorrent.Client, error) {
 	r.mu.RLock()
@@ -268,7 +320,7 @@ func (r *Registry) GetQbittorrentClient(instanceID string) (*qbittorrent.Client,
 		return nil, err
 	}
 
-	client := qbittorrent.NewClient(inst.URL, inst.Username, inst.Password)
+	client := newQbittorrentClient(inst)
 
 	r.mu.Lock()
 	r.qbittorrentClients[instanceID] = client
@@ -318,29 +370,6 @@ func (r *Registry) GetTransmissionClient(instanceID string) (*transmission.Clien
 
 	r.mu.Lock()
 	r.transmissionClients[instanceID] = client
-	r.mu.Unlock()
-
-	return client, nil
-}
-
-// GetTautulliClient returns a cached or new Tautulli client for the given instance ID.
-func (r *Registry) GetTautulliClient(instanceID string) (*tautulli.Client, error) {
-	r.mu.RLock()
-	if client, ok := r.tautulliClients[instanceID]; ok {
-		r.mu.RUnlock()
-		return client, nil
-	}
-	r.mu.RUnlock()
-
-	inst, err := r.getInstanceOfType(instanceID, "tautulli")
-	if err != nil {
-		return nil, err
-	}
-
-	client := tautulli.NewClient(inst.URL, inst.APIKey)
-
-	r.mu.Lock()
-	r.tautulliClients[instanceID] = client
 	r.mu.Unlock()
 
 	return client, nil
@@ -424,19 +453,6 @@ func (r *Registry) GetDefaultTransmissionClient() (*transmission.Client, string,
 	return client, inst.ID, err
 }
 
-// GetDefaultTautulliClient returns the client for the default Tautulli instance.
-func (r *Registry) GetDefaultTautulliClient() (*tautulli.Client, string, error) {
-	inst, err := r.store.GetDefault("tautulli")
-	if err != nil {
-		return nil, "", fmt.Errorf("get default tautulli: %w", err)
-	}
-	if inst == nil {
-		return nil, "", nil
-	}
-	client, err := r.GetTautulliClient(inst.ID)
-	return client, inst.ID, err
-}
-
 // GetUserDefaultRadarrClient returns the Radarr client for a user's effective
 // default instance: their pin, else the global default when it is granted (or
 // nothing is), else their first granted instance. The second return is the
@@ -485,6 +501,22 @@ func (r *Registry) GetUserChaptarrClient(userID int64) (*chaptarr.Client, string
 	return client, id, err
 }
 
+// GetUserLidarrClient returns the Lidarr client for a user's effective
+// granted instance (their pin, else their first grant). Lidarr has NO global
+// default: a user with no explicit rows gets a nil client and an empty ID,
+// which callers surface as "no access / not configured".
+func (r *Registry) GetUserLidarrClient(userID int64) (*lidarr.Client, string, error) {
+	id, err := r.store.EffectiveDefaultInstanceID(userID, "lidarr")
+	if err != nil {
+		return nil, "", fmt.Errorf("get user lidarr: %w", err)
+	}
+	if id == "" {
+		return nil, "", nil
+	}
+	client, err := r.GetLidarrClient(id)
+	return client, id, err
+}
+
 // GetDefaultChaptarrClient returns a client for an arbitrary configured Chaptarr
 // instance (lowest sort_order). Chaptarr has no global default flag; this exists
 // for admin/AI contexts that operate without a specific user identity. Returns a
@@ -498,6 +530,22 @@ func (r *Registry) GetDefaultChaptarrClient() (*chaptarr.Client, string, error) 
 		return nil, "", nil
 	}
 	client, err := r.GetChaptarrClient(inst.ID)
+	return client, inst.ID, err
+}
+
+// GetDefaultLidarrClient returns a client for an arbitrary configured Lidarr
+// instance (lowest sort_order). Lidarr has no global default flag; this exists
+// for admin contexts that operate without a specific user identity. Returns a
+// nil client when no Lidarr instance is configured.
+func (r *Registry) GetDefaultLidarrClient() (*lidarr.Client, string, error) {
+	inst, err := r.store.GetDefault("lidarr")
+	if err != nil {
+		return nil, "", fmt.Errorf("get default lidarr: %w", err)
+	}
+	if inst == nil {
+		return nil, "", nil
+	}
+	client, err := r.GetLidarrClient(inst.ID)
 	return client, inst.ID, err
 }
 
@@ -521,11 +569,12 @@ func (r *Registry) InvalidateClient(instanceID string) {
 	delete(r.radarrClients, instanceID)
 	delete(r.sonarrClients, instanceID)
 	delete(r.chaptarrClients, instanceID)
+	delete(r.lidarrClients, instanceID)
 	delete(r.sabnzbdClients, instanceID)
 	delete(r.qbittorrentClients, instanceID)
 	delete(r.nzbgetClients, instanceID)
 	delete(r.transmissionClients, instanceID)
-	delete(r.tautulliClients, instanceID)
+	delete(r.watchHistoryProviders, instanceID)
 	r.mu.Unlock()
 }
 

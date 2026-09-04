@@ -98,6 +98,16 @@ func (r registryMetadataResolver) Resolve(instanceID, serviceType string, fileID
 			return fileMetadata{}, err
 		}
 		return fileMetadata{Path: file.Path}, nil
+	case "lidarr":
+		client, _, err := r.registry.GetFreshLidarrClient(instanceID)
+		if err != nil {
+			return fileMetadata{}, err
+		}
+		file, err := client.GetTrackFile(fileID)
+		if err != nil {
+			return fileMetadata{}, err
+		}
+		return fileMetadata{Path: file.Path}, nil
 	default:
 		return fileMetadata{}, errMediaFileUnavailable
 	}
@@ -617,7 +627,7 @@ func (h *Handler) openMediaFile(inst *instance.Instance, reportedPath string, fi
 }
 
 func supportedService(serviceType string) bool {
-	return serviceType == "radarr" || serviceType == "sonarr" || serviceType == "chaptarr"
+	return serviceType == "radarr" || serviceType == "sonarr" || serviceType == "chaptarr" || serviceType == "lidarr"
 }
 
 // withinRoot reports whether candidate is root itself or lexically inside it.

@@ -16,7 +16,9 @@ var carouselSourceTools = map[string]bool{
 	"search_movies":       true,
 	"search_tv_shows":     true,
 	"search_books":        true,
+	"search_music":        true,
 	"get_trending":        true,
+	"browse_titles":       true,
 	"get_recommendations": true,
 }
 
@@ -24,7 +26,7 @@ var carouselSourceTools = map[string]bool{
 // the model to post the carousel it owes. Text produced after the nudge is
 // deliberately not streamed to the client (the user already has the full
 // answer), so the message can demand a bare tool call without harming UX.
-const displayMediaNudge = "System reminder: your answer named concrete titles taken from tool results, but you never called display_media, so the user sees no visual carousel. Call display_media now with exactly those items, in the order your answer mentions them, copying titles, years, media types, and TMDB IDs or foreign_book_ids from the tool results. None of the text you produce from now on will be shown to the user, so do not repeat your answer. If your answer truly named no concrete media items, reply with the single word: done."
+const displayMediaNudge = "System reminder: your answer named concrete titles taken from tool results, but you never called display_media, so the user sees no visual carousel. Call display_media now with exactly those items, in the order your answer mentions them, copying titles, years, media types, and TMDB IDs, foreign_book_ids, or foreign_album_ids from the tool results. None of the text you produce from now on will be shown to the user, so do not repeat your answer. If your answer truly named no concrete media items, reply with the single word: done."
 
 // carouselWatch tracks, across one interactive agent loop, whether the turn
 // owes the user a display_media carousel. It is fed from the tool-execution

@@ -41,6 +41,23 @@ void main() {
     expect(change.sourceLabel, 'Future Automation');
   });
 
+  test('every arr the settings tools can change has a display label', () {
+    // A Lidarr profile change once rendered its raw service type in
+    // Configuration history because the label switch stopped at Chaptarr.
+    for (final (serviceType, label) in [
+      ('radarr', 'Radarr'),
+      ('sonarr', 'Sonarr'),
+      ('chaptarr', 'Chaptarr'),
+      ('lidarr', 'Lidarr'),
+    ]) {
+      final change = ConfigChange.fromJson({
+        ..._changeJson(),
+        'service_type': serviceType,
+      });
+      expect(change.serviceLabel, label, reason: serviceType);
+    }
+  });
+
   test('models current system-source custom-format creation records', () {
     final change = ConfigChange.fromJson({
       ..._changeJson(),

@@ -22,6 +22,7 @@ import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../discover/logic/search_library_status.dart';
 import '../../discover/ui/book_search_results_view.dart';
+import '../../discover/ui/music_search_results_view.dart';
 import '../../discover/ui/search_results_view.dart';
 import '../../issues/logic/issues_provider.dart';
 import '../../media_access/data/media_access_service.dart';
@@ -34,6 +35,7 @@ import '../../settings/logic/setup_status_provider.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/logic/sonarr_series_provider.dart';
 import '../logic/shell_book_search_provider.dart';
+import '../logic/shell_music_search_provider.dart';
 import '../logic/shell_search_provider.dart';
 
 /// The root shell widget with persistent search bar and navigation chrome.
@@ -99,6 +101,11 @@ class _AppShellState extends ConsumerState<AppShell>
   SearchMode _prevMode = SearchMode.search;
   bool? _prevReduceMotion;
 
+  /// Whether the drawer's "Needs attention" row is showing its queues.
+  /// Deliberately not persisted: the group is a peek, so a reopened drawer
+  /// starts collapsed again and the navigation stays one screen of modules.
+  bool _attentionExpanded = false;
+
   @override
   void initState() {
     super.initState();
@@ -145,6 +152,7 @@ class _AppShellState extends ConsumerState<AppShell>
         if (!mounted) return;
         ref.read(shellSearchProvider.notifier).updateSearch('');
         ref.read(shellBookSearchProvider.notifier).reset();
+        ref.read(shellMusicSearchProvider.notifier).reset();
       });
     }
   }
@@ -287,9 +295,10 @@ class _AppShellState extends ConsumerState<AppShell>
   void _exitAiMode() {
     _searchController.clear();
     ref.read(shellSearchProvider.notifier).exitAiMode();
-    // GAP-SC1 desync: reset the book notifier too, so a book result hidden
-    // by an AI-mode entry can never reappear stale after a clear.
+    // GAP-SC1 desync: reset the book and music notifiers too, so a result
+    // hidden by an AI-mode entry can never reappear stale after a clear.
     ref.read(shellBookSearchProvider.notifier).reset();
+    ref.read(shellMusicSearchProvider.notifier).reset();
     _dismissKeyboard();
   }
 
@@ -303,6 +312,7 @@ class _AppShellState extends ConsumerState<AppShell>
     // bump, so no Chaptarr request is issued for a query the user just
     // converted into an AI question.
     ref.read(shellBookSearchProvider.notifier).reset();
+    ref.read(shellMusicSearchProvider.notifier).reset();
     ref.read(shellSearchProvider.notifier).enterAiMode();
     // The pill sits in a TextFieldTapRegion so tapping it doesn't blur the
     // field; re-assert focus anyway so typing can continue immediately.
@@ -319,6 +329,13 @@ class _AppShellState extends ConsumerState<AppShell>
       'book library. Treat it as a question about books, authors and '
       'reading.\n\n';
 
+  /// The Music tab's twin of [_booksAiHandoffPrefix] — the same compile-time
+  /// literal rule (T-04-01: nothing interpolated; user text only appended).
+  static const String _musicAiHandoffPrefix = 'Context: this question was '
+      'asked from the Music tab of Cantinarr, which searches the user\'s '
+      'music library. Treat it as a question about albums, artists and '
+      'listening.\n\n';
+
   /// Shows the books of an author the library does not hold, by running the
   /// search the user could have typed themselves.
   ///
@@ -327,6 +344,22 @@ class _AppShellState extends ConsumerState<AppShell>
   /// this same overlay, are the useful destination: each row is already a
   /// requestable book. Setting the field programmatically does not fire
   /// `onChanged` (see `_exitAiMode`), so the notifier is fed explicitly.
+  /// Shows the albums of an artist the library does not hold, by running the
+  /// search the user could have typed themselves — the music sibling of
+  /// [_searchAuthorBooks], for the same reason: a metadata-only artist has no
+  /// detail screen to open.
+  void _searchArtistAlbums(String artistName) {
+    final term = artistName.trim();
+    if (term.isEmpty) return;
+    _searchController.text = term;
+    _searchController.selection =
+        TextSelection.collapsed(offset: term.length);
+    // Treat it as a fresh keystroke: the Ask AI pill's idle timer restarts
+    // rather than firing off the tap that just happened.
+    _resetAskAiIdle();
+    ref.read(shellMusicSearchProvider.notifier).updateSearch(term);
+  }
+
   void _searchAuthorBooks(String authorName) {
     final term = authorName.trim();
     if (term.isEmpty) return;
@@ -347,9 +380,14 @@ class _AppShellState extends ConsumerState<AppShell>
     // Captured before `_exitAiMode()`/the route push change `currentPath` —
     // reading it from inside the post-frame callback below would ask "which
     // tab am I on?" of the assistant route and always answer "not Books".
-    final wireContent = _isBooksTab(widget.currentPath)
-        ? '$_booksAiHandoffPrefix$text'
-        : null;
+    final String? wireContent;
+    if (_isBooksTab(widget.currentPath)) {
+      wireContent = '$_booksAiHandoffPrefix$text';
+    } else if (_isMusicTab(widget.currentPath)) {
+      wireContent = '$_musicAiHandoffPrefix$text';
+    } else {
+      wireContent = null;
+    }
 
     _exitAiMode();
     context.push('/assistant');
@@ -378,8 +416,9 @@ class _AppShellState extends ConsumerState<AppShell>
     if (path.startsWith('/radarr')) return ModuleType.radarr;
     if (path.startsWith('/sonarr')) return ModuleType.sonarr;
     if (path.startsWith('/chaptarr')) return ModuleType.chaptarr;
+    if (path.startsWith('/lidarr')) return ModuleType.lidarr;
     if (path.startsWith('/downloads')) return ModuleType.downloads;
-    if (path.startsWith('/tautulli')) return ModuleType.tautulli;
+    if (path.startsWith('/monitoring')) return ModuleType.monitoring;
     return null;
   }
 
@@ -391,6 +430,12 @@ class _AppShellState extends ConsumerState<AppShell>
   /// Chaptarr (WR-01).
   static bool _isBooksTab(String path) =>
       path == '/dashboard/books' || path.startsWith('/dashboard/books/');
+
+  /// True on the Music discovery tab, where the toolbar searches Lidarr
+  /// albums and artists instead of TMDB. Same route-boundary rule as
+  /// [_isBooksTab] (WR-01).
+  static bool _isMusicTab(String path) =>
+      path == '/dashboard/music' || path.startsWith('/dashboard/music/');
 
   bool _handleScrollNotification(ScrollNotification notification) {
     // Side-scrolling shelves (poster rows, chip strips) bubble their
@@ -489,15 +534,32 @@ class _AppShellState extends ConsumerState<AppShell>
         });
       },
     );
+    // The music sibling of the listener above, for the same reason: an
+    // instance switch re-runs the typed search against the new Lidarr.
+    ref.listen(
+      instanceProvider.select((state) => state.activeLidarrInstance?.id),
+      (previous, next) {
+        if (previous == next) return;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          ref.read(shellMusicSearchProvider.notifier).rerunForInstance();
+        });
+      },
+    );
 
     final searchState = ref.watch(shellSearchProvider);
     final searchNotifier = ref.read(shellSearchProvider.notifier);
     final bookSearchState = ref.watch(shellBookSearchProvider);
     final bookSearchNotifier = ref.read(shellBookSearchProvider.notifier);
+    final musicSearchState = ref.watch(shellMusicSearchProvider);
+    final musicSearchNotifier = ref.read(shellMusicSearchProvider.notifier);
     final hasAi =
         ref.watch(authProvider).valueOrNull?.connection?.services.ai ?? false;
     final hasChaptarrService =
         ref.watch(authProvider).valueOrNull?.connection?.services.chaptarr ??
+            false;
+    final hasLidarrService =
+        ref.watch(authProvider).valueOrNull?.connection?.services.lidarr ??
             false;
     // Admin approval queue depth — drives the hamburger dot (here) and the
     // drawer "Approvals" entry. Always 0 for non-admins.
@@ -546,11 +608,12 @@ class _AppShellState extends ConsumerState<AppShell>
     // `_isBooksTab(widget.currentPath)` call sites) — every gate below reads
     // this local rather than re-deriving it.
     final booksTab = _isBooksTab(widget.currentPath);
+    final musicTab = _isMusicTab(widget.currentPath);
     // The prefix badge's glyph: the sparkle while the bar is actually in AI
     // mode, otherwise the active discovery tab's own icon (read from the
     // same `modulePagesFor` table the drawer already uses — no second icon
     // map). Gated on `ModuleType.dashboard` specifically, not on
-    // `showGlobalSearch`: Radarr/Sonarr/Chaptarr/Downloads/Tautulli get no
+    // `showGlobalSearch`: Radarr/Sonarr/Chaptarr/Downloads/Monitoring get no
     // context of their own this phase (SEARCH-06, deferred) and keep the
     // generic search glyph. A dashboard path matching no tab (a bare
     // `/dashboard`, or `/dashboard/books` without the Chaptarr grant) also
@@ -561,7 +624,7 @@ class _AppShellState extends ConsumerState<AppShell>
       contextIcon = Icons.auto_awesome_rounded;
     } else if (_moduleTypeForPath(widget.currentPath) == ModuleType.dashboard) {
       final dashboardPages = modulePagesFor(ModuleType.dashboard,
-          includeBooks: hasChaptarrService);
+          includeBooks: hasChaptarrService, includeMusic: hasLidarrService);
       for (final page in dashboardPages) {
         if (page.route == widget.currentPath) {
           contextIcon = page.activeIcon;
@@ -573,8 +636,11 @@ class _AppShellState extends ConsumerState<AppShell>
     // reads the Chaptarr notifier, never the TMDB one, so the overlay and
     // scroll gates cannot be driven by a notifier that no longer receives
     // Books-tab keystrokes.
-    final searchOverlayActive =
-        booksTab ? bookSearchState.isSearching : searchState.isSearching;
+    final searchOverlayActive = booksTab
+        ? bookSearchState.isSearching
+        : musicTab
+            ? musicSearchState.isSearching
+            : searchState.isSearching;
 
     final searchBar = Padding(
       padding: EdgeInsets.fromLTRB(desktop ? 24 : 6, 12, desktop ? 24 : 12, 10),
@@ -599,9 +665,11 @@ class _AppShellState extends ConsumerState<AppShell>
               ? 'Ask the AI anything...'
               : (booksTab
                   ? 'Search books or authors...'
-                  : (hasAi
-                      ? 'Search or ask AI...'
-                      : 'Search by title or person...')),
+                  : (musicTab
+                      ? 'Search albums or artists...'
+                      : (hasAi
+                          ? 'Search or ask AI...'
+                          : 'Search by title or person...'))),
           aiEnabled: hasAi,
           contextIcon: contextIcon,
           onSubmitted: _submitSearchBar,
@@ -631,6 +699,13 @@ class _AppShellState extends ConsumerState<AppShell>
                 // empty-results auto-escalation is ever consulted.
                 searchNotifier.updateSearch('');
               }
+            } else if (musicTab) {
+              if (!isAiReady) {
+                musicSearchNotifier.updateSearch(q);
+              } else if (q.trim().isEmpty) {
+                // Same AI-mode exit parity as the Books arm above.
+                searchNotifier.updateSearch('');
+              }
             } else {
               searchNotifier.updateSearch(q);
             }
@@ -641,13 +716,9 @@ class _AppShellState extends ConsumerState<AppShell>
                   // Clear means "nothing is being searched anywhere" — both
                   // notifiers are reset in both directions so a stale query
                   // can never linger in the one that wasn't being fed.
-                  if (booksTab) {
-                    ref.read(shellBookSearchProvider.notifier).reset();
-                    searchNotifier.updateSearch('');
-                  } else {
-                    searchNotifier.updateSearch('');
-                    ref.read(shellBookSearchProvider.notifier).reset();
-                  }
+                  ref.read(shellBookSearchProvider.notifier).reset();
+                  ref.read(shellMusicSearchProvider.notifier).reset();
+                  searchNotifier.updateSearch('');
                 },
         ),
       ),
@@ -763,6 +834,14 @@ class _AppShellState extends ConsumerState<AppShell>
 
     final scaffold = Scaffold(
       key: _scaffoldKey,
+      // A closed drawer collapses its attention group again, so reopening it
+      // always lands on the same short menu rather than on however far the
+      // last visit had unfolded it.
+      onDrawerChanged: (isOpened) {
+        if (!isOpened && _attentionExpanded) {
+          setState(() => _attentionExpanded = false);
+        }
+      },
       body: SafeArea(
         bottom: false,
         child: Stack(
@@ -897,6 +976,20 @@ class _AppShellState extends ConsumerState<AppShell>
                                         bookSearchState.authorsUnavailable,
                                     onResultTap: _dismissKeyboard,
                                     onAuthorDrillDown: _searchAuthorBooks,
+                                  )
+                                : musicTab
+                                ? MusicSearchResultsView(
+                                    results: musicSearchState.results,
+                                    artists: musicSearchState.artists,
+                                    query: musicSearchState.searchQuery,
+                                    isLoading:
+                                        musicSearchState.isLoadingSearch,
+                                    searched: musicSearchState.searched,
+                                    error: musicSearchState.error,
+                                    artistsUnavailable:
+                                        musicSearchState.artistsUnavailable,
+                                    onResultTap: _dismissKeyboard,
+                                    onArtistDrillDown: _searchArtistAlbums,
                                   )
                                 : SearchResultsView(
                                     results: searchState.searchResults,
@@ -1045,6 +1138,7 @@ class _AppShellState extends ConsumerState<AppShell>
   }
 
   static String _secondaryRouteLabel(String path) {
+    if (path.startsWith('/browse/')) return 'Browse';
     if (path.startsWith('/detail/')) return 'Media details';
     if (path.startsWith('/settings')) return 'Settings';
     if (path.startsWith('/approvals')) return 'Approvals';
@@ -1065,6 +1159,9 @@ class _AppShellState extends ConsumerState<AppShell>
     final pathModule = _moduleTypeForPath(widget.currentPath);
     final hasChaptarrService =
         ref.watch(authProvider).valueOrNull?.connection?.services.chaptarr ??
+            false;
+    final hasLidarrService =
+        ref.watch(authProvider).valueOrNull?.connection?.services.lidarr ??
             false;
     // The backend lists a media server only for users an admin granted it,
     // so its presence alone decides whether the access guide is offered —
@@ -1107,12 +1204,66 @@ class _AppShellState extends ConsumerState<AppShell>
         !ref.watch(profileApprovalsMenuOnlyWhenPendingProvider) ||
             profileProposalsStale ||
             pendingProfileProposals > 0;
-    final showNeedsAttentionSection = showApprovals ||
-        showIssues ||
-        showAgentFixes ||
-        showProfileApprovals ||
-        plexInvitesWaiting > 0 ||
-        showSetupReminder;
+    // The admin queues, as data rather than as six inline rows: the collapsed
+    // "Needs attention" entry's total is summed from this same list, so the
+    // number on the closed row can never disagree with what opening it shows.
+    final attentionEntries = <_AttentionEntry>[
+      if (showApprovals)
+        _AttentionEntry(
+          icon: Icons.fact_check_outlined,
+          title: 'Approvals',
+          semanticsIdentifier: 'nav-action-approvals',
+          count: pendingApprovals,
+          route: '/approvals',
+        ),
+      if (showIssues)
+        _AttentionEntry(
+          icon: Icons.flag_outlined,
+          title: 'Issues',
+          semanticsIdentifier: 'nav-action-issues',
+          count: openIssues,
+          route: '/issues',
+        ),
+      if (showAgentFixes)
+        _AttentionEntry(
+          icon: Icons.build_circle_outlined,
+          title: 'Agent fixes',
+          semanticsIdentifier: 'nav-action-agent-fixes',
+          count: pendingAgentActions,
+          route: '/agent-actions',
+        ),
+      if (showProfileApprovals)
+        _AttentionEntry(
+          icon: Icons.tune,
+          title: 'Profile approvals',
+          semanticsIdentifier: 'nav-action-profile-approvals',
+          count: pendingProfileProposals,
+          route: '/settings/profile-approvals',
+        ),
+      // Appears only while someone is waiting on a Plex invite (e.g. the push
+      // was missed or an auto-invite failed); lands on the Users screen where
+      // the invite is one tap.
+      if (plexInvitesWaiting > 0)
+        _AttentionEntry(
+          icon: Icons.play_circle_outline,
+          title: 'Plex invites',
+          semanticsIdentifier: 'nav-action-plex-invites',
+          count: plexInvitesWaiting,
+          route: '/settings/users',
+        ),
+      // Setup reminder: how many features are still unconfigured. Muteable
+      // from the checklist; the Settings tile always remains.
+      if (showSetupReminder)
+        _AttentionEntry(
+          icon: Icons.checklist_outlined,
+          title: 'Setup checklist',
+          semanticsIdentifier: 'nav-action-setup-checklist',
+          count: setupRemaining,
+          route: '/setup',
+        ),
+    ];
+    final attentionTotal =
+        attentionEntries.fold<int>(0, (sum, entry) => sum + entry.count);
 
     // AI Assistant is a tool, not a library, so it sits with the footer actions
     // instead of under the "Libraries" header. It's always last in
@@ -1190,7 +1341,9 @@ class _AppShellState extends ConsumerState<AppShell>
       );
 
       final pages = !isOverlay && isActive
-          ? modulePagesFor(module.type, includeBooks: hasChaptarrService)
+          ? modulePagesFor(module.type,
+              includeBooks: hasChaptarrService,
+              includeMusic: hasLidarrService)
           : const <ModulePage>[];
       if (pages.isEmpty) return item;
 
@@ -1275,93 +1428,83 @@ class _AppShellState extends ConsumerState<AppShell>
           ),
           const Divider(color: AppTheme.border),
 
-          // Admin action queues — kept above the modules so a waiting count is
-          // the first thing an admin sees when the drawer opens.
-          if (isAdmin && showNeedsAttentionSection) ...[
-            const _DrawerSectionHeader('Needs attention'),
-            if (showApprovals)
-              _DrawerItem(
-                icon: Icons.fact_check_outlined,
-                title: 'Approvals',
-                semanticsIdentifier: 'nav-action-approvals',
-                badgeCount: pendingApprovals,
-                onTap: () {
-                  if (isOverlay) Navigator.pop(context);
-                  context.push('/approvals');
-                },
-              ),
-            if (showIssues)
-              _DrawerItem(
-                icon: Icons.flag_outlined,
-                title: 'Issues',
-                semanticsIdentifier: 'nav-action-issues',
-                badgeCount: openIssues,
-                onTap: () {
-                  if (isOverlay) Navigator.pop(context);
-                  context.push('/issues');
-                },
-              ),
-            if (showAgentFixes)
-              _DrawerItem(
-                icon: Icons.build_circle_outlined,
-                title: 'Agent fixes',
-                semanticsIdentifier: 'nav-action-agent-fixes',
-                badgeCount: pendingAgentActions,
-                onTap: () {
-                  if (isOverlay) Navigator.pop(context);
-                  context.push('/agent-actions');
-                },
-              ),
-            if (showProfileApprovals)
-              _DrawerItem(
-                icon: Icons.tune,
-                title: 'Profile approvals',
-                semanticsIdentifier: 'nav-action-profile-approvals',
-                badgeCount: pendingProfileProposals,
-                onTap: () {
-                  if (isOverlay) Navigator.pop(context);
-                  context.push('/settings/profile-approvals');
-                },
-              ),
-            // Appears only while someone is waiting on a Plex invite (e.g.
-            // the push was missed or an auto-invite failed); lands on the
-            // Users screen where the invite is one tap.
-            if (plexInvitesWaiting > 0)
-              _DrawerItem(
-                icon: Icons.play_circle_outline,
-                title: 'Plex invites',
-                semanticsIdentifier: 'nav-action-plex-invites',
-                badgeCount: plexInvitesWaiting,
-                onTap: () {
-                  if (isOverlay) Navigator.pop(context);
-                  context.push('/settings/users');
-                },
-              ),
-            // Setup reminder: how many features are still unconfigured.
-            // Muteable from the checklist; the Settings tile always remains.
-            if (showSetupReminder)
-              _DrawerItem(
-                icon: Icons.checklist_outlined,
-                title: 'Setup checklist',
-                semanticsIdentifier: 'nav-action-setup-checklist',
-                badgeCount: setupRemaining,
-                onTap: () {
-                  if (isOverlay) Navigator.pop(context);
-                  context.push('/setup');
-                },
-              ),
-            const Divider(color: AppTheme.border),
-          ],
-
           // Module navigation. Discover (the browse/home surface) leads on its
           // own; the "Libraries" header groups the managed arr modules beneath
           // it. On desktop the active module also expands into its pages — those
           // replace the module shell's bottom nav there. The mobile drawer stays
           // modules-only because the bottom nav covers page switching.
+          //
+          // The admin queues ride at the top of this same list rather than as
+          // fixed rows above it: six of them left the modules a ~40px slot on a
+          // phone, so Discover and the libraries were scrolled out of a menu
+          // that is supposed to show them.
           Expanded(
             child: ListView(
               padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
               children: [
+                // Admin action queues, behind one row carrying their running
+                // total — the first thing an admin sees, without the queues
+                // themselves crowding out the navigation. Tapping unfolds them
+                // in place; nothing here navigates.
+                if (isAdmin && attentionEntries.isNotEmpty) ...[
+                  _DrawerItem(
+                    icon: Icons.notifications_active_outlined,
+                    title: 'Needs attention',
+                    semanticsIdentifier: 'nav-action-needs-attention',
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (attentionTotal > 0) ...[
+                          _CountPill(count: attentionTotal),
+                          const SizedBox(width: 6),
+                        ],
+                        AnimatedRotation(
+                          turns: _attentionExpanded ? 0.5 : 0,
+                          duration: AppTheme.motionFast,
+                          child: const Icon(
+                            Icons.expand_more,
+                            size: 20,
+                            color: AppTheme.textMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                    onTap: () => setState(
+                      () => _attentionExpanded = !_attentionExpanded,
+                    ),
+                  ),
+                  AnimatedSize(
+                    duration: AppTheme.motionMedium,
+                    curve: Curves.easeOutCubic,
+                    alignment: Alignment.topCenter,
+                    child: _attentionExpanded
+                        ? Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              for (final entry in attentionEntries)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 12),
+                                  child: _DrawerItem(
+                                    icon: entry.icon,
+                                    title: entry.title,
+                                    semanticsIdentifier:
+                                        entry.semanticsIdentifier,
+                                    badgeCount: entry.count,
+                                    onTap: () {
+                                      setState(
+                                        () => _attentionExpanded = false,
+                                      );
+                                      if (isOverlay) Navigator.pop(context);
+                                      context.push(entry.route);
+                                    },
+                                  ),
+                                ),
+                            ],
+                          )
+                        : const SizedBox(width: double.infinity),
+                  ),
+                  const Divider(color: AppTheme.border),
+                ],
                 if (libraryModules.isNotEmpty)
                   buildModuleTile(libraryModules.first),
                 if (libraryModules.length > 1) ...[
@@ -1421,10 +1564,12 @@ class _AppShellState extends ConsumerState<AppShell>
         return state.sonarrInstances;
       case ModuleType.downloads:
         return state.downloadInstances;
-      case ModuleType.tautulli:
-        return state.tautulliInstances;
+      case ModuleType.monitoring:
+        return state.watchHistoryInstances;
       case ModuleType.chaptarr:
         return state.chaptarrInstances;
+      case ModuleType.lidarr:
+        return state.lidarrInstances;
       default:
         return const [];
     }
@@ -1441,10 +1586,12 @@ class _AppShellState extends ConsumerState<AppShell>
         return state.activeSonarrInstance;
       case ModuleType.downloads:
         return state.activeDownloadInstance;
-      case ModuleType.tautulli:
-        return state.activeTautulliInstance;
+      case ModuleType.monitoring:
+        return state.activeWatchHistoryInstance;
       case ModuleType.chaptarr:
         return state.activeChaptarrInstance;
+      case ModuleType.lidarr:
+        return state.activeLidarrInstance;
       default:
         return null;
     }
@@ -1483,10 +1630,12 @@ class _AppShellState extends ConsumerState<AppShell>
           instances.setActiveSonarrInstance(instanceId);
         case ModuleType.downloads:
           instances.setActiveDownloadInstance(instanceId);
-        case ModuleType.tautulli:
-          instances.setActiveTautulliInstance(instanceId);
+        case ModuleType.monitoring:
+          instances.setActiveWatchHistoryInstance(instanceId);
         case ModuleType.chaptarr:
           instances.setActiveChaptarrInstance(instanceId);
+        case ModuleType.lidarr:
+          instances.setActiveLidarrInstance(instanceId);
         default:
           break;
       }
@@ -1500,10 +1649,12 @@ class _AppShellState extends ConsumerState<AppShell>
         context.go('/sonarr/library');
       case ModuleType.chaptarr:
         context.go('/chaptarr/library');
+      case ModuleType.lidarr:
+        context.go('/lidarr/library');
       case ModuleType.downloads:
         context.go('/downloads/queue');
-      case ModuleType.tautulli:
-        context.go('/tautulli/activity');
+      case ModuleType.monitoring:
+        context.go('/monitoring/activity');
       case ModuleType.assistant:
         context.push('/assistant');
     }
@@ -1638,8 +1789,31 @@ class _DrawerItem extends StatelessWidget {
   }
 }
 
+/// One admin queue listed under the drawer's "Needs attention" row.
+///
+/// Describing them as data keeps the collapsed row's total and the rows it
+/// hides derived from one list: the badge is the sum of these counts, so it
+/// cannot claim a number the expanded group doesn't account for.
+class _AttentionEntry {
+  const _AttentionEntry({
+    required this.icon,
+    required this.title,
+    required this.semanticsIdentifier,
+    required this.count,
+    required this.route,
+  });
+
+  final IconData icon;
+  final String title;
+  final String semanticsIdentifier;
+
+  /// How many items are waiting in this queue; 0 renders no badge.
+  final int count;
+  final String route;
+}
+
 /// A small caps label that segments the drawer into scannable groups
-/// (e.g. "Needs attention", "Libraries"). Purely visual — not tappable.
+/// (e.g. "Libraries"). Purely visual — not tappable.
 class _DrawerSectionHeader extends StatelessWidget {
   final String label;
 

@@ -141,7 +141,6 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
           highlightId: widget.highlightId,
           child: SwitchListTile(
             value: edited.requireApproval,
-            activeThumbColor: AppTheme.accent,
             onChanged: (v) =>
                 setState(() => _edited = edited.copyWith(requireApproval: v)),
             title: const Text(
@@ -161,7 +160,6 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
           highlightId: widget.highlightId,
           child: SwitchListTile(
             value: edited.allowSeasonChoice,
-            activeThumbColor: AppTheme.accent,
             onChanged: (v) =>
                 setState(() => _edited = edited.copyWith(allowSeasonChoice: v)),
             title: const Text(
@@ -210,7 +208,6 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
           highlightId: widget.highlightId,
           child: SwitchListTile(
             value: edited.allowQualityChoice,
-            activeThumbColor: AppTheme.accent,
             onChanged: (v) => setState(
                 () => _edited = edited.copyWith(allowQualityChoice: v)),
             title: const Text(

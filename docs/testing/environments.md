@@ -15,7 +15,7 @@ live service, it belongs in the live-lab or manual layers described in
 ## Where real credentials live
 
 Cantinarr's integration credentials are not environment variables. Radarr,
-Sonarr, Chaptarr, download clients, Tautulli, TMDB, Trakt, AI provider
+Sonarr, Chaptarr, download clients, Tautulli, Tracearr, TMDB, Trakt, AI provider
 keys, and the Plex account link (a Plex instance) are all entered through the admin UI at
 runtime and stored AES-256-GCM encrypted in the SQLite database
 (`service_instances` rows and the settings KV). Environment variables only
@@ -34,6 +34,7 @@ generated API key or local username/password:
 - Radarr, Sonarr, Chaptarr — local API key from each service's own settings
 - SABnzbd, NZBGet, qBittorrent, Transmission — local key or local credentials
 - Tautulli — local API key (meaningful data needs a Plex server feeding it)
+- Tracearr — public API key from its Settings > General (needs a Plex, Jellyfin, or Emby server feeding it; the jf-lab compose runs the all-in-one `supervised` image against the lab Jellyfin)
 - Jellyfin — local API key minted under Dashboard > API Keys; the whole
   integration is server-local, no jellyfin.org account
 - Emby — local API key minted under Settings > Advanced > API Keys; no

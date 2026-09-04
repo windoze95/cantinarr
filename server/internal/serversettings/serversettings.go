@@ -36,9 +36,9 @@ const (
 )
 
 // DefaultDiscoveryEnglishOnly is the language filter a server ships with until
-// an admin decides otherwise. On by default because the rows are a shelf, not a
-// catalogue: an untranslated title a household cannot watch costs one of twenty
-// slots, and the cost of the default being wrong is asymmetric — an admin who
+// an admin decides otherwise. On by default because an untranslated title a
+// household cannot watch costs a slot on every row and every page of the grids
+// under them, and the cost of the default being wrong is asymmetric — an admin who
 // wants everything flips one switch, while an admin who never opens the screen
 // would otherwise never learn the filter exists. Search and detail lookups are
 // never filtered either way.
@@ -100,6 +100,14 @@ type Settings struct {
 	// "off" once a discovery decision exists; until then reads serve
 	// DefaultDiscoveryEnglishOnly, because a bool cannot carry "unset".
 	DiscoveryEnglishOnly bool `json:"discovery_english_only"`
+
+	// SetupSkippedItems are the optional setup-checklist keys an admin has
+	// acknowledged and skipped, so a feature the deployment deliberately
+	// doesn't use stops counting as unfinished. Only optional items may live
+	// here (the write path enforces it), the set is server-wide — the
+	// checklist grades the server, not a device — and skipping is always
+	// reversible from the checklist itself.
+	SetupSkippedItems []string `json:"setup_skipped_items,omitempty"`
 }
 
 // Service reads and writes the server settings blob.
@@ -220,6 +228,28 @@ func (s *Service) SetDiscovery(source string, englishOnly bool) (Settings, error
 	next := s.raw()
 	next.DiscoverySource = normalizeDiscoverySource(source, s.traktAvailable())
 	next.DiscoveryEnglishOnly = englishOnly
+	return s.save(next)
+}
+
+// SetSetupItemSkipped records or clears one setup-checklist skip, leaving
+// every other preference untouched. Key validity (a real, optional item) is
+// the API layer's job — it owns the item list; this stays a plain set edit.
+func (s *Service) SetSetupItemSkipped(key string, skipped bool) (Settings, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return Settings{}, fmt.Errorf("setup item key is required")
+	}
+	next := s.raw()
+	kept := make([]string, 0, len(next.SetupSkippedItems)+1)
+	for _, existing := range next.SetupSkippedItems {
+		if existing != key {
+			kept = append(kept, existing)
+		}
+	}
+	if skipped {
+		kept = append(kept, key)
+	}
+	next.SetupSkippedItems = kept
 	return s.save(next)
 }
 

@@ -40,6 +40,6 @@ Use the [run template](../run-template.md) to record executions of these cases.
 
 - [ ] `EXP-001` · P2 · UI — Run a 60-minute unscripted requester session across discover/search/request/status/guide/AI with network changes; record confusion, stale state, and crashes.
 - [ ] `EXP-002` · P2 · UI — Run a 90-minute admin session across every module with two instances, concurrent Admin B changes, and mixed external mutations; record wrong-target or stale-control risks.
-- [ ] `EXP-003` · P2 · LIVE — Repeat the highest-risk integration flows against the oldest and newest supported upstream Plex/arr/download/Tautulli versions.
+- [ ] `EXP-003` · P2 · LIVE — Repeat the highest-risk integration flows against the oldest and newest supported upstream Plex/arr/download/Tautulli/Tracearr versions.
 - [ ] `EXP-004` · P2 · UI — Run Chrome, Safari, and supported mobile web plus current iOS/Android release builds with slow 3G/high latency and intermittent VPN.
 - [ ] `EXP-005` · P2 · SEC — Perform a focused abuse pass as a curious household requester using browser devtools/direct API calls, guessed IDs, and prompt injection; record any information or mutation beyond role.

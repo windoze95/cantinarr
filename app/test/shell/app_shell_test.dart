@@ -313,6 +313,100 @@ void main() {
   });
 
   testWidgets(
+      'a Music-tab question reaches the assistant framed while the bubble '
+      'shows the raw text', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final chatNotifier = _FakeAiChatNotifier();
+    final router = GoRouter(
+      initialLocation: '/dashboard/music',
+      routes: [
+        ShellRoute(
+          builder: (context, state, child) =>
+              AppShell(currentPath: state.uri.path, child: child),
+          routes: [
+            GoRoute(
+              path: '/dashboard/music',
+              builder: (_, __) => const Scaffold(body: Text('Music home')),
+            ),
+          ],
+        ),
+        GoRoute(
+          path: '/assistant',
+          builder: (_, __) => const AiChatScreen(aiAvailable: true),
+        ),
+      ],
+    );
+
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = const _JsonAdapter();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(() => _FakeAuthNotifier(_musicAiState)),
+          backendClientProvider.overrideWithValue(dio),
+          aiChatProvider.overrideWith((ref) {
+            ref.keepAlive();
+            return chatNotifier;
+          }),
+          codexConnectionStatusProvider.overrideWith(
+            (_) => const CodexConnectionStatus(
+              selected: false,
+              available: false,
+              connected: false,
+            ),
+          ),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+        find.byType(TextField).first, 'what should I listen to next?');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+    // Arm the pause detector behind the Ask AI pill; bounded pumps only from
+    // here — the pill's shimmer repeats forever while aiReady, so
+    // pumpAndSettle would never return.
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 150));
+    await tester.tap(find.text('Ask AI'));
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pumpAndSettle();
+
+    expect(
+      chatNotifier.sentMessage,
+      'what should I listen to next?',
+      reason: 'the bubble renders the raw text, never the framing — '
+          'whole-string equality',
+    );
+    expect(chatNotifier.sentWireContent, isNotNull);
+    expect(
+      chatNotifier.sentWireContent,
+      startsWith('Context: this question was asked from the Music tab'),
+    );
+    expect(
+      chatNotifier.sentWireContent,
+      endsWith('what should I listen to next?'),
+      reason: "the user's own words are appended unchanged, never reworded",
+    );
+    expect(
+      find.byType(AiChatScreen),
+      findsOneWidget,
+      reason: 'the assistant still opens with the prompt in flight',
+    );
+  });
+
+  testWidgets(
       'Ask AI pill surfaces on typed pause and never lingers on an empty field',
       (tester) async {
     tester.view.physicalSize = const Size(390, 844);
@@ -713,15 +807,91 @@ void main() {
     );
   });
 
-  testWidgets('admin drawer keeps all attention entries visible by default',
+  testWidgets('the admin queues collapse behind one Needs attention row',
       (tester) async {
     await _pumpAdminDrawer(tester);
 
-    expect(find.text('NEEDS ATTENTION'), findsOneWidget);
+    // One row stands for all of them until asked; the queues themselves are
+    // what pushed the modules off a phone screen.
+    expect(find.text('Needs attention'), findsOneWidget);
+    expect(find.text('Approvals'), findsNothing);
+    expect(find.text('Issues'), findsNothing);
+    expect(find.text('Agent fixes'), findsNothing);
+    expect(find.text('Profile approvals'), findsNothing);
+
+    await tester.tap(find.text('Needs attention'));
+    await tester.pumpAndSettle();
+
     expect(find.text('Approvals'), findsOneWidget);
     expect(find.text('Issues'), findsOneWidget);
     expect(find.text('Agent fixes'), findsOneWidget);
     expect(find.text('Profile approvals'), findsOneWidget);
+
+    // The expanded queues scroll with the navigation instead of sitting in a
+    // fixed block above it: that block is what squeezed the module list down
+    // to a sliver, hiding Discover and the libraries behind it.
+    Element scrollableOf(String label) => find
+        .ancestor(of: find.text(label), matching: find.byType(Scrollable))
+        .evaluate()
+        .first;
+    expect(scrollableOf('Approvals'), same(scrollableOf('Discover')));
+
+    await tester.tap(find.text('Needs attention'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Approvals'), findsNothing);
+    expect(find.text('Profile approvals'), findsNothing);
+  });
+
+  testWidgets('closing the drawer collapses the attention group again',
+      (tester) async {
+    await _pumpAdminDrawer(tester);
+
+    await tester.tap(find.text('Needs attention'));
+    await tester.pumpAndSettle();
+    expect(find.text('Approvals'), findsOneWidget);
+
+    // Tap the scrim beside the 304px drawer to dismiss it, then reopen.
+    await tester.tapAt(const Offset(370, 400));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Approvals'),
+      findsNothing,
+      reason: 'the group is a peek, so a reopened drawer starts collapsed',
+    );
+  });
+
+  testWidgets('the collapsed row totals the queues it hides', (tester) async {
+    await _pumpAdminDrawer(
+      tester,
+      requests: const [
+        {'id': 1, 'title': 'One'},
+        {'id': 2, 'title': 'Two'},
+      ],
+      issues: const [
+        {
+          'id': 1,
+          'status': 'open',
+          'media_type': 'movie',
+          'tmdb_id': 1,
+          'title': 'Broken movie',
+        },
+      ],
+    );
+
+    expect(find.text('3'), findsOneWidget);
+
+    await tester.tap(find.text('Needs attention'));
+    await tester.pumpAndSettle();
+
+    // Still one 3 (the collapsed row keeps its total), now beside the two
+    // counts that add up to it.
+    expect(find.text('3'), findsOneWidget);
+    expect(find.text('2'), findsOneWidget);
+    expect(find.text('1'), findsOneWidget);
   });
 
   testWidgets(
@@ -740,7 +910,7 @@ void main() {
     expect(find.text('Issues'), findsNothing);
     expect(find.text('Agent fixes'), findsNothing);
     expect(find.text('Profile approvals'), findsNothing);
-    expect(find.text('NEEDS ATTENTION'), findsNothing);
+    expect(find.text('Needs attention'), findsNothing);
   });
 
   testWidgets('conditional attention entries fail open when queues are unknown',
@@ -754,7 +924,11 @@ void main() {
 
     await _pumpAdminDrawer(tester, failAttentionQueues: true);
 
-    expect(find.text('NEEDS ATTENTION'), findsOneWidget);
+    expect(find.text('Needs attention'), findsOneWidget);
+
+    await tester.tap(find.text('Needs attention'));
+    await tester.pumpAndSettle();
+
     expect(find.text('Approvals'), findsOneWidget);
     expect(find.text('Issues'), findsOneWidget);
     expect(find.text('Agent fixes'), findsOneWidget);
@@ -776,7 +950,7 @@ void main() {
     // refresh makes a queue unknowable enough to show them.
     await _pumpAdminDrawer(tester, hangAttentionQueues: true);
 
-    expect(find.text('NEEDS ATTENTION'), findsNothing);
+    expect(find.text('Needs attention'), findsNothing);
     expect(find.text('Approvals'), findsNothing);
     expect(find.text('Issues'), findsNothing);
     expect(find.text('Agent fixes'), findsNothing);
@@ -805,19 +979,22 @@ void main() {
       ],
     );
 
-    expect(find.text('NEEDS ATTENTION'), findsOneWidget);
+    expect(find.text('Needs attention'), findsOneWidget);
+
+    await tester.tap(find.text('Needs attention'));
+    await tester.pumpAndSettle();
+
     expect(find.text('Approvals'), findsNothing);
     expect(find.text('Agent fixes'), findsNothing);
     expect(find.text('Profile approvals'), findsNothing);
     expect(find.text('Issues'), findsOneWidget);
 
-    final issuesTile = tester.widget<ListTile>(
-      find.ancestor(
-        of: find.text('Issues'),
-        matching: find.byType(ListTile),
-      ),
+    // Tracking is not an alert: neither the Issues row nor the total above it
+    // counts a passively observed issue.
+    expect(
+      find.descendant(of: find.byType(Drawer), matching: find.text('1')),
+      findsNothing,
     );
-    expect(issuesTile.trailing, isNull);
   });
 
   testWidgets(
@@ -1301,6 +1478,7 @@ void main() {
 
 Future<void> _pumpAdminDrawer(
   WidgetTester tester, {
+  List<Map<String, dynamic>> requests = const [],
   List<Map<String, dynamic>> issues = const [],
   bool failAttentionQueues = false,
   bool hangAttentionQueues = false,
@@ -1335,6 +1513,7 @@ Future<void> _pumpAdminDrawer(
           () => _FakeAuthNotifier(_authenticatedAiState),
         ),
         backendClientProvider.overrideWithValue(_fakeDio(
+          requests: requests,
           issues: issues,
           failAttentionQueues: failAttentionQueues,
           hangAttentionQueues: hangAttentionQueues,
@@ -1411,6 +1590,26 @@ const _authenticatedAiState = AuthState(
     services: AvailableServices(ai: true),
   ),
   user: UserProfile(id: 1, username: 'tester', role: 'admin'),
+);
+
+/// The music twin of [_authenticatedAiState]: AI plus a Lidarr grant, so the
+/// Music tab exists to hand a question off from.
+const _musicAiState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(ai: true, lidarr: true),
+    instances: [
+      ServiceInstance(
+        id: 'music-1',
+        serviceType: 'lidarr',
+        name: 'Music',
+        isDefault: true,
+      ),
+    ],
+  ),
+  user: UserProfile(id: 1, username: 'tester', role: 'user'),
 );
 
 /// SEARCH-05 pin fixture: AI is off (all services false) so `SearchMode`
@@ -1538,12 +1737,14 @@ class _FakeAiChatNotifier extends AiChatNotifier {
 }
 
 Dio _fakeDio({
+  List<Map<String, dynamic>> requests = const [],
   List<Map<String, dynamic>> issues = const [],
   bool failAttentionQueues = false,
   bool hangAttentionQueues = false,
 }) {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   dio.httpClientAdapter = _JsonAdapter(
+    requests: requests,
     issues: issues,
     failAttentionQueues: failAttentionQueues,
     hangAttentionQueues: hangAttentionQueues,
@@ -1553,11 +1754,13 @@ Dio _fakeDio({
 
 class _JsonAdapter implements HttpClientAdapter {
   const _JsonAdapter({
+    this.requests = const [],
     this.issues = const [],
     this.failAttentionQueues = false,
     this.hangAttentionQueues = false,
   });
 
+  final List<Map<String, dynamic>> requests;
   final List<Map<String, dynamic>> issues;
   final bool failAttentionQueues;
   final bool hangAttentionQueues;
@@ -1591,6 +1794,8 @@ class _JsonAdapter implements HttpClientAdapter {
     final Object body;
     if (path.endsWith('/movie') || path.endsWith('/series')) {
       body = [];
+    } else if (path == '/api/admin/requests') {
+      body = requests;
     } else if (path == '/api/admin/issues') {
       body = {'issues': issues};
     } else if (path == '/api/admin/agent-actions') {

@@ -232,7 +232,6 @@ class _DebugLoggingTile extends StatelessWidget {
             SwitchListTile(
               value: status.enabled,
               onChanged: pending ? null : onToggle,
-              activeThumbColor: AppTheme.accent,
               title: const Text(
                 'AI Debug Logging',
                 style: TextStyle(
@@ -292,7 +291,6 @@ class _ToolTile extends StatelessWidget {
     return SwitchListTile(
       value: tool.enabled,
       onChanged: pending ? null : onChanged,
-      activeThumbColor: AppTheme.accent,
       title: Row(
         children: [
           Flexible(

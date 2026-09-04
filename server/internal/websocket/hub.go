@@ -21,6 +21,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
@@ -90,12 +91,14 @@ type ContentNotifier interface {
 	NotifyNewMovie(title string, tmdbID int, instanceID string)
 	NotifyNewEpisode(seriesTitle string, tmdbID int, instanceID string)
 	NotifyNewBook(title, foreignID, instanceID, format string)
+	NotifyNewMusic(title, artist, foreignID, instanceID string)
 	// The Upgraded variants page only admins opted into content_upgraded and
 	// silently claim the matching broadcast key, which is what keeps the queue
 	// poller from re-announcing a proven upgrade as new content.
 	NotifyUpgradedMovie(title string, tmdbID int, instanceID string)
 	NotifyUpgradedEpisode(seriesTitle string, tmdbID int, instanceID string)
 	NotifyUpgradedBook(title, foreignID, instanceID, format string)
+	NotifyUpgradedMusic(title, artist, foreignID, instanceID string)
 }
 
 // IssueOpener is the auto-dispatch seam: after every successful detailed queue
@@ -153,6 +156,7 @@ type Hub struct {
 	prevRadarrQueue   map[string]map[int]float64  // instanceID -> movieId -> progress
 	prevSonarrQueue   map[string]map[int]float64  // instanceID -> seriesId -> progress
 	prevChaptarrQueue map[string]map[int]struct{} // instanceID -> set of book record ids
+	prevLidarrQueue   map[string]map[int]struct{} // instanceID -> set of album record ids
 
 	// witness persists the three prev*Queue maps so a restart resumes the
 	// departure diff instead of re-seeding from empty. nil disables persistence
@@ -209,6 +213,7 @@ func NewHub(authService *auth.Service, registry *instance.Registry, store *insta
 		prevRadarrQueue:    make(map[string]map[int]float64),
 		prevSonarrQueue:    make(map[string]map[int]float64),
 		prevChaptarrQueue:  make(map[string]map[int]struct{}),
+		prevLidarrQueue:    make(map[string]map[int]struct{}),
 		prevArrQueueHash:   make(map[string]string),
 		prevDownloadsHash:  make(map[string]string),
 		downloadsErrLogged: make(map[string]bool),
@@ -467,6 +472,7 @@ func (h *Hub) pollLoop(ctx context.Context) {
 			h.pollAllRadarr()
 			h.pollAllSonarr()
 			h.pollAllChaptarr()
+			h.pollAllLidarr()
 		case <-downloadsTicker.C:
 			h.pollAllDownloadClients()
 		}
@@ -501,12 +507,16 @@ func (h *Hub) restoreQueueWitness() {
 			} else {
 				h.prevSonarrQueue[instanceID] = seeded
 			}
-		case "chaptarr":
+		case "chaptarr", "lidarr":
 			seeded := make(map[int]struct{}, len(row.ids))
 			for _, id := range row.ids {
 				seeded[id] = struct{}{}
 			}
-			h.prevChaptarrQueue[instanceID] = seeded
+			if row.serviceType == "chaptarr" {
+				h.prevChaptarrQueue[instanceID] = seeded
+			} else {
+				h.prevLidarrQueue[instanceID] = seeded
+			}
 		default:
 			continue
 		}
@@ -909,6 +919,71 @@ func chaptarrUpgradeDeletesSince(client *chaptarr.Client, since time.Time) map[i
 	return counts
 }
 
+// lidarrImportsSince is the Lidarr analogue of chaptarrImportsSince, sharing
+// the webhook receiver's import vocabulary (lidarr.IsImportEventType) so the
+// two witnesses can never disagree about what counts as an import. Upgrade
+// proof pairs per album record, count-aware like the other splits.
+func lidarrImportsSince(client *lidarr.Client, since time.Time) (fresh, upgraded []int, err error) {
+	records, complete, err := client.GetImportHistorySince(since, catchUpHistoryPageSize)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !complete {
+		return nil, nil, errImportBacklogOverflow
+	}
+	imports := make(map[int]int, len(records))
+	var ids []int
+	for _, rec := range records {
+		if !lidarr.IsImportEventType(rec.EventType) || rec.AlbumID <= 0 {
+			continue
+		}
+		if imports[rec.AlbumID] == 0 {
+			ids = append(ids, rec.AlbumID)
+		}
+		imports[rec.AlbumID]++
+	}
+	sort.Ints(ids)
+	if len(ids) == 0 {
+		return nil, nil, nil
+	}
+	deletes := lidarrUpgradeDeletesSince(client, since)
+	for _, id := range ids {
+		if deletes[id] >= imports[id] {
+			upgraded = append(upgraded, id)
+		} else {
+			fresh = append(fresh, id)
+		}
+	}
+	return fresh, upgraded, nil
+}
+
+// lidarrUpgradeDeletesSince counts the window's delete-for-upgrade records per
+// album, failing open exactly like chaptarrUpgradeDeletesSince. Lidarr has no
+// trackFileDelete webhook toggle, so this history read is the only witness
+// upgrade-deletes have.
+func lidarrUpgradeDeletesSince(client *lidarr.Client, since time.Time) map[int]int {
+	records, complete, err := client.GetUpgradeDeleteHistorySince(since, catchUpHistoryPageSize)
+	if err != nil {
+		log.Printf("websocket: lidarr upgrade-delete catch-up: %v (announcing all imports as new)", err)
+		return nil
+	}
+	if !complete {
+		log.Printf("websocket: lidarr upgrade-delete catch-up: window over one page (announcing all imports as new)")
+		return nil
+	}
+	counts := make(map[int]int, len(records))
+	for _, rec := range records {
+		if !strings.EqualFold(rec.EventType, "trackFileDeleted") || rec.AlbumID <= 0 {
+			continue
+		}
+		if !strings.EqualFold(historyDataValue(rec.Data, "reason"), "Upgrade") {
+			continue
+		}
+		counts[rec.AlbumID]++
+	}
+	return counts
+}
+
 // saveQueueWitness records this instance's current queue membership. A failure
 // is logged and swallowed: degrading to in-memory-only behavior is right, but
 // suppressing the alerts this poll already found is not.
@@ -1232,6 +1307,61 @@ func (h *Hub) autoDispatchChaptarr(instanceID string, client *chaptarr.Client) {
 	h.dispatchDetailedItems("chaptarr", instanceID, observations)
 }
 
+// autoDispatchLidarr is autoDispatchChaptarr's music sibling: it feeds
+// complete diagnosed queue snapshots to remediation, whose music support
+// arrived with the issue-parity wave.
+func (h *Hub) autoDispatchLidarr(instanceID string, client *lidarr.Client) {
+	if !h.autoDispatchEnabled() {
+		return
+	}
+	items, err := client.GetQueueDetailed()
+	if err != nil {
+		log.Printf("websocket: auto-dispatch lidarr detailed queue (%s): %v", instanceID, err)
+		return
+	}
+	observations := make([]arr.QueueObservation, 0, len(items))
+	for _, item := range items {
+		observations = append(observations, lidarrQueueSignal(item))
+	}
+	h.dispatchDetailedItems("lidarr", instanceID, observations)
+}
+
+// lidarrQueueSignal is chaptarrQueueSignal's music sibling: the artist and
+// album record ids ride the generic AuthorID/BookID context fields.
+func lidarrQueueSignal(item lidarr.DetailedQueueItem) arr.QueueObservation {
+	messages := make([]arr.StatusMessage, 0, len(item.StatusMessages))
+	for _, m := range item.StatusMessages {
+		messages = append(messages, arr.StatusMessage{Title: m.Title, Messages: m.Messages})
+	}
+	media := arr.QueueMediaContext{QueueID: item.ID, Title: item.Title, AuthorID: item.ArtistID, BookID: item.AlbumID}
+	if item.Album != nil {
+		if item.Album.Title != "" {
+			media.Title = item.Album.Title
+		}
+		if media.BookID == 0 {
+			media.BookID = item.Album.ID
+		}
+	}
+	if item.Artist != nil && media.AuthorID == 0 {
+		media.AuthorID = item.Artist.ID
+	}
+	return arr.QueueObservation{
+		DownloadID: item.DownloadID,
+		AddedAt:    item.Added,
+		Media:      media,
+		Signal: arr.QueueSignal{
+			Status:                item.Status,
+			TrackedDownloadStatus: item.TrackedDownloadStatus,
+			TrackedDownloadState:  item.TrackedDownloadState,
+			ErrorMessage:          item.ErrorMessage,
+			StatusMessages:        messages,
+			Protocol:              item.Protocol,
+			Size:                  item.Size,
+			SizeLeft:              item.Sizeleft,
+		},
+	}
+}
+
 func (h *Hub) pollAllRadarr() {
 	if h.store == nil || h.registry == nil {
 		return
@@ -1281,6 +1411,126 @@ func (h *Hub) pollAllChaptarr() {
 		}
 		h.pollChaptarrInstance(inst.ID, client)
 	}
+}
+
+func (h *Hub) pollAllLidarr() {
+	if h.store == nil || h.registry == nil {
+		return
+	}
+	instances, err := h.store.List("lidarr")
+	if err != nil {
+		return
+	}
+	for _, inst := range instances {
+		client, err := h.registry.GetLidarrClient(inst.ID)
+		if err != nil {
+			continue
+		}
+		h.pollLidarrInstance(inst.ID, client)
+	}
+}
+
+// pollLidarrInstance emits an arr_queue_changed invalidation ping whenever the
+// instance's download queue composition changes, and witnesses queue departures
+// to push new_music alerts — the same completion witness the Chaptarr poller
+// uses. It is the fallback witness for music: instances where the admin never
+// configured instant updates, and imports of files already on disk. Like
+// Chaptarr it emits no per-item download_progress events (albums carry no TMDB
+// id, which those events key on). It ends with the same auto-dispatch
+// observation pass as the other pollers, feeding album queue snapshots to
+// remediation.
+func (h *Hub) pollLidarrInstance(instanceID string, client *lidarr.Client) {
+	queue, err := client.GetQueue()
+	if err != nil {
+		log.Printf("websocket: poll lidarr queue (%s): %v", instanceID, err)
+		return
+	}
+
+	currentQueue := make(map[int]struct{}, len(queue))
+	tuples := make([]string, 0, len(queue))
+	for _, item := range queue {
+		tuples = append(tuples, fmt.Sprintf("%d|%s|%.0f", item.AlbumID, item.Status, item.Sizeleft))
+		if item.AlbumID <= 0 {
+			// A queue row Lidarr could not match to a library album has no id
+			// to witness or announce; it still counts toward the composition
+			// tuple above so its arrival/departure invalidates queue views.
+			continue
+		}
+		currentQueue[item.AlbumID] = struct{}{}
+	}
+
+	// An album that left the queue and now has files finished importing; one
+	// that departed without a file failed or was removed — say nothing.
+	var departed []int
+	if prevQueue := h.prevLidarrQueue[instanceID]; prevQueue != nil {
+		for albumID := range prevQueue {
+			if _, stillInQueue := currentQueue[albumID]; stillInQueue || albumID <= 0 {
+				continue
+			}
+			departed = append(departed, albumID)
+		}
+		sort.Ints(departed)
+	}
+
+	announce, upgraded, hold := h.resolveAnnouncements(instanceID, departed, func(since time.Time) (fresh, upgrades []int, err error) {
+		return lidarrImportsSince(client, since)
+	})
+	if hold {
+		// Keep the restored membership and retry next tick, so these
+		// completions are not lost to an unenrolled gateway.
+		h.noteArrQueueComposition(instanceID, "lidarr", tuples)
+		h.autoDispatchLidarr(instanceID, client)
+		return
+	}
+
+	// Persist before announcing: a crash between the two costs this batch of
+	// alerts, whereas announcing first would re-announce them on every restart
+	// of a crashlooping container. The save is deliberately outside the
+	// h.content check — enabling push later must not start from amnesia.
+	h.prevLidarrQueue[instanceID] = currentQueue
+	h.saveQueueWitness(instanceID, "lidarr", setKeys(currentQueue))
+	h.lastPollAt[instanceID] = time.Now()
+
+	if h.content != nil {
+		// Upgrades pass the same live re-verification as broadcasts; only the
+		// audience differs (admins opted into content_upgraded).
+		announceAlbum := func(albumID int, upgrade bool) {
+			album, err := client.GetAlbum(albumID)
+			if err != nil {
+				log.Printf("websocket: get completed lidarr album %d: %v", albumID, err)
+				return
+			}
+			// Lidarr answers 404 with (nil, nil) for a record deleted while it
+			// was downloading. Dereferencing that would panic the poll
+			// goroutine and take the process down.
+			if album == nil {
+				return
+			}
+			if album.Statistics.TrackFileCount == 0 {
+				return
+			}
+			artist := ""
+			if album.Artist != nil {
+				artist = album.Artist.ArtistName
+			}
+			if upgrade {
+				h.content.NotifyUpgradedMusic(album.Title, artist, album.ForeignAlbumID, instanceID)
+			} else {
+				h.content.NotifyNewMusic(album.Title, artist, album.ForeignAlbumID, instanceID)
+			}
+		}
+		for _, albumID := range announce {
+			announceAlbum(albumID, false)
+		}
+		for _, albumID := range upgraded {
+			announceAlbum(albumID, true)
+		}
+	}
+
+	h.noteArrQueueComposition(instanceID, "lidarr", tuples)
+
+	// Auto-dispatch pass (see pollRadarrInstance). No-op when the opener is nil.
+	h.autoDispatchLidarr(instanceID, client)
 }
 
 func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {

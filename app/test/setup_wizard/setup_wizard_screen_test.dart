@@ -67,13 +67,14 @@ void main() {
     addTearDown(tester.view.reset);
 
     // What each row must send: the service type when the row names one.
-    // The download-client row names a category of four services, so it sends
-    // a selection prompt instead of guessing a member the admin would then
-    // have to correct — the same correction the Radarr default used to force.
+    // Rows naming a category (download clients, media servers, and the
+    // monitoring row, whose key predates Tracearr) send a selection prompt
+    // instead of guessing a member the admin would then have to correct —
+    // the same correction the Radarr default used to force.
     const expectedExtras = <String, Map<String, dynamic>>{
       'radarr': {'service_type': 'radarr'},
       'sonarr': {'service_type': 'sonarr'},
-      'tautulli': {'service_type': 'tautulli'},
+      'tautulli': {'service_type_prompt': 'Select a monitoring service'},
       'books': {'service_type': 'chaptarr'},
       'media_servers': {'service_type_prompt': 'Select a media server'},
       'download_client': {'service_type_prompt': 'Select a download client'},
@@ -129,12 +130,13 @@ void main() {
   group('row emphasis', _rowEmphasisTests);
 }
 
-/// The pill on a row, by the row's title.
+/// The action ("Set up") pill on a row, by the row's title. Targeted by its
+/// text because an optional outstanding row also carries a Skip pill.
 StatusPill _pillOn(WidgetTester tester, String title) => tester.widget<StatusPill>(
       find.descendant(
         of: find.ancestor(
             of: find.text(title), matching: find.byType(ListTile)),
-        matching: find.byType(StatusPill),
+        matching: find.widgetWithText(StatusPill, 'Set up'),
       ),
     );
 
@@ -237,14 +239,111 @@ void _rowEmphasisTests() {
     expect(tester.widget<Text>(_rowTitle('push')).style?.color,
         AppTheme.textPrimary);
   });
+
+  testWidgets('an optional outstanding row pairs Set up with Skip; '
+      'essentials never do', (tester) async {
+    tester.view.physicalSize = const Size(800, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await _pumpWizard(tester, [
+      ('radarr', false, false),
+      ('sonarr', true, false),
+      ('tmdb', true, false),
+      ('books', false, true),
+      ('music', false, true),
+    ]);
+
+    // One Skip per optional outstanding row with a Set up action — never on
+    // the essential radarr row, however unfinished: an essential's alarm is
+    // about capability and cannot be acknowledged away.
+    expect(find.widgetWithText(StatusPill, 'Skip'), findsNWidgets(2));
+    expect(find.widgetWithText(StatusPill, 'Set up'), findsNWidgets(3));
+    final radarrRow = find.ancestor(
+        of: find.text('radarr'), matching: find.byType(ListTile));
+    expect(
+        find.descendant(
+            of: radarrRow, matching: find.widgetWithText(StatusPill, 'Skip')),
+        findsNothing);
+  });
+
+  testWidgets(
+      'skipping a row acknowledges it: the skip is stored, the row dims to '
+      'Skipped, and every count stops charging for it', (tester) async {
+    tester.view.physicalSize = const Size(800, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final items = <(String, bool, bool)>[
+      ('radarr', true, false),
+      ('sonarr', true, false),
+      ('tmdb', true, false),
+      ('books', false, true),
+      ('music', false, true),
+    ];
+    final adapter = _WizardAdapter(items);
+    await _pumpWizard(tester, items, adapter: adapter);
+
+    expect(find.text('3 of 5 features configured'), findsOneWidget);
+    expect(find.text('NICE TO HAVE$_nb· 2${_nb}LEFT'), findsOneWidget);
+
+    final musicRow = find.ancestor(
+        of: find.text('music'), matching: find.byType(ListTile));
+    await tester.tap(find.descendant(
+        of: musicRow, matching: find.widgetWithText(StatusPill, 'Skip')));
+    await tester.pumpAndSettle();
+
+    expect(adapter.skipPuts.single, {'key': 'music', 'skipped': true});
+    // The skipped row leaves the math entirely — denominator included — so
+    // "X of Y" stays a true sentence about the features this deployment
+    // actually wants, and the section stops holding it against the admin.
+    expect(find.text('3 of 4 features configured'), findsOneWidget);
+    expect(find.text('NICE TO HAVE$_nb· 1${_nb}LEFT'), findsOneWidget);
+    expect(
+        find.descendant(
+            of: musicRow,
+            matching: find.widgetWithText(StatusPill, 'Skipped')),
+        findsOneWidget);
+    expect(tester.widget<Text>(_rowTitle('music')).style?.color,
+        AppTheme.textSecondary);
+    // Setting it up later needs no un-skip first: the row still opens the
+    // real settings screen.
+    expect(tester.widget<ListTile>(musicRow).onTap, isNotNull);
+  });
+
+  testWidgets('the Skipped chip is the undo', (tester) async {
+    tester.view.physicalSize = const Size(800, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final items = <(String, bool, bool)>[
+      ('radarr', true, false),
+      ('sonarr', true, false),
+      ('tmdb', true, false),
+      ('music', false, true),
+    ];
+    final adapter = _WizardAdapter(items, skipped: {'music'});
+    await _pumpWizard(tester, items, adapter: adapter);
+
+    expect(find.text('NICE TO HAVE$_nb· DONE'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(StatusPill, 'Skipped'));
+    await tester.pumpAndSettle();
+
+    expect(adapter.skipPuts.single, {'key': 'music', 'skipped': false});
+    expect(find.text('NICE TO HAVE$_nb· 1${_nb}LEFT'), findsOneWidget);
+    expect(find.widgetWithText(StatusPill, 'Skip'), findsOneWidget);
+    expect(find.widgetWithText(StatusPill, 'Set up'), findsOneWidget);
+  });
 }
 
 Future<void> _pumpWizard(
   WidgetTester tester,
-  List<(String, bool, bool)> items,
-) async {
+  List<(String, bool, bool)> items, {
+  _WizardAdapter? adapter,
+}) async {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
-    ..httpClientAdapter = _WizardAdapter(items);
+    ..httpClientAdapter = adapter ?? _WizardAdapter(items);
 
   await tester.pumpWidget(
     ProviderScope(
@@ -282,10 +381,18 @@ class _AdminAuthNotifier extends AuthNotifier {
 }
 
 class _WizardAdapter implements HttpClientAdapter {
-  _WizardAdapter(this.items);
+  _WizardAdapter(this.items, {Set<String>? skipped})
+      : skipped = {...?skipped};
 
   /// (key, configured, optional) per checklist row.
   final List<(String, bool, bool)> items;
+
+  /// Keys currently stored as skipped; PUTs to the skip route mutate it, so a
+  /// refresh after a tap reads the new truth like the real server.
+  final Set<String> skipped;
+
+  /// Every body PUT to the skip route, for asserting the wire shape.
+  final skipPuts = <Map<String, dynamic>>[];
 
   @override
   Future<ResponseBody> fetch(
@@ -293,6 +400,27 @@ class _WizardAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    if (options.method == 'PUT' &&
+        options.path == '/api/admin/setup-status/skips') {
+      final raw = options.data;
+      final body = raw is Map<String, dynamic>
+          ? raw
+          : jsonDecode(raw as String) as Map<String, dynamic>;
+      skipPuts.add(body);
+      final key = body['key'] as String;
+      if (body['skipped'] == true) {
+        skipped.add(key);
+      } else {
+        skipped.remove(key);
+      }
+      return ResponseBody.fromString(
+        jsonEncode({'key': key, 'skipped': body['skipped']}),
+        200,
+        headers: {
+          'content-type': ['application/json'],
+        },
+      );
+    }
     return ResponseBody.fromString(
       jsonEncode({
         'items': [
@@ -303,6 +431,8 @@ class _WizardAdapter implements HttpClientAdapter {
               'description': 'about $key',
               'configured': configured,
               'optional': optional,
+              // Mirrors the server: skipped stamps only optional items.
+              'skipped': optional && skipped.contains(key),
             },
         ],
         'configured': items.where((i) => i.$2).length,

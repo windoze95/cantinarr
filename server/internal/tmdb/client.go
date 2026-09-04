@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -61,6 +62,9 @@ type MovieDetails struct {
 	PosterPath  string  `json:"poster_path,omitempty"`
 	Overview    string  `json:"overview,omitempty"`
 	VoteAverage float64 `json:"vote_average,omitempty"`
+	// Adult and Genres feed a kids account's content policy.
+	Adult  bool    `json:"adult,omitempty"`
+	Genres []Genre `json:"genres,omitempty"`
 }
 
 type TVDetails struct {
@@ -70,6 +74,22 @@ type TVDetails struct {
 	PosterPath  string  `json:"poster_path,omitempty"`
 	Overview    string  `json:"overview,omitempty"`
 	VoteAverage float64 `json:"vote_average,omitempty"`
+	Adult       bool    `json:"adult,omitempty"`
+	Genres      []Genre `json:"genres,omitempty"`
+}
+
+// GenreIDs lists the detail's genre ids.
+func (m *MovieDetails) GenreIDs() []int { return genreIDs(m.Genres) }
+
+// GenreIDs lists the detail's genre ids.
+func (t *TVDetails) GenreIDs() []int { return genreIDs(t.Genres) }
+
+func genreIDs(genres []Genre) []int {
+	ids := make([]int, 0, len(genres))
+	for _, g := range genres {
+		ids = append(ids, g.ID)
+	}
+	return ids
 }
 
 // DoGetRaw fetches a TMDB API path and returns the raw JSON bytes.
@@ -85,10 +105,36 @@ func (c *Client) DoGetRaw(path string, params url.Values) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("TMDB API returned status %d", resp.StatusCode)
+		return nil, newStatusError(resp)
 	}
 	return io.ReadAll(resp.Body)
 }
+
+// StatusError is a non-200 answer from TMDB. Callers that must tell a
+// missing title (404) or rate limiting (429) from an outage inspect it; its
+// text is unchanged from the plain error it replaced.
+type StatusError struct {
+	StatusCode int
+	RetryAfter time.Duration
+}
+
+func newStatusError(resp *http.Response) *StatusError {
+	e := &StatusError{StatusCode: resp.StatusCode}
+	if secs, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && secs > 0 {
+		e.RetryAfter = time.Duration(secs) * time.Second
+	}
+	return e
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("TMDB API returned status %d", e.StatusCode)
+}
+
+// HTTPStatus is the upstream status code.
+func (e *StatusError) HTTPStatus() int { return e.StatusCode }
+
+// RetryAfterDuration is the upstream Retry-After, zero when absent.
+func (e *StatusError) RetryAfterDuration() time.Duration { return e.RetryAfter }
 
 func (c *Client) GetTVExternalIDs(tmdbID int) (*ExternalIDs, error) {
 	u := fmt.Sprintf("%s/tv/%d/external_ids", c.baseURL, tmdbID)
@@ -158,6 +204,10 @@ type SearchResult struct {
 	FirstAirDate string  `json:"first_air_date,omitempty"`
 	VoteAverage  float64 `json:"vote_average"`
 	MediaType    string  `json:"media_type,omitempty"`
+	// Adult and GenreIDs let a kids account's content policy hide a title
+	// without a rating lookup.
+	Adult    bool  `json:"adult,omitempty"`
+	GenreIDs []int `json:"genre_ids,omitempty"`
 }
 
 type searchResponse struct {
@@ -382,4 +432,137 @@ func (c *Client) GetRecommendations(tmdbID int, mediaType string) ([]SearchResul
 		return nil, fmt.Errorf("decode recommendations: %w", err)
 	}
 	return result.Results, nil
+}
+
+// DiscoverPage is one page of /discover/{movie,tv}.
+type DiscoverPage struct {
+	Page         int            `json:"page"`
+	TotalPages   int            `json:"total_pages"`
+	TotalResults int            `json:"total_results"`
+	Results      []SearchResult `json:"results"`
+}
+
+// Discover runs a filtered browse over TMDB's catalogue for one media type.
+// params are discover keys the caller has already validated; the request
+// goes through DoGetRaw so it carries the client's locale and auth.
+func (c *Client) Discover(mediaType string, params url.Values) (*DiscoverPage, error) {
+	if mediaType != "movie" && mediaType != "tv" {
+		return nil, fmt.Errorf("discover: unknown media type %q", mediaType)
+	}
+	data, err := c.DoGetRaw("/discover/"+mediaType, params)
+	if err != nil {
+		return nil, fmt.Errorf("discover %s: %w", mediaType, err)
+	}
+	var page DiscoverPage
+	if err := json.Unmarshal(data, &page); err != nil {
+		return nil, fmt.Errorf("decode discover %s: %w", mediaType, err)
+	}
+	setSearchResultMediaType(page.Results, mediaType)
+	return &page, nil
+}
+
+// Genre is one entry of a media type's genre list.
+type Genre struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// GenreList is /genre/{movie,tv}/list.
+func (c *Client) GenreList(mediaType string) ([]Genre, error) {
+	data, err := c.DoGetRaw("/genre/"+mediaType+"/list", nil)
+	if err != nil {
+		return nil, fmt.Errorf("genre list %s: %w", mediaType, err)
+	}
+	var out struct {
+		Genres []Genre `json:"genres"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode genre list: %w", err)
+	}
+	return out.Genres, nil
+}
+
+// Keyword is one /search/keyword result.
+type Keyword struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// SearchKeyword is /search/keyword, first page.
+func (c *Client) SearchKeyword(query string) ([]Keyword, error) {
+	data, err := c.DoGetRaw("/search/keyword", url.Values{"query": {query}})
+	if err != nil {
+		return nil, fmt.Errorf("search keyword: %w", err)
+	}
+	var out struct {
+		Results []Keyword `json:"results"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode keyword search: %w", err)
+	}
+	return out.Results, nil
+}
+
+// Company is one /search/company result.
+type Company struct {
+	ID            int    `json:"id"`
+	Name          string `json:"name"`
+	OriginCountry string `json:"origin_country"`
+}
+
+// SearchCompany is /search/company, first page.
+func (c *Client) SearchCompany(query string) ([]Company, error) {
+	data, err := c.DoGetRaw("/search/company", url.Values{"query": {query}})
+	if err != nil {
+		return nil, fmt.Errorf("search company: %w", err)
+	}
+	var out struct {
+		Results []Company `json:"results"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode company search: %w", err)
+	}
+	return out.Results, nil
+}
+
+// WatchProvider is one streaming service TMDB lists for a region.
+type WatchProvider struct {
+	ID              int    `json:"provider_id"`
+	Name            string `json:"provider_name"`
+	DisplayPriority int    `json:"display_priority"`
+}
+
+// WatchProviders is /watch/providers/{movie,tv} for one region.
+func (c *Client) WatchProviders(mediaType, region string) ([]WatchProvider, error) {
+	data, err := c.DoGetRaw("/watch/providers/"+mediaType, url.Values{"watch_region": {region}})
+	if err != nil {
+		return nil, fmt.Errorf("watch providers %s/%s: %w", mediaType, region, err)
+	}
+	var out struct {
+		Results []WatchProvider `json:"results"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode watch providers: %w", err)
+	}
+	return out.Results, nil
+}
+
+// Language is one entry of /configuration/languages.
+type Language struct {
+	Code        string `json:"iso_639_1"`
+	EnglishName string `json:"english_name"`
+	Name        string `json:"name"`
+}
+
+// Languages is /configuration/languages, a bare array.
+func (c *Client) Languages() ([]Language, error) {
+	data, err := c.DoGetRaw("/configuration/languages", nil)
+	if err != nil {
+		return nil, fmt.Errorf("languages: %w", err)
+	}
+	var out []Language
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode languages: %w", err)
+	}
+	return out, nil
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/cache"
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/config"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/discover"
@@ -34,11 +35,11 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
-	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 	"github.com/windoze95/cantinarr-server/internal/trakt"
 	"github.com/windoze95/cantinarr-server/internal/update"
 	"github.com/windoze95/cantinarr-server/internal/version"
+	"github.com/windoze95/cantinarr-server/internal/watchhistory"
 	"github.com/windoze95/cantinarr-server/internal/webhooks"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
 )
@@ -96,6 +97,22 @@ func main() {
 	)
 	credHandler := credentials.NewHandler(creds)
 
+	// Shared TTL cache for discovery payloads and the kids-account rating
+	// lookups; both key it themselves.
+	apiCache := cache.New()
+	defer apiCache.Close()
+
+	// Kids accounts: the per-user content policy every title surface
+	// applies. The TMDB client is resolved per lookup so an admin's
+	// credential change reaches it without a restart.
+	contentPolicy := contentpolicy.New(database, func() contentpolicy.RawGetter {
+		if client := creds.TMDB(); client != nil {
+			return client
+		}
+		return nil
+	}, apiCache)
+	contentPolicyHandler := contentpolicy.NewHandler(contentPolicy)
+
 	// Auth
 	authService := auth.NewService(database, cfg.JWTSecret, auth.WebAuthnConfig{
 		ExtraOrigins:            cfg.WebAuthnExtraOrigins,
@@ -128,8 +145,8 @@ func main() {
 	// Downloads handler (SABnzbd / qBittorrent / NZBGet / Transmission queue management)
 	downloadsHandler := downloads.NewHandler(instanceStore, registry)
 
-	// Tautulli handler (Plex monitoring)
-	tautulliHandler := tautulli.NewHandler(instanceStore, registry)
+	// Watch-history handler (Tautulli and Tracearr monitoring)
+	watchHistoryHandler := watchhistory.NewHandler(instanceStore, registry)
 
 	// Server-lifetime context: drives the WebSocket hub and the push manager's
 	// background enrollment retry.
@@ -323,9 +340,17 @@ func main() {
 	mediaAccessHandler.SetExternalURLSource(func() string { return serverSettings.Get().ExternalURL })
 
 	// Discover handler (always created — checks credentials at request time)
-	apiCache := cache.New()
-	defer apiCache.Close()
 	discoverHandler := discover.NewHandler(creds, apiCache, serverSettings)
+	// Kids accounts: every title surface applies the caller's policy after
+	// its own cache read; each of these is a chokepoint (AGENTS.md).
+	discoverHandler.SetContentPolicy(contentPolicy)
+	toolServer.SetContentPolicy(contentPolicy)
+	requestService.SetContentPolicy(contentPolicy)
+	aiHandler.SetContentPolicy(contentPolicy)
+	pushNotifier.SetContentPolicy(contentPolicy)
+	proxyHandler.SetContentPolicy(contentPolicy)
+	// browse_titles honors the same English-only default the browse grid does.
+	toolServer.SetDiscoveryPrefs(serverSettings)
 
 	// Arr webhook receiver (Sonarr/Radarr → Connect → Webhook): pushes
 	// out-of-band library changes (manual imports, deletes) into the same WS
@@ -344,7 +369,7 @@ func main() {
 	updateChecker := update.NewChecker(version.Version, cfg.DisableUpdateCheck)
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, mediaAccessHandler, updateChecker, serverSettings)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, watchHistoryHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, mediaAccessHandler, updateChecker, serverSettings, contentPolicyHandler)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)

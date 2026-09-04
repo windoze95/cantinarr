@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
@@ -80,6 +82,7 @@ var toolDefinitions = []Tool{
 			"required": []string{"media_type", "time_window"},
 		},
 	},
+	browseTitlesTool,
 	{
 		Name:        "get_movie_details",
 		Permission:  auth.PermissionMediaDiscover,
@@ -146,9 +149,24 @@ var toolDefinitions = []Tool{
 		},
 	},
 	{
+		Name:        "search_music",
+		Permission:  auth.PermissionMediaDiscover,
+		Description: "Search for music by album or artist on the user's music server. Each result carries the foreign_album_id that check_request_status, request_media, and display_media need for music (albums have no TMDB id; one result is one album, never a whole discography).",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{
+					"type":        "string",
+					"description": "The album or artist to search for",
+				},
+			},
+			"required": []string{"query"},
+		},
+	},
+	{
 		Name:        "check_request_status",
 		Permission:  auth.PermissionMediaRequest,
-		Description: "Check if a movie, TV show, or book is available, requested, or downloading on the media server. Movies/TV are keyed by tmdb_id; books by the foreign_book_id from search_books (per-format ebook/audiobook state is included).",
+		Description: "Check if a movie, TV show, book, or album is available, requested, or downloading on the media server. Movies/TV are keyed by tmdb_id; books by the foreign_book_id from search_books (per-format ebook/audiobook state is included); music by the foreign_album_id from search_music.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -158,16 +176,16 @@ var toolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv", "book"},
-					"description": "Whether this is a movie, TV show, or book",
+					"enum":        []string{"movie", "tv", "book", "music"},
+					"description": "Whether this is a movie, TV show, book, or album",
 				},
 				"foreign_id": map[string]interface{}{
 					"type":        "string",
-					"description": "Book only: the foreign_book_id from search_books",
+					"description": "Book/music only: the foreign_book_id from search_books or foreign_album_id from search_music",
 				},
 				"instance_id": map[string]interface{}{
 					"type":        "string",
-					"description": "Optional library instance to read (movie/tv: an id from get_request_options' libraries; book: a Chaptarr instance id). Omit for the user's default library.",
+					"description": "Optional library instance to read (movie/tv: an id from get_request_options' libraries; book/music: a Chaptarr or Lidarr instance id). Omit for the user's default library.",
 				},
 			},
 			"required": []string{"media_type"},
@@ -176,14 +194,14 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "get_request_options",
 		Permission:  auth.PermissionMediaRequest,
-		Description: "Show whether the current user may choose request options and list the quality profiles available for a movie, TV, or book request. When the user holds more than one library for the media type, the response also lists their libraries (id, name, is_default) for request_media's instance_id.",
+		Description: "Show whether the current user may choose request options and list the quality profiles available for a movie, TV, book, or music request. When the user holds more than one library for the media type, the response also lists their libraries (id, name, is_default) for request_media's instance_id.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv", "book"},
-					"description": "Whether the planned request is a movie, TV show, or book",
+					"enum":        []string{"movie", "tv", "book", "music"},
+					"description": "Whether the planned request is a movie, TV show, book, or album",
 				},
 				"instance_id": map[string]interface{}{
 					"type":        "string",
@@ -196,7 +214,7 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "request_media",
 		Permission:  auth.PermissionMediaRequest,
-		Description: "Request a movie, TV show, or book, optionally selecting a quality_profile_id returned by get_request_options when the current user may choose quality. Movies/TV are keyed by tmdb_id; books by the foreign_book_id from search_books plus an optional book_format.",
+		Description: "Request a movie, TV show, book, or album, optionally selecting a quality_profile_id returned by get_request_options when the current user may choose quality. Movies/TV are keyed by tmdb_id; books by the foreign_book_id from search_books plus an optional book_format; music by the foreign_album_id from search_music (one request is one album).",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -206,12 +224,12 @@ var toolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv", "book"},
-					"description": "Whether this is a movie, TV show, or book",
+					"enum":        []string{"movie", "tv", "book", "music"},
+					"description": "Whether this is a movie, TV show, book, or album",
 				},
 				"foreign_id": map[string]interface{}{
 					"type":        "string",
-					"description": "Book only: the foreign_book_id from search_books (required for book)",
+					"description": "Book/music only: the foreign_book_id from search_books or foreign_album_id from search_music (required for book and music)",
 				},
 				"book_format": map[string]interface{}{
 					"type":        "string",
@@ -220,7 +238,7 @@ var toolDefinitions = []Tool{
 				},
 				"title": map[string]interface{}{
 					"type":        "string",
-					"description": "Book only: the exact title from search_books (used when the book must be added to the library)",
+					"description": "Book/music only: the exact title from search_books or search_music (used when the record must be added to the library)",
 				},
 				"quality_profile_id": map[string]interface{}{
 					"type":        "integer",
@@ -247,7 +265,7 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "display_media",
 		Permission:  auth.PermissionMediaDiscover,
-		Description: "Display specific movies, TV shows, or books in the UI carousel. Call this whenever your answer names concrete titles to showcase, including recommendations, search/trending picks, franchise/title-list answers, or count answers that enumerate titles. Keep the item order identical to the order you mention in text. Call it before or while writing your prose so the results appear early, never repeat an already-written list afterwards, and never mention the carousel or its position in your reply. Prefer TMDB IDs (movies/TV) or foreign_book_ids (books) copied from prior tool results; if you only have exact title/year values for a movie/show, omit tmdb_id and the server will resolve and verify them.",
+		Description: "Display specific movies, TV shows, books, or albums in the UI carousel. Call this whenever your answer names concrete titles to showcase, including recommendations, search/trending picks, franchise/title-list answers, or count answers that enumerate titles. Keep the item order identical to the order you mention in text. Call it before or while writing your prose so the results appear early, never repeat an already-written list afterwards, and never mention the carousel or its position in your reply. Prefer TMDB IDs (movies/TV), foreign_book_ids (books), or foreign_album_ids (music) copied from prior tool results; if you only have exact title/year values for a movie/show, omit tmdb_id and the server will resolve and verify them.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -264,12 +282,12 @@ var toolDefinitions = []Tool{
 							},
 							"media_type": map[string]interface{}{
 								"type":        "string",
-								"enum":        []string{"movie", "tv", "book"},
-								"description": "Whether this is a movie, TV show, or book",
+								"enum":        []string{"movie", "tv", "book", "music"},
+								"description": "Whether this is a movie, TV show, book, or album",
 							},
 							"foreign_id": map[string]interface{}{
 								"type":        "string",
-								"description": "Book only: the foreign_book_id from search_books (required for book items)",
+								"description": "Book/music only: the foreign_book_id from search_books or foreign_album_id from search_music (required for book and music items)",
 							},
 							"title": map[string]interface{}{
 								"type":        "string",
@@ -442,7 +460,7 @@ func formatSearchResults(results []tmdb.SearchResult, limit int) string {
 	return sb.String()
 }
 
-func (s *ToolServer) searchMovies(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) searchMovies(ctx context.Context, input json.RawMessage, policy *contentpolicy.Policy) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
 		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
@@ -457,15 +475,19 @@ func (s *ToolServer) searchMovies(input json.RawMessage) (*ToolResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	results, hidden, err := s.filterResults(ctx, policy, results, contentpolicy.MediaMovie)
+	if err != nil {
+		return nil, err
+	}
 	return &ToolResult{
-		Text:           formatSearchResults(results, 10),
+		Text:           formatSearchResults(results, 10) + hiddenNote(hidden),
 		StructuredData: toMediaResultItems(results, 10),
 	}, nil
 }
 
 const maxMovieCollectionResults = 3
 
-func (s *ToolServer) searchMovieCollections(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) searchMovieCollections(ctx context.Context, input json.RawMessage, policy *contentpolicy.Policy) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
 		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
@@ -501,11 +523,34 @@ func (s *ToolServer) searchMovieCollections(input json.RawMessage) (*ToolResult,
 		return &ToolResult{Text: fmt.Sprintf("Movie collections were found, but details could not be loaded: %s", strings.Join(failures, "; "))}, nil
 	}
 
+	// A kids account sees each collection cut to the parts it may see; a
+	// collection with nothing left is dropped whole.
+	hidden := 0
+	if policy != nil {
+		kept := make([]tmdb.MovieCollection, 0, len(collections))
+		for _, collection := range collections {
+			parts, partsHidden, err := s.filterResults(ctx, policy, collection.Parts, contentpolicy.MediaMovie)
+			if err != nil {
+				return nil, err
+			}
+			hidden += partsHidden
+			if len(parts) == 0 {
+				continue
+			}
+			collection.Parts = parts
+			kept = append(kept, collection)
+		}
+		collections = kept
+		if len(collections) == 0 {
+			return &ToolResult{Text: "No movie collections are available for this account." + hiddenNote(hidden)}, nil
+		}
+	}
+
 	text := formatMovieCollectionResults(collections, maxDisplayMediaItems)
 	if len(failures) > 0 {
 		text += fmt.Sprintf("\nSome collection details could not be loaded: %s\n", strings.Join(failures, "; "))
 	}
-	return &ToolResult{Text: text}, nil
+	return &ToolResult{Text: text + hiddenNote(hidden)}, nil
 }
 
 func formatMovieCollectionResults(collections []tmdb.MovieCollection, maxParts int) string {
@@ -539,7 +584,7 @@ func formatMovieCollectionResults(collections []tmdb.MovieCollection, maxParts i
 	return sb.String()
 }
 
-func (s *ToolServer) searchTVShows(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) searchTVShows(ctx context.Context, input json.RawMessage, policy *contentpolicy.Policy) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
 		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
@@ -554,13 +599,17 @@ func (s *ToolServer) searchTVShows(input json.RawMessage) (*ToolResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	results, hidden, err := s.filterResults(ctx, policy, results, contentpolicy.MediaTV)
+	if err != nil {
+		return nil, err
+	}
 	return &ToolResult{
-		Text:           formatSearchResults(results, 10),
+		Text:           formatSearchResults(results, 10) + hiddenNote(hidden),
 		StructuredData: toMediaResultItems(results, 10),
 	}, nil
 }
 
-func (s *ToolServer) getTrending(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) getTrending(ctx context.Context, input json.RawMessage, policy *contentpolicy.Policy) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
 		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
@@ -576,13 +625,19 @@ func (s *ToolServer) getTrending(input json.RawMessage) (*ToolResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Trending entries name their own media type; the parameter covers a
+	// single-type ask whose entries do not.
+	results, hidden, err := s.filterResults(ctx, policy, results, strings.ToLower(strings.TrimSpace(params.MediaType)))
+	if err != nil {
+		return nil, err
+	}
 	return &ToolResult{
-		Text:           formatSearchResults(results, 10),
+		Text:           formatSearchResults(results, 10) + hiddenNote(hidden),
 		StructuredData: toMediaResultItems(results, 10),
 	}, nil
 }
 
-func (s *ToolServer) getMovieDetails(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) getMovieDetails(ctx context.Context, input json.RawMessage, policy *contentpolicy.Policy) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
 		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
@@ -597,11 +652,18 @@ func (s *ToolServer) getMovieDetails(input json.RawMessage) (*ToolResult, error)
 	if err != nil {
 		return nil, err
 	}
+	allowed, err := s.allowsTitle(ctx, policy, contentpolicy.Candidate{MediaType: contentpolicy.MediaMovie, TMDBID: movie.ID, Adult: movie.Adult, GenreIDs: movie.GenreIDs()})
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return &ToolResult{Text: titleNotAvailableText}, nil
+	}
 	data, _ := json.Marshal(movie)
 	return &ToolResult{Text: string(data)}, nil
 }
 
-func (s *ToolServer) getTVDetails(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) getTVDetails(ctx context.Context, input json.RawMessage, policy *contentpolicy.Policy) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
 		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
@@ -616,11 +678,18 @@ func (s *ToolServer) getTVDetails(input json.RawMessage) (*ToolResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	allowed, err := s.allowsTitle(ctx, policy, contentpolicy.Candidate{MediaType: contentpolicy.MediaTV, TMDBID: tv.ID, Adult: tv.Adult, GenreIDs: tv.GenreIDs()})
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return &ToolResult{Text: titleNotAvailableText}, nil
+	}
 	data, _ := json.Marshal(tv)
 	return &ToolResult{Text: string(data)}, nil
 }
 
-func (s *ToolServer) getRecommendations(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) getRecommendations(ctx context.Context, input json.RawMessage, policy *contentpolicy.Policy) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
 		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
@@ -636,8 +705,12 @@ func (s *ToolServer) getRecommendations(input json.RawMessage) (*ToolResult, err
 	if err != nil {
 		return nil, err
 	}
+	results, hidden, err := s.filterResults(ctx, policy, results, strings.ToLower(strings.TrimSpace(params.MediaType)))
+	if err != nil {
+		return nil, err
+	}
 	return &ToolResult{
-		Text:           formatSearchResults(results, 10),
+		Text:           formatSearchResults(results, 10) + hiddenNote(hidden),
 		StructuredData: toMediaResultItems(results, 10),
 	}, nil
 }
@@ -691,6 +764,52 @@ func (s *ToolServer) searchBooks(input json.RawMessage, userID int64) (*ToolResu
 	return &ToolResult{Text: sb.String(), StructuredData: items}, nil
 }
 
+func (s *ToolServer) searchMusic(input json.RawMessage, userID int64) (*ToolResult, error) {
+	var params struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+	results, err := s.request.SearchAlbumsForUser(userID, params.Query)
+	if errors.Is(err, request.ErrNoLidarrAccess) {
+		return &ToolResult{Text: "Music is not available for this account (no music server is configured or granted)."}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(results) == 0 {
+		return &ToolResult{Text: fmt.Sprintf("No music found for %q.", params.Query)}, nil
+	}
+	const maxMusicResults = 10
+	if len(results) > maxMusicResults {
+		results = results[:maxMusicResults]
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Found %d album(s) for %q:", len(results), params.Query)
+	items := make([]MediaResultItem, 0, len(results))
+	for _, r := range results {
+		fmt.Fprintf(&sb, "\n- %s", r.Title)
+		if r.ArtistName != "" {
+			fmt.Fprintf(&sb, " by %s", r.ArtistName)
+		}
+		if r.Year > 0 {
+			fmt.Fprintf(&sb, " (%d)", r.Year)
+		}
+		fmt.Fprintf(&sb, " [foreign_album_id: %s]", r.ForeignAlbumID)
+		year := ""
+		if r.Year > 0 {
+			year = strconv.Itoa(r.Year)
+		}
+		items = append(items, MediaResultItem{
+			Title: r.Title, Year: year, Overview: r.Overview,
+			MediaType: "music", ForeignID: r.ForeignAlbumID, PosterURL: r.RemoteCover,
+		})
+	}
+	sb.WriteString("\nUse the foreign_album_id with check_request_status, request_media, and display_media.")
+	return &ToolResult{Text: sb.String(), StructuredData: items}, nil
+}
+
 func (s *ToolServer) checkRequestStatus(input json.RawMessage, userID int64) (*ToolResult, error) {
 	var params struct {
 		TmdbID     int    `json:"tmdb_id"`
@@ -706,6 +825,17 @@ func (s *ToolServer) checkRequestStatus(input json.RawMessage, userID int64) (*T
 			return &ToolResult{Text: "A book status check requires the foreign_id from search_books."}, nil
 		}
 		status, err := s.request.GetUserBookStatusForInstance(userID, params.ForeignID, params.InstanceID)
+		if err != nil {
+			return nil, err
+		}
+		data, _ := json.Marshal(status)
+		return &ToolResult{Text: string(data)}, nil
+	}
+	if params.MediaType == "music" {
+		if strings.TrimSpace(params.ForeignID) == "" {
+			return &ToolResult{Text: "A music status check requires the foreign_id from search_music."}, nil
+		}
+		status, err := s.request.GetUserMusicStatusForInstance(userID, params.ForeignID, params.InstanceID)
 		if err != nil {
 			return nil, err
 		}
@@ -734,8 +864,8 @@ func (s *ToolServer) getRequestOptions(input json.RawMessage, userID int64, role
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	if params.MediaType != "movie" && params.MediaType != "tv" && params.MediaType != "book" {
-		return &ToolResult{Text: "Request options require media_type movie, tv, or book."}, nil
+	if params.MediaType != "movie" && params.MediaType != "tv" && params.MediaType != "book" && params.MediaType != "music" {
+		return &ToolResult{Text: "Request options require media_type movie, tv, book, or music."}, nil
 	}
 	opts, err := s.request.GetRequestOptions(userID, auth.HasPermission(role, auth.PermissionAdmin), params.MediaType, params.InstanceID)
 	if err != nil {
@@ -775,6 +905,8 @@ func (s *ToolServer) visibleLibraries(userID int64, mediaType string) []toolLibr
 		serviceType = "sonarr"
 	case "book":
 		serviceType = "chaptarr"
+	case "music":
+		serviceType = "lidarr"
 	default:
 		return nil
 	}
@@ -824,7 +956,10 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 	if params.MediaType == "book" && strings.TrimSpace(params.ForeignID) == "" {
 		return &ToolResult{Text: "A book request requires the foreign_id from search_books."}, nil
 	}
-	if params.MediaType != "book" && params.TmdbID <= 0 {
+	if params.MediaType == "music" && strings.TrimSpace(params.ForeignID) == "" {
+		return &ToolResult{Text: "A music request requires the foreign_id from search_music."}, nil
+	}
+	if params.MediaType != "book" && params.MediaType != "music" && params.TmdbID <= 0 {
 		return &ToolResult{Text: "A movie/TV request requires the tmdb_id from search results."}, nil
 	}
 	// The request service authorizes the selection; a library outside the
@@ -847,7 +982,7 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 
 const maxDisplayMediaItems = 10
 
-func (s *ToolServer) displayMedia(input json.RawMessage, userID int64) (*ToolResult, error) {
+func (s *ToolServer) displayMedia(ctx context.Context, input json.RawMessage, userID int64, policy *contentpolicy.Policy) (*ToolResult, error) {
 	// Book items verify against the user's Chaptarr lookup, so a missing TMDB
 	// credential only fails the movie/TV items rather than the whole call.
 	var tmdbClient *tmdb.Client
@@ -880,6 +1015,11 @@ func (s *ToolServer) displayMedia(input json.RawMessage, userID int64) (*ToolRes
 		err     error
 	}
 	bookLookups := map[string]bookLookup{}
+	type musicLookup struct {
+		results []request.MusicSearchResult
+		err     error
+	}
+	musicLookups := map[string]musicLookup{}
 	bookResultsFor := func(title string) bookLookup {
 		key := strings.ToLower(strings.TrimSpace(title))
 		if cached, ok := bookLookups[key]; ok {
@@ -888,6 +1028,17 @@ func (s *ToolServer) displayMedia(input json.RawMessage, userID int64) (*ToolRes
 		results, err := s.request.SearchBooksForUser(userID, title)
 		looked := bookLookup{results: results, err: err}
 		bookLookups[key] = looked
+		return looked
+	}
+
+	musicResultsFor := func(title string) musicLookup {
+		key := strings.ToLower(strings.TrimSpace(title))
+		if cached, ok := musicLookups[key]; ok {
+			return cached
+		}
+		results, err := s.request.SearchAlbumsForUser(userID, title)
+		looked := musicLookup{results: results, err: err}
+		musicLookups[key] = looked
 		return looked
 	}
 
@@ -942,6 +1093,45 @@ func (s *ToolServer) displayMedia(input json.RawMessage, userID int64) (*ToolRes
 				Title: match.Title, Year: year, Overview: match.Overview,
 				MediaType: "book", ForeignID: match.ForeignBookID, PosterURL: match.RemoteCover,
 			})
+		case "music":
+			foreignID := strings.TrimSpace(p.ForeignID)
+			if foreignID == "" {
+				failures = append(failures, fmt.Sprintf("music %q: missing foreign_id; copy it from search_music", p.Title))
+				continue
+			}
+			match, cached := s.request.CachedAlbumByForeignID(userID, foreignID)
+			var lookupErr error
+			if !cached {
+				looked := musicResultsFor(p.Title)
+				lookupErr = looked.err
+				for i := range looked.results {
+					if looked.results[i].ForeignAlbumID == foreignID {
+						match = &looked.results[i]
+						break
+					}
+				}
+			}
+			if match == nil {
+				switch {
+				case errors.Is(lookupErr, request.ErrNoLidarrAccess):
+					failures = append(failures, fmt.Sprintf("music %q: music is not available for this account", p.Title))
+				case lookupErr != nil:
+					// Host-free by construction: transport errors can embed the
+					// instance URL and this text reaches the model/chat.
+					failures = append(failures, fmt.Sprintf("music %q: the album lookup failed; retry without changing the foreign_id", p.Title))
+				default:
+					failures = append(failures, fmt.Sprintf("music %q: foreign_id %s did not match a lookup for that title; copy both from search_music", p.Title, foreignID))
+				}
+				continue
+			}
+			year := ""
+			if match.Year > 0 {
+				year = strconv.Itoa(match.Year)
+			}
+			items = append(items, MediaResultItem{
+				Title: match.Title, Year: year, Overview: match.Overview,
+				MediaType: "music", ForeignID: match.ForeignAlbumID, PosterURL: match.RemoteCover,
+			})
 		case "movie":
 			tmdbID := p.TmdbID
 			if tmdbID <= 0 {
@@ -967,6 +1157,14 @@ func (s *ToolServer) displayMedia(input json.RawMessage, userID int64) (*ToolRes
 			}
 			if reason := displayMediaMismatch(p.Title, p.Year, movie.Title, year); reason != "" {
 				failures = append(failures, fmt.Sprintf("movie %d: %s", tmdbID, reason))
+				continue
+			}
+			allowed, err := s.allowsTitle(ctx, policy, contentpolicy.Candidate{MediaType: contentpolicy.MediaMovie, TMDBID: movie.ID, Adult: movie.Adult, GenreIDs: movie.GenreIDs()})
+			if err != nil {
+				return nil, err
+			}
+			if !allowed {
+				failures = append(failures, fmt.Sprintf("movie %d: not available for this account", tmdbID))
 				continue
 			}
 			items = append(items, MediaResultItem{
@@ -1003,6 +1201,14 @@ func (s *ToolServer) displayMedia(input json.RawMessage, userID int64) (*ToolRes
 			}
 			if reason := displayMediaMismatch(p.Title, p.Year, tv.Name, year); reason != "" {
 				failures = append(failures, fmt.Sprintf("tv %d: %s", tmdbID, reason))
+				continue
+			}
+			allowed, err := s.allowsTitle(ctx, policy, contentpolicy.Candidate{MediaType: contentpolicy.MediaTV, TMDBID: tv.ID, Adult: tv.Adult, GenreIDs: tv.GenreIDs()})
+			if err != nil {
+				return nil, err
+			}
+			if !allowed {
+				failures = append(failures, fmt.Sprintf("tv %d: not available for this account", tmdbID))
 				continue
 			}
 			items = append(items, MediaResultItem{

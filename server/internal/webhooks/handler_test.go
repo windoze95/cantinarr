@@ -23,6 +23,7 @@ func (f *fakeBroadcaster) Broadcast(e ws.Event) { f.events = append(f.events, e)
 type fakeInvalidator struct {
 	instanceIDs []string
 	bookIDs     []string
+	musicIDs    []string
 }
 
 func (f *fakeInvalidator) InvalidateAvailabilityDigests(id string) {
@@ -33,13 +34,19 @@ func (f *fakeInvalidator) InvalidateBookDigests(id string) {
 	f.bookIDs = append(f.bookIDs, id)
 }
 
+func (f *fakeInvalidator) InvalidateMusicDigests(id string) {
+	f.musicIDs = append(f.musicIDs, id)
+}
+
 type fakeContent struct {
 	movies           []string
 	episodes         []string
 	books            []string
+	music            []string
 	upgradedMovies   []string
 	upgradedEpisodes []string
 	upgradedBooks    []string
+	upgradedMusic    []string
 }
 
 func (f *fakeContent) NotifyNewMovie(title string, tmdbID int, instanceID string) { f.movies = append(f.movies, title) }
@@ -54,6 +61,11 @@ func (f *fakeContent) NotifyNewBook(title, foreignID, instanceID, format string)
 	f.books = append(f.books, fmt.Sprintf("%s|%s|%s|%s", title, foreignID, instanceID, format))
 }
 
+// Music records the full alert tuple for the same reason as books.
+func (f *fakeContent) NotifyNewMusic(title, artist, foreignID, instanceID string) {
+	f.music = append(f.music, fmt.Sprintf("%s|%s|%s|%s", title, artist, foreignID, instanceID))
+}
+
 func (f *fakeContent) NotifyUpgradedMovie(title string, tmdbID int, instanceID string) {
 	f.upgradedMovies = append(f.upgradedMovies, title)
 }
@@ -62,6 +74,9 @@ func (f *fakeContent) NotifyUpgradedEpisode(seriesTitle string, tmdbID int, inst
 }
 func (f *fakeContent) NotifyUpgradedBook(title, foreignID, instanceID, format string) {
 	f.upgradedBooks = append(f.upgradedBooks, fmt.Sprintf("%s|%s|%s|%s", title, foreignID, instanceID, format))
+}
+func (f *fakeContent) NotifyUpgradedMusic(title, artist, foreignID, instanceID string) {
+	f.upgradedMusic = append(f.upgradedMusic, fmt.Sprintf("%s|%s|%s|%s", title, artist, foreignID, instanceID))
 }
 
 type fixture struct {

@@ -343,6 +343,67 @@ class BookRequestSubmission {
   }
 }
 
+/// The current user's request state for one album. Music has no format axis,
+/// so unlike [BookRequestStatusDetail] there is a single status — but the
+/// same fail-closed [isKnown] rule applies: a failed read must never turn an
+/// outage into a fresh Request button over an album that was already asked
+/// for.
+class MusicRequestStatusDetail {
+  final RequestStatus status;
+  final bool isKnown;
+
+  /// The id the library files this album under today, when it differs from
+  /// the id that was queried (MusicBrainz merges release-groups). Clients
+  /// should re-address the album by it.
+  final String? canonicalForeignId;
+
+  const MusicRequestStatusDetail({
+    this.status = RequestStatus.unavailable,
+    this.isKnown = true,
+    this.canonicalForeignId,
+  });
+
+  bool get isRequestable =>
+      isKnown &&
+      (status == RequestStatus.unavailable || status == RequestStatus.denied);
+}
+
+/// The parsed outcome of an album request submission.
+class MusicRequestSubmission {
+  final RequestStatus? status;
+
+  /// A server explanation for an outcome the status alone would misrepresent —
+  /// today, an album parked for an admin because the library couldn't match
+  /// it. Empty when the status speaks for itself.
+  final String message;
+
+  const MusicRequestSubmission({required this.status, this.message = ''});
+}
+
+String _musicRequestErrorMessage(DioException error) {
+  final data = error.response?.data;
+  String? raw;
+  if (data is Map) {
+    final message = data['error'] ?? data['message'];
+    if (message is String && message.isNotEmpty) raw = message;
+  }
+  if (data is String && data.isNotEmpty) raw = data;
+  final lower = raw?.toLowerCase() ?? '';
+  if (lower.contains('root folder')) {
+    return 'No library folder is available for music. Ask an admin to check the Lidarr settings.';
+  }
+  if (lower.contains('quality profile') || lower.contains('metadata profile')) {
+    return 'Ask an admin to check the Lidarr settings.';
+  }
+  if (lower.contains('album not found') || lower.contains('foreign id')) {
+    return 'This album could not be matched in the library. Search for it again and retry.';
+  }
+  if (_requestErrorIsDefinitive(error)) {
+    return 'The library could not complete this request. Try again later.';
+  }
+  return 'This album could not be requested. Check the connection and try again.';
+}
+
 String _requestErrorMessage(DioException error) {
   final data = error.response?.data;
   String? raw;
@@ -873,6 +934,89 @@ class RequestService {
     } on DioException catch (e) {
       throw RequestSubmissionException(
         _requestErrorMessage(e),
+        definitive: _requestErrorIsDefinitive(e),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Check the current user's request state for an album, keyed by the
+  /// MusicBrainz release-group id (music has no tmdb_id). A failed lookup is
+  /// returned as unknown so callers cannot turn an outage into a duplicate
+  /// request affordance.
+  Future<MusicRequestStatusDetail> checkMusicStatusDetail(
+    String foreignId, {
+    String? instanceId,
+  }) async {
+    try {
+      final resp = await _backendDio.get(
+        '/api/requests/music-status',
+        queryParameters: {
+          'foreign_id': foreignId,
+          if (instanceId != null && instanceId.isNotEmpty)
+            'instance_id': instanceId,
+        },
+      );
+      final data = resp.data as Map<String, dynamic>;
+      var isKnown = data['status_known'] as bool? ?? true;
+      RequestStatus? status;
+      for (final candidate in RequestStatus.values) {
+        if (candidate.name == data['status']?.toString()) status = candidate;
+      }
+      if (status == null) isKnown = false;
+      final rawCanonical = data['canonical_foreign_id'];
+      final canonical = rawCanonical is String && rawCanonical.trim().isNotEmpty
+          ? rawCanonical.trim()
+          : null;
+      return MusicRequestStatusDetail(
+        status: status ?? RequestStatus.unavailable,
+        isKnown: isKnown,
+        canonicalForeignId: canonical,
+      );
+    } catch (_) {
+      return const MusicRequestStatusDetail(isKnown: false);
+    }
+  }
+
+  /// Submit an album request. Albums are keyed by the MusicBrainz
+  /// release-group id, not a tmdb_id; the backend adds the album (and, if
+  /// needed, its artist) to the user's granted Lidarr instance, after approval
+  /// when the user's policy requires it. Returns the resulting status or null
+  /// on non-HTTP failure.
+  Future<MusicRequestSubmission?> requestAlbum({
+    required String foreignId,
+    required String title,
+    String? instanceId,
+    String? searchTerm,
+  }) async {
+    try {
+      final term = searchTerm?.trim() ?? '';
+      final resp = await _backendDio.post('/api/requests', data: {
+        'media_type': 'music',
+        'foreign_id': foreignId,
+        'title': title,
+        // The exact-id lookup usually re-finds the record deterministically,
+        // but the term that already produced this row is the proven fallback
+        // when it cannot. Absent for notification/deep-link arrivals.
+        if (term.isNotEmpty) 'search_term': term,
+        if (instanceId != null && instanceId.isNotEmpty)
+          'instance_id': instanceId,
+      });
+      if (resp.statusCode != 200 && resp.statusCode != 201) return null;
+      final data = resp.data as Map<String, dynamic>?;
+      RequestStatus? status;
+      for (final candidate in RequestStatus.values) {
+        if (candidate.name == data?['status']?.toString()) status = candidate;
+      }
+      final rawMessage = data?['message'];
+      return MusicRequestSubmission(
+        status: status,
+        message: rawMessage is String ? rawMessage.trim() : '',
+      );
+    } on DioException catch (e) {
+      throw RequestSubmissionException(
+        _musicRequestErrorMessage(e),
         definitive: _requestErrorIsDefinitive(e),
       );
     } catch (_) {

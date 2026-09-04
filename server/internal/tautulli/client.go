@@ -1,5 +1,5 @@
-// Package tautulli provides a client and REST handler for Tautulli (Plex
-// monitoring) instances.
+// Package tautulli provides a client for Tautulli (Plex monitoring)
+// instances and adapts it to the watchhistory.Provider contract.
 package tautulli
 
 import (
@@ -141,6 +141,7 @@ type Session struct {
 	QualityProfile    string  `json:"quality_profile"`
 	TranscodeDecision string  `json:"transcode_decision"` // direct play/copy/transcode
 	Bandwidth         flexInt `json:"bandwidth"`          // kbps
+	MediaType         string  `json:"media_type"`         // movie/episode/track/...
 }
 
 // Activity is the current streaming activity from get_activity.

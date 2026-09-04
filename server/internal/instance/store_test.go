@@ -210,6 +210,7 @@ func TestLookupServiceTypeUsesServiceMetadata(t *testing.T) {
 		"nzbget",
 		"transmission",
 		"tautulli",
+		"tracearr",
 		"jellyfin",
 		"emby",
 		"plex",
@@ -825,6 +826,55 @@ func TestMediaServerConfigRoundTripAndFailClosed(t *testing.T) {
 	}
 	if raw != "{}" {
 		t.Fatalf("radarr media_server_config = %q, want {}", raw)
+	}
+}
+
+// TestLidarrGrantOnlyLikeChaptarr pins the music access model: no global
+// default ever persists, an ungranted user resolves to no instance at all
+// (never a first-instance fallback that would leak a library), and the pin or
+// grant is the entire access story.
+func TestLidarrGrantOnlyLikeChaptarr(t *testing.T) {
+	s := newTestStore(t)
+	inst := &Instance{ServiceType: "lidarr", Name: "Music", URL: "http://localhost", APIKey: "key", IsDefault: true}
+	if err := s.Create(inst); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if inst.IsDefault || isDefault(t, s, inst.ID) {
+		t.Fatal("lidarr instance must never persist a global default flag")
+	}
+
+	userID := createUser(t, s, "listener")
+	if id, err := s.EffectiveDefaultInstanceID(userID, "lidarr"); err != nil || id != "" {
+		t.Fatalf("ungranted effective default = %q, %v; want empty", id, err)
+	}
+	if ok, err := s.UserCanAccessInstance(userID, inst.ID, "lidarr"); err != nil || ok {
+		t.Fatalf("ungranted access = %v, %v; want false", ok, err)
+	}
+
+	if err := s.SetUserDefault(userID, "lidarr", inst.ID); err != nil {
+		t.Fatalf("SetUserDefault: %v", err)
+	}
+	if id, err := s.EffectiveDefaultInstanceID(userID, "lidarr"); err != nil || id != inst.ID {
+		t.Fatalf("pinned effective default = %q, %v", id, err)
+	}
+	if ok, err := s.UserCanAccessInstance(userID, inst.ID, "lidarr"); err != nil || !ok {
+		t.Fatalf("pinned access = %v, %v; want true", ok, err)
+	}
+
+	// Un-pinning IS revocation: there is no global chain to fall back to.
+	if err := s.ClearUserDefault(userID, "lidarr"); err != nil {
+		t.Fatalf("ClearUserDefault: %v", err)
+	}
+	if id, _ := s.EffectiveDefaultInstanceID(userID, "lidarr"); id != "" {
+		t.Fatalf("post-revocation effective default = %q, want empty", id)
+	}
+
+	// An additive grant row (no pin) also grants: first granted wins.
+	if err := s.SetUserGrants(userID, map[string][]string{"lidarr": {inst.ID}}); err != nil {
+		t.Fatalf("SetUserGrants: %v", err)
+	}
+	if id, _ := s.EffectiveDefaultInstanceID(userID, "lidarr"); id != inst.ID {
+		t.Fatalf("granted effective default = %q", id)
 	}
 }
 

@@ -17,7 +17,9 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/cache"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
@@ -246,6 +248,97 @@ type Service struct {
 	// webhook-driven resume may fire together, and two concurrent passes would
 	// race their probes over the same parked rows.
 	parkSweepRunMu sync.Mutex
+	// contentPolicy is the kids-account service: a child cannot request,
+	// see the status of, or list a title outside their limits. nil until
+	// wired (SetContentPolicy); a server without it gates nothing.
+	contentPolicy *contentpolicy.Service
+}
+
+// SetContentPolicy wires the kids-account service.
+func (s *Service) SetContentPolicy(svc *contentpolicy.Service) { s.contentPolicy = svc }
+
+var (
+	// ErrTitleNotAvailable is a kids account asking for a title outside its
+	// limits, in the requester's own words: the same "not available" the
+	// detail route answers, never a hint at what was hidden.
+	ErrTitleNotAvailable = errors.New("that title is not available for this account")
+	// ErrContentPolicyUnavailable is a limit that could not be checked; the
+	// request is refused rather than let through.
+	ErrContentPolicyUnavailable = errors.New("content limits are temporarily unavailable, retry shortly")
+)
+
+// contentPolicyFor reads a requester's policy; nil means unrestricted.
+func (s *Service) contentPolicyFor(userID int64, isAdmin bool) (*contentpolicy.Policy, error) {
+	if s.contentPolicy == nil || isAdmin {
+		return nil, nil
+	}
+	policy, err := s.contentPolicy.Store.Get(userID)
+	if err != nil {
+		return nil, ErrContentPolicyUnavailable
+	}
+	return policy, nil
+}
+
+// checkContentPolicy refuses a movie or show a kids account may not see.
+func (s *Service) checkContentPolicy(userID int64, isAdmin bool, mediaType string, tmdbID int) error {
+	if mediaType != contentpolicy.MediaMovie && mediaType != contentpolicy.MediaTV {
+		return nil
+	}
+	policy, err := s.contentPolicyFor(userID, isAdmin)
+	if err != nil || policy == nil {
+		return err
+	}
+	allowed, err := s.contentPolicy.Allows(context.Background(), policy, contentpolicy.Candidate{MediaType: mediaType, TMDBID: tmdbID})
+	if err != nil {
+		return ErrContentPolicyUnavailable
+	}
+	if !allowed {
+		return ErrTitleNotAvailable
+	}
+	return nil
+}
+
+// hideBlockedRequests drops the movie and show rows a kids account may not
+// see from their own history (a request made before the limits were set,
+// say). A lookup that fails fails the read: a list that looks complete but
+// is not would be worse than an error.
+func (s *Service) hideBlockedRequests(userID int64, isAdmin bool, requests []RequestLog) ([]RequestLog, error) {
+	policy, err := s.contentPolicyFor(userID, isAdmin)
+	if err != nil || policy == nil {
+		return requests, err
+	}
+	cands := make([]contentpolicy.Candidate, 0, len(requests))
+	indexes := make([]int, 0, len(requests))
+	for i, r := range requests {
+		if r.MediaType != contentpolicy.MediaMovie && r.MediaType != contentpolicy.MediaTV {
+			continue
+		}
+		cands = append(cands, contentpolicy.Candidate{MediaType: r.MediaType, TMDBID: r.TmdbID})
+		indexes = append(indexes, i)
+	}
+	if len(cands) == 0 {
+		return requests, nil
+	}
+	keep, err := s.contentPolicy.Filter(context.Background(), policy, cands)
+	if err != nil {
+		return nil, ErrContentPolicyUnavailable
+	}
+	drop := map[int]struct{}{}
+	for i, ok := range keep {
+		if !ok {
+			drop[indexes[i]] = struct{}{}
+		}
+	}
+	if len(drop) == 0 {
+		return requests, nil
+	}
+	kept := make([]RequestLog, 0, len(requests)-len(drop))
+	for i, r := range requests {
+		if _, dropped := drop[i]; !dropped {
+			kept = append(kept, r)
+		}
+	}
+	return kept, nil
 }
 
 func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, notifier Notifier) *Service {
@@ -453,8 +546,10 @@ type CreateRequest struct {
 	MediaType string `json:"media_type"`
 	Title     string `json:"title"`
 	TvdbID    int    `json:"tvdb_id"`
-	// ForeignID is the Chaptarr/Readarr foreignBookId for book requests, which
-	// have no TMDB id. Required when media_type == "book"; ignored otherwise.
+	// ForeignID is the arr-native metadata id for requests with no TMDB id:
+	// the Chaptarr/Readarr foreignBookId for books, the MusicBrainz
+	// release-group id for music. Required when media_type is "book" or
+	// "music"; ignored otherwise.
 	ForeignID  string `json:"foreign_id"`
 	BookFormat string `json:"book_format"`
 	// SearchTerm is the text the requester actually searched to find this book.
@@ -736,21 +831,21 @@ type effective struct {
 
 // resolvedRequest is a request whose options have all been resolved server-side.
 type resolvedRequest struct {
-	userID      int64
-	actorID     int64 // optional execution authority; history remains userID-owned
-	tmdbID      int
-	tvdbID      int
-	foreignID   string // Chaptarr foreignBookId (book requests)
-	bookFormat  string
-	searchTerm  string // the requester's own search text (book requests)
-	parkReason  string // why a pending row is server-owned (see bookParkReasonAuthorImport)
-	addFailure  string // the add that already ran and failed (see bookAddFailureMetadataUnresolved)
-	instanceID  string
+	userID     int64
+	actorID    int64 // optional execution authority; history remains userID-owned
+	tmdbID     int
+	tvdbID     int
+	foreignID  string // Chaptarr foreignBookId (book requests)
+	bookFormat string
+	searchTerm string // the requester's own search text (book requests)
+	parkReason string // why a pending row is server-owned (see bookParkReasonAuthorImport)
+	addFailure string // the add that already ran and failed (see bookAddFailureMetadataUnresolved)
+	instanceID string
 	// instanceIsUserDefault marks a movie/TV request whose resolved instance is
 	// the requester's effective default, which is the only target allowed to
 	// absorb legacy pending rows written before instances were stamped.
 	instanceIsUserDefault bool
-	bookFormats map[string]string
+	bookFormats           map[string]string
 	// bookRecordIDs maps each fulfilled concrete format to the Chaptarr record
 	// id that satisfies it (created, or monitored in place). The numeric id is
 	// the arr-native identity that survives foreignBookId re-keying, so it is
@@ -787,9 +882,11 @@ func (r *resolvedRequest) noteBookRecord(format string, recordID int, foreignID 
 }
 
 // bookRecordIDForRow is the nullable book_record_id value for this row's
-// concrete format. Non-book rows and legacy "both" rows store NULL.
+// concrete format. Music rows reuse the column as their generic arr-native
+// record id (keyed by the empty format). Movie/TV rows and legacy "both" rows
+// store NULL.
 func (r *resolvedRequest) bookRecordIDForRow() interface{} {
-	if r.mediaType != "book" {
+	if r.mediaType != "book" && r.mediaType != "music" {
 		return nil
 	}
 	return sqlNullInt(r.bookRecordIDs[r.bookFormat])
@@ -958,7 +1055,7 @@ func (s *Service) effectiveSettings(userID int64, isAdmin bool) (effective, erro
 }
 
 func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateResponse, error) {
-	if req.MediaType != "movie" && req.MediaType != "tv" && req.MediaType != "book" {
+	if req.MediaType != "movie" && req.MediaType != "tv" && req.MediaType != "book" && req.MediaType != "music" {
 		return nil, fmt.Errorf("unsupported media type: %s", req.MediaType)
 	}
 	if req.MediaType == "book" {
@@ -971,8 +1068,23 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 			return nil, fmt.Errorf("book_format must be ebook, audiobook, or both")
 		}
 	}
+	if req.MediaType == "music" {
+		req.ForeignID = strings.TrimSpace(req.ForeignID)
+		req.Title = strings.TrimSpace(req.Title)
+		if req.ForeignID == "" {
+			return nil, fmt.Errorf("foreign_id is required for music requests")
+		}
+		if req.BookFormat != "" {
+			return nil, fmt.Errorf("music requests carry no book_format")
+		}
+	}
 
 	isAdmin := s.userIsAdmin(userID)
+	// A kids account's limits come before anything is resolved or written:
+	// a title outside them is not available, in those words.
+	if err := s.checkContentPolicy(userID, isAdmin, req.MediaType, req.TmdbID); err != nil {
+		return nil, err
+	}
 	eff, err := s.effectiveSettings(userID, isAdmin)
 	if err != nil {
 		return nil, err
@@ -983,11 +1095,13 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		tmdbID:     req.TmdbID,
 		tvdbID:     req.TvdbID,
 		foreignID:  req.ForeignID,
-		bookFormat: normalizeBookFormat(req.BookFormat),
 		searchTerm: strings.TrimSpace(req.SearchTerm),
 		instanceID: strings.TrimSpace(req.InstanceID),
 		mediaType:  req.MediaType,
 		title:      req.Title,
+	}
+	if resolved.mediaType == "book" {
+		resolved.bookFormat = normalizeBookFormat(req.BookFormat)
 	}
 	var resolvedBookClient *chaptarr.Client
 	if resolved.mediaType == "book" {
@@ -1005,6 +1119,23 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		bookLock := s.bookLock(resolved.instanceID + "\x00" + resolved.foreignID)
 		bookLock.Lock()
 		defer bookLock.Unlock()
+	}
+	var resolvedMusicClient *lidarr.Client
+	if resolved.mediaType == "music" {
+		client, instanceID, err := s.resolveLidarr(userID, resolved.instanceID)
+		if err != nil {
+			return nil, err
+		}
+		if client == nil {
+			return nil, fmt.Errorf("lidarr is not configured for you")
+		}
+		resolvedMusicClient = client
+		resolved.instanceID = instanceID
+		// Same per-title critical section as books: preflight, external
+		// mutation, and request-log write stay one unit.
+		musicLock := s.bookLock(resolved.instanceID + "\x00" + resolved.foreignID)
+		musicLock.Lock()
+		defer musicLock.Unlock()
 	}
 	if resolved.mediaType == "movie" || resolved.mediaType == "tv" {
 		// Resolve and authorize the target library up front so a pending row
@@ -1108,6 +1239,26 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 			pendingResp.Status = collapseBookStatuses(pendingResp.BookFormats, StatusPending)
 			return pendingResp, nil
 		}
+		if resolved.mediaType == "music" {
+			// An album the library already covers must answer with that truth
+			// instead of queueing a no-op decision.
+			live, known, err := s.freshLiveMusicStatus(resolvedMusicClient, resolved.instanceID, resolved.foreignID)
+			if err != nil {
+				return nil, err
+			}
+			if known && live != StatusUnavailable {
+				return &CreateResponse{Success: true, Status: live, Title: resolved.title, InstanceID: resolved.instanceID}, nil
+			}
+			if resolved.title == "" {
+				return nil, fmt.Errorf("title is required to add a new album")
+			}
+			resp, err := s.createPendingUnlocked(resolved)
+			if err != nil {
+				return nil, err
+			}
+			resp.InstanceID = resolved.instanceID
+			return resp, nil
+		}
 		resp, err := s.createPending(resolved)
 		if err != nil {
 			return nil, err
@@ -1127,6 +1278,21 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		// its own; approving afterwards replays the add). Every other failure (no
 		// instance, no root folder, ambiguous profiles) is a configuration answer
 		// the requester needs to see, not queue.
+		if resolved.mediaType == "music" && errors.Is(err, ErrMusicMetadataUnresolved) {
+			// Music gets the metadata-unresolved rescue too: the add already
+			// ran and failed, so the row queues for an admin with that fact
+			// recorded instead of landing on the floor. There is no
+			// author-import analogue — a Lidarr add is synchronous and fails
+			// loudly, never leaving a pending import to wait on.
+			resolved.addFailure = bookAddFailureMetadataUnresolved
+			parked, parkErr := s.createPendingUnlocked(resolved)
+			if parkErr != nil {
+				return nil, err
+			}
+			parked.Message = musicParkedMessage
+			parked.InstanceID = resolved.instanceID
+			return parked, nil
+		}
 		if resolved.mediaType == "book" {
 			parkMessage := ""
 			switch {
@@ -1301,6 +1467,20 @@ func (s *Service) createPendingUnlocked(r *resolvedRequest) (*CreateResponse, er
 		if err := tx.Commit(); err != nil {
 			return nil, fmt.Errorf("commit pending book request: %w", err)
 		}
+	} else if r.mediaType == "music" {
+		// Music pending rows are per-user like movie/TV (no format axis means
+		// no shared work item), but keyed on the foreignAlbumId + pinned
+		// instance the way books key: two users asking for one album are two
+		// rows, and each approval replays an idempotent add.
+		res, err = s.db.Exec(
+			`INSERT INTO request_log (user_id, tmdb_id, foreign_id, instance_id, media_type, title, status, search_term, add_failure_reason)
+			 SELECT ?, 0, ?, ?, 'music', ?, ?, ?, ?
+			 WHERE NOT EXISTS (
+			     SELECT 1 FROM request_log WHERE user_id = ? AND foreign_id = ? AND media_type = 'music' AND status = ? AND COALESCE(instance_id, '') = COALESCE(?, '')
+			 )`,
+			r.userID, r.foreignID, sqlNullStr(r.instanceID), r.title, StatusPending, sqlNullStr(r.searchTerm), sqlNullStr(r.addFailure),
+			r.userID, r.foreignID, StatusPending, sqlNullStr(r.instanceID),
+		)
 	} else {
 		// The duplicate guard is per target library: the same title pending on
 		// a sibling instance is a distinct request, never absorbed. Legacy
@@ -1350,6 +1530,10 @@ func (s *Service) createPendingUnlocked(r *resolvedRequest) (*CreateResponse, er
 			data["book_format"] = insertedBookFormat
 			data["instance_id"] = r.instanceID
 		}
+		if r.mediaType == "music" {
+			data["foreign_id"] = r.foreignID
+			data["instance_id"] = r.instanceID
+		}
 		s.notifier.NotifyAdmins("request_pending", data)
 	}
 	formats := map[string]string{}
@@ -1379,6 +1563,8 @@ func (s *Service) addToArr(r *resolvedRequest) (status string, title string, err
 		status, title, err = s.addSeries(r)
 	case "book":
 		return s.addToChaptarr(r)
+	case "music":
+		return s.addToLidarr(r)
 	default:
 		return "", "", fmt.Errorf("unsupported media type: %s", r.mediaType)
 	}
@@ -2664,6 +2850,16 @@ func (s *Service) GetUserStatus(userID int64, tmdbID int, mediaType, instanceID 
 		}
 	}
 
+	// A title a kids account may not see has no state to report: it reads
+	// unavailable, the same as a title the library does not hold.
+	if err := s.checkContentPolicy(userID, s.userIsAdmin(userID), mediaType, tmdbID); err != nil {
+		if errors.Is(err, ErrTitleNotAvailable) {
+			known := true
+			return &StatusResponse{Status: StatusUnavailable, StatusKnown: &known}, nil
+		}
+		return nil, err
+	}
+
 	resp, err := s.userStatusForInstance(userID, tmdbID, mediaType, instanceID)
 	if err != nil {
 		return nil, err
@@ -3518,7 +3714,7 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 		}
 		requests[i] = history[i].log
 	}
-	return requests, nil
+	return s.hideBlockedRequests(userID, s.userIsAdmin(userID), requests)
 }
 
 // overlayLiveStatuses recomputes each history row's status from the live arr
@@ -3535,15 +3731,18 @@ func (s *Service) overlayLiveStatuses(userID int64, history []historyRow) {
 	// book branch below); the "" key is the user's effective default, which is
 	// also what legacy rows written before instance stamping factually meant.
 	var (
-		movieDigests     = map[string]map[int]movieAvailability{}
-		movieDigestDone  = map[string]bool{}
-		movieDigestOK    = map[string]bool{}
-		seriesDigests    = map[string]map[int]seriesAvailability{}
-		seriesDigestDone = map[string]bool{}
-		seriesDigestOK   = map[string]bool{}
-		bookClients      = map[string]*chaptarr.Client{}
-		bookInstanceDone = map[string]bool{}
-		bookInstanceOK   = map[string]bool{}
+		movieDigests      = map[string]map[int]movieAvailability{}
+		movieDigestDone   = map[string]bool{}
+		movieDigestOK     = map[string]bool{}
+		seriesDigests     = map[string]map[int]seriesAvailability{}
+		seriesDigestDone  = map[string]bool{}
+		seriesDigestOK    = map[string]bool{}
+		bookClients       = map[string]*chaptarr.Client{}
+		bookInstanceDone  = map[string]bool{}
+		bookInstanceOK    = map[string]bool{}
+		musicClients      = map[string]*lidarr.Client{}
+		musicInstanceDone = map[string]bool{}
+		musicInstanceOK   = map[string]bool{}
 	)
 
 	for i := range history {
@@ -3632,6 +3831,40 @@ func (s *Service) overlayLiveStatuses(userID int64, history []historyRow) {
 				}
 			}
 			live = collapseBookStatuses(selected, StatusUnavailable)
+
+		case "music":
+			// Legacy unscoped rows cannot be safely attributed after a user's
+			// default changes, so their point-in-time state remains untouched.
+			if row.foreignID == "" || row.instanceID == "" {
+				continue
+			}
+			instanceID := row.instanceID
+			if !musicInstanceDone[instanceID] {
+				client, resolvedID, err := s.resolveLidarr(userID, instanceID)
+				if err == nil && client != nil && resolvedID == instanceID {
+					musicClients[instanceID] = client
+					musicInstanceOK[instanceID] = true
+				}
+				musicInstanceDone[instanceID] = true
+			}
+			if !musicInstanceOK[instanceID] {
+				continue
+			}
+			projection, err := s.liveMusicProjectionCached(musicClients[instanceID], instanceID)
+			if err != nil {
+				// Transient failures retain the stored state until live truth
+				// is available again.
+				continue
+			}
+			status, exists := projection.Statuses[row.foreignID]
+			if !exists {
+				// Like the book overlay, history rows are not re-keyed through
+				// record ids here; the detail status endpoint does that. A
+				// record the projection no longer keys by this id reads
+				// unavailable.
+				status = StatusUnavailable
+			}
+			live = status
 
 		default:
 			continue
@@ -3853,7 +4086,9 @@ func (s *Service) scanPending(parked bool) ([]PendingRequest, error) {
 		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.TmdbID, &p.TvdbID, &p.ForeignID, &p.MediaType, &p.Title, &p.BookFormat, &p.InstanceID, &p.InstanceName, &p.RequesterCount, &p.SeasonScope, &p.QualityProfileID, &p.RequestedAt, &parkReason, &p.AddFailureReason); err != nil {
 			return nil, fmt.Errorf("scan pending request: %w", err)
 		}
-		p.BookFormat = normalizeBookFormat(p.BookFormat)
+		if p.MediaType == "book" {
+			p.BookFormat = normalizeBookFormat(p.BookFormat)
+		}
 		if parkReason != "" {
 			wait := s.bookFormatWaitFor(parkReason, p.RequestedAt)
 			p.WaitReason = wait.Reason
@@ -3878,9 +4113,11 @@ func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error)
 	if err != nil {
 		return nil, "", fmt.Errorf("load request: %w", err)
 	}
-	r.bookFormat = normalizeBookFormat(r.bookFormat)
-	if r.mediaType == "book" && !validBookFormat(r.bookFormat) {
-		return nil, "", fmt.Errorf("request has unsupported book_format %q", r.bookFormat)
+	if r.mediaType == "book" {
+		r.bookFormat = normalizeBookFormat(r.bookFormat)
+		if !validBookFormat(r.bookFormat) {
+			return nil, "", fmt.Errorf("request has unsupported book_format %q", r.bookFormat)
+		}
 	}
 	// An explicit season list was stored as JSON in season_scope; decode it so
 	// approval replays the explicit season selection the requester chose.
@@ -4135,6 +4372,14 @@ func (s *Service) fulfillPendingRequest(actorID, requestID int64, override *Deci
 		bookLock.Lock()
 		defer bookLock.Unlock()
 	}
+	if r.mediaType == "music" {
+		if strings.TrimSpace(r.instanceID) == "" {
+			return nil, fmt.Errorf("pending music request has no pinned Lidarr instance")
+		}
+		musicLock := s.bookLock(r.instanceID + "\x00" + r.foreignID)
+		musicLock.Lock()
+		defer musicLock.Unlock()
+	}
 	// The request's instance was authorized and stamped at submission. Execute
 	// the decision under the approving admin so a later requester-grant change
 	// cannot reroute or strand it; history remains owned by r.userID. A
@@ -4276,14 +4521,17 @@ func (s *Service) fulfillPendingRequest(actorID, requestID int64, override *Deci
 			"title":      title,
 			"status":     newStatus,
 		}
-		// Books have no TMDB id (tmdb_id is 0); the Chaptarr foreignBookId is
-		// the identity a client can deep-link on. Movie/TV rows carry no
-		// foreign_id, so the field is omitted and their payloads are unchanged.
+		// Music (like books) has no TMDB id; the foreign id is the identity a
+		// client can deep-link on. Movie/TV rows carry no foreign_id, so the
+		// field is omitted and their payloads are unchanged. Format fields are
+		// a book concept and never ride a music payload.
 		if r.foreignID != "" {
 			data["foreign_id"] = r.foreignID
-			data["book_format"] = primaryFormat
-			data["book_formats"] = r.bookFormats
 			data["instance_id"] = r.instanceID
+			if r.mediaType == "book" {
+				data["book_format"] = primaryFormat
+				data["book_formats"] = r.bookFormats
+			}
 		}
 		for _, subscriber := range audience {
 			s.notifier.NotifyUser(subscriber.UserID, "request_decision", data)
@@ -4777,12 +5025,14 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 			"reason":     reason,
 			"status":     StatusDenied,
 		}
-		// Same as the approval event: book rows carry their foreignBookId for
-		// deep-linking; movie/TV payloads are unchanged.
+		// Same as the approval event: book and music rows carry their foreign
+		// id for deep-linking; movie/TV payloads are unchanged.
 		if r.foreignID != "" {
 			data["foreign_id"] = r.foreignID
-			data["book_format"] = r.bookFormat
 			data["instance_id"] = r.instanceID
+			if r.mediaType == "book" {
+				data["book_format"] = r.bookFormat
+			}
 		}
 		for _, subscriber := range audience {
 			s.notifier.NotifyUser(subscriber.UserID, "request_decision", data)
@@ -4819,11 +5069,11 @@ func (s *Service) GetRequestOptions(userID int64, isAdmin bool, mediaType, insta
 	}
 	opts := &RequestOptions{
 		CanChooseSeason:    eff.AllowSeasonChoice && mediaType == "tv",
-		CanChooseQuality:   eff.AllowQualityChoice && mediaType != "book",
+		CanChooseQuality:   eff.AllowQualityChoice && mediaType != "book" && mediaType != "music",
 		DefaultSeasonScope: eff.SeasonScope,
 		QualityProfiles:    []QualityProfile{},
 	}
-	if eff.AllowQualityChoice && mediaType != "book" {
+	if eff.AllowQualityChoice && mediaType != "book" && mediaType != "music" {
 		profiles, err := s.qualityProfilesForInstance(userID, mediaType, instanceID)
 		if err != nil {
 			return nil, err

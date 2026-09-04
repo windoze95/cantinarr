@@ -32,10 +32,10 @@ func TestValidateQueueItemRejectsUnrelatedMovieForUserIssue(t *testing.T) {
 	executor := &Executor{}
 	client := radarr.NewClient(server.URL, "test")
 	ic := issueContext{mediaType: "movie", tmdbID: 42}
-	if err := executor.validateQueueItem("movie", 11, ic, client, nil, nil); err == nil || !strings.Contains(err.Error(), "not this issue's TMDB 42") {
+	if err := executor.validateQueueItem("movie", 11, ic, client, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "not this issue's TMDB 42") {
 		t.Fatalf("unrelated movie validation error = %v", err)
 	}
-	if err := executor.validateQueueItem("movie", 12, ic, client, nil, nil); err != nil {
+	if err := executor.validateQueueItem("movie", 12, ic, client, nil, nil, nil); err != nil {
 		t.Fatalf("matching movie rejected: %v", err)
 	}
 }
@@ -58,7 +58,7 @@ func TestValidateQueueItemResolvesMissingEmbeddedMovieIdentity(t *testing.T) {
 
 	executor := &Executor{}
 	if err := executor.validateQueueItem("movie", 12,
-		issueContext{mediaType: "movie", tmdbID: 42}, radarr.NewClient(server.URL, "test"), nil, nil); err != nil {
+		issueContext{mediaType: "movie", tmdbID: 42}, radarr.NewClient(server.URL, "test"), nil, nil, nil); err != nil {
 		t.Fatalf("matching fallback identity rejected: %v", err)
 	}
 }
@@ -85,13 +85,13 @@ func TestValidateQueueItemBindsSonarrTitleSeasonAndEpisode(t *testing.T) {
 	executor := &Executor{}
 	client := sonarr.NewClient(server.URL, "test")
 	ic := issueContext{mediaType: "tv", tmdbID: 42, tvdbID: 4242, seasonNumber: 2, episodeNumber: 7}
-	if err := executor.validateQueueItem("tv", 21, ic, nil, client, nil); err != nil {
+	if err := executor.validateQueueItem("tv", 21, ic, nil, client, nil, nil); err != nil {
 		t.Fatalf("matching episode rejected: %v", err)
 	}
-	if err := executor.validateQueueItem("tv", 22, ic, nil, client, nil); err == nil || !strings.Contains(err.Error(), "S02E07") {
+	if err := executor.validateQueueItem("tv", 22, ic, nil, client, nil, nil); err == nil || !strings.Contains(err.Error(), "S02E07") {
 		t.Fatalf("wrong episode validation error = %v", err)
 	}
-	if err := executor.validateQueueItem("tv", 23, ic, nil, client, nil); err == nil || !strings.Contains(err.Error(), "not this issue's TMDB 42") {
+	if err := executor.validateQueueItem("tv", 23, ic, nil, client, nil, nil); err == nil || !strings.Contains(err.Error(), "not this issue's TMDB 42") {
 		t.Fatalf("wrong series validation error = %v", err)
 	}
 }
@@ -110,7 +110,7 @@ func TestValidateQueueItemFailsClosedWhenRecordedDownloadIdentityDisappears(t *t
 
 	err := (&Executor{}).validateQueueItem("movie", 12,
 		issueContext{mediaType: "movie", tmdbID: 42, downloadID: "recorded"},
-		radarr.NewClient(server.URL, "test"), nil, nil)
+		radarr.NewClient(server.URL, "test"), nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "reassigned") {
 		t.Fatalf("missing live download identity error = %v", err)
 	}
@@ -126,7 +126,7 @@ func TestValidateQueueItemRejectsDifferentRecordedQueueBeforeFetching(t *testing
 
 	err := (&Executor{}).validateQueueItem("movie", 12,
 		issueContext{mediaType: "movie", tmdbID: 42, arrQueueID: 7},
-		radarr.NewClient(server.URL, "test"), nil, nil)
+		radarr.NewClient(server.URL, "test"), nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "issue's queue item 7") {
 		t.Fatalf("queue invariant error = %v", err)
 	}
@@ -158,12 +158,12 @@ func TestValidateGrabReleaseCandidateRequiresFreshScopedMovieTuple(t *testing.T)
 	client := radarr.NewClient(server.URL, "test")
 	ic := issueContext{mediaType: "movie", tmdbID: 42}
 	if liveGUID, err := executor.validateGrabReleaseCandidate(
-		GrabReleaseParams{MediaType: "movie", GUID: "scoped-guid", IndexerID: 3}, ic, client, nil, nil,
+		GrabReleaseParams{MediaType: "movie", GUID: "scoped-guid", IndexerID: 3}, ic, client, nil, nil, nil,
 	); err != nil || liveGUID != "scoped-guid" {
 		t.Fatalf("fresh scoped release rejected: %v", err)
 	}
 	if _, err := executor.validateGrabReleaseCandidate(
-		GrabReleaseParams{MediaType: "movie", GUID: "invented-guid", IndexerID: 3}, ic, client, nil, nil,
+		GrabReleaseParams{MediaType: "movie", GUID: "invented-guid", IndexerID: 3}, ic, client, nil, nil, nil,
 	); err == nil || !strings.Contains(err.Error(), "not present in a fresh search") {
 		t.Fatalf("invented release validation error = %v", err)
 	}
@@ -186,7 +186,7 @@ func TestValidateGrabReleaseCandidateResolvesScrubbedCapabilityAtDispatch(t *tes
 	for _, safeReference := range []string{secrets.RedactText(liveGUID), releaseGUIDFingerprint(liveGUID)} {
 		resolved, err := (&Executor{}).validateGrabReleaseCandidate(
 			GrabReleaseParams{MediaType: "movie", GUID: safeReference, IndexerID: 3},
-			issueContext{mediaType: "movie", tmdbID: 42}, radarr.NewClient(server.URL, "test"), nil, nil,
+			issueContext{mediaType: "movie", tmdbID: 42}, radarr.NewClient(server.URL, "test"), nil, nil, nil,
 		)
 		if err != nil || resolved != liveGUID {
 			t.Fatalf("safe reference %q resolved to %q, %v", safeReference, resolved, err)
@@ -219,12 +219,12 @@ func TestValidateGrabReleaseCandidateRejectsChangedObservedMetadata(t *testing.T
 	executor := &Executor{}
 	client := radarr.NewClient(server.URL, "test")
 	if _, err := executor.validateGrabReleaseCandidate(p,
-		issueContext{mediaType: "movie", tmdbID: 42}, client, nil, nil); err != nil {
+		issueContext{mediaType: "movie", tmdbID: 42}, client, nil, nil, nil); err != nil {
 		t.Fatalf("matching candidate metadata rejected: %v", err)
 	}
 	p.Quality = "HDTV-1080p"
 	if _, err := executor.validateGrabReleaseCandidate(p,
-		issueContext{mediaType: "movie", tmdbID: 42}, client, nil, nil); err == nil || !strings.Contains(err.Error(), "metadata changed") {
+		issueContext{mediaType: "movie", tmdbID: 42}, client, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "metadata changed") {
 		t.Fatalf("changed candidate metadata error = %v", err)
 	}
 }
@@ -261,7 +261,7 @@ func TestValidateGrabReleaseCandidateUsesEpisodeSpecificSonarrSearch(t *testing.
 	_, err := (&Executor{}).validateGrabReleaseCandidate(
 		GrabReleaseParams{MediaType: "tv", GUID: "episode-guid", IndexerID: 6},
 		issueContext{mediaType: "tv", tmdbID: 42, tvdbID: 4242, seasonNumber: 2, episodeNumber: 7},
-		nil, sonarr.NewClient(server.URL, "test"), nil,
+		nil, sonarr.NewClient(server.URL, "test"), nil, nil,
 	)
 	if err != nil {
 		t.Fatalf("episode-scoped release rejected: %v", err)
@@ -290,19 +290,19 @@ func TestValidateQueueItemBookBindsToIssueBookIdentity(t *testing.T) {
 	executor := &Executor{}
 	client := chaptarr.NewClient(server.URL, "test")
 	withIdentity := issueContext{mediaType: "book", bookID: 123}
-	if err := executor.validateQueueItem("book", 21, withIdentity, nil, nil, client); err == nil || !strings.Contains(err.Error(), "not this issue's book 123") {
+	if err := executor.validateQueueItem("book", 21, withIdentity, nil, nil, client, nil); err == nil || !strings.Contains(err.Error(), "not this issue's book 123") {
 		t.Fatalf("unrelated book validation error = %v", err)
 	}
-	if err := executor.validateQueueItem("book", 22, withIdentity, nil, nil, client); err != nil {
+	if err := executor.validateQueueItem("book", 22, withIdentity, nil, nil, client, nil); err != nil {
 		t.Fatalf("matching book rejected: %v", err)
 	}
 
 	detectorOnly := issueContext{mediaType: "book", arrQueueID: 22, downloadID: "right"}
-	if err := executor.validateQueueItem("book", 22, detectorOnly, nil, nil, client); err != nil {
+	if err := executor.validateQueueItem("book", 22, detectorOnly, nil, nil, client, nil); err != nil {
 		t.Fatalf("detector-bound book queue action rejected: %v", err)
 	}
 	unprovable := issueContext{mediaType: "book"}
-	if err := executor.validateQueueItem("book", 22, unprovable, nil, nil, client); err == nil || !strings.Contains(err.Error(), "cannot be proven") {
+	if err := executor.validateQueueItem("book", 22, unprovable, nil, nil, client, nil); err == nil || !strings.Contains(err.Error(), "cannot be proven") {
 		t.Fatalf("identity-less book validation error = %v", err)
 	}
 }
@@ -326,7 +326,7 @@ func TestValidateGrabReleaseCandidateBookScopedSearch(t *testing.T) {
 	guid, err := (&Executor{}).validateGrabReleaseCandidate(
 		GrabReleaseParams{MediaType: "book", GUID: "book-guid", IndexerID: 6},
 		issueContext{mediaType: "book", bookID: 123},
-		nil, nil, client,
+		nil, nil, client, nil,
 	)
 	if err != nil || guid != "book-guid" {
 		t.Fatalf("book-scoped release = %q err=%v", guid, err)
@@ -338,7 +338,7 @@ func TestValidateGrabReleaseCandidateBookScopedSearch(t *testing.T) {
 	if _, err := (&Executor{}).validateGrabReleaseCandidate(
 		GrabReleaseParams{MediaType: "book", GUID: "unknown-guid", IndexerID: 6},
 		issueContext{mediaType: "book", bookID: 123},
-		nil, nil, client,
+		nil, nil, client, nil,
 	); err == nil || !strings.Contains(err.Error(), "not present in a fresh search") {
 		t.Fatalf("stale book release error = %v", err)
 	}
@@ -346,7 +346,7 @@ func TestValidateGrabReleaseCandidateBookScopedSearch(t *testing.T) {
 	if _, err := (&Executor{}).validateGrabReleaseCandidate(
 		GrabReleaseParams{MediaType: "book", GUID: "book-guid", IndexerID: 6},
 		issueContext{mediaType: "book"},
-		nil, nil, client,
+		nil, nil, client, nil,
 	); err == nil || !strings.Contains(err.Error(), "cannot establish the issue's Chaptarr book") {
 		t.Fatalf("identity-less book release error = %v", err)
 	}
@@ -373,7 +373,7 @@ func TestManualImportScopeBookUsesEmbeddedBookContext(t *testing.T) {
 	client := chaptarr.NewClient(server.URL, "test")
 	scope, err := (&Executor{}).manualImportScope("book", 31,
 		issueContext{mediaType: "book", bookID: 123, arrQueueID: 31, downloadID: "right"},
-		nil, nil, client)
+		nil, nil, client, nil)
 	if err != nil {
 		t.Fatalf("manualImportScope: %v", err)
 	}

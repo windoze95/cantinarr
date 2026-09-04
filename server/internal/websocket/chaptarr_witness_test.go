@@ -18,9 +18,11 @@ type recordingContent struct {
 	books            []string // "title|foreignID|instanceID|format"
 	movies           []string // "title|tmdbID"
 	episodes         []string // "seriesTitle|tmdbID"
+	music            []string // "title|artist|foreignID|instanceID"
 	upgradedBooks    []string // "title|foreignID|instanceID|format"
 	upgradedMovies   []string // "title|tmdbID"
 	upgradedEpisodes []string // "seriesTitle|tmdbID"
+	upgradedMusic    []string // "title|artist|foreignID|instanceID"
 }
 
 func (r *recordingContent) NotifyNewMovie(title string, tmdbID int, instanceID string) {
@@ -52,6 +54,16 @@ func (r *recordingContent) NotifyUpgradedBook(title, foreignID, instanceID, form
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.upgradedBooks = append(r.upgradedBooks, fmt.Sprintf("%s|%s|%s|%s", title, foreignID, instanceID, format))
+}
+func (r *recordingContent) NotifyNewMusic(title, artist, foreignID, instanceID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.music = append(r.music, fmt.Sprintf("%s|%s|%s|%s", title, artist, foreignID, instanceID))
+}
+func (r *recordingContent) NotifyUpgradedMusic(title, artist, foreignID, instanceID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.upgradedMusic = append(r.upgradedMusic, fmt.Sprintf("%s|%s|%s|%s", title, artist, foreignID, instanceID))
 }
 
 func (r *recordingContent) calls() []string {
@@ -88,6 +100,18 @@ func (r *recordingContent) upgradedBookCalls() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]string(nil), r.upgradedBooks...)
+}
+
+func (r *recordingContent) musicCalls() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.music...)
+}
+
+func (r *recordingContent) upgradedMusicCalls() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.upgradedMusic...)
 }
 
 // chaptarrBackend is a minimal Chaptarr API double: a mutable queue plus a

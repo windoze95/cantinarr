@@ -11,12 +11,12 @@ import '../logic/issues_provider.dart';
 /// optionally narrowed to a TV season/episode.
 class ReportScope {
   final String instanceId;
-  final String mediaType; // 'movie' | 'tv' | 'book'
+  final String mediaType; // 'movie' | 'tv' | 'book' | 'music'
   final int tmdbId;
   final int? tvdbId;
   final int? seasonNumber;
   final int? episodeNumber;
-  final String? foreignId; // book: Chaptarr foreignBookId
+  final String? foreignId; // book/music: the library's foreign id
   final String? bookFormat; // book: 'ebook' | 'audiobook'
   final String? title;
 
@@ -47,6 +47,21 @@ class ReportScope {
           tmdbId: 0,
           foreignId: foreignId,
           bookFormat: format,
+          title: title,
+        );
+
+  /// Music mirrors books minus the format axis: the report names the
+  /// library's foreignAlbumId (a MusicBrainz release-group id) and the server
+  /// resolves the durable Lidarr record ids live.
+  const ReportScope.album({
+    required String instanceId,
+    required String foreignId,
+    String? title,
+  }) : this(
+          instanceId: instanceId,
+          mediaType: 'music',
+          tmdbId: 0,
+          foreignId: foreignId,
           title: title,
         );
 
@@ -190,11 +205,19 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
   }
 
   String _chipLabel(IssueCategory c) {
-    if (widget.scope.mediaType != 'book') return c.label;
-    return switch (c) {
-      IssueCategory.wrongContent => 'Wrong book/title',
-      _ => c.label,
-    };
+    if (widget.scope.mediaType == 'book') {
+      return switch (c) {
+        IssueCategory.wrongContent => 'Wrong book/title',
+        _ => c.label,
+      };
+    }
+    if (widget.scope.mediaType == 'music') {
+      return switch (c) {
+        IssueCategory.wrongContent => 'Wrong album/release',
+        _ => c.label,
+      };
+    }
+    return c.label;
   }
 
   Future<void> _submit() async {

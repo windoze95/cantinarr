@@ -551,7 +551,7 @@ func TestArrReadToolsTargetNamedLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("trigger_search unknown id: %v", err)
 	}
-	if !strings.Contains(result.Text, `No Radarr, Sonarr, or Chaptarr instance with ID "radarr-nope"`) {
+	if !strings.Contains(result.Text, `No Radarr, Sonarr, Chaptarr, or Lidarr instance with ID "radarr-nope"`) {
 		t.Fatalf("trigger_search refusal = %q", result.Text)
 	}
 	if got := deflt.mutations(); len(got) != 0 {
@@ -644,6 +644,7 @@ func TestRemoveQueueItemDispatchesExactDeletePerService(t *testing.T) {
 		{mediaType: "movie", serviceType: "radarr", wantURI: "/api/v3/queue/42?removeFromClient=true&blocklist=true&skipRedownload=false&changeCategory=false"},
 		{mediaType: "tv", serviceType: "sonarr", wantURI: "/api/v3/queue/42?removeFromClient=true&blocklist=true&skipRedownload=false&changeCategory=false"},
 		{mediaType: "book", serviceType: "chaptarr", wantURI: "/api/v1/queue/42?removeFromClient=true&blocklist=true&skipRedownload=false&changeCategory=false"},
+		{mediaType: "music", serviceType: "lidarr", wantURI: "/api/v1/queue/42?removeFromClient=true&blocklist=true&skipRedownload=false&changeCategory=false"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.mediaType, func(t *testing.T) {
@@ -689,7 +690,7 @@ func TestRemoveQueueItemDispatchesExactDeletePerService(t *testing.T) {
 			json.RawMessage(`{"queue_id":42,"media_type":"album"}`),
 			adminCallContext(),
 		)
-		assertRejectedWith(t, err, `media_type must be "movie", "tv", or "book"`)
+		assertRejectedWith(t, err, `media_type must be "movie", "tv", "book", or "music"`)
 		if got := recorder.all(); len(got) != 0 {
 			t.Fatalf("rejected removal still reached the arr: %+v", got)
 		}
@@ -1679,5 +1680,51 @@ func TestBookRequesterToolWiring(t *testing.T) {
 	}
 	if strings.Contains(string(searchJSON), "MediaCoverProxy") {
 		t.Fatalf("arr-relative cover surfaced to the client: %s", searchJSON)
+	}
+}
+
+// Music search dispatch: an album-scoped search posts AlbumSearch with exactly
+// the album id, and an artist-wide search posts ArtistSearch.
+func TestTriggerSearchDispatchesMusicCommands(t *testing.T) {
+	recorder := &callRecorder{}
+	arrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/command" {
+			recorder.record(r)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		t.Errorf("unexpected lidarr request %s %s", r.Method, r.URL.Path)
+		http.NotFound(w, r)
+	}))
+	defer arrServer.Close()
+
+	server := newDefaultInstanceToolServer(t, map[string]string{"lidarr": arrServer.URL})
+	if _, err := server.ExecuteTool(
+		context.Background(),
+		"trigger_search",
+		json.RawMessage(`{"media_type":"music","album_id":123}`),
+		adminCallContext(),
+	); err != nil {
+		t.Fatalf("album trigger_search: %v", err)
+	}
+	if _, err := server.ExecuteTool(
+		context.Background(),
+		"trigger_search",
+		json.RawMessage(`{"media_type":"music","artist_id":456}`),
+		adminCallContext(),
+	); err != nil {
+		t.Fatalf("artist trigger_search: %v", err)
+	}
+	calls := recorder.all()
+	if len(calls) != 2 {
+		t.Fatalf("upstream calls = %+v, want exactly two commands", calls)
+	}
+	if !strings.Contains(calls[0].Body, `"AlbumSearch"`) || !strings.Contains(calls[0].Body, "123") {
+		t.Fatalf("album command = %q", calls[0].Body)
+	}
+	if !strings.Contains(calls[1].Body, `"ArtistSearch"`) || !strings.Contains(calls[1].Body, "456") {
+		t.Fatalf("artist command = %q", calls[1].Body)
 	}
 }

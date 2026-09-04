@@ -1,24 +1,36 @@
+import 'dart:async';
+
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../data/content_policy_service.dart';
 import '../data/request_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../discover/data/discover_api_service.dart';
+import '../../discover/data/tmdb_models.dart';
 import '../../request/data/request_service.dart';
 
 /// Admin screen for editing one user's per-user request overrides. A null
-/// value for any option means "inherit the global default".
+/// value for any option means "inherit the global default". It also leads
+/// with the Kids account section: the switch and the limits the server
+/// enforces on every title that account is shown.
 class UserRequestSettingsScreen extends ConsumerStatefulWidget {
   const UserRequestSettingsScreen({
     super.key,
     required this.userId,
     required this.username,
+    this.targetIsAdmin = false,
   });
 
   final int userId;
   final String username;
+
+  /// An admin can never be a kids account, so the section is absent for one.
+  final bool targetIsAdmin;
 
   @override
   ConsumerState<UserRequestSettingsScreen> createState() =>
@@ -28,10 +40,33 @@ class UserRequestSettingsScreen extends ConsumerStatefulWidget {
 class _UserRequestSettingsScreenState
     extends ConsumerState<UserRequestSettingsScreen> {
   late final RequestSettingsService _service;
+  late final ContentPolicyService _policyService;
 
   bool _isLoading = true;
   String? _error;
   bool _saving = false;
+
+  // Kids account section. It loads beside the request settings with its own
+  // failure states, so a ratings list that cannot be read never blocks the
+  // rest of the screen. _kidsSupported is false on a server too old to
+  // have kids accounts (the certifications route 404s), which hides the
+  // section entirely; the policy read itself 404s for any non-child.
+  bool _kidsLoading = true;
+  bool _kidsSupported = false;
+  bool _catalogFailed = false;
+  bool _policyUnreadable = false;
+  CertificationCatalog? _catalog;
+  ContentPolicy? _loadedPolicy;
+  bool _childEnabled = false;
+  String _ratingRegion = 'US';
+  String? _maxMovieRating;
+  String? _maxTvRating;
+  bool _blockUnrated = true;
+  Set<int> _blockedMovieGenres = {};
+  Set<int> _blockedTvGenres = {};
+  List<Genre>? _movieGenres;
+  List<Genre>? _tvGenres;
+  Map<String, String> _regionNames = {};
 
   GlobalRequestSettings? _global;
   List<QualityProfile> _radarrProfiles = const [];
@@ -60,11 +95,21 @@ class _UserRequestSettingsScreenState
       _service = RequestSettingsService(
         backendDio: ref.read(backendClientProvider),
       );
+      _policyService = ContentPolicyService(
+        backendDio: ref.read(backendClientProvider),
+      );
       _load();
     });
   }
 
   String _friendlyError(Object e) {
+    // Dio's toString omits the response body, so the server's own words
+    // (a rating the region does not know, an admin that cannot be a kids
+    // account) are read from the response first.
+    if (e is DioException) {
+      final data = e.response?.data;
+      if (data is Map && data['error'] is String) return data['error'] as String;
+    }
     final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
     return m != null ? m.group(1)! : 'Something went wrong';
   }
@@ -74,6 +119,7 @@ class _UserRequestSettingsScreenState
       _isLoading = true;
       _error = null;
     });
+    unawaited(_loadKidsSection());
     try {
       final user = await _service.getUserSettings(widget.userId);
       final admin = await _service.getAdminSettings();
@@ -105,10 +151,149 @@ class _UserRequestSettingsScreenState
     }
   }
 
+  /// Loads the Kids account section: the rating schemes (which double as
+  /// the "does this server have kids accounts" probe), the user's policy,
+  /// the genre lists, and the region names. Each part fails on its own.
+  Future<void> _loadKidsSection() async {
+    if (widget.targetIsAdmin) {
+      if (mounted) setState(() => _kidsLoading = false);
+      return;
+    }
+    setState(() {
+      _kidsLoading = true;
+      _catalogFailed = false;
+      _policyUnreadable = false;
+    });
+    CertificationCatalog? catalog;
+    var catalogFailed = false;
+    try {
+      catalog = await _policyService.certifications();
+    } catch (_) {
+      catalogFailed = true;
+    }
+    if (!mounted) return;
+    if (catalog == null && !catalogFailed) {
+      setState(() {
+        _kidsSupported = false;
+        _kidsLoading = false;
+      });
+      return;
+    }
+    ContentPolicy? policy;
+    var unreadable = false;
+    try {
+      policy = await _policyService.getUserPolicy(widget.userId);
+    } catch (_) {
+      unreadable = true;
+    }
+    final discover = ref.read(discoverServiceProvider);
+    final movieGenres = await _swallow(discover.movieGenres());
+    final tvGenres = await _swallow(discover.tvGenres());
+    final regions = await _swallow(discover.watchRegions());
+    if (!mounted) return;
+    setState(() {
+      _kidsSupported = true;
+      _catalog = catalog;
+      _catalogFailed = catalogFailed;
+      _policyUnreadable = unreadable;
+      _loadedPolicy = policy;
+      _childEnabled = policy != null;
+      if (policy != null) {
+        _ratingRegion = policy.ratingRegion;
+        _maxMovieRating = policy.maxMovieRating;
+        _maxTvRating = policy.maxTvRating;
+        _blockUnrated = policy.blockUnrated;
+        _blockedMovieGenres = Set.of(policy.blockedMovieGenres);
+        _blockedTvGenres = Set.of(policy.blockedTvGenres);
+      }
+      _movieGenres = movieGenres;
+      _tvGenres = tvGenres;
+      _regionNames = {
+        for (final region in regions ?? const <WatchRegion>[])
+          region.code: region.name,
+      };
+      _kidsLoading = false;
+    });
+  }
+
+  /// A failed side fetch (a genre list, the region names) leaves that part
+  /// unknown rather than failing the section.
+  Future<T?> _swallow<T>(Future<T> future) async {
+    try {
+      return await future;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The policy as edited, or null when the switch is off.
+  ContentPolicy? get _kidsDraft {
+    if (!_childEnabled) return null;
+    return ContentPolicy(
+      maxMovieRating: _maxMovieRating ?? '',
+      maxTvRating: _maxTvRating ?? '',
+      ratingRegion: _ratingRegion,
+      blockUnrated: _blockUnrated,
+      blockedMovieGenres: _blockedMovieGenres.toList()..sort(),
+      blockedTvGenres: _blockedTvGenres.toList()..sort(),
+    );
+  }
+
+  /// Only a changed section is written: the policy PUT refuses an admin and
+  /// a rating the region does not know, and an untouched section must not
+  /// trip either.
+  bool get _kidsDirty =>
+      _kidsSupported && !widget.targetIsAdmin && _kidsDraft != _loadedPolicy;
+
+  /// Both caps must be entries of the chosen region's schemes. While the
+  /// schemes could not be read the stored caps are kept as they are.
+  bool get _kidsValid {
+    final catalog = _catalog;
+    if (!_childEnabled || catalog == null || _catalogFailed) return true;
+    return catalog
+            .movieFor(_ratingRegion)
+            .any((o) => o.certification == _maxMovieRating) &&
+        catalog.tvFor(_ratingRegion).any((o) => o.certification == _maxTvRating);
+  }
+
+  void _onChildToggled(bool on) {
+    setState(() {
+      _childEnabled = on;
+      if (!on) return;
+      // A kids account's requests default to needing approval; the control
+      // stays visible below so the admin can still decide otherwise.
+      _requireApproval = true;
+      if (_maxMovieRating == null || _maxTvRating == null) {
+        _applyRegionDefaults(_ratingRegion);
+      }
+    });
+  }
+
+  void _applyRegionDefaults(String region) {
+    final catalog = _catalog;
+    if (catalog == null) return;
+    _maxMovieRating =
+        CertificationCatalog.defaultFor(catalog.movieFor(region))?.certification;
+    _maxTvRating =
+        CertificationCatalog.defaultFor(catalog.tvFor(region))?.certification;
+  }
+
   Future<void> _save() async {
     if (_saving) return;
     setState(() => _saving = true);
     try {
+      // The kids account write goes first, and only when it changed: it is
+      // the one with refusals of its own, and refusing before anything else
+      // is written leaves a clean "nothing saved" state.
+      if (_kidsDirty) {
+        final draft = _kidsDraft;
+        if (draft != null) {
+          await _policyService.updateUserPolicy(widget.userId, draft);
+        } else {
+          await _policyService.deleteUserPolicy(widget.userId);
+        }
+        _loadedPolicy = draft;
+      }
       await _service.updateUserSettings(
         widget.userId,
         UserRequestSettings(
@@ -184,6 +369,7 @@ class _UserRequestSettingsScreenState
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
+        ..._buildKidsSection(),
         const Padding(
           padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: Text(
@@ -241,7 +427,7 @@ class _UserRequestSettingsScreenState
                 foregroundColor: AppTheme.onAccent,
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
-              onPressed: _saving ? null : _save,
+              onPressed: _saving || !_kidsValid ? null : _save,
               child: _saving
                   ? const SizedBox(
                       width: 20,
@@ -258,12 +444,275 @@ class _UserRequestSettingsScreenState
     );
   }
 
+  /// The Kids account section: the switch, then the limits while it is on.
+  /// Absent for admins and on servers without kids accounts.
+  List<Widget> _buildKidsSection() {
+    if (widget.targetIsAdmin || !_kidsSupported) return const [];
+    final catalog = _catalog;
+    return [
+      const Padding(
+        padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
+        child: Text(
+          'Kids account',
+          style: TextStyle(
+            color: AppTheme.textPrimary,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+      if (_policyUnreadable)
+        _kidsNotice(
+          "Couldn't read this user's kids account settings.",
+          onRetry: _loadKidsSection,
+        )
+      else ...[
+        SwitchListTile(
+          value: _childEnabled,
+          onChanged: _kidsLoading || (catalog == null && !_childEnabled)
+              ? null
+              : _onChildToggled,
+          title: const Text(
+            'Kids account',
+            style: TextStyle(
+                color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+          ),
+          subtitle: const Text(
+            'Only shows this user titles within the limits below. The server '
+            'filters every row, search, and page for this account.',
+            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+          ),
+        ),
+        if (_childEnabled) ...[
+          if (_catalogFailed)
+            _kidsNotice(
+              "Couldn't load the ratings list. The stored ratings are kept.",
+              onRetry: _loadKidsSection,
+            ),
+          _regionField(),
+          _ratingField(
+            key: ValueKey('movie-rating-$_ratingRegion'),
+            label: 'Movies up to',
+            options: catalog?.movieFor(_ratingRegion) ?? const [],
+            value: _maxMovieRating,
+            onChanged: (v) => setState(() => _maxMovieRating = v),
+          ),
+          _ratingField(
+            key: ValueKey('tv-rating-$_ratingRegion'),
+            label: 'Shows up to',
+            options: catalog?.tvFor(_ratingRegion) ?? const [],
+            value: _maxTvRating,
+            onChanged: (v) => setState(() => _maxTvRating = v),
+          ),
+          SwitchListTile(
+            value: _blockUnrated,
+            onChanged: (v) => setState(() => _blockUnrated = v),
+            title: const Text(
+              'Hide unrated titles',
+              style: TextStyle(
+                  color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+            ),
+            subtitle: const Text(
+              'A title with no rating in this region stays hidden.',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: Text(
+              'Hidden genres',
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          _genreChips(
+            label: 'Movies',
+            genres: _movieGenres,
+            hidden: _blockedMovieGenres,
+            onToggle: (id, on) => setState(() {
+              on ? _blockedMovieGenres.add(id) : _blockedMovieGenres.remove(id);
+            }),
+          ),
+          _genreChips(
+            label: 'Shows',
+            genres: _tvGenres,
+            hidden: _blockedTvGenres,
+            onToggle: (id, on) => setState(() {
+              on ? _blockedTvGenres.add(id) : _blockedTvGenres.remove(id);
+            }),
+          ),
+        ],
+      ],
+      const Divider(color: AppTheme.border),
+    ];
+  }
+
+  Widget _kidsNotice(String message, {required VoidCallback onRetry}) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(message,
+                style: const TextStyle(color: AppTheme.warning, fontSize: 13)),
+          ),
+          TextButton(onPressed: onRetry, child: const Text('Retry')),
+        ],
+      ),
+    );
+  }
+
+  Widget _regionField() {
+    final codes = <String>{...?_catalog?.regions, _ratingRegion}.toList();
+    String labelFor(String code) => _regionNames[code] ?? code;
+    codes.sort((a, b) => labelFor(a).compareTo(labelFor(b)));
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      child: DropdownButtonFormField<String>(
+        key: ValueKey('rating-region-${codes.length}'),
+        initialValue: _ratingRegion,
+        isExpanded: true,
+        dropdownColor: AppTheme.surfaceVariant,
+        decoration: const InputDecoration(
+          labelText: 'Ratings region',
+          labelStyle: TextStyle(color: AppTheme.textSecondary),
+          enabledBorder: OutlineInputBorder(
+            borderSide: BorderSide(color: AppTheme.border),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderSide: BorderSide(color: AppTheme.accent),
+          ),
+        ),
+        style: const TextStyle(color: AppTheme.textPrimary),
+        items: [
+          for (final code in codes)
+            DropdownMenuItem<String>(value: code, child: Text(labelFor(code))),
+        ],
+        onChanged: _catalog == null
+            ? null
+            : (v) {
+                if (v == null) return;
+                setState(() {
+                  _ratingRegion = v;
+                  _applyRegionDefaults(v);
+                });
+              },
+      ),
+    );
+  }
+
+  Widget _ratingField({
+    required Key key,
+    required String label,
+    required List<CertificationOption> options,
+    required String? value,
+    required ValueChanged<String?> onChanged,
+  }) {
+    final known = options.any((o) => o.certification == value);
+    final selected =
+        known ? options.firstWhere((o) => o.certification == value) : null;
+    // With no schemes to offer, the stored cap is shown as the one choice
+    // and left alone.
+    final items = _catalogFailed && value != null && !known
+        ? [DropdownMenuItem<String>(value: value, child: Text(value))]
+        : [
+            for (final o in options)
+              DropdownMenuItem<String>(
+                  value: o.certification, child: Text(o.certification)),
+          ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      child: DropdownButtonFormField<String>(
+        key: key,
+        initialValue: known || (_catalogFailed && value != null) ? value : null,
+        isExpanded: true,
+        dropdownColor: AppTheme.surfaceVariant,
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: const TextStyle(color: AppTheme.textSecondary),
+          helperText: selected != null && selected.meaning.isNotEmpty
+              ? selected.meaning
+              : null,
+          helperMaxLines: 3,
+          errorText: !known && !_catalogFailed && options.isNotEmpty
+              ? 'Choose a rating for this region'
+              : null,
+          enabledBorder: const OutlineInputBorder(
+            borderSide: BorderSide(color: AppTheme.border),
+          ),
+          focusedBorder: const OutlineInputBorder(
+            borderSide: BorderSide(color: AppTheme.accent),
+          ),
+        ),
+        style: const TextStyle(color: AppTheme.textPrimary),
+        items: items,
+        onChanged: _catalogFailed ? null : onChanged,
+      ),
+    );
+  }
+
+  /// Hidden-genre chips for one media type. Selected means hidden. A stored
+  /// id the list no longer names is kept as it is, never pruned.
+  Widget _genreChips({
+    required String label,
+    required List<Genre>? genres,
+    required Set<int> hidden,
+    required void Function(int id, bool on) onToggle,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style: const TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          if (genres == null)
+            _kidsNotice("Couldn't load the genre list.",
+                onRetry: _loadKidsSection)
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final genre in genres)
+                  FilterChip(
+                    label: Text(genre.name),
+                    selected: hidden.contains(genre.id),
+                    onSelected: (on) => onToggle(genre.id, on),
+                    showCheckmark: false,
+                    selectedColor: AppTheme.accent.withValues(alpha: 0.2),
+                    backgroundColor: AppTheme.surfaceVariant,
+                    labelStyle: TextStyle(
+                      color: hidden.contains(genre.id)
+                          ? AppTheme.accent
+                          : AppTheme.textPrimary,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      side: BorderSide(
+                          color: hidden.contains(genre.id)
+                              ? AppTheme.accent
+                              : AppTheme.border),
+                    ),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
   /// The admin's connection lists every configured instance; group them by
   /// service type (first-seen order) so we can render one dropdown per type.
   /// Service types whose default instance is a per-user "source" override.
-  /// Download clients and Tautulli are admin-only infrastructure (not a
-  /// per-user content source), so they are excluded from this section.
-  static const _sourceServiceTypes = {'radarr', 'sonarr', 'chaptarr'};
+  /// Download clients, Tautulli and Tracearr are admin-only infrastructure
+  /// (not a per-user content source), so they are excluded from this section.
+  static const _sourceServiceTypes = {'radarr', 'sonarr', 'chaptarr', 'lidarr'};
 
   Map<String, List<ServiceInstance>> _instancesByType() {
     final instances =
@@ -297,10 +746,11 @@ class _UserRequestSettingsScreenState
         padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
         child: Text(
           'Pin which instance this user defaults to per service. For regular '
-          'users, choosing a Chaptarr instance grants Books access. Admins can '
-          'pin their own request target here too. Below each default, extra '
-          'libraries can be granted so the user chooses per request — a grant '
-          'never moves the default.',
+          'users, choosing a Chaptarr instance grants Books access and a '
+          'Lidarr instance grants Music access. Admins can pin their own '
+          'request target here too. Below each default, extra libraries can '
+          'be granted so the user chooses per request — a grant never moves '
+          'the default.',
           style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
         ),
       ),
@@ -361,9 +811,9 @@ class _UserRequestSettingsScreenState
     required String serviceType,
     required List<ServiceInstance> instances,
   }) {
-    // Chaptarr grants are per-user for regular users. Admins can also use this
-    // setting to pin their own request target.
-    final isChaptarr = serviceType == 'chaptarr';
+    // Chaptarr and Lidarr grants are per-user for regular users. Admins can
+    // also use this setting to pin their own request target.
+    final isGrantOnly = serviceType == 'chaptarr' || serviceType == 'lidarr';
     final value = _defaultInstances[serviceType];
     // Guard against a stored id that's no longer in the instance list.
     final hasValue = value != null && instances.any((i) => i.id == value);
@@ -388,8 +838,8 @@ class _UserRequestSettingsScreenState
           DropdownMenuItem<String?>(
             value: null,
             child: Text(
-              isChaptarr
-                  ? 'No per-user Chaptarr assignment'
+              isGrantOnly
+                  ? 'No per-user ${_serviceLabel(serviceType)} assignment'
                   : 'Inherit (global default)',
               style: const TextStyle(color: AppTheme.textSecondary),
             ),
@@ -414,6 +864,8 @@ class _UserRequestSettingsScreenState
         return 'Sonarr';
       case 'chaptarr':
         return 'Chaptarr';
+      case 'lidarr':
+        return 'Lidarr';
       case 'sabnzbd':
         return 'SABnzbd';
       case 'qbittorrent':
@@ -424,6 +876,8 @@ class _UserRequestSettingsScreenState
         return 'Transmission';
       case 'tautulli':
         return 'Tautulli';
+      case 'tracearr':
+        return 'Tracearr';
       case 'jellyfin':
         return 'Jellyfin';
       case 'emby':

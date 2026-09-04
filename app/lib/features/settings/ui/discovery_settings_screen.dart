@@ -293,7 +293,6 @@ class _DiscoverySettingsScreenState
           highlightId: widget.highlightId,
           child: SwitchListTile(
             value: edited.englishOnly,
-            activeThumbColor: AppTheme.accent,
             onChanged: (v) =>
                 setState(() => _edited = edited.copyWith(englishOnly: v)),
             title: const Text(

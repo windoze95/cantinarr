@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
@@ -51,7 +52,7 @@ func mutationNotStarted(detail string) (string, error) {
 }
 
 // CustomFormatMutator is the complete remote surface used by the canonical
-// custom-format upsert. Radarr, Sonarr, and Chaptarr clients satisfy it.
+// custom-format upsert. Radarr, Sonarr, Chaptarr, and Lidarr clients satisfy it.
 type CustomFormatMutator interface {
 	GetCustomFormatsRawContext(context.Context) ([]json.RawMessage, error)
 	GetQualityProfilesRawContext(context.Context) ([]json.RawMessage, error)
@@ -540,7 +541,7 @@ func seriesByTMDB(bridge *tmdb.Bridge, client *sonarr.Client, tmdbID int) (*sona
 // queueIDToReplace > 0 removes that queue item (deleting the download from the
 // client, no blocklist) before grabbing, so a "grab a different release" fix
 // doesn't leave the old one downloading alongside the new one.
-func GrabReleaseHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType, guid string, indexerID, queueIDToReplace int) (string, error) {
+func GrabReleaseHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, lc *lidarr.Client, mediaType, guid string, indexerID, queueIDToReplace int) (string, error) {
 	if guid == "" {
 		return mutationNotStarted("guid is required (from search_releases)")
 	}
@@ -590,8 +591,23 @@ func GrabReleaseHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client
 			}
 			return "", err
 		}
+	case "music":
+		if lc == nil {
+			return mutationNotStarted("Lidarr is not configured")
+		}
+		if queueIDToReplace > 0 {
+			if err := lc.RemoveQueueItem(queueIDToReplace, true, false, false, false); err != nil {
+				return "", err
+			}
+		}
+		if err := lc.GrabRelease(guid, indexerID); err != nil {
+			if queueIDToReplace > 0 {
+				return "", &PartialMutationError{Completed: fmt.Sprintf("queue item %d was removed", queueIDToReplace), Pending: "sending the replacement release", Err: err}
+			}
+			return "", err
+		}
 	default:
-		return mutationNotStarted("media_type must be \"movie\", \"tv\", or \"book\"")
+		return mutationNotStarted("media_type must be \"movie\", \"tv\", \"book\", or \"music\"")
 	}
 	msg := "Release sent to the download client. It should show up in get_queue shortly."
 	if queueIDToReplace > 0 {
@@ -603,7 +619,7 @@ func GrabReleaseHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client
 // RemoveQueueItemHelper removes a queue item (deleting the download from the
 // client), optionally blocklisting the release so it is not re-grabbed. Shared
 // body of the remove_queue_item tool.
-func RemoveQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType string, queueID int, blocklist bool) (string, error) {
+func RemoveQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, lc *lidarr.Client, mediaType string, queueID int, blocklist bool) (string, error) {
 	switch mediaType {
 	case "movie":
 		if rc == nil {
@@ -626,8 +642,15 @@ func RemoveQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Cl
 		if err := cc.RemoveQueueItem(queueID, true, blocklist, false, false); err != nil {
 			return "", err
 		}
+	case "music":
+		if lc == nil {
+			return mutationNotStarted("Lidarr is not configured")
+		}
+		if err := lc.RemoveQueueItem(queueID, true, blocklist, false, false); err != nil {
+			return "", err
+		}
 	default:
-		return mutationNotStarted("media_type must be \"movie\", \"tv\", or \"book\"")
+		return mutationNotStarted("media_type must be \"movie\", \"tv\", \"book\", or \"music\"")
 	}
 	text := fmt.Sprintf("Removed queue item %d and deleted the download from the client.", queueID)
 	if blocklist {
@@ -639,7 +662,7 @@ func RemoveQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Cl
 // RemediateQueueItemHelper applies one of the structured queue remediations
 // (remove | blocklist_search | blocklist_only | change_category) to a queue item. Shared body of
 // the remediate_queue_item tool and the Executor's remediate_queue kind.
-func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType string, queueID int, action string) (string, error) {
+func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, lc *lidarr.Client, mediaType string, queueID int, action string) (string, error) {
 	switch action {
 	case "remove", "blocklist_search", "blocklist_only", "change_category":
 	default:
@@ -779,8 +802,52 @@ func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr
 			return fmt.Sprintf("Handed queue item %d (%s) to the download client's post-import category. It stays in the client for tools like Unpackerr.", queueID, chaptarrQueueTitle(*item)), nil
 		}
 
+	case "music":
+		if lc == nil {
+			return mutationNotStarted("Lidarr is not configured")
+		}
+		item, err := findLidarrQueueItem(lc, queueID)
+		if err != nil {
+			return "", err
+		}
+		if item == nil {
+			return mutationNotStarted(fmt.Sprintf("no music queue item with id %d", queueID))
+		}
+		switch action {
+		case "remove":
+			if err := lc.RemoveQueueItem(queueID, true, false, false, false); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Removed queue item %d (%s) and deleted the download.", queueID, lidarrQueueTitle(*item)), nil
+		case "blocklist_search":
+			// Clear the stuck item and blocklist it — then stop. Whether a
+			// replacement is searched for is the SERVICE's call, made from settings
+			// an administrator already set (including whether a release a human
+			// hand-picked may be substituted automatically). Blocklisting is exactly
+			// what triggers that policy, so skipRedownload stays false and Cantinarr
+			// adds no search of its own: an agent that searched here would be doing
+			// something no human clicking the same button would produce.
+			if err := lc.RemoveQueueItem(queueID, true, true, false, false); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Removed and blocklisted queue item %d (%s). Whether a replacement is searched for now follows the service's own failed-download handling.", queueID, lidarrQueueTitle(*item)), nil
+		case "blocklist_only":
+			// skipRedownload suppresses the automatic replacement search the
+			// blocklist would otherwise trigger. The blocklist still stands, so the
+			// dead release cannot come back through the service's own RSS pass.
+			if err := lc.RemoveQueueItem(queueID, true, true, true, false); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Removed and blocklisted queue item %d (%s) without searching for a replacement. The copy already in the library is untouched.", queueID, lidarrQueueTitle(*item)), nil
+		case "change_category":
+			if err := lc.RemoveQueueItem(queueID, false, false, false, true); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Handed queue item %d (%s) to the download client's post-import category. It stays in the client for tools like Unpackerr.", queueID, lidarrQueueTitle(*item)), nil
+		}
+
 	default:
-		return mutationNotStarted("media_type must be \"movie\", \"tv\", or \"book\"")
+		return mutationNotStarted("media_type must be \"movie\", \"tv\", \"book\", or \"music\"")
 	}
 	return mutationNotStarted("no remediation was applied")
 }
@@ -794,6 +861,7 @@ type ManualImportScope struct {
 	MovieID       int
 	SeriesID      int
 	BookID        int
+	AlbumID       int
 	SeasonNumber  int
 	EpisodeNumber int
 }
@@ -803,7 +871,7 @@ type ManualImportScopeError struct{ Detail string }
 func (e *ManualImportScopeError) Error() string            { return e.Detail }
 func (e *ManualImportScopeError) MutationNotStarted() bool { return true }
 
-func ExecuteManualImportHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType string, queueID int, force bool, scope *ManualImportScope) (string, error) {
+func ExecuteManualImportHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, lc *lidarr.Client, mediaType string, queueID int, force bool, scope *ManualImportScope) (string, error) {
 	switch mediaType {
 	case "movie":
 		if rc == nil {
@@ -1001,8 +1069,74 @@ func ExecuteManualImportHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptar
 		}
 		return importResultMessage(len(files), importMode, skipped), nil
 
+	case "music":
+		if lc == nil {
+			return mutationNotStarted("Lidarr is not configured")
+		}
+		item, err := findLidarrQueueItem(lc, queueID)
+		if err != nil {
+			return "", err
+		}
+		if item == nil {
+			return mutationNotStarted(fmt.Sprintf("no music queue item with id %d", queueID))
+		}
+		if item.DownloadID == "" {
+			return mutationNotStarted(fmt.Sprintf("queue item %d has no download-client id yet; nothing to import", queueID))
+		}
+		if scope != nil && scope.DownloadID != "" && item.DownloadID != scope.DownloadID {
+			return "", &ManualImportScopeError{Detail: "the queue item now points to a different download; not importing"}
+		}
+		candidates, err := lc.GetManualImportCandidates(item.DownloadID)
+		if err != nil {
+			return "", err
+		}
+		var files []lidarr.ManualImportFile
+		var skipped []string
+		scopedCandidates := 0
+		for _, c := range candidates {
+			if scope != nil && (scope.AlbumID <= 0 || c.AlbumID != scope.AlbumID) {
+				skipped = append(skipped, fmt.Sprintf("%s (mapped to a different album)", c.Name))
+				continue
+			}
+			scopedCandidates++
+			rejections := toRejectionViews(c.Rejections)
+			if !force && hasPermanentRejection(rejections) {
+				skipped = append(skipped, fmt.Sprintf("%s (%s)", c.Name, formatRejections(rejections)))
+				continue
+			}
+			if c.AlbumID == 0 || len(c.TrackIDs) == 0 {
+				skipped = append(skipped, fmt.Sprintf("%s (not matched to an album's tracks)", c.Name))
+				continue
+			}
+			files = append(files, lidarr.ManualImportFile{
+				Path:           c.Path,
+				FolderName:     c.FolderName,
+				ArtistID:       c.ArtistID,
+				AlbumID:        c.AlbumID,
+				AlbumReleaseID: c.AlbumRelease,
+				TrackIDs:       c.TrackIDs,
+				Quality:        c.Quality,
+				ReleaseGroup:   c.ReleaseGroup,
+				DownloadID:     c.DownloadID,
+			})
+		}
+		if len(files) == 0 {
+			if scope != nil && len(candidates) > 0 && scopedCandidates == 0 {
+				return "", &ManualImportScopeError{Detail: "no manual-import candidate maps exclusively to this issue's album; not importing"}
+			}
+			return mutationNotStarted(importSkippedMessage(skipped, force))
+		}
+		// Lidarr's ManualImport command sets importMode itself (auto); the
+		// helper still reports the protocol-derived mode so the result message
+		// matches the movie/TV path.
+		importMode := importModeFor(item.Protocol)
+		if err := lc.ExecuteManualImport(files); err != nil {
+			return "", err
+		}
+		return importResultMessage(len(files), importMode, skipped), nil
+
 	default:
-		return mutationNotStarted("media_type must be \"movie\", \"tv\", or \"book\"")
+		return mutationNotStarted("media_type must be \"movie\", \"tv\", \"book\", or \"music\"")
 	}
 }
 
@@ -1035,7 +1169,7 @@ func manualImportCandidateMatchesTVScope(candidate sonarr.ManualImportCandidate,
 // carried in the proposal: a proposal can wait hours or days for an admin, and
 // in that window the next episode airs. Resolving early would search a week-old
 // answer.
-func TriggerSearchHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType string, tmdbID int, seasonNumber, episodeNumber *int, airedOnly bool, authorID int, bookIDs []int) (string, error) {
+func TriggerSearchHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, lc *lidarr.Client, mediaType string, tmdbID int, seasonNumber, episodeNumber *int, airedOnly bool, authorID int, bookIDs []int, artistID int, albumIDs []int) (string, error) {
 	switch mediaType {
 	case "movie":
 		if rc == nil {
@@ -1115,8 +1249,26 @@ func TriggerSearchHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Clie
 		}
 		return fmt.Sprintf("Search started for all monitored books of author %d. Check get_queue in a bit to see if releases were grabbed.", authorID), nil
 
+	case "music":
+		if lc == nil {
+			return mutationNotStarted("Lidarr is not configured")
+		}
+		if len(albumIDs) > 0 {
+			if err := lc.TriggerAlbumSearch(albumIDs); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Search started for %d album(s). Check get_queue in a bit to see if releases were grabbed.", len(albumIDs)), nil
+		}
+		if artistID == 0 {
+			return mutationNotStarted("trigger_search for music requires artist_id or album_id")
+		}
+		if err := lc.TriggerArtistSearch(artistID); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Search started for all monitored albums of artist %d. Check get_queue in a bit to see if releases were grabbed.", artistID), nil
+
 	default:
-		return mutationNotStarted("media_type must be \"movie\", \"tv\", or \"book\"")
+		return mutationNotStarted("media_type must be \"movie\", \"tv\", \"book\", or \"music\"")
 	}
 }
 
@@ -1125,7 +1277,7 @@ func TriggerSearchHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Clie
 // TMDB id, so tmdbID is unused on the book path and authorID is unused on the
 // movie/TV paths). Shared body of the rescan_media tool and the Executor's
 // rescan kind.
-func RescanMediaHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType string, tmdbID, authorID int) (string, error) {
+func RescanMediaHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, lc *lidarr.Client, mediaType string, tmdbID, authorID, artistID int) (string, error) {
 	switch mediaType {
 	case "movie":
 		if rc == nil {
@@ -1180,7 +1332,22 @@ func RescanMediaHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Client
 		}
 		return fmt.Sprintf("Rescanning author %d and running the import pass. Check diagnose_queue shortly.", authorID), nil
 
+	case "music":
+		if lc == nil {
+			return mutationNotStarted("Lidarr is not configured")
+		}
+		if artistID == 0 {
+			return mutationNotStarted("rescan for music requires artist_id")
+		}
+		if err := lc.RescanArtist(artistID); err != nil {
+			return "", err
+		}
+		if err := lc.ProcessMonitoredDownloads(); err != nil {
+			return "", &PartialMutationError{Completed: fmt.Sprintf("a rescan of artist %d was started", artistID), Pending: "starting the monitored-download import pass", Err: err}
+		}
+		return fmt.Sprintf("Rescanning artist %d and running the import pass. Check diagnose_queue shortly.", artistID), nil
+
 	default:
-		return mutationNotStarted("media_type must be \"movie\", \"tv\", or \"book\"")
+		return mutationNotStarted("media_type must be \"movie\", \"tv\", \"book\", or \"music\"")
 	}
 }

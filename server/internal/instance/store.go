@@ -32,7 +32,8 @@ const (
 
 // Instance represents a configured service instance (Radarr, Sonarr, SABnzbd,
 // or qBittorrent). Radarr/Sonarr/SABnzbd authenticate with an API key;
-// qBittorrent authenticates with username/password.
+// qBittorrent with either an API key (5.2 and newer) or a username and
+// password, and a row holds one shape or the other, never both.
 type Instance struct {
 	ID          string `json:"id"`
 	ServiceType string `json:"service_type"` // "radarr", "sonarr", "sabnzbd", or "qbittorrent"
@@ -251,12 +252,19 @@ func (s *Store) Get(id string) (*Instance, error) {
 }
 
 // normalizeDefault applies the service-type default rules before persisting:
-// Chaptarr and the media servers have no global default — their instances are
+// grant-only service types have no global default — their instances are
 // granted per user — so the flag is forced off for them.
 func normalizeDefault(inst *Instance) {
-	if inst.ServiceType == "chaptarr" || IsMediaServerType(inst.ServiceType) {
+	if isGrantOnlyType(inst.ServiceType) {
 		inst.IsDefault = false
 	}
+}
+
+// isGrantOnlyType reports a service type with no global default instance:
+// Chaptarr, Lidarr, and the media servers. For these, a user's per-user rows
+// (pin or grant) are the entire access story — no rows means no access.
+func isGrantOnlyType(serviceType string) bool {
+	return serviceType == "chaptarr" || serviceType == "lidarr" || IsMediaServerType(serviceType)
 }
 
 // clearSiblingDefaults keeps at most one default per service type: saving an
@@ -584,7 +592,8 @@ func (s *Store) Delete(id string) error {
 		return fmt.Errorf("instance not found: %s", id)
 	}
 	// Drop any per-user defaults/grants that pointed at this instance so a
-	// deleted instance neither lingers as someone's default nor (for chaptarr)
+	// deleted instance neither lingers as someone's default nor (for grant-only
+	// types)
 	// keeps granting access to a now-removed instance. user_instance_grants
 	// also declares ON DELETE CASCADE; the explicit delete keeps the cleanup
 	// independent of the foreign_keys pragma.
@@ -636,7 +645,7 @@ func (s *Store) GetDefault(serviceType string) (*Instance, error) {
 // GetUserDefault returns the instance ID a user has pinned as their default for
 // a service type, or ("", false, nil) when the user has no per-user override
 // (the caller should fall back to the global default). For service types with no
-// global default (chaptarr), the returned ID is also the access grant.
+// global default (chaptarr/lidarr), the returned ID is also the access grant.
 func (s *Store) GetUserDefault(userID int64, serviceType string) (string, bool, error) {
 	var instanceID string
 	err := s.db.QueryRow(
@@ -744,7 +753,7 @@ func (s *Store) ServiceTypeOf(instanceID string) (string, error) {
 // SetInstanceUsers pins instanceID as the per-user default for exactly
 // userIDs: listed users are pinned to it (moving off a sibling instance if
 // needed), and users previously pinned to THIS instance but absent from the
-// list revert to the global default (for chaptarr: access revoked). Pins to
+// list revert to the global default (for grant-only types: access revoked). Pins to
 // sibling instances are otherwise untouched.
 func (s *Store) SetInstanceUsers(instanceID string, userIDs []int64) error {
 	serviceType, err := s.ServiceTypeOf(instanceID)
@@ -780,7 +789,7 @@ func (s *Store) SetInstanceUsers(instanceID string, userIDs []int64) error {
 }
 
 // ClearUserDefault removes a user's per-user override for a service type, so it
-// reverts to the global default (or, for chaptarr, revokes access).
+// reverts to the global default (or, for grant-only types, revokes access).
 func (s *Store) ClearUserDefault(userID int64, serviceType string) error {
 	if _, err := s.db.Exec(
 		"DELETE FROM user_default_instances WHERE user_id = ? AND service_type = ?",
@@ -793,7 +802,7 @@ func (s *Store) ClearUserDefault(userID int64, serviceType string) error {
 
 // UserHasInstanceAccess reports whether a user has an explicit row (per-user
 // default pin or access grant) naming a specific instance. Used to gate access
-// to service types that have no global default (chaptarr); admins bypass this
+// to service types that have no global default (chaptarr/lidarr); admins bypass this
 // check at the caller.
 func (s *Store) UserHasInstanceAccess(userID int64, instanceID string) (bool, error) {
 	var one int
@@ -816,7 +825,7 @@ func (s *Store) UserHasInstanceAccess(userID int64, instanceID string) (bool, er
 // GrantedInstanceIDs returns the user's explicitly granted set for a service
 // type — access-grant rows plus the per-user default pin — in deterministic
 // (sort_order, name, id) order. An empty result means the user has no explicit
-// rows: radarr/sonarr callers fall back to the global default, chaptarr
+// rows: radarr/sonarr callers fall back to the global default, grant-only
 // callers treat it as no access. Metadata-only; never decrypts credentials.
 func (s *Store) GrantedInstanceIDs(userID int64, serviceType string) ([]string, error) {
 	rows, err := s.db.Query(
@@ -849,10 +858,10 @@ func (s *Store) GrantedInstanceIDs(userID int64, serviceType string) ([]string, 
 // EffectiveDefaultInstanceID resolves the one instance a user's implicit
 // (no instance selected) operations target: their pin when set, else the
 // global Radarr/Sonarr default chain — grants never move the default, they
-// only widen what may be selected. Chaptarr and the media servers have no
-// global chain: an unpinned user's implicit target is their first granted
-// instance, and no rows means no access (the first-instance fallback the
-// other types get would leak a library).
+// only widen what may be selected. Chaptarr, Lidarr, and the media servers
+// have no global chain: an unpinned user's implicit target is their first
+// granted instance, and no rows means no access (the first-instance fallback
+// the other types get would leak a library).
 func (s *Store) EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error) {
 	pinnedID, pinned, err := s.GetUserDefault(userID, serviceType)
 	if err != nil {
@@ -861,7 +870,7 @@ func (s *Store) EffectiveDefaultInstanceID(userID int64, serviceType string) (st
 	if pinned {
 		return pinnedID, nil
 	}
-	if serviceType == "chaptarr" || IsMediaServerType(serviceType) {
+	if isGrantOnlyType(serviceType) {
 		granted, err := s.GrantedInstanceIDs(userID, serviceType)
 		if err != nil {
 			return "", err
@@ -1007,7 +1016,7 @@ func (s *Store) ListTypeUserGrants(serviceType string) (map[int64][]string, erro
 // SetInstanceGrantUsers replaces which users have an explicit row on exactly
 // this instance: listed users gain a grant row, users absent from the list
 // lose their grant AND any per-user default pin naming this instance (their
-// default reverts to the global chain; for chaptarr, access is revoked).
+// default reverts to the global chain; for grant-only types, access is revoked).
 // Clearing the pin too is what makes an admin's uncheck a real revocation —
 // legacy assignments are pin rows, and a surviving pin would silently keep
 // granting the library. Listed users' pins and every sibling instance's rows
@@ -1066,11 +1075,11 @@ func (s *Store) SetInstanceGrantUsers(instanceID string, userIDs []int64) error 
 // UserCanAccessInstance reports whether instanceID is a service instance
 // exposed to a requester: exactly membership in VisibleInstanceIDs — their
 // explicit rows (grants are additive, a pin is an exclusive default) plus,
-// for an unpinned Radarr/Sonarr user, the global default. Chaptarr
-// deliberately has no global fallback, so its rows are the entire grant. All
-// lookups are metadata-only and never decrypt the instance's credentials.
+// for an unpinned Radarr/Sonarr user, the global default. Chaptarr and Lidarr
+// deliberately have no global fallback, so their rows are the entire grant.
+// All lookups are metadata-only and never decrypt the instance's credentials.
 func (s *Store) UserCanAccessInstance(userID int64, instanceID, serviceType string) (bool, error) {
-	if serviceType != "radarr" && serviceType != "sonarr" && serviceType != "chaptarr" {
+	if serviceType != "radarr" && serviceType != "sonarr" && serviceType != "chaptarr" && serviceType != "lidarr" {
 		return false, nil
 	}
 	visible, err := s.VisibleInstanceIDs(userID, serviceType)

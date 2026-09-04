@@ -31,13 +31,13 @@ var arrProfileToolDefinitions = []Tool{
 	{
 		Name:        "preview_profile_change",
 		Permission:  auth.PermissionInstancesManage,
-		Description: "Prepare and show a narrow full-object quality-profile update for one Radarr/Sonarr/Chaptarr instance; it never writes. In Cantinarr's in-app chat it returns a one-use reference apply_profile_change may consume in this same authenticated turn, after an explicit admin request. From an external MCP client it instead parks the change for admin approval in the Cantinarr app and notifies the admins; the write happens only if an admin approves it there. Admin only",
+		Description: "Prepare and show a narrow full-object quality-profile update for one Radarr/Sonarr/Chaptarr/Lidarr instance; it never writes. In Cantinarr's in-app chat it returns a one-use reference apply_profile_change may consume in this same authenticated turn, after an explicit admin request. From an external MCP client it instead parks the change for admin approval in the Cantinarr app and notifies the admins; the write happens only if an admin approves it there. Admin only",
 		InputSchema: map[string]interface{}{
 			"type":                 "object",
 			"additionalProperties": false,
 			"properties": map[string]interface{}{
 				"service": map[string]interface{}{
-					"type": "string", "enum": []string{"radarr", "sonarr", "chaptarr"},
+					"type": "string", "enum": []string{"radarr", "sonarr", "chaptarr", "lidarr"},
 				},
 				"instance_id": map[string]interface{}{
 					"type": "string", "description": "Instance ID from list_arr_instances (default: the service's current default instance)",

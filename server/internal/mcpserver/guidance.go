@@ -63,7 +63,7 @@ func registerAgentPrompts(mcpServer *server.MCPServer, toolServer *internalmcp.T
 %s
 
 Workflow:
-1. Ground recommendations in tools. Use search_movie_collections for movie franchise/count/list asks, search_movies/search_tv_shows for specific title asks, search_books for book/author asks, or get_trending for trending/general discovery.
+1. Ground recommendations in tools. Use search_movie_collections for movie franchise/count/list asks, search_movies/search_tv_shows for specific title asks, search_books for book/author asks, search_music for album/artist asks, get_trending for trending/general discovery, or browse_titles when the ask names a genre, year or decade, rating, language, streaming service, keyword, or studio (media_type "movie" or "tv", once per type for a mix; pass plain names and correct any it reports as unresolved).
 2. If the user did not ask specifically for only movies or only TV, use get_trending with media_type "all". That returns a balanced movie/TV mix.
 3. Choose the items you actually want to show, then call display_media in the same order you will mention them in text. Prefer exact TMDB IDs, media_type values, titles, and years copied from prior tool output; if you only have exact title/year values, omit tmdb_id and let display_media resolve them.
 4. Search/get_trending results alone are not enough for the native carousel. display_media is what prepares the rich visual result set, including franchise/title-list and count answers that enumerate concrete titles.
@@ -75,7 +75,7 @@ Workflow:
 	mcpServer.AddPrompt(
 		mcplib.NewPrompt(
 			"request-media",
-			mcplib.WithPromptDescription("Find and request a movie, TV show, or book for the authenticated user"),
+			mcplib.WithPromptDescription("Find and request a movie, TV show, book, or album for the authenticated user"),
 			mcplib.WithArgument("title_or_request",
 				mcplib.ArgumentDescription("The title or natural-language request to fulfill"),
 				mcplib.RequiredArgument(),
@@ -87,10 +87,10 @@ Workflow:
 %s
 
 Workflow:
-1. Search for the exact title first. Use search_movies or search_tv_shows based on the request (search_books for books); if ambiguous, search both and disambiguate by year/title.
-2. Never invent TMDB IDs or foreign_book_ids. Use only IDs returned by tools.
+1. Search for the exact title first. Use search_movies or search_tv_shows based on the request (search_books for books, search_music for albums); if ambiguous, search both and disambiguate by year/title.
+2. Never invent TMDB IDs, foreign_book_ids, or foreign_album_ids. Use only IDs returned by tools.
 3. Call check_request_status before requesting so you know whether it is already available, requested, or downloading.
-4. If a request is needed, call request_media with the selected TMDB ID and media_type (books: the foreign_book_id from search_books plus an optional book_format).
+4. If a request is needed, call request_media with the selected TMDB ID and media_type (books: the foreign_book_id from search_books plus an optional book_format; music: the foreign_album_id from search_music).
 5. If presenting candidates before requesting, call display_media with exact values from the prior tool output so the client can render a carousel.
 6. Confirm what happened in plain language.`, userRequest)
 			return promptResult("Request media", text), nil
@@ -114,7 +114,7 @@ Workflow:
 Workflow:
 1. Use get_queue for current downloads, get_history for recent activity, get_calendar for upcoming releases, and get_library for library state.
 2. For stuck, failed, or stuck-importing downloads, run diagnose_queue first (the Import Doctor). It explains each problem and prints the exact next tool call to run on each item's "→ next:" line: get_manual_import_candidates then execute_manual_import (force a correct file in), remediate_queue_item (remove / blocklist_search / change_category), or rescan_media (after fixing disk/path/permissions). When diagnose_queue shows path, permission, or download-client errors, call get_arr_health to confirm the config-level root cause (download client unreachable, remote path mapping, indexers down).
-3. For a complaint about the CONTENT of a TV show — wrong episode, wrong season, not what was asked for — the queue is expected to be empty, because the download already finished and imported. Use get_episode_timeline: it lays the season out episode by episode and flags files the service imported before that episode aired, which cannot be that episode. For the same complaint about a BOOK — wrong book, bad copy — use get_book_timeline: it joins the record's files on disk to the grab/import history that delivered them.
+3. For a complaint about the CONTENT of a TV show — wrong episode, wrong season, not what was asked for — the queue is expected to be empty, because the download already finished and imported. Use get_episode_timeline: it lays the season out episode by episode and flags files the service imported before that episode aired, which cannot be that episode. For the same complaint about a BOOK — wrong book, bad copy — use get_book_timeline: it joins the record's files on disk to the grab/import history that delivered them. For an ALBUM, get_album_timeline is the same receipts read.
 4. For missing media or failed downloads, trigger_search can start an automatic search; on a season still airing week to week, aired_only searches just the episodes that have actually come out.
 5. Use search_releases before grab_release when the user wants a particular quality, release group, or manual selection.
 6. Only call destructive tools such as grab_release, remove_queue_item, execute_manual_import, or remediate_queue_item when the user explicitly asks for that action. Summarize consequences before or after the call.
@@ -187,6 +187,7 @@ Tools may be hidden or disabled by RBAC and administrator settings. If a tool re
 - For general trending requests, or when the user mentions both movies and shows/TV, call get_trending with media_type "all".
 - Only use media_type "movie" or "tv" when the user asks for that category specifically.
 - get_trending with media_type "all" returns a balanced movie/TV mix.
+- When the ask names filters (genre, year or decade, minimum rating, original language, streaming service, keyword or theme, or studio), call browse_titles with media_type "movie" or "tv" rather than get_trending; pass plain names, ask for the next page for more of the same, and correct any name it reports as unresolved from the options it lists.
 - For movie franchise/count/list answers, use search_movie_collections before search_movies so you do not miss sequels, prequels, current-year releases, or upcoming entries.
 - Search or trending results alone do not prepare the native visual carousel. After selecting the items to show, call display_media in the same order you will mention them in text, with exact TMDB IDs, media_type values, titles, and years copied from prior tool results when available.
 - Franchise/title-list and count answers that enumerate concrete movies or shows should call display_media for those titles in the enumerated order.
@@ -209,7 +210,7 @@ Tools may be hidden or disabled by RBAC and administrator settings. If a tool re
 - Use get_history for recent grabs, imports, and failures.
 - If a library item is missing or a download failed, trigger_search can start a new automatic search; for a TV season still airing, aired_only narrows it to the episodes that have actually come out.
 - When someone says a TV episode or season is the wrong content, use get_episode_timeline rather than the queue: the download finished long ago, and the timeline shows each episode's air date against the file the library holds for it.
-- When someone says a book is the wrong content or a bad copy, use get_book_timeline rather than the queue: it shows the record's files on disk joined to the grabs and imports that delivered them.
+- When someone says a book is the wrong content or a bad copy, use get_book_timeline rather than the queue: it shows the record's files on disk joined to the grabs and imports that delivered them. get_album_timeline answers the same complaint about an album.
 - For downloads that are stuck, failed, or stuck importing, run diagnose_queue (the Import Doctor). It explains each problem and prints the exact next tool call to run on each item's "→ next:" line, then use get_manual_import_candidates / execute_manual_import to force a correct file in, remediate_queue_item to remove / blocklist+search / change category, or rescan_media after fixing a disk, path, or permissions issue.
 - When diagnose_queue reports a path, permission, or download-client problem, call get_arr_health to confirm the config-level root cause (download client unreachable, remote path mapping wrong, indexers down, no root folder) that per-item diagnosis can only guess at.
 - For manual control, call search_releases before grab_release so the user can choose quality, release group, or a specific release.

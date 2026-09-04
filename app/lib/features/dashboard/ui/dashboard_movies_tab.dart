@@ -8,8 +8,12 @@ import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../discover/data/tmdb_models.dart';
+import '../../discover/logic/browse_query.dart';
+import '../../discover/logic/library_snapshot_provider.dart';
 import '../../discover/logic/search_library_status.dart';
 import '../../discover/ui/category_row.dart';
+import '../../discover/ui/genre_chip_strip.dart';
 import '../../radarr/data/radarr_api_service.dart';
 import '../../radarr/data/radarr_models.dart';
 import '../../radarr/logic/movie_discover_provider.dart';
@@ -81,6 +85,8 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
         _recentlyDownloaded = recentlyDownloadedMovies(movies);
         _libraryMovies = movies;
       });
+      // A grid opened from this tab badges its posters from the same list.
+      ref.read(librarySnapshotProvider.notifier).seed(movies: movies);
     } catch (_) {
       // Movie fetch failed; leave _recentlyDownloaded empty.
     }
@@ -128,9 +134,16 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
     ]);
   }
 
+  /// Opens a discovery row's feed as a full grid.
+  void _seeAll(BrowseFeed feed, String title) => context.push(
+        BrowseQuery(type: MediaType.movie, feed: feed, title: title)
+            .toLocation(),
+      );
+
   @override
   Widget build(BuildContext context) {
     final discover = ref.watch(movieDiscoverProvider);
+    final discoverNotifier = ref.watch(movieDiscoverProvider.notifier);
     // searchResults is genuinely unused here: buildSearchLibraryStatus keys
     // movies straight off the Radarr list and returns early when series is
     // empty, so passing the browse-row items would build a list for nothing.
@@ -165,7 +178,24 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
             isLoading: discover.isLoadingFeatured,
             isTvRow: false,
             libraryStatus: libraryStatus,
+            // The grid continues whichever source answered; until one has,
+            // there is nothing to continue.
+            onSeeAll: discover.featuredSource.isEmpty
+                ? null
+                : () => _seeAll(BrowseFeed.featured, discover.featuredTitle),
           ),
+          // Every row below grows as it is scrolled toward its end; the
+          // headline row above is the one server-capped page.
+          if (discover.nowPlaying.isNotEmpty)
+            CategoryRow(
+              title: 'In Theaters',
+              items: discover.nowPlaying,
+              isLoading: discover.isLoadingNowPlaying,
+              isTvRow: false,
+              libraryStatus: libraryStatus,
+              onLoadMore: (_) => discoverNotifier.loadMoreNowPlaying(),
+              onSeeAll: () => _seeAll(BrowseFeed.nowPlaying, 'In Theaters'),
+            ),
           if (discover.topRated.isNotEmpty)
             CategoryRow(
               title: 'Top Rated',
@@ -173,6 +203,8 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
               isLoading: discover.isLoadingTopRated,
               isTvRow: false,
               libraryStatus: libraryStatus,
+              onLoadMore: (_) => discoverNotifier.loadMoreTopRated(),
+              onSeeAll: () => _seeAll(BrowseFeed.topRated, 'Top Rated'),
             ),
           if (discover.upcoming.isNotEmpty)
             CategoryRow(
@@ -181,6 +213,8 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
               isLoading: discover.isLoadingUpcoming,
               isTvRow: false,
               libraryStatus: libraryStatus,
+              onLoadMore: (_) => discoverNotifier.loadMoreUpcoming(),
+              onSeeAll: () => _seeAll(BrowseFeed.upcoming, 'Coming Soon'),
             ),
           if (discover.anticipated.isNotEmpty)
             CategoryRow(
@@ -189,7 +223,11 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
               isLoading: discover.isLoadingAnticipated,
               isTvRow: false,
               libraryStatus: libraryStatus,
+              onLoadMore: (_) => discoverNotifier.loadMoreAnticipated(),
+              onSeeAll: () =>
+                  _seeAll(BrowseFeed.anticipated, 'Most Anticipated'),
             ),
+          GenreChipStrip(genres: discover.genres, mediaType: MediaType.movie),
 
           // Radarr library rows (same style as discovery)
           if (_downloadingSoon.isNotEmpty || _isLoadingLibrary)

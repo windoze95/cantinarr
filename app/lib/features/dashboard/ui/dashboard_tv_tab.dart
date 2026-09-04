@@ -8,8 +8,12 @@ import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../discover/data/tmdb_models.dart';
+import '../../discover/logic/browse_query.dart';
+import '../../discover/logic/library_snapshot_provider.dart';
 import '../../discover/logic/search_library_status.dart';
 import '../../discover/ui/category_row.dart';
+import '../../discover/ui/genre_chip_strip.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/data/sonarr_models.dart';
 import '../../sonarr/logic/tv_discover_provider.dart';
@@ -94,6 +98,8 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
     // each fail independently, and browse-row badges must survive either
     // outage since the series list they depend on already arrived.
     setState(() => _librarySeries = series);
+    // A grid opened from this tab badges its posters from the same list.
+    ref.read(librarySnapshotProvider.notifier).seed(series: series);
 
     try {
       final imports = await service.getHistory(
@@ -136,17 +142,30 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
     ]);
   }
 
+  /// Opens a discovery row's feed as a full grid.
+  void _seeAll(BrowseFeed feed, String title) => context.push(
+        BrowseQuery(type: MediaType.tv, feed: feed, title: title).toLocation(),
+      );
+
   @override
   Widget build(BuildContext context) {
     final discover = ref.watch(tvDiscoverProvider);
+    final discoverNotifier = ref.watch(tvDiscoverProvider.notifier);
     // Unlike the Movies tab, searchResults is load-bearing here: the TV
     // branch of buildSearchLibraryStatus looks each result up by tmdbId
-    // (falling back to a title+year match), so it needs the browse-row items
-    // to key against. The whole featured list is passed, not `.skip(1)` —
-    // the hero's extra entry is one unread map key, and keeping the lists
-    // aligned avoids an off-by-one.
+    // (falling back to a title+year match), so it needs every discovery
+    // row's items to key against; a row left out renders unbadged. The
+    // whole featured list is passed, not `.skip(1)` — the hero's extra entry
+    // is one unread map key, and keeping the lists aligned avoids an
+    // off-by-one.
     final libraryStatus = buildSearchLibraryStatus(
-      searchResults: [...discover.featured, ...discover.anticipated],
+      searchResults: [
+        ...discover.featured,
+        ...discover.onTheAir,
+        ...discover.topRated,
+        ...discover.upcoming,
+        ...discover.anticipated,
+      ],
       movies: const [],
       series: _librarySeries,
     );
@@ -171,7 +190,42 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
             isLoading: discover.isLoadingFeatured,
             isTvRow: true,
             libraryStatus: libraryStatus,
+            onSeeAll: discover.featuredSource.isEmpty
+                ? null
+                : () => _seeAll(BrowseFeed.featured, discover.featuredTitle),
           ),
+          // Every row below grows as it is scrolled toward its end; the
+          // headline row above is the one server-capped page.
+          if (discover.onTheAir.isNotEmpty)
+            CategoryRow(
+              title: 'Airing This Week',
+              items: discover.onTheAir,
+              isLoading: discover.isLoadingOnTheAir,
+              isTvRow: true,
+              libraryStatus: libraryStatus,
+              onLoadMore: (_) => discoverNotifier.loadMoreOnTheAir(),
+              onSeeAll: () => _seeAll(BrowseFeed.onTheAir, 'Airing This Week'),
+            ),
+          if (discover.topRated.isNotEmpty)
+            CategoryRow(
+              title: 'Top Rated',
+              items: discover.topRated,
+              isLoading: discover.isLoadingTopRated,
+              isTvRow: true,
+              libraryStatus: libraryStatus,
+              onLoadMore: (_) => discoverNotifier.loadMoreTopRated(),
+              onSeeAll: () => _seeAll(BrowseFeed.topRated, 'Top Rated'),
+            ),
+          if (discover.upcoming.isNotEmpty)
+            CategoryRow(
+              title: 'Coming Soon',
+              items: discover.upcoming,
+              isLoading: discover.isLoadingUpcoming,
+              isTvRow: true,
+              libraryStatus: libraryStatus,
+              onLoadMore: (_) => discoverNotifier.loadMoreUpcoming(),
+              onSeeAll: () => _seeAll(BrowseFeed.upcoming, 'Coming Soon'),
+            ),
           if (discover.anticipated.isNotEmpty)
             CategoryRow(
               title: 'Most Anticipated',
@@ -179,7 +233,11 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
               isLoading: discover.isLoadingAnticipated,
               isTvRow: true,
               libraryStatus: libraryStatus,
+              onLoadMore: (_) => discoverNotifier.loadMoreAnticipated(),
+              onSeeAll: () =>
+                  _seeAll(BrowseFeed.anticipated, 'Most Anticipated'),
             ),
+          GenreChipStrip(genres: discover.genres, mediaType: MediaType.tv),
 
           // Sonarr library rows (same style as discovery)
           if (_recentlyDownloaded.isNotEmpty || _isLoadingLibrary)

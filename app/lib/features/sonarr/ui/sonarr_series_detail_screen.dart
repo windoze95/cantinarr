@@ -296,11 +296,12 @@ class _SonarrSeriesDetailScreenState
       if ((_series.tmdbId ?? 0) > 0)
         SheetAction('https://www.themoviedb.org/tv/${_series.tmdbId}',
             Icons.theaters_outlined, 'TMDB'),
-      if ((_series.tvdbId ?? 0) > 0)
-        SheetAction(
-            'https://trakt.tv/search/tvdb/${_series.tvdbId}?id_type=show',
-            Icons.track_changes_outlined,
-            'Trakt'),
+      // Keyed on the IMDb id, not the TVDB one: Trakt's `/search/<source>/<id>`
+      // form answers 404 since its web app moved, and `/shows/<imdb id>` is
+      // what resolves now.
+      if ((_series.imdbId ?? '').isNotEmpty)
+        SheetAction('https://trakt.tv/shows/${_series.imdbId}',
+            Icons.track_changes_outlined, 'Trakt'),
     ];
     if (links.isEmpty) {
       _toast('No external links available');

@@ -112,6 +112,7 @@ void main() {
         ServiceInstance(
             id: 'jf-a', serviceType: 'jellyfin', name: 'Home Jellyfin'),
         ServiceInstance(id: 'tautulli-a', serviceType: 'tautulli', name: 'T'),
+        ServiceInstance(id: 'tracearr-a', serviceType: 'tracearr', name: 'TR'),
         ServiceInstance(id: 'jf-b', serviceType: 'jellyfin', name: 'Cabin'),
         ServiceInstance(id: 'em-a', serviceType: 'emby', name: 'Den Emby'),
       ],
@@ -122,9 +123,14 @@ void main() {
       connection.mediaServerInstances.map((i) => i.id).toList(),
       ['jf-a', 'jf-b', 'em-a'],
     );
-    // A media server is neither a library nor a download client.
+    // A media server is neither a library nor a download client, and a
+    // watch-history provider is not a media server.
     expect(connection.radarrInstances.map((i) => i.id), ['radarr-main']);
     expect(connection.downloadInstances, isEmpty);
+    expect(
+      connection.watchHistoryInstances.map((i) => i.id).toList(),
+      ['tautulli-a', 'tracearr-a'],
+    );
 
     const none = BackendConnection(
       serverUrl: 'https://cantinarr.example',
@@ -135,6 +141,27 @@ void main() {
       ],
     );
     expect(none.mediaServerInstances, isEmpty);
+  });
+
+  test('watchHistoryInstances lists Tautulli and Tracearr in server order', () {
+    const connection = BackendConnection(
+      serverUrl: 'https://cantinarr.example',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      instances: [
+        ServiceInstance(id: 'radarr-main', serviceType: 'radarr', name: 'Movies'),
+        ServiceInstance(id: 'tracearr-a', serviceType: 'tracearr', name: 'TR'),
+        ServiceInstance(id: 'jf-a', serviceType: 'jellyfin', name: 'Jellyfin'),
+        ServiceInstance(id: 'tautulli-a', serviceType: 'tautulli', name: 'T'),
+      ],
+    );
+
+    expect(watchHistoryServiceTypes, {'tautulli', 'tracearr'});
+    expect(
+      connection.watchHistoryInstances.map((i) => i.id).toList(),
+      ['tracearr-a', 'tautulli-a'],
+    );
+    expect(connection.mediaServerInstances.map((i) => i.id), ['jf-a']);
   });
 
   test('legacy payload falls back to the global capability', () {

@@ -165,8 +165,8 @@ func resolveProfileChangePlan(service string, profileRaw json.RawMessage, custom
 }
 
 func validateProfileChangesInput(service string, changes profileChangesInput) error {
-	if service != "radarr" && service != "sonarr" && service != "chaptarr" {
-		return fmt.Errorf("service must be radarr, sonarr, or chaptarr")
+	if service != "radarr" && service != "sonarr" && service != "chaptarr" && service != "lidarr" {
+		return fmt.Errorf("service must be radarr, sonarr, chaptarr, or lidarr")
 	}
 	if changes.UpgradeAllowed == nil && changes.QualityCutoffID == nil && changes.MinFormatScore == nil &&
 		changes.CutoffFormatScore == nil && changes.MinUpgradeFormatScore == nil &&

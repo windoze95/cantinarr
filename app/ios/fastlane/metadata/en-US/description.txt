@@ -1,4 +1,4 @@
-Cantinarr is the intelligent control app for your self-hosted media server — discovery and requests for your household, control of Radarr, Sonarr, and Chaptarr for you, unified management of your download clients, plus diagnosis and admin-approved fixes when downloads get stuck.
+Cantinarr is the intelligent control app for your self-hosted media server — discovery and requests for your household, control of Radarr, Sonarr, Chaptarr, and Lidarr for you, unified management of your download clients, plus diagnosis and admin-approved fixes when downloads get stuck.
 
 You need a Cantinarr server to use this app. The server is open source and runs as a single Docker container; setup instructions are on GitHub.
 
@@ -23,7 +23,7 @@ The management side goes as deep as you want:
 • Drill into Radarr and Sonarr: series → season → episode, batch searches, Edit Series, interactive release search
 • One download queue across SABnzbd, qBittorrent, NZBGet, and Transmission
 • Import Doctor: stuck downloads explain themselves in plain English, with one-click fixes
-• See what's playing through Tautulli — active streams, history, top stats
+• See what's playing through Tautulli or Tracearr — active streams, history, top stats
 • Plex invites, Jellyfin and Emby accounts, a guided setup checklist, per-user defaults, and device management
 • Push notifications with a single line of server config — no Apple developer account, certificates, or Firebase project on your side
 • Your server is an MCP server too: connect Claude or any MCP client and manage your library with the same tools that power the built-in assistant

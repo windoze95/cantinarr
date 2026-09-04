@@ -45,6 +45,7 @@ const _user = UserProfile(
 const _adminGates = SettingsSearchGates(
   user: _admin,
   chaptarrEnabled: true,
+  lidarrEnabled: true,
   donateVisible: true,
   phoneAppsVisible: true,
   mediaServersVisible: true,
@@ -100,11 +101,13 @@ class _FakeAuthNotifier extends AuthNotifier {
   _FakeAuthNotifier({
     required this.user,
     this.chaptarr = false,
+    this.lidarr = false,
     this.instances = const [],
   });
 
   final UserProfile user;
   final bool chaptarr;
+  final bool lidarr;
 
   /// A jellyfin instance here renders the root's media server guide row
   /// (gated on `mediaServersVisible`), keeping that entry drift-checked.
@@ -116,7 +119,7 @@ class _FakeAuthNotifier extends AuthNotifier {
           serverUrl: 'http://localhost',
           accessToken: 'access',
           refreshToken: 'refresh',
-          services: AvailableServices(chaptarr: chaptarr),
+          services: AvailableServices(chaptarr: chaptarr, lidarr: lidarr),
           instances: instances,
         ),
         user: user,
@@ -164,14 +167,15 @@ Future<void> _pumpScreen(
   required Dio dio,
   UserProfile? authUser,
   bool chaptarr = false,
+  bool lidarr = false,
 }) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
         backendClientProvider.overrideWithValue(dio),
         if (authUser != null)
-          authProvider.overrideWith(
-              () => _FakeAuthNotifier(user: authUser, chaptarr: chaptarr)),
+          authProvider.overrideWith(() => _FakeAuthNotifier(
+              user: authUser, chaptarr: chaptarr, lidarr: lidarr)),
       ],
       child: MaterialApp(theme: AppTheme.dark, home: screen),
     ),
@@ -280,6 +284,7 @@ void main() {
       }),
       authUser: _admin,
       chaptarr: true,
+      lidarr: true,
     );
     await _assertTitles(
         tester, _controlsFor('/settings/notifications'), _adminGates);

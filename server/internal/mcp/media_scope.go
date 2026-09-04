@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
@@ -13,7 +14,7 @@ import (
 // remediation runner. Ordinary admin MCP calls may omit it; when present, read
 // tools fail closed instead of rendering records for another title/episode.
 // Books have no TMDB/TVDB identity: their scope is the Chaptarr book/author
-// record id.
+// record id. Music mirrors books with the Lidarr album/artist record id.
 type mediaReadScope struct {
 	QueueID       int
 	DownloadID    string
@@ -23,6 +24,8 @@ type mediaReadScope struct {
 	EpisodeNumber int
 	AuthorID      int
 	BookID        int
+	ArtistID      int
+	AlbumID       int
 }
 
 func (s mediaReadScope) hasTitleIdentity() bool { return s.TmdbID > 0 || s.TvdbID > 0 }
@@ -287,4 +290,62 @@ func filterSonarrHistory(client *sonarr.Client, records []sonarr.HistoryRecord, 
 		}
 	}
 	return out, nil
+}
+
+// filterLidarrQueue narrows a Lidarr queue snapshot to the scope. Lidarr queue
+// rows carry their album/artist ids directly, so no client round-trips are
+// needed to resolve identity.
+func filterLidarrQueue(items []lidarr.DetailedQueueItem, scope mediaReadScope) []lidarr.DetailedQueueItem {
+	out := make([]lidarr.DetailedQueueItem, 0, len(items))
+	for _, item := range items {
+		if scope.QueueID > 0 && item.ID != scope.QueueID {
+			continue
+		}
+		if scope.DownloadID != "" && item.DownloadID != scope.DownloadID {
+			continue
+		}
+		albumID, artistID := item.AlbumID, item.ArtistID
+		if albumID == 0 && item.Album != nil {
+			albumID = item.Album.ID
+		}
+		if artistID == 0 && item.Artist != nil {
+			artistID = item.Artist.ID
+		}
+		if scope.AlbumID > 0 && albumID != scope.AlbumID {
+			continue
+		}
+		if scope.AlbumID == 0 && scope.ArtistID > 0 && artistID != scope.ArtistID {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// filterLidarrHistory narrows music history records to the scope, matching the
+// exact album record when scoped to one, else the artist.
+func filterLidarrHistory(records []lidarr.HistoryRecord, scope mediaReadScope) []lidarr.HistoryRecord {
+	if scope.AlbumID <= 0 && scope.ArtistID <= 0 {
+		return records
+	}
+	out := make([]lidarr.HistoryRecord, 0, len(records))
+	for _, rec := range records {
+		albumID, artistID := rec.AlbumID, rec.ArtistID
+		if albumID == 0 && rec.Album != nil {
+			albumID = rec.Album.ID
+		}
+		if artistID == 0 && rec.Artist != nil {
+			artistID = rec.Artist.ID
+		}
+		if scope.AlbumID > 0 {
+			if albumID == scope.AlbumID {
+				out = append(out, rec)
+			}
+			continue
+		}
+		if artistID == scope.ArtistID {
+			out = append(out, rec)
+		}
+	}
+	return out
 }

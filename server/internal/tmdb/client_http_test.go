@@ -264,3 +264,58 @@ func TestClientDoesNotFollowRedirects(t *testing.T) {
 		t.Fatalf("redirect destination received %d requests, want 0", got)
 	}
 }
+
+// The browse tool's typed lookups: each decodes its TMDB shape, and Discover
+// carries the page count and stamps the media type.
+func TestDiscoverAndLookupsDecode(t *testing.T) {
+	c := testHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/discover/tv":
+			if r.URL.Query().Get("with_genres") != "35" {
+				t.Errorf("discover query = %v, want with_genres=35", r.URL.Query())
+			}
+			_, _ = w.Write([]byte(`{"page":2,"total_pages":9,"total_results":180,"results":[{"id":1399,"name":"Game of Thrones"}]}`))
+		case "/genre/movie/list":
+			_, _ = w.Write([]byte(`{"genres":[{"id":28,"name":"Action"}]}`))
+		case "/search/keyword":
+			_, _ = w.Write([]byte(`{"results":[{"id":9715,"name":"superhero"}]}`))
+		case "/search/company":
+			_, _ = w.Write([]byte(`{"results":[{"id":420,"name":"Marvel Studios","origin_country":"US"}]}`))
+		case "/watch/providers/movie":
+			if r.URL.Query().Get("watch_region") != "GB" {
+				t.Errorf("providers query = %v, want watch_region=GB", r.URL.Query())
+			}
+			_, _ = w.Write([]byte(`{"results":[{"provider_id":8,"provider_name":"Netflix","display_priority":0}]}`))
+		case "/configuration/languages":
+			_, _ = w.Write([]byte(`[{"iso_639_1":"ko","english_name":"Korean","name":"한국어"}]`))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+
+	page, err := c.Discover("tv", url.Values{"with_genres": {"35"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Page != 2 || page.TotalPages != 9 || page.TotalResults != 180 || page.Results[0].MediaType != "tv" || page.Results[0].Name != "Game of Thrones" {
+		t.Errorf("Discover = %+v, want page 2 of 9 with the show stamped tv", page)
+	}
+	if _, err := c.Discover("podcast", nil); err == nil {
+		t.Error("Discover accepted an unknown media type")
+	}
+	if genres, err := c.GenreList("movie"); err != nil || len(genres) != 1 || genres[0].Name != "Action" {
+		t.Errorf("GenreList = %v, %v", genres, err)
+	}
+	if kw, err := c.SearchKeyword("superhero"); err != nil || kw[0].ID != 9715 {
+		t.Errorf("SearchKeyword = %v, %v", kw, err)
+	}
+	if co, err := c.SearchCompany("marvel"); err != nil || co[0].ID != 420 || co[0].OriginCountry != "US" {
+		t.Errorf("SearchCompany = %v, %v", co, err)
+	}
+	if pv, err := c.WatchProviders("movie", "GB"); err != nil || pv[0].ID != 8 {
+		t.Errorf("WatchProviders = %v, %v", pv, err)
+	}
+	if langs, err := c.Languages(); err != nil || langs[0].Code != "ko" || langs[0].EnglishName != "Korean" {
+		t.Errorf("Languages = %v, %v", langs, err)
+	}
+}

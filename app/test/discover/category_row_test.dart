@@ -1,5 +1,7 @@
 import 'package:cantinarr/core/widgets/horizontal_item_row.dart';
 import 'package:cantinarr/core/widgets/media_card.dart';
+import 'package:cantinarr/core/widgets/section_header.dart';
+import 'package:cantinarr/core/widgets/see_all_button.dart';
 import 'package:cantinarr/features/discover/data/tmdb_models.dart';
 import 'package:cantinarr/features/discover/ui/category_row.dart';
 import 'package:flutter/material.dart';
@@ -14,6 +16,38 @@ import 'package:flutter_test/flutter_test.dart';
 /// then jumped 14px the instant the feed resolved. `isTvRow` is a static
 /// per-call-site flag instead, so it is correct before any items arrive.
 void main() {
+  testWidgets('See all renders only when the row offers it, at the same height',
+      (tester) async {
+    await _setViewport(tester);
+    Future<double> headerHeight({VoidCallback? onSeeAll}) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: CategoryRow(
+              title: 'Top Rated',
+              items: const [],
+              isLoading: false,
+              isTvRow: false,
+              onSeeAll: onSeeAll,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      return tester.getSize(find.byType(SectionHeader)).height;
+    }
+
+    final plain = await headerHeight();
+    expect(find.byType(SeeAllButton), findsNothing);
+
+    final withSeeAll = await headerHeight(onSeeAll: () {});
+    expect(find.byType(SeeAllButton), findsOneWidget);
+    expect(find.bySemanticsLabel('See all Top Rated'), findsOneWidget);
+    // The button fits inside the heading's own height, so rows never shift
+    // when a feed gains a grid.
+    expect(withSeeAll, plain);
+  });
+
   testWidgets(
       'a TV row reserves the taller height on the loading frame, before any items arrive',
       (tester) async {

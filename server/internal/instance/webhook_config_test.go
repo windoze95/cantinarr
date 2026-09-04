@@ -78,6 +78,22 @@ func webhookSchema(serviceType string) map[string]any {
 			map[string]any{"name": "username", "value": ""},
 			map[string]any{"name": "password", "value": ""},
 		}
+	case "lidarr":
+		// Lidarr names the import event onReleaseImport too, and exposes no
+		// track-file-delete toggle at all; its settings carry no headers field.
+		resource["onReleaseImport"] = false
+		resource["onArtistAdd"] = false
+		resource["onAlbumDelete"] = false
+		resource["onArtistDelete"] = false
+		resource["onTrackRetag"] = false
+		resource["onDownloadFailure"] = false
+		resource["onImportFailure"] = false
+		resource["fields"] = []any{
+			map[string]any{"name": "url", "value": ""},
+			map[string]any{"name": "method", "value": 1},
+			map[string]any{"name": "username", "value": ""},
+			map[string]any{"name": "password", "value": ""},
+		}
 	default:
 		resource["onSeriesAdd"] = false
 		resource["onSeriesDelete"] = false
@@ -174,6 +190,69 @@ func TestConfigureWebhookRegistersChaptarrAgainstV1(t *testing.T) {
 	}
 	if got := webhookFieldValue(t, captured, "url"); got != "http://192.168.35.150:8585/api/webhooks/arr/"+inst.ID {
 		t.Errorf("private-LAN callback URL = %v", got)
+	}
+}
+
+// TestConfigureWebhookRegistersLidarrAgainstV1 pins that a Lidarr webhook is
+// installed through the v1 notification API with its import event enabled,
+// under the same schema-is-authority rule as Chaptarr: only declared toggles
+// are written, and no track-file-delete flag is invented (Lidarr has none —
+// upgrade-deletes surface via the import payload and history instead).
+func TestConfigureWebhookRegistersLidarrAgainstV1(t *testing.T) {
+	var captured map[string]any
+	arr := arrWebhookStub(t, "v1", webhookSchema("lidarr"), &captured)
+	defer arr.Close()
+
+	store := newTestStore(t)
+	inst := mkArrInstance(t, store, "lidarr", arr.URL)
+	if rec := postWebhook(t, NewHandler(store, nil, "http://192.168.35.150:8585"), inst.ID); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if captured == nil {
+		t.Fatal("no webhook resource was written to Lidarr")
+	}
+	if got, _ := captured["onReleaseImport"].(bool); !got {
+		t.Error("onReleaseImport was not enabled, so music imports would never invalidate")
+	}
+	if got, _ := captured["onUpgrade"].(bool); !got {
+		t.Error("onUpgrade was not enabled, so upgrade imports would never reach the server")
+	}
+	if got, _ := captured["onArtistAdd"].(bool); !got {
+		t.Error("onArtistAdd was not enabled")
+	}
+	for _, invented := range []string{"onTrackFileDelete", "onBookFileDelete", "onEpisodeFileDelete"} {
+		if _, present := captured[invented]; present {
+			t.Errorf("%s leaked onto a Lidarr resource that never declared it", invented)
+		}
+	}
+	for _, raw := range captured["fields"].([]any) {
+		field, _ := raw.(map[string]any)
+		if name, _ := field["name"].(string); strings.EqualFold(name, "headers") {
+			t.Error("a headers field was invented for a schema that does not declare one")
+		}
+	}
+	if got := webhookFieldValue(t, captured, "url"); got != "http://192.168.35.150:8585/api/webhooks/arr/"+inst.ID {
+		t.Errorf("callback URL = %v", got)
+	}
+}
+
+// TestConfigureWebhookFailsWhenLidarrDeclaresNoImportEvent mirrors the
+// Chaptarr fail-loud guarantee for the music arm.
+func TestConfigureWebhookFailsWhenLidarrDeclaresNoImportEvent(t *testing.T) {
+	schema := webhookSchema("lidarr")
+	delete(schema, "onReleaseImport")
+	var captured map[string]any
+	arr := arrWebhookStub(t, "v1", schema, &captured)
+	defer arr.Close()
+
+	store := newTestStore(t)
+	inst := mkArrInstance(t, store, "lidarr", arr.URL)
+	rec := postWebhook(t, NewHandler(store, nil, "http://192.168.35.150:8585"), inst.ID)
+	if rec.Code == http.StatusOK {
+		t.Fatalf("webhook configured without any import toggle; body=%s", rec.Body.String())
+	}
+	if captured != nil {
+		t.Error("a useless webhook resource was still written")
 	}
 }
 

@@ -63,3 +63,25 @@ func TestMediaFileDetailsIsScopedToTheIssuesTitle(t *testing.T) {
 		t.Fatalf("scoped input = %v, want the issue's own identity", got)
 	}
 }
+
+// The music arm of get_media_file_details is keyed by album_id, which the
+// scrub deletes like every other identity key; the re-injection is what makes
+// the tool reachable on a music issue at all.
+func TestMediaFileDetailsIsScopedToTheIssuesAlbum(t *testing.T) {
+	issue := &Issue{MediaType: "music", AuthorID: 3, BookID: 77}
+	scoped, err := scopeReadToolInput(issue, "get_media_file_details",
+		json.RawMessage(`{"media_type":"movie","tmdb_id":999,"album_id":5}`))
+	if err != nil {
+		t.Fatalf("scope: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(scoped, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["media_type"] != "music" || got["album_id"] != float64(77) {
+		t.Fatalf("scoped input = %v, want the issue's own album", got)
+	}
+	if _, leaked := got["tmdb_id"]; leaked {
+		t.Fatalf("a model-supplied tmdb_id survived the scrub: %v", got)
+	}
+}

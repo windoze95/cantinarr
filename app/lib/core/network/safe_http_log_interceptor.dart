@@ -44,6 +44,7 @@ class SafeHttpLogInterceptor extends Interceptor {
     'sonarr',
     'tautulli',
     'tmdb',
+    'watch-history',
   };
 
   /// Third-level route literals that are safe only within their known scope.

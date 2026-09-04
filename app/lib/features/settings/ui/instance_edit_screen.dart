@@ -18,6 +18,11 @@ import '../logic/arr_path_match.dart';
 import '../logic/plex_invites_provider.dart';
 
 /// Form for creating or editing a service instance.
+/// qBittorrent's two credential shapes: the WebUI sign-in, which every
+/// version has, or an API key, which 5.2 and newer issue under
+/// Options > WebUI.
+enum _QbitAuth { password, apiKey }
+
 class InstanceEditScreen extends ConsumerStatefulWidget {
   final String? instanceId;
   final String? initialServiceType;
@@ -134,25 +139,42 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   String _plexMachineId = '';
   bool _plexAutoApprove = false;
 
+  /// Which credential shape a qBittorrent form is on, and the shape the
+  /// stored instance is on when editing, so a switch knows it must carry
+  /// the new shape's fields instead of "leave blank to keep existing".
+  _QbitAuth _qbitAuth = _QbitAuth.password;
+  _QbitAuth _storedQbitAuth = _QbitAuth.password;
+
   static const _serviceTypes = <(String, String)>[
     ('radarr', 'Radarr'),
     ('sonarr', 'Sonarr'),
     ('chaptarr', 'Chaptarr'),
+    ('lidarr', 'Lidarr'),
     ('sabnzbd', 'SABnzbd'),
     ('qbittorrent', 'qBittorrent'),
     ('nzbget', 'NZBGet'),
     ('transmission', 'Transmission'),
     ('tautulli', 'Tautulli'),
+    ('tracearr', 'Tracearr'),
     ('jellyfin', 'Jellyfin'),
     ('emby', 'Emby'),
     ('plex', 'Plex'),
   ];
 
   /// Types that authenticate with username/password instead of an API key.
+  /// qBittorrent can do either, chosen by the toggle above its fields.
   bool get _usesUserPass =>
-      _serviceType == 'qbittorrent' ||
       _serviceType == 'nzbget' ||
-      _serviceType == 'transmission';
+      _serviceType == 'transmission' ||
+      (_serviceType == 'qbittorrent' && _qbitAuth == _QbitAuth.password);
+
+  /// Editing a qBittorrent instance onto its other credential shape: the
+  /// stored credential is about to be dropped, so the new one is required
+  /// and "leave blank to keep existing" no longer applies.
+  bool get _qbitSwitchingShape =>
+      widget.isEditing &&
+      _serviceType == 'qbittorrent' &&
+      _qbitAuth != _storedQbitAuth;
 
   /// Transmission auth is optional (only when the daemon requires it).
   bool get _credentialsOptional => _serviceType == 'transmission';
@@ -164,14 +186,23 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _serviceType == 'transmission';
 
   bool get _supportsWebhook =>
-      _serviceType == 'radarr' || _serviceType == 'sonarr' || _isChaptarr;
+      _serviceType == 'radarr' ||
+      _serviceType == 'sonarr' ||
+      _isChaptarr ||
+      _isLidarr;
 
   bool get _isChaptarr => _serviceType == 'chaptarr';
+
+  bool get _isLidarr => _serviceType == 'lidarr';
 
   /// Media servers (Jellyfin, Emby, Plex): users sign in there to watch, so
   /// the form carries a sign-in address and a shared-library choice instead
   /// of media downloads or instant updates.
   bool get _isMediaServer => mediaServerServiceTypes.contains(_serviceType);
+
+  /// Watch-history providers (Tautulli, Tracearr): admin-only monitoring
+  /// with a global default, the plain name + URL + API key form.
+  bool get _isWatchHistory => watchHistoryServiceTypes.contains(_serviceType);
 
   /// Plex has no URL or API key to type: the credential is a plex.tv account
   /// linked with a PIN, and the server to share is picked from the ones that
@@ -185,10 +216,13 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   /// Types with no global default: their instances reach users only through
   /// access grants, so the default toggle is hidden and never sent.
-  bool get _grantOnly => _isChaptarr || _isMediaServer;
+  bool get _grantOnly => _isChaptarr || _isLidarr || _isMediaServer;
 
   bool get _supportsMediaDownloads =>
-      _serviceType == 'radarr' || _serviceType == 'sonarr' || _isChaptarr;
+      _serviceType == 'radarr' ||
+      _serviceType == 'sonarr' ||
+      _isChaptarr ||
+      _isLidarr;
 
   bool get _shouldSubmitMediaPathMappings =>
       _supportsMediaDownloads &&
@@ -198,11 +232,13 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   /// Source types feed requests and dashboard statuses, so they support
   /// per-user assignment, and a media server's grant is what lets a user
-  /// create an account there; download clients and Tautulli are global-only.
+  /// create an account there; download clients, Tautulli and Tracearr are
+  /// global-only.
   bool get _supportsUserAssignment =>
       _serviceType == 'radarr' ||
       _serviceType == 'sonarr' ||
       _isChaptarr ||
+      _isLidarr ||
       _isMediaServer;
 
   /// Chaptarr and media servers have no global default — their instances are
@@ -476,6 +512,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           _usernameController.text = details['username'] as String? ?? '';
         }
         _isDefault = details['is_default'] as bool? ?? _isDefault;
+        _storedQbitAuth = details['has_api_key'] == true
+            ? _QbitAuth.apiKey
+            : _QbitAuth.password;
+        _qbitAuth = _storedQbitAuth;
         if (_isMediaServer) {
           final raw = details['media_server_config'];
           final config = raw is Map
@@ -886,8 +926,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       }
     }
     // When editing, blank credentials keep the existing ones. Plex's is
-    // the link, checked above.
-    if (widget.isEditing || _isPlex) return null;
+    // the link, checked above. A qBittorrent instance moved onto its other
+    // credential shape has nothing stored to keep, so that shape's fields
+    // are required as on a new instance.
+    if ((widget.isEditing && !_qbitSwitchingShape) || _isPlex) return null;
     if (_usesUserPass) {
       if (_credentialsOptional) return null;
       if (_usernameController.text.trim().isEmpty ||
@@ -1002,7 +1044,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     return [
       const SizedBox(height: 16),
       Text(
-        _isChaptarr ? 'Assigned Users' : 'User Access',
+        _grantOnly && !_isMediaServer ? 'Assigned Users' : 'User Access',
         style: const TextStyle(
             color: AppTheme.textSecondary,
             fontSize: 13,
@@ -1015,6 +1057,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 'Books access through this instance (alongside any other '
                 'Chaptarr instance they hold). Unselecting a user removes '
                 'their access.'
+            : _isLidarr
+                ? 'Lidarr instances are assigned per user: selected users get '
+                    'Music access through this instance (alongside any other '
+                    'Lidarr instance they hold). Unselecting a user removes '
+                    'their access.'
             : _isPlex
                 ? 'Selected users get this server under Watch on Plex, '
                     'where they sign in with their own Plex account or share '
@@ -1282,17 +1329,23 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               .any((instance) => instance.id == chaptarrId)) {
         notifier.setActiveChaptarrInstance(chaptarrId);
       }
+      final lidarrId = activeBefore.activeLidarrInstanceId;
+      if (lidarrId != null &&
+          refreshed.lidarrInstances
+              .any((instance) => instance.id == lidarrId)) {
+        notifier.setActiveLidarrInstance(lidarrId);
+      }
       final downloadId = activeBefore.activeDownloadInstanceId;
       if (downloadId != null &&
           refreshed.downloadInstances
               .any((instance) => instance.id == downloadId)) {
         notifier.setActiveDownloadInstance(downloadId);
       }
-      final tautulliId = activeBefore.activeTautulliInstanceId;
-      if (tautulliId != null &&
-          refreshed.tautulliInstances
-              .any((instance) => instance.id == tautulliId)) {
-        notifier.setActiveTautulliInstance(tautulliId);
+      final watchHistoryId = activeBefore.activeWatchHistoryInstanceId;
+      if (watchHistoryId != null &&
+          refreshed.watchHistoryInstances
+              .any((instance) => instance.id == watchHistoryId)) {
+        notifier.setActiveWatchHistoryInstance(watchHistoryId);
       }
     } catch (_) {
       // The instance itself is already saved. The normal resume/config refresh
@@ -1382,6 +1435,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'http://sonarr:8989';
       case 'chaptarr':
         return 'http://chaptarr:8787';
+      case 'lidarr':
+        return 'http://lidarr:8686';
       case 'sabnzbd':
         return 'http://sabnzbd:8080';
       case 'qbittorrent':
@@ -1392,6 +1447,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'http://transmission:9091';
       case 'tautulli':
         return 'http://tautulli:8181';
+      case 'tracearr':
+        return 'http://tracearr:3000';
       case 'jellyfin':
         return 'http://jellyfin:8096';
       case 'emby':
@@ -1406,6 +1463,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     switch (_serviceType) {
       case 'tautulli':
         return 'e.g. Tautulli';
+      case 'tracearr':
+        return 'e.g. Tracearr';
       case 'jellyfin':
         return 'e.g. Home Jellyfin';
       case 'emby':
@@ -1417,15 +1476,65 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     }
   }
 
+  /// qBittorrent's credential shape. Switching clears the other shape's
+  /// fields so a save carries exactly one, which is what tells the server
+  /// to drop the stored other.
+  Widget _buildQbitAuthToggle() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SegmentedButton<_QbitAuth>(
+          segments: const [
+            ButtonSegment(
+              value: _QbitAuth.password,
+              label: Text('Username & password'),
+            ),
+            ButtonSegment(
+              value: _QbitAuth.apiKey,
+              label: Text('API key'),
+            ),
+          ],
+          selected: {_qbitAuth},
+          showSelectedIcon: false,
+          onSelectionChanged: (selection) => setState(() {
+            _qbitAuth = selection.first;
+            if (_qbitAuth == _QbitAuth.apiKey) {
+              _usernameController.clear();
+              _passwordController.clear();
+            } else {
+              _apiKeyController.clear();
+            }
+          }),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _qbitAuth == _QbitAuth.apiKey
+              ? 'API keys need qBittorrent 5.2 or newer; generate one under '
+                  'Options > WebUI.'
+              : 'The WebUI sign-in; works on every qBittorrent version.',
+          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+        ),
+      ],
+    );
+  }
+
   String get _apiKeyHint {
-    if (widget.isEditing) return 'Leave blank to keep existing';
+    if (widget.isEditing && !_qbitSwitchingShape) {
+      return 'Leave blank to keep existing';
+    }
     switch (_serviceType) {
+      case 'qbittorrent':
+        return 'Your qBittorrent API key (Options > WebUI, 5.2 or newer)';
       case 'sabnzbd':
         return 'Your SABnzbd API key';
       case 'tautulli':
         return 'Your Tautulli API key';
+      case 'tracearr':
+        return 'Your Tracearr API key (Settings > General, starts with trr_pub_)';
       case 'chaptarr':
         return 'Your Chaptarr API key';
+      case 'lidarr':
+        return 'Your Lidarr API key';
       case 'jellyfin':
         return 'Your Jellyfin API key (Dashboard > API Keys)';
       case 'emby':
@@ -1437,8 +1546,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   String get _defaultSubtitle {
     if (_isDownloadClient) return 'Use this as the default download client';
-    if (_serviceType == 'tautulli') {
-      return 'Use this as the default Tautulli instance';
+    if (_isWatchHistory) {
+      return 'Use this as the default $_serviceLabel instance';
     }
     return 'Use this as the default for media requests';
   }
@@ -1681,7 +1790,6 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _plexAutoApprove = value;
         _mediaServerConfigDirty = true;
       }),
-      activeThumbColor: AppTheme.accent,
       contentPadding: EdgeInsets.zero,
     );
   }
@@ -2385,10 +2493,15 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           // shape (API key vs username/password), so the prompted form shows
           // nothing here until one is picked.
           //
-          // qBittorrent, NZBGet and Transmission authenticate with
-          // username/password; Plex links a plex.tv account with a PIN;
+          // NZBGet and Transmission authenticate with username/password;
+          // qBittorrent with either that or, on 5.2 and newer, an API key,
+          // chosen by the toggle; Plex links a plex.tv account with a PIN;
           // everything else uses an API key. Credentials are write-only:
           // when editing, blank keeps the existing value.
+          if (_serviceType == 'qbittorrent') ...[
+            _buildQbitAuthToggle(),
+            const SizedBox(height: 16),
+          ],
           if (_serviceTypeUnchosen)
             const SizedBox.shrink()
           else if (_isPlex)
@@ -2411,7 +2524,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               decoration: InputDecoration(
                 labelText:
                     _credentialsOptional ? 'Password (optional)' : 'Password',
-                hintText: widget.isEditing
+                hintText: widget.isEditing && !_qbitSwitchingShape
                     ? 'Leave blank to keep existing'
                     : (_credentialsOptional
                         ? 'Only if authentication is enabled'

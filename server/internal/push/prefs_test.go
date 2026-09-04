@@ -18,7 +18,7 @@ func TestPrefsGetDefaultsForMissingRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	want := Prefs{RequestDecision: false, RequestPending: true, NewMovie: true, NewEpisode: true, NewBook: true, IssueCreated: true, AgentActionPending: true, PlexAccessRequest: true, PlexInviteSent: true, IssueReportUpdate: true, AgentDigest: true, ContentUpgraded: false}
+	want := Prefs{RequestDecision: false, RequestPending: true, NewMovie: true, NewEpisode: true, NewBook: true, NewMusic: true, IssueCreated: true, AgentActionPending: true, PlexAccessRequest: true, PlexInviteSent: true, IssueReportUpdate: true, AgentDigest: true, ContentUpgraded: false}
 	if got != want {
 		t.Errorf("default prefs = %+v, want %+v", got, want)
 	}
@@ -32,7 +32,7 @@ func TestPrefsSetThenGet(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
 
 	store := NewPrefsStore(database)
-	want := Prefs{RequestDecision: true, RequestPending: false, NewMovie: false, NewEpisode: true, NewBook: true, PlexAccessRequest: true, ContentUpgraded: true}
+	want := Prefs{RequestDecision: true, RequestPending: false, NewMovie: false, NewEpisode: true, NewBook: true, NewMusic: false, PlexAccessRequest: true, ContentUpgraded: true}
 	if err := store.Set(1, want); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
@@ -265,6 +265,80 @@ func TestUsersOptedIntoNewBookScopesToInstanceAccess(t *testing.T) {
 	}
 	if !equalIDs(got, []int64{2, 6, 7}) {
 		t.Errorf("books-a audience with a granted reader = %v, want [2 6 7]", got)
+	}
+}
+
+// TestUsersOptedIntoNewMusicScopesToInstanceAccess mirrors the books matrix:
+// lidarr shares chaptarr's assignment-is-the-grant access model, so the music
+// audience rule must behave identically.
+func TestUsersOptedIntoNewMusicScopesToInstanceAccess(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// admin(1): no music assignment. alice(2): assigned music-a. bob(3):
+	// assigned music-a but opted out. carol(4): assigned sibling music-b.
+	// erin(6): ADMIN assigned music-a — the two-library household case.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin', '', 'admin')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'bob', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (4, 'carol', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (6, 'erin', '', 'admin')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (2, 'lidarr', 'music-a')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (3, 'lidarr', 'music-a')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (4, 'lidarr', 'music-b')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (6, 'lidarr', 'music-a')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_music) VALUES (3, 0)")
+
+	store := NewPrefsStore(database)
+
+	// The unscoped audience is refused outright: a caller who cannot name the
+	// instance must not page users who cannot see any music.
+	if _, err := store.usersOptedInto(CategoryNewMusic); err == nil {
+		t.Fatal("usersOptedInto(new_music) succeeded, want the scoped-query refusal")
+	}
+
+	got, err := store.usersOptedIntoNewMusic("music-a")
+	if err != nil {
+		t.Fatalf("usersOptedIntoNewMusic(music-a): %v", err)
+	}
+	if !equalIDs(got, []int64{1, 2, 6}) {
+		t.Errorf("music-a audience = %v, want [1 2 6] (unassigned admin + assigned alice + assigned admin erin)", got)
+	}
+
+	// The sibling instance reaches its own assignee (and the unassigned
+	// admin) — never music-a's users, and NOT the admin assigned to music-a.
+	got, err = store.usersOptedIntoNewMusic("music-b")
+	if err != nil {
+		t.Fatalf("usersOptedIntoNewMusic(music-b): %v", err)
+	}
+	if !equalIDs(got, []int64{1, 4}) {
+		t.Errorf("music-b audience = %v, want [1 4] (unassigned admin + assigned carol)", got)
+	}
+
+	// A chaptarr assignment is not a music assignment: it must neither admit
+	// a user to a music audience nor strip an admin of the unassigned
+	// fallback.
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (1, 'chaptarr', 'books-a')")
+	got, err = store.usersOptedIntoNewMusic("music-b")
+	if err != nil {
+		t.Fatalf("usersOptedIntoNewMusic(music-b) after chaptarr row: %v", err)
+	}
+	if !equalIDs(got, []int64{1, 4}) {
+		t.Errorf("music-b audience after chaptarr row = %v, want [1 4] unchanged", got)
+	}
+
+	// An access GRANT is an assignment too: a granted user joins that
+	// instance's audience without holding the pin.
+	mustExec(t, database, "INSERT INTO service_instances (id, service_type, name, url, api_key) VALUES ('music-a', 'lidarr', 'Music A', 'http://music-a', 'k')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (7, 'frank', '', 'user')")
+	mustExec(t, database, "INSERT INTO user_instance_grants (user_id, instance_id) VALUES (7, 'music-a')")
+	got, err = store.usersOptedIntoNewMusic("music-a")
+	if err != nil {
+		t.Fatalf("usersOptedIntoNewMusic(music-a) with grant: %v", err)
+	}
+	if !equalIDs(got, []int64{1, 2, 6, 7}) {
+		t.Errorf("music-a audience with a granted listener = %v, want [1 2 6 7]", got)
 	}
 }
 

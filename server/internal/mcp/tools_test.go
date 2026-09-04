@@ -79,7 +79,7 @@ func TestArrToolsOfferOptionalInstanceID(t *testing.T) {
 		"trigger_search", "search_releases", "grab_release",
 		"remove_queue_item", "get_disk_space", "get_arr_health",
 		"get_episode_timeline", "get_media_file_details", "get_service_config",
-		"get_book_timeline", "diagnose_queue", "get_manual_import_candidates",
+		"get_book_timeline", "get_album_timeline", "diagnose_queue", "get_manual_import_candidates",
 		"execute_manual_import", "remediate_queue_item", "rescan_media",
 	} {
 		tool := findToolDefinition(name)
@@ -99,6 +99,79 @@ func TestArrToolsOfferOptionalInstanceID(t *testing.T) {
 				t.Fatalf("%s must not require instance_id (omitting it means the default library)", name)
 			}
 		}
+	}
+}
+
+// The schema is the contract a model reads. Every queue/library tool whose
+// implementation carries a music arm has to SAY so in its media_type enum, and
+// the ids that scope a music call have to be declared where their book
+// siblings are — the music module first shipped with the implementations in
+// place and the enums still stopping at "book", which left every album fix
+// unreachable from any MCP client.
+func TestArrToolSchemasAdmitMusic(t *testing.T) {
+	enumOf := func(t *testing.T, name, property string) []string {
+		t.Helper()
+		tool := findToolDefinition(name)
+		if tool == nil {
+			t.Fatalf("%s definition not found", name)
+		}
+		properties, _ := tool.InputSchema["properties"].(map[string]interface{})
+		field, _ := properties[property].(map[string]interface{})
+		values, _ := field["enum"].([]string)
+		return values
+	}
+	has := func(values []string, want string) bool {
+		for _, v := range values {
+			if v == want {
+				return true
+			}
+		}
+		return false
+	}
+	for _, name := range []string{
+		"get_queue", "get_calendar", "get_library", "get_history", "get_arr_health",
+		"trigger_search", "search_releases", "grab_release", "remove_queue_item",
+		"diagnose_queue", "get_manual_import_candidates", "execute_manual_import",
+		"remediate_queue_item", "rescan_media",
+	} {
+		if values := enumOf(t, name, "media_type"); !has(values, "music") {
+			t.Fatalf("%s media_type enum = %v, want music", name, values)
+		}
+	}
+	if values := enumOf(t, "get_service_config", "service"); !has(values, "lidarr") {
+		t.Fatalf("get_service_config service enum = %v, want lidarr", values)
+	}
+	if values := enumOf(t, "get_media_file_details", "media_type"); !has(values, "music") {
+		t.Fatalf("get_media_file_details media_type enum = %v, want music", values)
+	}
+	for name, ids := range map[string][]string{
+		"get_library":            {"artist_id", "album_id"},
+		"trigger_search":         {"artist_id", "album_id"},
+		"search_releases":        {"album_id"},
+		"grab_release":           {"album_id"},
+		"rescan_media":           {"artist_id"},
+		"get_media_file_details": {"album_id"},
+	} {
+		properties, _ := findToolDefinition(name).InputSchema["properties"].(map[string]interface{})
+		for _, id := range ids {
+			if _, ok := properties[id]; !ok {
+				t.Fatalf("%s schema is missing %s", name, id)
+			}
+		}
+	}
+	branches, _ := findToolDefinition("grab_release").InputSchema["oneOf"].([]interface{})
+	musicBranch := false
+	for _, branch := range branches {
+		b, _ := branch.(map[string]interface{})
+		props, _ := b["properties"].(map[string]interface{})
+		mt, _ := props["media_type"].(map[string]interface{})
+		required, _ := b["required"].([]string)
+		if mt["const"] == "music" && len(required) == 1 && required[0] == "album_id" {
+			musicBranch = true
+		}
+	}
+	if !musicBranch {
+		t.Fatalf("grab_release oneOf has no music branch requiring album_id: %#v", branches)
 	}
 }
 
@@ -215,6 +288,31 @@ func TestResolveDisplayMediaSearchResultRejectsWrongYear(t *testing.T) {
 	}
 }
 
+// browse_titles has no "all": TMDB has no combined discover endpoint, and a
+// model that sends it is corrected by the executor rather than guessed at.
+func TestBrowseTitlesSchemaIsMovieOrTV(t *testing.T) {
+	var def *Tool
+	for i := range toolDefinitions {
+		if toolDefinitions[i].Name == "browse_titles" {
+			def = &toolDefinitions[i]
+		}
+	}
+	if def == nil {
+		t.Fatal("browse_titles is not registered")
+	}
+	props := def.InputSchema["properties"].(map[string]interface{})
+	mediaType := props["media_type"].(map[string]interface{})
+	if got := mediaType["enum"].([]string); len(got) != 2 || got[0] != "movie" || got[1] != "tv" {
+		t.Errorf("media_type enum = %v, want exactly movie, tv", got)
+	}
+	if got := def.InputSchema["required"].([]string); len(got) != 1 || got[0] != "media_type" {
+		t.Errorf("required = %v, want exactly media_type", got)
+	}
+	if def.Permission != auth.PermissionMediaDiscover || def.AdminOnly || def.InAppChatOnly {
+		t.Errorf("browse_titles gating = %+v, want a plain discover tool", *def)
+	}
+}
+
 func TestToolDefinitionsDeclarePermissions(t *testing.T) {
 	for _, tool := range toolDefinitions {
 		if tool.RequiredPermission() == "" {
@@ -295,6 +393,9 @@ func TestGetToolsForRoleFiltersOperationalTools(t *testing.T) {
 	}
 	if !hasTool(userTools, "search_movie_collections") {
 		t.Fatal("user tools should include movie collection discovery")
+	}
+	if !hasTool(userTools, "browse_titles") {
+		t.Fatal("user tools should include catalog browsing")
 	}
 	if hasTool(userTools, "get_queue") {
 		t.Fatal("user tools should not include operational queue access")

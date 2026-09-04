@@ -30,13 +30,14 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
 
-var arrSettingsServices = []string{"radarr", "sonarr", "chaptarr"}
+var arrSettingsServices = []string{"radarr", "sonarr", "chaptarr", "lidarr"}
 
 const maxLanguageCatalogOutputBytes = 20 << 10
 
@@ -52,13 +53,13 @@ var arrSettingsToolDefinitions = []Tool{
 	{
 		Name:        "list_arr_instances",
 		Permission:  auth.PermissionInstancesManage,
-		Description: "List the configured Radarr/Sonarr/Chaptarr instances with the instance_id values other settings tools accept, and which instance is each service's default. Admin only",
+		Description: "List the configured Radarr/Sonarr/Chaptarr/Lidarr instances with the instance_id values other settings tools accept, and which instance is each service's default. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"service": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"radarr", "sonarr", "chaptarr"},
+					"enum":        []string{"radarr", "sonarr", "chaptarr", "lidarr"},
 					"description": "Limit the list to one service (default: all)",
 				},
 			},
@@ -67,13 +68,13 @@ var arrSettingsToolDefinitions = []Tool{
 	{
 		Name:        "get_quality_profiles",
 		Permission:  auth.PermissionInstancesManage,
-		Description: "Read the quality profiles of a Radarr/Sonarr/Chaptarr instance. Without profile_id: a summary of every profile (allowed qualities, cutoff, upgrade policy, custom-format scores, language); include_languages adds the complete bounded live Radarr/Sonarr language catalog, while language_name looks up one exact live name/ID. With profile_id: that one profile's full JSON exactly as the service stores it. Admin only",
+		Description: "Read the quality profiles of a Radarr/Sonarr/Chaptarr/Lidarr instance. Without profile_id: a summary of every profile (allowed qualities, cutoff, upgrade policy, custom-format scores, language); include_languages adds the complete bounded live Radarr/Sonarr language catalog, while language_name looks up one exact live name/ID. With profile_id: that one profile's full JSON exactly as the service stores it. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"service": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"radarr", "sonarr", "chaptarr"},
+					"enum":        []string{"radarr", "sonarr", "chaptarr", "lidarr"},
 					"description": "Which service's profiles to read",
 				},
 				"instance_id": map[string]interface{}{
@@ -101,13 +102,13 @@ var arrSettingsToolDefinitions = []Tool{
 	{
 		Name:        "get_custom_formats",
 		Permission:  auth.PermissionInstancesManage,
-		Description: "Read the custom formats of a Radarr/Sonarr/Chaptarr instance. Without format_id: a summary of every custom format and its specifications. With format_id: that one format's full JSON exactly as the service stores it. The scores that make formats matter live in each quality profile (see get_quality_profiles). Admin only",
+		Description: "Read the custom formats of a Radarr/Sonarr/Chaptarr/Lidarr instance. Without format_id: a summary of every custom format and its specifications. With format_id: that one format's full JSON exactly as the service stores it. The scores that make formats matter live in each quality profile (see get_quality_profiles). Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"service": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"radarr", "sonarr", "chaptarr"},
+					"enum":        []string{"radarr", "sonarr", "chaptarr", "lidarr"},
 					"description": "Which service's custom formats to read",
 				},
 				"instance_id": map[string]interface{}{
@@ -125,14 +126,14 @@ var arrSettingsToolDefinitions = []Tool{
 	{
 		Name:        "upsert_custom_format",
 		Permission:  auth.PermissionInstancesManage,
-		Description: "Create or update one Radarr/Sonarr/Chaptarr custom format by exact name from native or TRaSH-style JSON. Caller-supplied ids are ignored. A create enters every existing quality profile at score 0; an update preserves the profile's numeric score but does not recompute stored file matches. A successful write is read back and recorded in Configuration history for live comparison. This tool does not set profile scores. Admin only",
+		Description: "Create or update one Radarr/Sonarr/Chaptarr/Lidarr custom format by exact name from native or TRaSH-style JSON. Caller-supplied ids are ignored. A create enters every existing quality profile at score 0; an update preserves the profile's numeric score but does not recompute stored file matches. A successful write is read back and recorded in Configuration history for live comparison. This tool does not set profile scores. Admin only",
 		InputSchema: map[string]interface{}{
 			"type":                 "object",
 			"additionalProperties": false,
 			"properties": map[string]interface{}{
 				"service": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"radarr", "sonarr", "chaptarr"},
+					"enum":        []string{"radarr", "sonarr", "chaptarr", "lidarr"},
 					"description": "Which service owns the custom format",
 				},
 				"instance_id": map[string]interface{}{
@@ -179,6 +180,8 @@ func arrServiceLabel(service string) string {
 		return "Sonarr"
 	case "chaptarr":
 		return "Chaptarr"
+	case "lidarr":
+		return "Lidarr"
 	}
 	return service
 }
@@ -190,7 +193,7 @@ func arrServiceLabel(service string) string {
 func (s *ToolServer) settingsTargetFor(service, instanceID string) (settingsReader, string, string, string) {
 	label := arrServiceLabel(service)
 	if !slices.Contains(arrSettingsServices, service) {
-		return nil, "", "", "Unknown service — expected radarr, sonarr, or chaptarr."
+		return nil, "", "", "Unknown service — expected radarr, sonarr, chaptarr, or lidarr."
 	}
 	if s.registry == nil {
 		return nil, "", "", label + " is not configured."
@@ -242,6 +245,20 @@ func (s *ToolServer) settingsTargetFor(service, instanceID string) (settingsRead
 			}
 			reader, resolvedID = client, id
 		}
+	case "lidarr":
+		if instanceID != "" {
+			client, err := s.registry.GetLidarrClient(instanceID)
+			if err != nil {
+				return nil, "", "", s.instanceResolveFailureText(service, instanceID)
+			}
+			reader, resolvedID = client, instanceID
+		} else {
+			client, id, err := s.registry.GetDefaultLidarrClient()
+			if err != nil || client == nil {
+				return nil, "", "", label + " is not configured."
+			}
+			reader, resolvedID = client, id
+		}
 	}
 	return reader, resolvedID, s.arrInstanceLabel(service, resolvedID), ""
 }
@@ -280,8 +297,10 @@ func (s *ToolServer) freshSettingsTargetFor(service, requestedID string) (settin
 		reader, fingerprint, err = s.registry.GetFreshSonarrClient(resolvedID)
 	case "chaptarr":
 		reader, fingerprint, err = s.registry.GetFreshChaptarrClient(resolvedID)
+	case "lidarr":
+		reader, fingerprint, err = s.registry.GetFreshLidarrClient(resolvedID)
 	default:
-		return nil, "", "", instance.ArrSettingsFingerprint{}, "service must be radarr, sonarr, or chaptarr."
+		return nil, "", "", instance.ArrSettingsFingerprint{}, "service must be radarr, sonarr, chaptarr, or lidarr."
 	}
 	if err != nil || reader == nil {
 		return nil, "", "", instance.ArrSettingsFingerprint{}, s.instanceResolveFailureText(service, resolvedID)
@@ -370,7 +389,7 @@ func (s *ToolServer) listArrInstances(input json.RawMessage) (*ToolResult, error
 	services := arrSettingsServices
 	if params.Service != "" {
 		if !slices.Contains(arrSettingsServices, params.Service) {
-			return &ToolResult{Text: "Unknown service — expected radarr, sonarr, or chaptarr."}, nil
+			return &ToolResult{Text: "Unknown service — expected radarr, sonarr, chaptarr, or lidarr."}, nil
 		}
 		services = []string{params.Service}
 	}
@@ -532,6 +551,8 @@ func (s *ToolServer) getQualityProfiles(ctx context.Context, input json.RawMessa
 	if params.IncludeLanguages || params.LanguageName != "" {
 		if params.Service == "chaptarr" {
 			sb.WriteString("\nChaptarr does not expose release-language specifications; book metadata language is configured separately.\n")
+		} else if params.Service == "lidarr" {
+			sb.WriteString("\nLidarr does not expose release-language specifications.\n")
 		} else if languageReader, ok := reader.(arrLanguageReader); ok {
 			languages, languageErr := languageReader.GetLanguagesRawContext(ctx)
 			if languageErr != nil {
@@ -880,7 +901,7 @@ func (s *ToolServer) upsertCustomFormat(ctx context.Context, input json.RawMessa
 		if errors.Is(err, errCustomFormatChanged) {
 			return &ToolResult{Text: "The custom format changed while this write was being prepared. No write was attempted; review the live settings and try again."}, nil
 		}
-		if errors.Is(err, radarr.ErrCustomFormatsNotFound) || errors.Is(err, sonarr.ErrCustomFormatsNotFound) || errors.Is(err, chaptarr.ErrCustomFormatsNotFound) {
+		if errors.Is(err, radarr.ErrCustomFormatsNotFound) || errors.Is(err, sonarr.ErrCustomFormatsNotFound) || errors.Is(err, chaptarr.ErrCustomFormatsNotFound) || errors.Is(err, lidarr.ErrCustomFormatsNotFound) {
 			return &ToolResult{Text: customFormatsUnavailableText(params.Service, label)}, nil
 		}
 		return nil, err
@@ -913,7 +934,8 @@ func (s *ToolServer) upsertCustomFormat(ctx context.Context, input json.RawMessa
 func isCustomFormatsNotFound(err error) bool {
 	return errors.Is(err, radarr.ErrCustomFormatsNotFound) ||
 		errors.Is(err, sonarr.ErrCustomFormatsNotFound) ||
-		errors.Is(err, chaptarr.ErrCustomFormatsNotFound)
+		errors.Is(err, chaptarr.ErrCustomFormatsNotFound) ||
+		errors.Is(err, lidarr.ErrCustomFormatsNotFound)
 }
 
 func customFormatsUnavailableText(service, label string) string {

@@ -9,6 +9,8 @@ import 'package:cantinarr/core/widgets/cached_image.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/chaptarr/ui/chaptarr_book_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
+import 'package:cantinarr/features/dashboard/ui/requester_author_detail_screen.dart';
+import 'package:cantinarr/features/dashboard/ui/requester_series_detail_screen.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -361,6 +363,104 @@ void main() {
     expect(adapter.statusInstanceIds, everyElement('books'));
   });
 
+  testWidgets('the series line renders with its stated position',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester);
+
+    router.go('/detail/book/29749107');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Discworld #13'), findsOneWidget);
+    expect(find.byKey(const ValueKey('book-series-link')), findsOneWidget);
+  });
+
+  testWidgets('a book the library states no series for shows no series line',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: _BooksAdapter(noSeries: true),
+    );
+
+    router.go('/detail/book/29749107');
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Discworld'), findsNothing);
+    expect(find.byKey(const ValueKey('book-series-link')), findsNothing);
+  });
+
+  testWidgets('tapping the series link leaves the book detail for the series route',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester);
+
+    router.go('/detail/book/29749107');
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('book-series-link')));
+    await tester.pumpAndSettle();
+
+    // GoRouter's routeInformationProvider does not observably update for an
+    // imperative push nested under this route pattern in this harness, so the
+    // navigation is asserted structurally instead: the book detail screen is
+    // gone and the pushed series screen's own constructor arguments (set
+    // before any network call resolves) carry the exact name and instance —
+    // this is the destination *route*, not its fetched contents.
+    expect(find.byType(RequesterBookDetailScreen), findsNothing);
+    final seriesScreen = tester.widget<RequesterSeriesDetailScreen>(
+      find.byType(RequesterSeriesDetailScreen),
+    );
+    expect(seriesScreen.seriesName, 'Discworld');
+    expect(seriesScreen.instanceId, 'books');
+  });
+
+  testWidgets('the author line is tappable when the digest states its identity',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester);
+
+    router.go('/detail/book/29749107');
+    await tester.pumpAndSettle();
+
+    expect(find.text('E. K. Johnston'), findsOneWidget);
+    expect(find.byKey(const ValueKey('book-author-link')), findsOneWidget);
+  });
+
+  testWidgets('an author with no stated library identity renders as plain text',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: _BooksAdapter(noAuthorLink: true),
+    );
+
+    router.go('/detail/book/29749107');
+    await tester.pumpAndSettle();
+
+    // The name still renders — only the tap target is withheld, because
+    // /detail/author/{id} has no id it could resolve for this row.
+    expect(find.text('E. K. Johnston'), findsOneWidget);
+    expect(find.byKey(const ValueKey('book-author-link')), findsNothing);
+  });
+
+  testWidgets('tapping the author link leaves the book detail for the author route',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester);
+
+    router.go('/detail/book/29749107');
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('book-author-link')));
+    await tester.pumpAndSettle();
+
+    // Asserted structurally for the same reason as the series link above: the
+    // pushed screen's constructor arguments are the destination route, set
+    // before any network call resolves.
+    expect(find.byType(RequesterBookDetailScreen), findsNothing);
+    final authorScreen = tester.widget<RequesterAuthorDetailScreen>(
+      find.byType(RequesterAuthorDetailScreen),
+    );
+    expect(authorScreen.foreignAuthorId, 'hc:auth-ekj');
+    expect(authorScreen.nameHint, 'E. K. Johnston');
+    expect(authorScreen.instanceId, 'books');
+  });
+
   testWidgets('an unresolvable id shows a graceful state with a Books tab exit',
       (tester) async {
     final (:router, container: _) = await _pumpRouter(tester);
@@ -547,6 +647,14 @@ class _BooksAdapter implements HttpClientAdapter {
   final bool partiallyUnknownStatus;
   final bool bookFiles;
 
+  /// Suppresses the `series`/`series_position` keys on the Ahsoka digest row,
+  /// defaulted so every other test keeps its current behaviour unchanged.
+  final bool noSeries;
+
+  /// Suppresses the `author_foreign_id` key on the Ahsoka digest row, so the
+  /// author name is stated without the library identity that makes it tappable.
+  final bool noAuthorLink;
+
   /// Coverage verdicts by reported path; unlisted paths count as covered.
   final Map<String, bool> coverage;
   final coveragePaths = <String>[];
@@ -563,6 +671,8 @@ class _BooksAdapter implements HttpClientAdapter {
     this.mismatchedLookupAuthor = false,
     this.partiallyUnknownStatus = false,
     this.bookFiles = false,
+    this.noSeries = false,
+    this.noAuthorLink = false,
     this.coverage = const {},
   });
 
@@ -594,24 +704,35 @@ class _BooksAdapter implements HttpClientAdapter {
       final instanceId = options.queryParameters['instance_id'].toString();
       libraryInstanceIds.add(instanceId);
       final otherLibrary = divergentLibraries && instanceId == 'books-two';
+      final ahsokaRow = <String, dynamic>{
+        'title': 'Ahsoka',
+        'author': 'E. K. Johnston',
+        'author_foreign_id': 'hc:auth-ekj',
+        'year': 2016,
+        'series': 'Discworld',
+        'series_position': '13',
+        // Empty by default so most tests never start a real image fetch.
+        'cover': ownedCover,
+        'foreign_book_id': '29749107',
+        'ebook': {
+          'monitored': otherLibrary,
+          'downloaded': otherLibrary,
+        },
+        'audiobook': {
+          'monitored': !otherLibrary,
+          'downloaded': false,
+        },
+      };
+      if (noSeries) {
+        ahsokaRow.remove('series');
+        ahsokaRow.remove('series_position');
+      }
+      if (noAuthorLink) {
+        ahsokaRow.remove('author_foreign_id');
+      }
       body = {
         'titles': [
-          {
-            'title': 'Ahsoka',
-            'author': 'E. K. Johnston',
-            'year': 2016,
-            // Empty by default so most tests never start a real image fetch.
-            'cover': ownedCover,
-            'foreign_book_id': '29749107',
-            'ebook': {
-              'monitored': otherLibrary,
-              'downloaded': otherLibrary,
-            },
-            'audiobook': {
-              'monitored': !otherLibrary,
-              'downloaded': false,
-            },
-          },
+          ahsokaRow,
           if (mismatchedLookupId)
             {
               'title': 'Dune Messiah',

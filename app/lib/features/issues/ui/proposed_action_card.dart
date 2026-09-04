@@ -899,7 +899,9 @@ class _ActionCopy {
   /// (files gone versus files gone *and* that release stood down), so it is
   /// never folded away.
   static String _deleteSummary(AgentActionParams p) {
-    final one = p.mediaType != 'tv' || p.episodes.length == 1;
+    // A book delete covers every file the record holds — plural, count unknown.
+    final one = p.mediaType == 'movie' ||
+        (p.mediaType == 'tv' && p.episodes.length == 1);
     final files = one ? 'file' : 'files';
     final replacements = one ? 'a replacement' : 'replacements';
     if (!p.blocklist) {
@@ -965,10 +967,15 @@ class _ActionCopy {
   static String _deleteConfirmation(AgentActionParams p) {
     final episodes = p.episodes;
     final isTv = p.mediaType == 'tv';
-    final one = !isTv || episodes.length == 1;
+    // A book delete covers every file the record holds — plural, count unknown.
+    final one = p.mediaType == 'movie' || (isTv && episodes.length == 1);
 
     final String target;
-    if (isTv && episodes.isNotEmpty) {
+    if (p.mediaType == 'book') {
+      target = 'every file this book holds in your library';
+    } else if (p.mediaType == 'music') {
+      target = 'every track file this album holds in your library';
+    } else if (isTv && episodes.isNotEmpty) {
       final season = p.season;
       target = '${one ? '1 file' : '${episodes.length} files'} from your '
           'library — ${season == null ? '' : 'season $season, '}'
@@ -1058,6 +1065,7 @@ class _ActionCopy {
     String mediaLabel() => switch (p.mediaType) {
           'tv' => 'TV',
           'book' => 'Book',
+          'music' => 'Music',
           _ => 'Movie',
         };
 
@@ -1110,15 +1118,24 @@ class _ActionCopy {
           rows.add(('Author id', '${p.authorId}', false));
         }
         if (p.bookId != null) rows.add(('Book id', '${p.bookId}', false));
+        if (p.artistId != null) {
+          rows.add(('Artist id', '${p.artistId}', false));
+        }
+        if (p.albumId != null) rows.add(('Album id', '${p.albumId}', false));
       case AgentActionKind.rescan:
         if (p.mediaType != null) rows.add(('Type', mediaLabel(), false));
         if (p.tmdbId != null) rows.add(('TMDB id', '${p.tmdbId}', false));
         if (p.authorId != null) {
           rows.add(('Author id', '${p.authorId}', false));
         }
+        if (p.artistId != null) {
+          rows.add(('Artist id', '${p.artistId}', false));
+        }
       case AgentActionKind.deleteMediaFiles:
         if (p.mediaType != null) rows.add(('Type', mediaLabel(), false));
         if (p.tmdbId != null) rows.add(('TMDB id', '${p.tmdbId}', false));
+        if (p.bookId != null) rows.add(('Book id', '${p.bookId}', false));
+        if (p.albumId != null) rows.add(('Album id', '${p.albumId}', false));
         if (p.season != null) rows.add(('Season', '${p.season}', false));
         final toDelete = p.episodes;
         if (toDelete.isNotEmpty) {

@@ -18,18 +18,30 @@ import '../features/chaptarr/ui/chaptarr_home_screen.dart';
 import '../features/chaptarr/ui/chaptarr_module_shell.dart';
 import '../features/chaptarr/ui/chaptarr_queue_screen.dart';
 import '../features/chaptarr/ui/chaptarr_wanted_screen.dart';
+import '../features/lidarr/data/lidarr_models.dart';
+import '../features/lidarr/ui/lidarr_calendar_screen.dart';
+import '../features/lidarr/ui/lidarr_history_screen.dart';
+import '../features/lidarr/ui/lidarr_home_screen.dart';
+import '../features/lidarr/ui/lidarr_module_shell.dart';
+import '../features/lidarr/ui/lidarr_queue_screen.dart';
+import '../features/lidarr/ui/lidarr_wanted_screen.dart';
 import '../features/config_changes/ui/config_change_detail_screen.dart';
 import '../features/config_changes/ui/config_change_history_screen.dart';
 import '../features/profile_proposals/ui/profile_proposals_screen.dart';
 import '../features/dashboard/ui/dashboard_books_tab.dart';
+import '../features/dashboard/ui/dashboard_music_tab.dart';
 import '../features/dashboard/ui/dashboard_movies_tab.dart';
 import '../features/dashboard/ui/dashboard_releases_tab.dart';
 import '../features/dashboard/ui/dashboard_shell.dart';
 import '../features/dashboard/ui/dashboard_tv_tab.dart';
+import '../features/dashboard/ui/requester_album_detail_screen.dart';
+import '../features/dashboard/ui/requester_artist_detail_screen.dart';
 import '../features/dashboard/ui/requester_author_detail_screen.dart';
 import '../features/dashboard/ui/requester_book_detail_screen.dart';
 import '../features/dashboard/ui/requester_series_detail_screen.dart';
 import '../features/discover/data/tmdb_models.dart';
+import '../features/discover/logic/browse_query.dart';
+import '../features/discover/ui/browse_grid_screen.dart';
 import '../features/downloads/ui/downloads_history_screen.dart';
 import '../features/downloads/ui/downloads_module_shell.dart';
 import '../features/downloads/ui/downloads_queue_screen.dart';
@@ -66,10 +78,10 @@ import '../features/sonarr/ui/sonarr_home_screen.dart';
 import '../features/sonarr/ui/sonarr_module_shell.dart';
 import '../features/sonarr/ui/sonarr_queue_screen.dart';
 import '../features/sonarr/ui/sonarr_wanted_screen.dart';
-import '../features/tautulli/ui/tautulli_activity_screen.dart';
-import '../features/tautulli/ui/tautulli_history_screen.dart';
-import '../features/tautulli/ui/tautulli_module_shell.dart';
-import '../features/tautulli/ui/tautulli_stats_screen.dart';
+import '../features/monitoring/ui/monitoring_activity_screen.dart';
+import '../features/monitoring/ui/monitoring_history_screen.dart';
+import '../features/monitoring/ui/monitoring_module_shell.dart';
+import '../features/monitoring/ui/monitoring_stats_screen.dart';
 import '../core/widgets/app_ambient_background.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -162,6 +174,17 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               _isWithinRoute(state.uri.path, '/detail/series'))) {
         return '/dashboard/movies';
       }
+      // Requester music surfaces — the Music tab and the id-addressable album
+      // and artist details — require the music grant and degrade the same way
+      // without it.
+      final hasLidarrGrant = auth?.connection?.services.lidarr ?? false;
+      if (isAuthenticated &&
+          !hasLidarrGrant &&
+          (_isWithinRoute(state.uri.path, '/dashboard/music') ||
+              _isWithinRoute(state.uri.path, '/detail/album') ||
+              _isWithinRoute(state.uri.path, '/detail/artist'))) {
+        return '/dashboard/movies';
+      }
       return null;
     },
     routes: [
@@ -226,6 +249,17 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                   GoRoute(
                     path: '/dashboard/books',
                     builder: (_, __) => const DashboardBooksTab(),
+                  ),
+                ],
+              ),
+              // Music (Lidarr) — after Books for the same index-stability
+              // reason: the grant-gated tabs are the trailing branches, so
+              // showing or hiding either never shifts the fixed tabs.
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/dashboard/music',
+                    builder: (_, __) => const DashboardMusicTab(),
                   ),
                 ],
               ),
@@ -386,6 +420,60 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ],
           ),
 
+          // Lidarr module (Library/Queue/History/Wanted tabs)
+          StatefulShellRoute.indexedStack(
+            pageBuilder: (context, state, navigationShell) => _fadeSurfacePage(
+              key: state.pageKey,
+              child: LidarrModuleShell(
+                currentIndex: navigationShell.currentIndex,
+                onTabChanged: (index) => navigationShell.goBranch(index),
+                child: navigationShell,
+              ),
+            ),
+            branches: [
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/lidarr/library',
+                    builder: (_, __) => const LidarrHomeScreen(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/lidarr/queue',
+                    builder: (_, __) => const LidarrQueueScreen(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/lidarr/history',
+                    builder: (_, __) => const LidarrHistoryScreen(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/lidarr/wanted',
+                    builder: (_, __) => const LidarrWantedScreen(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/lidarr/calendar',
+                    builder: (_, __) => const LidarrCalendarScreen(),
+                  ),
+                ],
+              ),
+            ],
+          ),
+
           // Downloads module (Queue/History tabs, admin only)
           StatefulShellRoute.indexedStack(
             pageBuilder: (context, state, navigationShell) => _fadeSurfacePage(
@@ -416,11 +504,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ],
           ),
 
-          // Tautulli module (Activity/History/Stats tabs, admin only)
+          // Monitoring module (Tautulli or Tracearr; Activity/History/Stats
+          // tabs, admin only)
           StatefulShellRoute.indexedStack(
             pageBuilder: (context, state, navigationShell) => _fadeSurfacePage(
               key: state.pageKey,
-              child: TautulliModuleShell(
+              child: MonitoringModuleShell(
                 currentIndex: navigationShell.currentIndex,
                 onTabChanged: (index) => navigationShell.goBranch(index),
                 child: navigationShell,
@@ -430,24 +519,24 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               StatefulShellBranch(
                 routes: [
                   GoRoute(
-                    path: '/tautulli/activity',
-                    builder: (_, __) => const TautulliActivityScreen(),
+                    path: '/monitoring/activity',
+                    builder: (_, __) => const MonitoringActivityScreen(),
                   ),
                 ],
               ),
               StatefulShellBranch(
                 routes: [
                   GoRoute(
-                    path: '/tautulli/history',
-                    builder: (_, __) => const TautulliHistoryScreen(),
+                    path: '/monitoring/history',
+                    builder: (_, __) => const MonitoringHistoryScreen(),
                   ),
                 ],
               ),
               StatefulShellBranch(
                 routes: [
                   GoRoute(
-                    path: '/tautulli/stats',
-                    builder: (_, __) => const TautulliStatsScreen(),
+                    path: '/monitoring/stats',
+                    builder: (_, __) => const MonitoringStatsScreen(),
                   ),
                 ],
               ),
@@ -461,6 +550,30 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: '/assistant',
             builder: (_, __) =>
                 const AppAmbientBackground(child: AiChatScreen()),
+          ),
+          // A feed as a full grid: the "See all" behind every discovery
+          // row and the Browse page. Everything it needs is in the URL, so
+          // web deep links and pushes are the same thing.
+          GoRoute(
+            path: '/browse/:type/:feed',
+            redirect: (_, state) => BrowseQuery.tryParse(state.uri) == null
+                ? (state.pathParameters['type'] == 'tv'
+                    ? '/dashboard/tv'
+                    : '/dashboard/movies')
+                : null,
+            builder: (_, state) {
+              final query = BrowseQuery.tryParse(state.uri);
+              if (query == null) {
+                return const AppAmbientBackground(
+                  child: _InvalidRouteScreen(
+                    message: 'This browse link is invalid.',
+                  ),
+                );
+              }
+              return AppAmbientBackground(
+                child: BrowseGridScreen(query: query),
+              );
+            },
           ),
           GoRoute(
             path: '/detail/:type/:id',
@@ -569,7 +682,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               final username = state.extra as String? ?? '';
               return AppAmbientBackground(
                 child: UserRequestSettingsScreen(
-                    userId: userId, username: username),
+                  userId: userId,
+                  username: username,
+                  targetIsAdmin: state.uri.queryParameters['admin'] == '1',
+                ),
               );
             },
           ),
@@ -702,6 +818,16 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: '/plex-guide',
             redirect: (_, __) => '/media-servers',
           ),
+          // The Tautulli-only module became the provider-neutral Monitoring
+          // module; old bookmarks land on the same tab.
+          GoRoute(
+            path: '/tautulli/:tab',
+            redirect: (_, state) {
+              const tabs = {'activity', 'history', 'stats'};
+              final tab = state.pathParameters['tab'];
+              return '/monitoring/${tabs.contains(tab) ? tab : 'activity'}';
+            },
+          ),
           GoRoute(
             path: '/media-servers',
             builder: (_, __) =>
@@ -737,8 +863,9 @@ bool _isAdminOnlyRoute(String path) {
     '/radarr',
     '/sonarr',
     '/chaptarr',
+    '/lidarr',
     '/downloads',
-    '/tautulli',
+    '/monitoring',
     '/approvals',
     '/agent-actions',
     '/agent-runs',
@@ -799,6 +926,35 @@ Widget _mediaDetailChild(GoRouterState state) {
       instanceId: state.uri.queryParameters['instance_id'],
     );
   }
+  if (type == 'artist') {
+    final foreignId = state.pathParameters['id']?.trim() ?? '';
+    if (foreignId.isEmpty) {
+      return const _InvalidRouteScreen(
+        message: 'This artist link is invalid.',
+      );
+    }
+    return RequesterArtistDetailScreen(
+      foreignArtistId: foreignId,
+      nameHint: state.uri.queryParameters['name'],
+      instanceId: state.uri.queryParameters['instance_id'],
+    );
+  }
+  if (type == 'album') {
+    final foreignId = state.pathParameters['id']?.trim() ?? '';
+    if (foreignId.isEmpty) {
+      return const _InvalidRouteScreen(
+        message: 'This album link is invalid.',
+      );
+    }
+    return RequesterAlbumDetailScreen(
+      foreignId: foreignId,
+      titleHint: state.uri.queryParameters['title'],
+      searchTerm: state.uri.queryParameters['q'],
+      instanceId: state.uri.queryParameters['instance_id'],
+      initialAlbum:
+          state.extra is LidarrAlbum ? state.extra! as LidarrAlbum : null,
+    );
+  }
   if (type == 'book') {
     final foreignId = state.pathParameters['id']?.trim() ?? '';
     if (foreignId.isEmpty) {
@@ -835,16 +991,19 @@ bool _hasValidMediaDetailParameters(GoRouterState state) {
       _positiveIntParameter(state, 'id') != null;
 }
 
-/// Route-level guard for `/detail/:type/:id`. Books and authors use a string
-/// foreign id and a series uses its name, so the only malformed shape is a
-/// blank id — degrade to the Books
-/// tab (the requester book surface). Movie/TV keep the positive-TMDB-id
-/// validation and their movies-dashboard fallback.
+/// Route-level guard for `/detail/:type/:id`. Books, authors, albums and
+/// artists use a string foreign id and a series uses its name, so the only
+/// malformed shape is a blank id — degrade to that media's own tab. Movie/TV
+/// keep the positive-TMDB-id validation and their movies-dashboard fallback.
 String? _mediaDetailRedirect(GoRouterState state) {
   final type = state.pathParameters['type'];
   if (type == 'book' || type == 'author' || type == 'series') {
     final id = state.pathParameters['id']?.trim() ?? '';
     return id.isEmpty ? '/dashboard/books' : null;
+  }
+  if (type == 'album' || type == 'artist') {
+    final id = state.pathParameters['id']?.trim() ?? '';
+    return id.isEmpty ? '/dashboard/music' : null;
   }
   return _hasValidMediaDetailParameters(state) ? null : '/dashboard/movies';
 }

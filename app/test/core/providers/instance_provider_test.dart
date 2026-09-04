@@ -46,7 +46,37 @@ Future<ProviderContainer> _containerWith(
   return container;
 }
 
+const _tautulli = ServiceInstance(
+  id: 'tautulli-a',
+  serviceType: 'tautulli',
+  name: 'Tautulli',
+);
+const _tracearr = ServiceInstance(
+  id: 'tracearr-a',
+  serviceType: 'tracearr',
+  name: 'Tracearr',
+  isDefault: true,
+);
+
 void main() {
+  test('Tautulli and Tracearr share one active watch-history selection',
+      () async {
+    final container = await _containerWith(const [_tautulli, _tracearr]);
+    var state = container.read(instanceProvider);
+
+    expect(state.watchHistoryInstances.map((i) => i.id),
+        ['tautulli-a', 'tracearr-a']);
+    // The default instance wins the initial selection whatever its type.
+    expect(state.activeWatchHistoryInstanceId, 'tracearr-a');
+    expect(state.activeWatchHistoryInstance?.serviceType, 'tracearr');
+
+    container
+        .read(instanceProvider.notifier)
+        .setActiveWatchHistoryInstance('tautulli-a');
+    state = container.read(instanceProvider);
+    expect(state.activeWatchHistoryInstance?.id, 'tautulli-a');
+  });
+
   test('several download clients default to the aggregate All view', () async {
     final container = await _containerWith(const [_sab, _qbit]);
     final state = container.read(instanceProvider);

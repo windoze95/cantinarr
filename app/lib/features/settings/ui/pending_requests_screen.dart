@@ -183,7 +183,9 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
       );
       return;
     }
-    final profiles = item.isBook
+    // Books and music resolve deterministic profile/root settings at add
+    // time, so their approvals carry no quality choice.
+    final profiles = item.isBook || item.isMusic
         ? const <QualityProfile>[]
         : (item.isTv ? admin.sonarrProfiles : admin.radarrProfiles);
 
@@ -339,7 +341,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
         seasonScope: item.isTv
             ? (chosenScope == _keepRequestedScope ? null : chosenScope)
             : null,
-        qualityProfileId: item.isBook ? null : chosenProfile,
+        qualityProfileId: item.isBook || item.isMusic ? null : chosenProfile,
       );
       if (!mounted) return;
       await _load();
@@ -630,7 +632,11 @@ class _WaitingTile extends StatelessWidget {
                 ? null
                 : AppConfig.tmdbPoster(item.posterPath, width: 185),
             fit: BoxFit.cover,
-            icon: item.isBook ? Icons.menu_book : Icons.movie,
+            icon: item.isBook
+                ? Icons.menu_book
+                : item.isMusic
+                    ? Icons.album
+                    : Icons.movie,
           ),
         ),
       ),
@@ -735,6 +741,7 @@ class _PendingTile extends StatelessWidget {
   IconData get _placeholderIcon => switch (item.mediaType) {
         'tv' => Icons.live_tv,
         'book' => Icons.menu_book,
+        'music' => Icons.album,
         _ => Icons.movie,
       };
 
@@ -821,7 +828,8 @@ class _PendingTile extends StatelessWidget {
               if (showScope) _chip(SeasonScope.describe(item.seasonScope)),
               if (showBookFormat)
                 _chip(item.requestedBookFormat?.label ?? 'Unsupported format'),
-              if (item.isBook && item.instanceName.isNotEmpty)
+              if ((item.isBook || item.isMusic) &&
+                  item.instanceName.isNotEmpty)
                 _chip('Library: ${item.instanceName}'),
             ],
           ),

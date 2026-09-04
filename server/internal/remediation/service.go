@@ -12,6 +12,7 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
@@ -137,6 +138,32 @@ func resolveReportedBook(client *chaptarr.Client, foreignID, format string) (*ch
 	}
 }
 
+// resolveReportedAlbum maps a reported foreignAlbumId (a MusicBrainz
+// release-group id) to the live Lidarr album record it names. Music has no
+// format axis, so one foreign id names at most one record. An album with no
+// library record has nothing to remediate (no queue, no files), so resolution
+// failing is a client error.
+func resolveReportedAlbum(client *lidarr.Client, foreignID string) (*lidarr.Album, error) {
+	if client == nil {
+		return nil, fmt.Errorf("lidarr instance unavailable")
+	}
+	albums, err := client.GetAllAlbums()
+	if err != nil {
+		return nil, fmt.Errorf("resolve reported album: %w", err)
+	}
+	for _, a := range albums {
+		if a.ForeignAlbumID != foreignID {
+			continue
+		}
+		if a.ID <= 0 {
+			return nil, fmt.Errorf("the matched library album has no usable record id")
+		}
+		record := a
+		return &record, nil
+	}
+	return nil, fmt.Errorf("no library album matches this report; it may have been removed")
+}
+
 func validCategory(c string) bool {
 	switch c {
 	case CategoryWrongContent, CategoryBadCopy, CategoryWrongAudio, CategoryOther:
@@ -173,7 +200,7 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 	if instanceID == "" {
 		return nil, fmt.Errorf("instance_id is required")
 	}
-	if req.MediaType != "movie" && req.MediaType != "tv" && req.MediaType != "book" {
+	if req.MediaType != "movie" && req.MediaType != "tv" && req.MediaType != "book" && req.MediaType != "music" {
 		return nil, fmt.Errorf("unsupported media type: %s", req.MediaType)
 	}
 	if s.registry == nil {
@@ -185,7 +212,7 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 	// with the same visible-set rule request routing enforces. Admins may
 	// report against any configured instance.
 	if !s.reporterIsAdmin(reporterID) {
-		serviceType := map[string]string{"movie": "radarr", "tv": "sonarr", "book": "chaptarr"}[req.MediaType]
+		serviceType := map[string]string{"movie": "radarr", "tv": "sonarr", "book": "chaptarr", "music": "lidarr"}[req.MediaType]
 		allowed, err := s.registry.UserCanAccessInstance(reporterID, instanceID, serviceType)
 		if err != nil {
 			return nil, fmt.Errorf("check %s access: %w", serviceType, err)
@@ -195,6 +222,7 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 		}
 	}
 	var chaptarrClient *chaptarr.Client
+	var lidarrClient *lidarr.Client
 	var instanceErr error
 	switch req.MediaType {
 	case "movie":
@@ -203,6 +231,8 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 		_, instanceErr = s.registry.GetSonarrClient(instanceID)
 	case "book":
 		chaptarrClient, instanceErr = s.registry.GetChaptarrClient(instanceID)
+	case "music":
+		lidarrClient, instanceErr = s.registry.GetLidarrClient(instanceID)
 	}
 	if instanceErr != nil {
 		return nil, fmt.Errorf("invalid instance_id for %s: %w", req.MediaType, instanceErr)
@@ -221,6 +251,14 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 	}
 	if req.MediaType == "book" && strings.TrimSpace(req.ForeignID) == "" {
 		return nil, fmt.Errorf("foreign_id is required for a book issue")
+	}
+	if req.MediaType == "music" {
+		if strings.TrimSpace(req.ForeignID) == "" {
+			return nil, fmt.Errorf("foreign_id is required for a music issue")
+		}
+		if strings.TrimSpace(req.BookFormat) != "" {
+			return nil, fmt.Errorf("music has no book_format")
+		}
 	}
 	// episode_number > 0 disambiguates an exact S00 special from the
 	// season_number=0 whole-series sentinel.
@@ -247,6 +285,19 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 			return nil, err
 		}
 		authorID, bookID = record.AuthorID, record.ID
+		if strings.TrimSpace(req.Title) == "" {
+			req.Title = record.Title
+		}
+	}
+	// Music mirrors books with the format axis removed: the artist and album
+	// record ids ride the same generic arr-identity columns.
+	if req.MediaType == "music" {
+		tmdbID, tvdbID = 0, 0
+		record, err := resolveReportedAlbum(lidarrClient, strings.TrimSpace(req.ForeignID))
+		if err != nil {
+			return nil, err
+		}
+		authorID, bookID = record.ArtistID, record.ID
 		if strings.TrimSpace(req.Title) == "" {
 			req.Title = record.Title
 		}

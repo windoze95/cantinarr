@@ -29,6 +29,7 @@ void main() {
     expect(_labels(modules), isNot(contains('Sonarr')));
     expect(_labels(modules), isNot(contains('Chaptarr')));
     expect(_labels(modules), isNot(contains('Downloads')));
+    expect(_labels(modules), isNot(contains('Monitoring')));
     expect(_labels(modules), isNot(contains('Tautulli')));
     // A granted media server is a guide, never a module.
     expect(_labels(modules), isNot(contains('Jellyfin')));
@@ -37,6 +38,34 @@ void main() {
     expect(_labels(modules), isNot(contains('Den Emby')));
     expect(_labels(modules), isNot(contains('Plex')));
     expect(_labels(modules), isNot(contains('Cantina Plex')));
+  });
+
+  test('a Tracearr-only server lights Monitoring for admins only', () async {
+    for (final isAdmin in [true, false]) {
+      final container = ProviderContainer(
+        overrides: [
+          authProvider.overrideWith(
+            () => _FakeAuthNotifier(_tracearrOnlyState(isAdmin: isAdmin)),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      await container.read(authProvider.future);
+      await container.pump();
+
+      final modules = container.read(moduleProvider).modules;
+      final monitoring =
+          modules.where((module) => module.type == ModuleType.monitoring);
+      if (isAdmin) {
+        expect(_labels(modules), contains('Monitoring'));
+        expect(monitoring, hasLength(1));
+      } else {
+        expect(_labels(modules), isNot(contains('Monitoring')));
+        expect(monitoring, isEmpty);
+      }
+      expect(_labels(modules), isNot(contains('Tracearr')));
+    }
   });
 
   test('admin module navigation is one row per app type', () async {
@@ -61,9 +90,10 @@ void main() {
         'Sonarr',
         'Chaptarr',
         'Downloads',
-        'Tautulli',
+        'Monitoring',
       ]),
     );
+    expect(_labels(modules), isNot(contains('Tautulli')));
     expect(
       modules.where((module) => module.type == ModuleType.radarr),
       hasLength(1),
@@ -85,6 +115,29 @@ void main() {
 
 List<String> _labels(List<AppModule> modules) =>
     modules.map((module) => module.label).toList();
+
+/// A server whose only watch-history source is Tracearr: the Monitoring row
+/// must light up for admins from that alone, and never for requesters.
+AuthState _tracearrOnlyState({required bool isAdmin}) => AuthState(
+      connection: const BackendConnection(
+        serverUrl: 'http://localhost',
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        instances: [
+          ServiceInstance(
+            id: 'tracearr-main',
+            serviceType: 'tracearr',
+            name: 'Tracearr',
+            isDefault: true,
+          ),
+        ],
+      ),
+      user: UserProfile(
+        id: 1,
+        username: isAdmin ? 'admin' : 'viewer',
+        role: isAdmin ? 'admin' : 'user',
+      ),
+    );
 
 AuthState _authState({required bool isAdmin}) {
   return AuthState(

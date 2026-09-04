@@ -7,6 +7,7 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
@@ -65,6 +66,22 @@ func chaptarrSignal(item chaptarr.QueueItem) arr.QueueSignal {
 	}
 }
 
+// lidarrSignal is chaptarrSignal's music sibling.
+func lidarrSignal(item lidarr.QueueItem) arr.QueueSignal {
+	messages := make([]arr.StatusMessage, 0, len(item.StatusMessages))
+	for _, m := range item.StatusMessages {
+		messages = append(messages, arr.StatusMessage{Title: m.Title, Messages: m.Messages})
+	}
+	return arr.QueueSignal{
+		Status:                item.Status,
+		TrackedDownloadStatus: item.TrackedDownloadStatus,
+		TrackedDownloadState:  item.TrackedDownloadState,
+		ErrorMessage:          item.ErrorMessage,
+		StatusMessages:        messages,
+		Protocol:              item.Protocol,
+	}
+}
+
 func sonarrQueueTitle(item sonarr.DetailedQueueItem) string {
 	if item.Series != nil {
 		if item.Episode != nil {
@@ -103,6 +120,20 @@ func chaptarrQueueTitle(item chaptarr.QueueItem) string {
 		return item.Title
 	}
 	return fmt.Sprintf("book %d", item.BookID)
+}
+
+// lidarrQueueTitle is chaptarrQueueTitle's music sibling.
+func lidarrQueueTitle(item lidarr.QueueItem) string {
+	if item.Album != nil && item.Album.Title != "" {
+		if item.Artist != nil && item.Artist.ArtistName != "" {
+			return fmt.Sprintf("%s — %s", item.Artist.ArtistName, item.Album.Title)
+		}
+		return item.Album.Title
+	}
+	if item.Title != "" {
+		return item.Title
+	}
+	return fmt.Sprintf("album %d", item.AlbumID)
 }
 
 // resolveGrabProvenance fills in who asked for a download, but only when the
@@ -156,13 +187,17 @@ func nextCalls(mediaType string, queueID, tmdbID int, verbs []string) string {
 	for _, v := range verbs {
 		switch v {
 		case arr.ActionProcess, arr.ActionRescan:
-			// rescan_media runs Rescan{Series,Movie,Author} then the import pass.
-			// For movies/TV it needs a tmdb_id (the Sonarr queue item only carries
-			// a TVDB id, so we fall back to naming the tool when we could not
-			// resolve one). Books carry no TMDB id at all — rescan_media takes an
-			// author_id there — so book always renders a resolve hint.
+			// rescan_media runs Rescan{Series,Movie,Author,Artist} then the import
+			// pass. For movies/TV it needs a tmdb_id (the Sonarr queue item only
+			// carries a TVDB id, so we fall back to naming the tool when we could
+			// not resolve one). Books and music carry no TMDB id at all —
+			// rescan_media takes an author_id or artist_id there — so both always
+			// render a resolve hint.
 			if mediaType == "book" {
 				return "rescan_media (resolve this item's author_id first — get_library media_type=book by author/title — then call it with that author_id)"
+			}
+			if mediaType == "music" {
+				return "rescan_media (resolve this item's artist_id first — get_queue media_type=music, or get_library media_type=music by artist/title — then call it with that artist_id)"
 			}
 			if tmdbID != 0 {
 				return toolCall("rescan_media", fmt.Sprintf(`{"tmdb_id": %d, "media_type": %q}`, tmdbID, mediaType))
@@ -191,7 +226,7 @@ func toolCall(name, args string) string {
 // are skipped so the agent only sees actionable config problems). The generic
 // parameter lets the one renderer serve both sonarr.HealthCheck and
 // radarr.HealthCheck, which are structurally identical but distinct types.
-func renderHealthSection[T sonarr.HealthCheck | radarr.HealthCheck | chaptarr.HealthCheck](label string, checks []T) string {
+func renderHealthSection[T sonarr.HealthCheck | radarr.HealthCheck | chaptarr.HealthCheck | lidarr.HealthCheck](label string, checks []T) string {
 	var sb strings.Builder
 	shown := 0
 	for _, c := range checks {
@@ -202,6 +237,8 @@ func renderHealthSection[T sonarr.HealthCheck | radarr.HealthCheck | chaptarr.He
 		case radarr.HealthCheck:
 			source, ctype, message, wiki = v.Source, v.Type, v.Message, v.WikiURL
 		case chaptarr.HealthCheck:
+			source, ctype, message, wiki = v.Source, v.Type, v.Message, v.WikiURL
+		case lidarr.HealthCheck:
 			source, ctype, message, wiki = v.Source, v.Type, v.Message, v.WikiURL
 		}
 		if strings.EqualFold(ctype, "ok") {
@@ -285,6 +322,22 @@ func (s *ToolServer) getArrHealth(input json.RawMessage, callInstanceID string) 
 		}
 	}
 
+	if mediaType == "music" || mediaType == "all" {
+		client, label, refusal := s.lidarrTargetFor(params.InstanceID, callInstanceID)
+		if client == nil {
+			if mediaType == "music" {
+				return &ToolResult{Text: refusal}, nil
+			}
+			sections = append(sections, refusal)
+		} else {
+			checks, err := client.GetHealth()
+			if err != nil {
+				return nil, err
+			}
+			sections = append(sections, renderHealthSection(label, checks))
+		}
+	}
+
 	return &ToolResult{Text: strings.Join(sections, "\n\n")}, nil
 }
 
@@ -302,6 +355,8 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage, callInstanceID string)
 		EpisodeNumber int    `json:"episode_number"`
 		AuthorID      int    `json:"author_id"`
 		BookID        int    `json:"book_id"`
+		ArtistID      int    `json:"artist_id"`
+		AlbumID       int    `json:"album_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -311,6 +366,7 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage, callInstanceID string)
 		QueueID: params.QueueID, DownloadID: params.DownloadID, TmdbID: params.TmdbID, TvdbID: params.TvdbID,
 		SeasonNumber: params.SeasonNumber, EpisodeNumber: params.EpisodeNumber,
 		AuthorID: params.AuthorID, BookID: params.BookID,
+		ArtistID: params.ArtistID, AlbumID: params.AlbumID,
 	}
 
 	var sb strings.Builder
@@ -419,6 +475,33 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage, callInstanceID string)
 		}
 	}
 
+	if mediaType == "music" || mediaType == "all" {
+		lidarrClient, _, refusal := s.lidarrTargetFor(params.InstanceID, callInstanceID)
+		if lidarrClient == nil {
+			if mediaType == "music" {
+				return &ToolResult{Text: refusal}, nil
+			}
+			notes = append(notes, refusal)
+		} else {
+			items, err := lidarrClient.GetQueueDetailed()
+			if err != nil {
+				return nil, err
+			}
+			items = filterLidarrQueue(items, scope)
+			for _, item := range items {
+				d := arr.Diagnose(lidarrSignal(item))
+				if d.Severity == arr.SeverityOK {
+					healthy++
+					continue
+				}
+				problems++
+				// Lidarr albums carry no TMDB id either; nextCalls renders the
+				// artist_id resolve hint for rescan_media.
+				renderDiagnosis(&sb, "music", item.ID, 0, lidarrQueueTitle(item), d)
+			}
+		}
+	}
+
 	var header strings.Builder
 	if problems == 0 {
 		header.WriteString(noQueueProblemsText(healthy, scope))
@@ -480,6 +563,19 @@ func findChaptarrQueueItem(client *chaptarr.Client, queueID int) (*chaptarr.Deta
 	return nil, nil
 }
 
+func findLidarrQueueItem(client *lidarr.Client, queueID int) (*lidarr.DetailedQueueItem, error) {
+	items, err := client.GetQueueDetailed()
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		if items[i].ID == queueID {
+			return &items[i], nil
+		}
+	}
+	return nil, nil
+}
+
 // --- get_manual_import_candidates ---
 
 func formatRejections(rejections []arr.ManualImportRejectionView) string {
@@ -509,6 +605,8 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage, callInstan
 		EpisodeNumber int    `json:"episode_number"`
 		AuthorID      int    `json:"author_id"`
 		BookID        int    `json:"book_id"`
+		ArtistID      int    `json:"artist_id"`
+		AlbumID       int    `json:"album_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -517,6 +615,7 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage, callInstan
 		QueueID: params.QueueID, DownloadID: params.DownloadID, TmdbID: params.TmdbID, TvdbID: params.TvdbID,
 		SeasonNumber: params.SeasonNumber, EpisodeNumber: params.EpisodeNumber,
 		AuthorID: params.AuthorID, BookID: params.BookID,
+		ArtistID: params.ArtistID, AlbumID: params.AlbumID,
 	}
 
 	switch params.MediaType {
@@ -664,12 +763,55 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage, callInstan
 		sb.WriteString(" Note: Chaptarr re-checks identification at import time — a candidate with no rejections listed can still be rejected when the import runs; if that happens the file is not moved and the queue item will show the reason.")
 		return &ToolResult{Text: sb.String()}, nil
 
+	case "music":
+		client, _, refusal := s.lidarrTargetFor(params.InstanceID, callInstanceID)
+		if client == nil {
+			return &ToolResult{Text: refusal}, nil
+		}
+		item, err := findLidarrQueueItem(client, params.QueueID)
+		if err != nil {
+			return nil, err
+		}
+		if item != nil && len(filterLidarrQueue([]lidarr.DetailedQueueItem{*item}, scope)) == 0 {
+			item = nil
+		}
+		if item == nil {
+			return &ToolResult{Text: fmt.Sprintf("No music queue item with id %d in this scope. Run get_queue or diagnose_queue for current ids.", params.QueueID)}, nil
+		}
+		if item.DownloadID == "" {
+			return &ToolResult{Text: fmt.Sprintf("Queue item %d has no download-client id yet, so its files cannot be inspected. Wait until it has been handed to the download client.", params.QueueID)}, nil
+		}
+		candidates, err := client.GetManualImportCandidates(item.DownloadID)
+		if err != nil {
+			return nil, err
+		}
+		if len(candidates) == 0 {
+			return &ToolResult{Text: fmt.Sprintf("No importable files found for %s. The folder may be empty, an unextracted archive, or inaccessible.", lidarrQueueTitle(*item))}, nil
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "%d candidate file(s) for %s:", len(candidates), lidarrQueueTitle(*item))
+		for _, c := range candidates {
+			fmt.Fprintf(&sb, "\n- %s (%s)", c.Name, humanBytes(float64(c.Size)))
+			// Lidarr silently skips a manual-import file that lacks any of the
+			// artist, album, and track ids, so say which mapping is missing.
+			if c.AlbumID != 0 && len(c.TrackIDs) != 0 {
+				fmt.Fprintf(&sb, "\n  maps to artist id %d, album id %d, %d track(s)", c.ArtistID, c.AlbumID, len(c.TrackIDs))
+			} else {
+				sb.WriteString("\n  not matched to an album's tracks (cannot be imported without artist, album, and track mappings)")
+			}
+			if rej := formatRejections(toRejectionViews(c.Rejections)); rej != "" {
+				fmt.Fprintf(&sb, "\n  rejections: %s", rej)
+			}
+		}
+		sb.WriteString("\n\nUse execute_manual_import to import these (add force=true to import despite permanent rejections).")
+		return &ToolResult{Text: sb.String()}, nil
+
 	default:
-		return &ToolResult{Text: "media_type must be \"movie\", \"tv\", or \"book\"."}, nil
+		return &ToolResult{Text: "media_type must be \"movie\", \"tv\", \"book\", or \"music\"."}, nil
 	}
 }
 
-func toRejectionViews[T sonarr.ManualImportRejection | radarr.ManualImportRejection | chaptarr.ManualImportRejection](rejections []T) []arr.ManualImportRejectionView {
+func toRejectionViews[T sonarr.ManualImportRejection | radarr.ManualImportRejection | chaptarr.ManualImportRejection | lidarr.ManualImportRejection](rejections []T) []arr.ManualImportRejectionView {
 	out := make([]arr.ManualImportRejectionView, 0, len(rejections))
 	for _, r := range rejections {
 		switch v := any(r).(type) {
@@ -678,6 +820,8 @@ func toRejectionViews[T sonarr.ManualImportRejection | radarr.ManualImportReject
 		case radarr.ManualImportRejection:
 			out = append(out, arr.ManualImportRejectionView{Reason: v.Reason, Type: v.Type})
 		case chaptarr.ManualImportRejection:
+			out = append(out, arr.ManualImportRejectionView{Reason: v.Reason, Type: v.Type})
+		case lidarr.ManualImportRejection:
 			out = append(out, arr.ManualImportRejectionView{Reason: v.Reason, Type: v.Type})
 		}
 	}
@@ -706,11 +850,11 @@ func (s *ToolServer) executeManualImport(input json.RawMessage, callInstanceID s
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	radarrClient, sonarrClient, chaptarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
+	radarrClient, sonarrClient, chaptarrClient, lidarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
 	if refusal != "" {
 		return &ToolResult{Text: refusal}, nil
 	}
-	text, err := ExecuteManualImportHelper(radarrClient, sonarrClient, chaptarrClient, params.MediaType, params.QueueID, params.Force, nil)
+	text, err := ExecuteManualImportHelper(radarrClient, sonarrClient, chaptarrClient, lidarrClient, params.MediaType, params.QueueID, params.Force, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -757,11 +901,11 @@ func (s *ToolServer) remediateQueueItem(input json.RawMessage, callInstanceID st
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	radarrClient, sonarrClient, chaptarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
+	radarrClient, sonarrClient, chaptarrClient, lidarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
 	if refusal != "" {
 		return &ToolResult{Text: refusal}, nil
 	}
-	text, err := RemediateQueueItemHelper(radarrClient, sonarrClient, chaptarrClient, params.MediaType, params.QueueID, params.Action)
+	text, err := RemediateQueueItemHelper(radarrClient, sonarrClient, chaptarrClient, lidarrClient, params.MediaType, params.QueueID, params.Action)
 	if err != nil {
 		return nil, err
 	}
@@ -776,15 +920,16 @@ func (s *ToolServer) rescanMedia(input json.RawMessage, callInstanceID string) (
 		MediaType  string `json:"media_type"`
 		InstanceID string `json:"instance_id"`
 		AuthorID   int    `json:"author_id"`
+		ArtistID   int    `json:"artist_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	radarrClient, sonarrClient, chaptarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
+	radarrClient, sonarrClient, chaptarrClient, lidarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
 	if refusal != "" {
 		return &ToolResult{Text: refusal}, nil
 	}
-	text, err := RescanMediaHelper(s.bridge, radarrClient, sonarrClient, chaptarrClient, params.MediaType, params.TmdbID, params.AuthorID)
+	text, err := RescanMediaHelper(s.bridge, radarrClient, sonarrClient, chaptarrClient, lidarrClient, params.MediaType, params.TmdbID, params.AuthorID, params.ArtistID)
 	if err != nil {
 		return nil, err
 	}

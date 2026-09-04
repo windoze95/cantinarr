@@ -36,6 +36,35 @@ void main() {
     );
   });
 
+  testWidgets('the Account tile names a kids account and its limits',
+      (tester) async {
+    await _pumpSettings(
+      tester,
+      _settings(source: AiAccessSource.none),
+      user: const UserProfile(
+        id: 7,
+        username: 'kid',
+        role: 'user',
+        child: true,
+        contentLimits: ContentLimits(
+            maxMovieRating: 'PG', maxTvRating: 'TV-PG', ratingRegion: 'US'),
+      ),
+    );
+    expect(find.text('Kids account · movies up to PG · shows up to TV-PG'),
+        findsOneWidget);
+    expect(find.text('User'), findsNothing);
+  });
+
+  testWidgets('the Account tile says Kids account without limits',
+      (tester) async {
+    await _pumpSettings(
+      tester,
+      _settings(source: AiAccessSource.none),
+      user: const UserProfile(id: 7, username: 'kid', role: 'user', child: true),
+    );
+    expect(find.text('Kids account'), findsOneWidget);
+  });
+
   testWidgets('shows the effective included provider', (tester) async {
     await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
 
@@ -356,7 +385,8 @@ Color? _setupCountColor(WidgetTester tester) {
   return (span.children!.first as TextSpan).style?.color;
 }
 
-Map<String, dynamic> _setupPayload(List<(String, bool)> items) => {
+Map<String, dynamic> _setupPayload(List<(String, bool)> items,
+        {Set<String> skipped = const {}}) => {
       'items': [
         for (final (key, configured) in items)
           {
@@ -365,6 +395,7 @@ Map<String, dynamic> _setupPayload(List<(String, bool)> items) => {
             'description': 'about $key',
             'configured': configured,
             'optional': key != 'radarr' && key != 'sonarr' && key != 'tmdb',
+            if (skipped.contains(key)) 'skipped': true,
           },
       ],
       'configured': items.where((i) => i.$2).length,
@@ -411,6 +442,29 @@ void _setupChecklistTileTests() {
     expect(_setupCountColor(tester), AppTheme.warning);
   });
 
+  testWidgets('greens the count once everything left is skipped',
+      (tester) async {
+    // The admin acknowledged the optional rows this deployment doesn't want;
+    // the tile must read finished — no permanent amber nag — and its
+    // denominator must shed the skips rather than counting them configured.
+    await _pumpSettings(
+      tester,
+      _settings(source: AiAccessSource.shared),
+      isAdmin: true,
+      setupStatus: _setupPayload([
+        ('radarr', true),
+        ('sonarr', true),
+        ('tmdb', true),
+        ('music', false),
+      ], skipped: {'music'}),
+    );
+    await _dragSettingsUntilFound(
+        tester, find.textContaining('features configured'));
+
+    expect(_setupCountColor(tester), AppTheme.available);
+    expect(find.text('3 of 3 features configured'), findsOneWidget);
+  });
+
   testWidgets('greens the count once nothing is left', (tester) async {
     await _pumpSettings(
       tester,
@@ -435,13 +489,14 @@ Future<ProviderContainer> _pumpSettings(
   bool isAdmin = false,
   Map<String, dynamic>? setupStatus,
   List<ServiceInstance> instances = const [],
+  UserProfile? user,
 }) async {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   dio.httpClientAdapter = _SettingsAdapter(setupStatus: setupStatus);
   final container = ProviderContainer(
     overrides: [
-      authProvider.overrideWith(
-          () => _FakeAuthNotifier(isAdmin: isAdmin, instances: instances)),
+      authProvider.overrideWith(() =>
+          _FakeAuthNotifier(isAdmin: isAdmin, instances: instances, user: user)),
       aiSettingsProvider.overrideWith((_) async => settings),
       backendClientProvider.overrideWithValue(dio),
     ],
@@ -469,10 +524,15 @@ Future<void> _dragSettingsUntilFound(
 }
 
 class _FakeAuthNotifier extends AuthNotifier {
-  _FakeAuthNotifier({required this.isAdmin, this.instances = const []});
+  _FakeAuthNotifier(
+      {required this.isAdmin, this.instances = const [], this.user});
 
   final bool isAdmin;
   final List<ServiceInstance> instances;
+
+  /// A profile to seed instead of the role-derived one; refreshUser is a
+  /// no-op here, so this is the only way a kids account reaches the tile.
+  final UserProfile? user;
 
   @override
   Future<AuthState> build() async => AuthState(
@@ -482,12 +542,13 @@ class _FakeAuthNotifier extends AuthNotifier {
           refreshToken: 'refresh',
           instances: instances,
         ),
-        user: UserProfile(
-          id: 1,
-          username: isAdmin ? 'admin' : 'viewer',
-          role: isAdmin ? 'admin' : 'user',
-          permissions: const ['ai:chat'],
-        ),
+        user: user ??
+            UserProfile(
+              id: 1,
+              username: isAdmin ? 'admin' : 'viewer',
+              role: isAdmin ? 'admin' : 'user',
+              permissions: const ['ai:chat'],
+            ),
       );
 
   @override

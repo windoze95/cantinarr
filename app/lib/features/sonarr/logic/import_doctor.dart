@@ -1,4 +1,5 @@
 import '../../chaptarr/data/chaptarr_models.dart';
+import '../../lidarr/data/lidarr_models.dart';
 import '../../radarr/data/radarr_models.dart';
 import '../data/sonarr_models.dart';
 
@@ -423,6 +424,19 @@ QueueDiagnosis diagnoseRadarrQueueItem(RadarrQueueItem item) =>
 /// ChaptarrStatusMessage is shape-identical to SonarrStatusMessage; bridge the
 /// groups so the one neutral catalog keeps driving all three services.
 QueueDiagnosis diagnoseChaptarrQueueItem(ChaptarrQueueItem item) =>
+    diagnoseQueueSignal(
+      trackedDownloadStatus: item.trackedDownloadStatus,
+      trackedDownloadState: item.trackedDownloadState,
+      errorMessage: item.errorMessage,
+      statusMessageGroups: item.statusMessageGroups
+          .map((g) => SonarrStatusMessage(title: g.title, messages: g.messages))
+          .toList(),
+    );
+
+/// Classifies a Lidarr queue item (thin wrapper over [diagnoseQueueSignal]).
+/// LidarrStatusMessage is shape-identical too; bridging the groups keeps the
+/// one neutral catalog driving all four services.
+QueueDiagnosis diagnoseLidarrQueueItem(LidarrQueueItem item) =>
     diagnoseQueueSignal(
       trackedDownloadStatus: item.trackedDownloadStatus,
       trackedDownloadState: item.trackedDownloadState,

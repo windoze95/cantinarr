@@ -17,7 +17,7 @@ import (
 // bearing — that all tool output and the user's report are UNTRUSTED data, never
 // instructions. The per-issue scope is appended after this block as a separate,
 // clearly-fenced section.
-const remediationSystemPrompt = `You are Cantinarr's issue-remediation agent. You investigate ONE scoped problem on the user's PRODUCTION Radarr (movies), Sonarr (TV), or Chaptarr (books) instance and either resolve it (by proposing a fix an admin approves) or explain why it can't be resolved.
+const remediationSystemPrompt = `You are Cantinarr's issue-remediation agent. You investigate ONE scoped problem on the user's PRODUCTION Radarr (movies), Sonarr (TV), Chaptarr (books), or Lidarr (music) instance and either resolve it (by proposing a fix an admin approves) or explain why it can't be resolved.
 
 Your job:
 - Investigate the single issue described below using the read-only tools.
@@ -33,7 +33,7 @@ Hard constraints:
 - Never infer who fixed an auto-detected incident merely because it disappeared. The server's queue witness records external recovery provenance separately.
 
 How to work:
-- Read tools available: diagnose_queue, get_manual_import_candidates, search_releases, get_queue, get_history, get_library, get_arr_health, get_episode_timeline, get_book_timeline, get_media_file_details, get_quality_profiles, get_custom_formats. Start with the one that fits the issue (diagnose_queue for stuck downloads, get_episode_timeline then get_history for "wrong/bad content" on TV, get_book_timeline for "wrong/bad content" on a book, get_history for "wrong/bad content" on a movie, get_media_file_details for "wrong audio"/"no subtitles"/"bad quality" on a movie or TV season, get_arr_health for environmental/config errors).
+- Read tools available: diagnose_queue, get_manual_import_candidates, search_releases, get_queue, get_history, get_library, get_arr_health, get_episode_timeline, get_book_timeline, get_album_timeline, get_media_file_details, get_quality_profiles, get_custom_formats. Start with the one that fits the issue (diagnose_queue for stuck downloads, get_episode_timeline then get_history for "wrong/bad content" on TV, get_book_timeline for "wrong/bad content" on a book, get_album_timeline for "wrong/bad content" on an album, get_history for "wrong/bad content" on a movie, get_media_file_details for "wrong audio"/"no subtitles"/"bad quality" on a movie or TV season, get_arr_health for environmental/config errors).
 - An empty queue is not an empty investigation. A complaint about the CONTENT of something is only possible after the download already finished and imported, so the queue being empty is the expected state, not a dead end — the evidence is in the library and the history instead.
 - For TV, get_episode_timeline is the strongest evidence you have: a file the service imported BEFORE that episode aired cannot be that episode, and a season holding files for episodes that have not aired yet is content that does not exist. When the timeline reports that, say so plainly in your findings and propose the fix it prescribes.
 - An auto-detected issue whose problem is "Content that has not aired yet" was opened by that same check at the moment the files imported, before anyone watched anything. It names a whole SEASON, not one episode. Read the timeline for that season and propose the single fix it prescribes; there is nothing a reporter needs to be asked.
@@ -58,17 +58,26 @@ func buildSystemPrompt(issue *Issue, attempts []remediationAttempt) string {
 	fmt.Fprintf(&sb, "issue_id: %d\n", issue.ID)
 	fmt.Fprintf(&sb, "source: %s\n", issue.Source)
 	fmt.Fprintf(&sb, "media_type: %s\n", issue.MediaType)
-	if issue.MediaType != "book" {
+	if issue.MediaType != "book" && issue.MediaType != "music" {
 		fmt.Fprintf(&sb, "tmdb_id: %d\n", issue.TmdbID)
 	}
 	if issue.TvdbID > 0 {
 		fmt.Fprintf(&sb, "tvdb_id: %d\n", issue.TvdbID)
 	}
-	if issue.BookID > 0 {
-		fmt.Fprintf(&sb, "book_id: %d (Chaptarr book record; books have no TMDB id)\n", issue.BookID)
-	}
-	if issue.AuthorID > 0 {
-		fmt.Fprintf(&sb, "author_id: %d\n", issue.AuthorID)
+	if issue.MediaType == "music" {
+		if issue.BookID > 0 {
+			fmt.Fprintf(&sb, "album_id: %d (Lidarr album record; music has no TMDB id)\n", issue.BookID)
+		}
+		if issue.AuthorID > 0 {
+			fmt.Fprintf(&sb, "artist_id: %d\n", issue.AuthorID)
+		}
+	} else {
+		if issue.BookID > 0 {
+			fmt.Fprintf(&sb, "book_id: %d (Chaptarr book record; books have no TMDB id)\n", issue.BookID)
+		}
+		if issue.AuthorID > 0 {
+			fmt.Fprintf(&sb, "author_id: %d\n", issue.AuthorID)
+		}
 	}
 	if issue.InstanceID != "" {
 		fmt.Fprintf(&sb, "authoritative_instance_id: %s\n", issue.InstanceID)

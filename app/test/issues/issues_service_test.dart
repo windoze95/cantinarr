@@ -33,6 +33,31 @@ void main() {
     expect(adapter.body['episode_number'], 4);
   });
 
+  test('a music report carries the album foreign id and never a tmdb or format',
+      () async {
+    final adapter = _CaptureAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+
+    await IssuesService(backendDio: dio).reportProblem(
+      instanceId: 'lidarr-main',
+      mediaType: 'music',
+      tmdbId: 0,
+      foreignId: 'fa-1',
+      category: IssueCategory.badCopy,
+      reason: 'Track two cuts off.',
+      title: 'Example Album',
+    );
+
+    expect(adapter.body['instance_id'], 'lidarr-main');
+    expect(adapter.body['media_type'], 'music');
+    expect(adapter.body['foreign_id'], 'fa-1');
+    expect(adapter.body.containsKey('tmdb_id'), isFalse,
+        reason: 'music has no TMDB identity');
+    expect(adapter.body.containsKey('book_format'), isFalse,
+        reason: 'music has no format axis');
+  });
+
   test('problem report preserves an exact Specials episode scope', () async {
     final adapter = _CaptureAdapter();
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))

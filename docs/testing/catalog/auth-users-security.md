@@ -10,7 +10,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `AUTH-011` · P0 · LIVE/UI — Register and use a native passkey on an associated HTTPS iOS deployment; verify creation, login, listing, naming, and deletion.
 - [ ] `AUTH-012` · P0 · LIVE/UI — Repeat passkey registration/login on Android with matching `assetlinks.json`; verify the native credential provider accepts the RP.
 - [ ] `AUTH-013` · P1 · LIVE/UI — Register and use a browser passkey on supported desktop/web; verify origin/RP validation and browser fallback.
-- [ ] `AUTH-022` · P0 · SEC — As a requester, directly navigate/call every admin root (`/radarr`, `/sonarr`, `/chaptarr`, `/downloads`, `/tautulli`, `/approvals`, admin issues/actions/runs, setup, privileged settings); verify UI redirects and APIs return 403.
+- [ ] `AUTH-022` · P0 · SEC — As a requester, directly navigate/call every admin root (`/radarr`, `/sonarr`, `/chaptarr`, `/downloads`, `/monitoring` and its `/tautulli` redirect, `/approvals`, admin issues/actions/runs, setup, privileged settings); verify UI redirects and APIs return 403.
 - [ ] `AUTH-036` · P0 · UI — Redeem equivalent valid `cantinarr://connect` links by native deep link and paste; verify identical normalized server/account/device outcome, one token consumption, and an already-authenticated app does not switch accounts silently.
 
 ## Navigation smoke and app lifecycle

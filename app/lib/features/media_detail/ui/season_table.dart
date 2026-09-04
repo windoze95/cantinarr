@@ -5,12 +5,14 @@ import '../../media_download/data/media_download_models.dart';
 import '../../media_download/ui/media_download_button.dart';
 import '../../request/data/request_service.dart';
 import '../../request/logic/request_provider.dart';
+import '../logic/season_label.dart';
 
 /// Interactive per-season request table (Overseerr-style): one row per season
-/// with a checkbox, "Season N", an "x/y eps" availability count, and a status
-/// badge. Already-available seasons are shown checked + disabled. Quick
-/// All / First / Latest chips bulk-select. Submitting sends the chosen season
-/// numbers to the request service.
+/// with a checkbox, "Season N" (with its first-air year when TMDB knows one),
+/// an "x/y eps" availability count, and a status badge. Already-available
+/// seasons are shown checked + disabled. Quick All / First / Latest chips
+/// bulk-select. Submitting sends the chosen season numbers to the request
+/// service.
 ///
 /// The table reads live per-season status from [notifier] and drives its
 /// submit through it, so it stays in sync with the request button above it.
@@ -270,7 +272,7 @@ class _SeasonRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    season.name ?? 'Season ${season.seasonNumber}',
+                    seasonRowLabel(season),
                     style: const TextStyle(
                         color: AppTheme.textPrimary, fontSize: 14),
                   ),

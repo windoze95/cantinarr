@@ -12,8 +12,11 @@ import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/auth/ui/auth_screen.dart';
 import 'package:cantinarr/features/auth/ui/set_password_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/dashboard_shell.dart';
+import 'package:cantinarr/features/dashboard/ui/requester_album_detail_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
+import 'package:cantinarr/features/discover/ui/browse_grid_screen.dart';
 import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
+import 'package:cantinarr/features/monitoring/ui/monitoring_module_shell.dart';
 import 'package:cantinarr/features/settings/ui/instance_edit_screen.dart';
 import 'package:cantinarr/features/shell/ui/app_shell.dart';
 import 'package:cantinarr/features/sonarr/ui/sonarr_module_shell.dart';
@@ -109,6 +112,9 @@ void main() {
     final (:router, container: _) = await _pumpRouter(tester, _authedState);
 
     for (final path in [
+      '/monitoring/activity',
+      // The old module path stays admin-only through its redirect.
+      '/tautulli/activity',
       '/approvals',
       '/agent-actions',
       '/agent-runs/1',
@@ -132,6 +138,25 @@ void main() {
         reason: '$path must remain admin-only',
       );
     }
+  });
+
+  testWidgets('old Tautulli tab paths redirect to the Monitoring module',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _adminState);
+
+    for (final tab in ['activity', 'history', 'stats']) {
+      router.go('/tautulli/$tab');
+      await tester.pumpAndSettle();
+      expect(router.routeInformationProvider.value.uri.path,
+          '/monitoring/$tab');
+      expect(find.byType(MonitoringModuleShell), findsOneWidget);
+    }
+
+    // An unknown tab lands on the first one rather than an error page.
+    router.go('/tautulli/bogus');
+    await tester.pumpAndSettle();
+    expect(router.routeInformationProvider.value.uri.path,
+        '/monitoring/activity');
   });
 
   testWidgets('a requester keeps /issues — it is their My Reports inbox',
@@ -242,6 +267,79 @@ void main() {
     expect(screen.instanceId, 'books-two');
   });
 
+  testWidgets('music route requires the Lidarr grant', (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+
+    router.go('/dashboard/music');
+    await tester.pumpAndSettle();
+
+    expect(
+      router.routeInformationProvider.value.uri.path,
+      '/dashboard/movies',
+    );
+  });
+
+  testWidgets('music route remains available with the Lidarr grant',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _musicState);
+
+    router.go('/dashboard/music');
+    await tester.pumpAndSettle();
+
+    expect(router.routeInformationProvider.value.uri.path, '/dashboard/music');
+  });
+
+  testWidgets('album detail route requires the Lidarr grant', (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+
+    router.go('/detail/album/mb-1234');
+    await tester.pumpAndSettle();
+
+    expect(
+      router.routeInformationProvider.value.uri.path,
+      '/dashboard/movies',
+    );
+  });
+
+  testWidgets('album detail route resolves and preserves a pinned instance',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _musicState);
+
+    router.go('/detail/album/mb-1234?instance_id=music-two');
+    await tester.pumpAndSettle();
+
+    final screen = tester.widget<RequesterAlbumDetailScreen>(
+      find.byType(RequesterAlbumDetailScreen),
+    );
+    expect(screen.foreignId, 'mb-1234');
+    expect(screen.instanceId, 'music-two');
+  });
+
+  testWidgets('a blank album detail id degrades to the Music tab',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _musicState);
+
+    router.go('/detail/album/%20');
+    await tester.pumpAndSettle();
+
+    expect(router.routeInformationProvider.value.uri.path, '/dashboard/music');
+  });
+
+  testWidgets('a Chaptarr grant alone opens no music surface',
+      (tester) async {
+    // The two grant-only modules gate independently: holding Books must not
+    // leak Music, and the redirect degrades to the movies dashboard.
+    final (:router, container: _) = await _pumpRouter(tester, _booksState);
+
+    router.go('/dashboard/music');
+    await tester.pumpAndSettle();
+
+    expect(
+      router.routeInformationProvider.value.uri.path,
+      '/dashboard/movies',
+    );
+  });
+
   testWidgets('instance/new carries the checklist extras into the form',
       (tester) async {
     final (:router, container: _) = await _pumpRouter(tester, _adminState);
@@ -301,15 +399,23 @@ void main() {
       '/detail/movie/not-a-number',
       '/detail/movie/0',
       '/detail/podcast/12',
+      '/browse/podcast/top-rated',
+      '/browse/movie/bogus',
+      '/browse/movie/recommendations',
+      '/browse/movie/on-the-air',
     ]) {
       router.go(path);
       await tester.pumpAndSettle();
       expect(
         router.routeInformationProvider.value.uri.path,
         '/dashboard/movies',
-        reason: '$path must not reach MediaDetailScreen',
+        reason: '$path must not reach a detail or browse screen',
       );
     }
+
+    router.go('/browse/tv/now-playing');
+    await tester.pumpAndSettle();
+    expect(router.routeInformationProvider.value.uri.path, '/dashboard/tv');
 
     router.go('/settings/users/not-a-number/request-settings');
     await tester.pumpAndSettle();
@@ -359,6 +465,28 @@ void main() {
       ),
       findsNWidgets(2),
     );
+
+    router.push('/browse/movie/top-rated');
+    await tester.pumpAndSettle();
+    expect(
+      find.ancestor(
+        of: find.byType(BrowseGridScreen),
+        matching: find.byType(AppAmbientBackground),
+      ),
+      findsNWidgets(2),
+    );
+  });
+
+  testWidgets('a requester can open a browse grid from a bare link',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+
+    router.push('/browse/movie/discover?genres=28');
+    await tester.pumpAndSettle();
+    expect(find.byType(BrowseGridScreen), findsOneWidget);
+    // The query string reached the grid.
+    final grid = tester.widget<BrowseGridScreen>(find.byType(BrowseGridScreen));
+    expect(grid.query.filters.genreIds, [28]);
   });
 
   testWidgets('the login page paints its own opaque ambient backdrop',
@@ -429,6 +557,24 @@ const _booksState = AuthState(
         id: 'books',
         serviceType: 'chaptarr',
         name: 'Books',
+        isDefault: true,
+      ),
+    ],
+  ),
+  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+);
+
+const _musicState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(lidarr: true),
+    instances: [
+      ServiceInstance(
+        id: 'music',
+        serviceType: 'lidarr',
+        name: 'Music',
         isDefault: true,
       ),
     ],

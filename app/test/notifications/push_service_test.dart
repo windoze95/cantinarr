@@ -304,6 +304,37 @@ void main() {
       expect(h.router.pushed, isEmpty);
     });
 
+    test('new_music opens the album detail pinned to its Lidarr instance',
+        () async {
+      // A new_music availability alert carries the same album identity fields
+      // as a music decision payload and must route identically.
+      final h = _Harness();
+      await _emitNativeCall('onNotificationTap', {
+        'type': 'new_music',
+        'media_type': 'music',
+        'foreign_id': '1f4a9e6b',
+        'title': 'Fear Inoculum',
+        'instance_id': 'music-a',
+      });
+      expect(
+        h.router.pushed,
+        ['/detail/album/1f4a9e6b?title=Fear%20Inoculum&instance_id=music-a'],
+      );
+    });
+
+    test('new_music without a usable foreign_id falls back to the Music tab',
+        () async {
+      final h = _Harness();
+      await _emitNativeCall('onNotificationTap', {
+        'type': 'new_music',
+        'media_type': 'music',
+        'foreign_id': '',
+        'title': 'Fear Inoculum',
+      });
+      expect(h.router.went, ['/dashboard/music']);
+      expect(h.router.pushed, isEmpty);
+    });
+
     test('blank and non-string foreign_id values fall back to the Books tab',
         () async {
       final h = _Harness();

@@ -2,11 +2,14 @@ package discover
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +17,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/cache"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
@@ -128,6 +132,15 @@ type env struct {
 	prefs    *stubPrefs
 	creds    *credentials.Registry
 	router   chi.Router
+	database *sql.DB
+	cache    *cache.Cache
+	handler  *Handler
+	// identity, when set, is injected into every request's context the way
+	// AuthMiddleware does, so a kids account can be exercised. claimsOnly
+	// injects the claims without the user, the shape an older middleware
+	// or another harness produces.
+	identity   *auth.User
+	claimsOnly bool
 }
 
 // setTMDBOnly configures TMDB and deliberately leaves Trakt unset, which is the
@@ -174,11 +187,32 @@ func newEnv(t *testing.T, configured bool) *env {
 	router.Get("/discover/trending", handler.Trending)
 	router.Get("/discover/movies", handler.DiscoverMovies)
 	router.Get("/discover/movies/upcoming", handler.UpcomingMovies)
+	router.Get("/discover/movies/popular", handler.PopularMovies)
+	router.Get("/genres/movie", handler.MovieGenres)
+	router.Get("/genres/tv", handler.TVGenres)
+	router.Get("/media/movie/{id}/similar", handler.SimilarMovies)
+	router.Get("/media/person/{id}", handler.PersonDetail)
+	router.Get("/media/person/{id}/credits", handler.PersonCredits)
+	router.Get("/trakt/popular", handler.TraktPopular)
+	router.Get("/trakt/anticipated", handler.TraktAnticipated)
+	router.Get("/trakt/calendar", handler.TraktCalendar)
+	router.Get("/trakt/recommendations", handler.TraktRecommendations)
+	router.Get("/trakt/lists", handler.TraktPopularLists)
+	router.Get("/trakt/lists/{user}/{slug}/items", handler.TraktListItems)
 	router.Get("/discover/tv", handler.DiscoverTV)
 	router.Get("/discover/tv/popular", handler.PopularTV)
+	router.Get("/discover/tv/on-the-air", handler.OnTheAirTV)
+	router.Get("/discover/tv/top-rated", handler.TopRatedTV)
+	router.Get("/discover/tv/upcoming", handler.UpcomingTV)
 	router.Get("/discover/tv/featured", handler.FeaturedTV)
 	router.Get("/discover/movies/featured", handler.FeaturedMovies)
 	router.Get("/search", handler.Search)
+	router.Get("/search/keyword", handler.SearchKeywords)
+	router.Get("/search/company", handler.SearchCompanies)
+	router.Get("/languages", handler.Languages)
+	router.Get("/providers/movie", handler.MovieWatchProviders)
+	router.Get("/providers/tv", handler.TVWatchProviders)
+	router.Get("/providers/regions", handler.WatchProviderRegions)
 	router.Get("/media/movie/{id}", handler.MovieDetail)
 	router.Get("/media/tv/{id}", handler.TVDetail)
 	router.Get("/trakt/trending", handler.TraktTrending)
@@ -189,12 +223,19 @@ func newEnv(t *testing.T, configured bool) *env {
 	http.DefaultTransport = upstream
 	t.Cleanup(func() { http.DefaultTransport = previous })
 
-	return &env{upstream: upstream, prefs: prefs, creds: creds, router: router}
+	return &env{upstream: upstream, prefs: prefs, creds: creds, router: router, database: database, cache: responseCache, handler: handler}
 }
 
 func (e *env) do(t *testing.T, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, path, nil)
+	if e.identity != nil {
+		ctx := context.WithValue(req.Context(), auth.ClaimsKey, &auth.Claims{UserID: e.identity.ID, Username: e.identity.Username, Role: e.identity.Role})
+		if !e.claimsOnly {
+			ctx = context.WithValue(ctx, auth.UserKey, e.identity)
+		}
+		req = req.WithContext(ctx)
+	}
 	rec := httptest.NewRecorder()
 	e.router.ServeHTTP(rec, req)
 	return rec
@@ -253,6 +294,59 @@ func TestTrendingDefaultsToDayPageOne(t *testing.T) {
 	}
 }
 
+// TestMovieDetailAppendsReleaseDatesAlongsideVideos pins the release-dates
+// wire change: the movie detail proxy must keep requesting videos while also
+// requesting release_dates, so the app can render the Release dates section
+// for any TMDB movie. Asserts membership, not exact string equality, so a
+// later third append does not break this test.
+func TestMovieDetailAppendsReleaseDatesAlongsideVideos(t *testing.T) {
+	e := newEnv(t, true)
+	e.doOK(t, "/media/movie/603")
+	hit := e.upstream.hit(t, 0)
+	if hit.path != "/3/movie/603" {
+		t.Errorf("upstream path = %s, want /3/movie/603", hit.path)
+	}
+	appends := strings.Split(hit.query.Get("append_to_response"), ",")
+	if !slices.Contains(appends, "videos") {
+		t.Errorf("append_to_response = %q, want it to contain videos", hit.query.Get("append_to_response"))
+	}
+	if !slices.Contains(appends, "release_dates") {
+		t.Errorf("append_to_response = %q, want it to contain release_dates", hit.query.Get("append_to_response"))
+	}
+}
+
+// TestDetailBodiesAppendCredits pins the credits append on both detail
+// proxies: the title page's Cast row and Details lines read `credits` off
+// the same body as everything else, so neither type may drop its earlier
+// appends to gain it. Membership, not string equality, as above.
+func TestDetailBodiesAppendCredits(t *testing.T) {
+	cases := []struct {
+		name  string
+		route string
+		path  string
+		keeps []string
+	}{
+		{"movie", "/media/movie/603", "/3/movie/603", []string{"videos", "release_dates"}},
+		{"tv", "/media/tv/603", "/3/tv/603", []string{"videos", "external_ids"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t, true)
+			e.doOK(t, tc.route)
+			hit := e.upstream.hit(t, 0)
+			if hit.path != tc.path {
+				t.Errorf("upstream path = %s, want %s", hit.path, tc.path)
+			}
+			appends := strings.Split(hit.query.Get("append_to_response"), ",")
+			for _, want := range append(tc.keeps, "credits") {
+				if !slices.Contains(appends, want) {
+					t.Errorf("append_to_response = %q, want it to contain %s", hit.query.Get("append_to_response"), want)
+				}
+			}
+		})
+	}
+}
+
 // TestRepeatQueryIsServedFromCache pins the TTL cache: an identical query
 // within the TTL never reaches the upstream again, while a different page
 // does.
@@ -293,6 +387,14 @@ func TestAdjacentQueriesNeverShareCacheEntries(t *testing.T) {
 		// disc_movies uses params.Encode(): a with_genres VALUE containing a
 		// literal "&page=2" must not collide with a genuine page=2 request.
 		{"/discover/movies?with_genres=28&page=2", "/discover/movies?with_genres=28%26page%3D2"},
+		// The headline feed pages: page 1 (the row) and page 2 (its grid)
+		// are different entries of the same source.
+		{"/discover/movies/featured?page=1", "/discover/movies/featured?page=2"},
+		// The type-ahead lookups share a query with multi-search and with each
+		// other, and the provider lists share a region across media types.
+		{"/search?query=heat", "/search/keyword?query=heat"},
+		{"/search/keyword?query=heist", "/search/company?query=heist"},
+		{"/providers/movie?region=GB", "/providers/tv?region=GB"},
 	}
 
 	expectedHits := 0
@@ -416,9 +518,15 @@ func TestTraktPassthroughCacheAndAuth(t *testing.T) {
 func TestUnconfiguredCredentialsReturn503(t *testing.T) {
 	e := newEnv(t, false)
 
+	for _, path := range []string{"/discover/trending", "/languages", "/search/keyword?query=x"} {
+		rec := e.do(t, path)
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "TMDB is not configured") {
+			t.Errorf("GET %s status = %d body = %s, want 503 not-configured", path, rec.Code, rec.Body.String())
+		}
+	}
 	rec := e.do(t, "/discover/trending")
-	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "TMDB is not configured") {
-		t.Errorf("TMDB status = %d body = %s, want 503 not-configured", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("TMDB status = %d, want 503 not-configured", rec.Code)
 	}
 	rec = e.do(t, "/trakt/trending")
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "trakt not configured") {

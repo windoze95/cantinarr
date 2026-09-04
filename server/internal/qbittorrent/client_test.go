@@ -336,3 +336,110 @@ func TestPauseResumeFallbackOn404(t *testing.T) {
 		}
 	}
 }
+
+// qbitKeyFake models the qBittorrent 5.2+ API-key flow: every endpoint wants
+// `Authorization: Bearer <key>` and answers 403 without it, any auth/* call
+// is refused outright under a key, and no cookie is ever issued. It counts
+// login attempts and requests so a test can pin that a key-mode client
+// never makes a login call.
+type qbitKeyFake struct {
+	key      string
+	logins   atomic.Int32
+	requests atomic.Int32
+}
+
+func (f *qbitKeyFake) handler(t *testing.T) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		f.requests.Add(1)
+		if strings.HasPrefix(r.URL.Path, "/api/v2/auth/") {
+			f.logins.Add(1)
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if cookie := r.Header.Get("Cookie"); cookie != "" {
+			t.Errorf("key-mode request carried a cookie: %q", cookie)
+		}
+		if r.Header.Get("Authorization") != "Bearer "+f.key {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		switch r.URL.Path {
+		case "/api/v2/app/version":
+			_, _ = io.WriteString(w, "v5.2.0")
+		case "/api/v2/torrents/info":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `[{"name":"t1","hash":"aaa","size":10,"progress":0.5,"state":"downloading"}]`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}
+}
+
+// TestAPIKeyClientSendsBearerAndNeverLogsIn pins the key flow: every call
+// carries the key and no cookie, and the login endpoint is never touched.
+func TestAPIKeyClientSendsBearerAndNeverLogsIn(t *testing.T) {
+	fake := &qbitKeyFake{key: "qbit-key-1"}
+	srv := httptest.NewServer(fake.handler(t))
+	t.Cleanup(srv.Close)
+
+	client := NewAPIKeyClient(srv.URL, "qbit-key-1")
+	version, err := client.Version()
+	if err != nil || version != "v5.2.0" {
+		t.Fatalf("Version() = %q, %v; want v5.2.0", version, err)
+	}
+	for i := 0; i < 3; i++ {
+		torrents, err := client.GetTorrents()
+		if err != nil {
+			t.Fatalf("GetTorrents call %d: %v", i, err)
+		}
+		if len(torrents) != 1 || torrents[0].Hash != "aaa" {
+			t.Fatalf("torrents = %+v, want the fake torrent", torrents)
+		}
+	}
+	if got := fake.logins.Load(); got != 0 {
+		t.Fatalf("logins = %d, want none under an API key", got)
+	}
+}
+
+// TestAPIKeyRejectionIsFinalAndNeverEchoesTheKey pins the 403 handling under
+// a key: no login is attempted (it would 403 too), the error names the API
+// key as the problem, and the key's value never appears in it.
+func TestAPIKeyRejectionIsFinalAndNeverEchoesTheKey(t *testing.T) {
+	const key = "QBIT_KEY_SENTINEL"
+	fake := &qbitKeyFake{key: "the-real-key"}
+	srv := httptest.NewServer(fake.handler(t))
+	t.Cleanup(srv.Close)
+
+	client := NewAPIKeyClient(srv.URL, key)
+	_, err := client.Version()
+	if err == nil {
+		t.Fatal("Version() with a rejected key succeeded")
+	}
+	if !strings.Contains(err.Error(), "API key") {
+		t.Fatalf("error %q does not name the API key", err)
+	}
+	if strings.Contains(err.Error(), key) {
+		t.Fatalf("error %q echoes the key", err)
+	}
+	if _, err := client.GetTorrents(); err == nil || !strings.Contains(err.Error(), "API key") {
+		t.Fatalf("GetTorrents error = %v, want the API key named", err)
+	}
+	if got := fake.logins.Load(); got != 0 {
+		t.Fatalf("logins = %d, want none: a 403 under a key is final", got)
+	}
+}
+
+// TestLoginIsRefusedUnderAnAPIKey pins that a key-mode client cannot be
+// steered onto the cookie flow: Login errors locally, without a request.
+func TestLoginIsRefusedUnderAnAPIKey(t *testing.T) {
+	fake := &qbitKeyFake{key: "qbit-key-1"}
+	srv := httptest.NewServer(fake.handler(t))
+	t.Cleanup(srv.Close)
+
+	if err := NewAPIKeyClient(srv.URL, "qbit-key-1").Login(); err == nil {
+		t.Fatal("Login() under an API key succeeded")
+	}
+	if got := fake.requests.Load(); got != 0 {
+		t.Fatalf("requests = %d, want none from a refused Login", got)
+	}
+}

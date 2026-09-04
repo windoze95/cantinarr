@@ -74,6 +74,25 @@ CREATE TABLE IF NOT EXISTS user_request_settings (
     quality_profile_sonarr INTEGER
 );
 
+-- Kids accounts. A row makes the user a child account and holds the content
+-- policy every title surface applies after its shared-cache read: discover
+-- rows, search, details, people, Trakt feeds, the Radarr/Sonarr proxy reads,
+-- the AI tools, request creation, and new-content pushes (internal/contentpolicy).
+-- No row = unrestricted. Admins never have a row: the store refuses one and
+-- the role change refuses to promote a child. Approval is deliberately NOT
+-- here; user_request_settings.require_approval stays the one control.
+CREATE TABLE IF NOT EXISTS user_content_policies (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    max_movie_rating TEXT NOT NULL,             -- a certification of rating_region's movie scheme, e.g. 'PG'
+    max_tv_rating TEXT NOT NULL,                -- e.g. 'TV-PG'
+    rating_region TEXT NOT NULL DEFAULT 'US',   -- ISO 3166-1 alpha-2; must exist in both TMDB schemes
+    block_unrated BOOLEAN NOT NULL DEFAULT 1,   -- hide a title with no certification in the region
+    blocked_movie_genres TEXT NOT NULL DEFAULT '[]',  -- JSON array of TMDB movie genre ids
+    blocked_tv_genres TEXT NOT NULL DEFAULT '[]',     -- JSON array of TMDB tv genre ids
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS tmdb_tvdb_cache (
     tmdb_id INTEGER PRIMARY KEY,
     tvdb_id INTEGER,
@@ -100,9 +119,9 @@ CREATE TABLE IF NOT EXISTS service_instances (
 -- Per-user default *arr instance override (admin-managed). A row pins which
 -- instance is THIS user's default source for a service type, overriding the
 -- global service_instances.is_default. For service types that have NO global
--- default (chaptarr), a row is ALSO the per-user access grant: without one the
--- user can neither see nor proxy to that instance. Absent row = inherit the
--- global default (or, for chaptarr, no access). At most one row per
+-- default (chaptarr/lidarr), a row is ALSO the per-user access grant: without
+-- one the user can neither see nor proxy to that instance. Absent row =
+-- inherit the global default (or, for chaptarr/lidarr, no access). At most one row per
 -- (user, service_type). Mirrors user_request_settings (admin-managed per-user).
 CREATE TABLE IF NOT EXISTS user_default_instances (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -116,7 +135,7 @@ CREATE TABLE IF NOT EXISTS user_default_instances (
 -- person can hold e.g. an HD and a 4K Radarr at once and choose per request.
 -- The user_default_instances pin stays the user's default among their granted
 -- set. With no grant rows the old model applies unchanged: the pin alone, or
--- the global default (chaptarr stays grant-only, never falling back).
+-- the global default (chaptarr/lidarr stay grant-only, never falling back).
 CREATE TABLE IF NOT EXISTS user_instance_grants (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     instance_id TEXT NOT NULL REFERENCES service_instances(id) ON DELETE CASCADE,
@@ -162,8 +181,8 @@ CREATE TABLE IF NOT EXISTS push_tokens (
 -- Per-user push notification preferences. A missing row means "all defaults",
 -- so a user only gets a row once they change something. Defaults match the
 -- self-service API: request_decision off, everything else (request_pending,
--- the new_movie/new_episode/new_book content alerts, ...) on. Kept separate
--- from user_request_settings (admin-managed request policy).
+-- the new_movie/new_episode/new_book/new_music content alerts, ...) on. Kept
+-- separate from user_request_settings (admin-managed request policy).
 CREATE TABLE IF NOT EXISTS notification_prefs (
     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     request_decision INTEGER NOT NULL DEFAULT 0,
@@ -171,6 +190,7 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
     new_movie        INTEGER NOT NULL DEFAULT 1,
     new_episode      INTEGER NOT NULL DEFAULT 1,
     new_book         INTEGER NOT NULL DEFAULT 1,
+    new_music        INTEGER NOT NULL DEFAULT 1,
     issue_created    INTEGER NOT NULL DEFAULT 1,
     agent_action_pending INTEGER NOT NULL DEFAULT 1,
     plex_access_request INTEGER NOT NULL DEFAULT 1,
@@ -973,6 +993,10 @@ func Open(dbPath string) (*sql.DB, error) {
 		// address shown to granted users plus the shared library ids, as one
 		// JSON document; '{}' for every other service type.
 		{alter: "ALTER TABLE service_instances ADD COLUMN media_server_config TEXT NOT NULL DEFAULT '{}'"},
+		// Music availability alerts: pushed when a Lidarr album import lands.
+		// On by default like the other new-content categories; the audience is
+		// additionally scoped in SQL to users who can see the instance.
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN new_music INTEGER NOT NULL DEFAULT 1"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {
@@ -989,12 +1013,13 @@ func Open(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("clear legacy agent-run cost estimates: %w", err)
 	}
 
-	// Chaptarr and the media servers (Jellyfin, Emby, Plex) have no global default —
-	// instances are granted per user — but older versions let the flag be
-	// set. Zero any legacy rows so the admin/AI fallback (GetDefault) resolves
-	// purely by sort order. Runs every boot; idempotent and the table is tiny.
+	// Chaptarr, Lidarr, and the media servers (Jellyfin, Emby, Plex) have no
+	// global default — instances are granted per user — but older versions let
+	// the flag be set. Zero any legacy rows so the admin/AI fallback
+	// (GetDefault) resolves purely by sort order. Runs every boot; idempotent
+	// and the table is tiny.
 	if _, err := db.Exec(
-		"UPDATE service_instances SET is_default = 0 WHERE service_type IN ('chaptarr', 'jellyfin', 'emby', 'plex') AND is_default = 1",
+		"UPDATE service_instances SET is_default = 0 WHERE service_type IN ('chaptarr', 'lidarr', 'jellyfin', 'emby', 'plex') AND is_default = 1",
 	); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("clear grant-only default flags: %w", err)

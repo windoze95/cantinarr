@@ -11,6 +11,7 @@ class NotificationPrefs {
   final bool newMovie;
   final bool newEpisode;
   final bool newBook;
+  final bool newMusic;
   final bool issueCreated;
   final bool agentActionPending;
   final bool plexAccessRequest;
@@ -25,6 +26,7 @@ class NotificationPrefs {
     required this.newMovie,
     required this.newEpisode,
     this.newBook = true,
+    this.newMusic = true,
     this.issueCreated = true,
     this.agentActionPending = true,
     this.plexAccessRequest = true,
@@ -43,6 +45,7 @@ class NotificationPrefs {
         // Categories newer than the connected server (and the admin-only
         // ones) default on server-side; mirror that when a key is absent.
         newBook: json['new_book'] as bool? ?? true,
+        newMusic: json['new_music'] as bool? ?? true,
         issueCreated: json['issue_created'] as bool? ?? true,
         agentActionPending: json['agent_action_pending'] as bool? ?? true,
         plexAccessRequest: json['plex_access_request'] as bool? ?? true,
@@ -62,6 +65,7 @@ class NotificationPrefs {
         'new_movie': newMovie,
         'new_episode': newEpisode,
         'new_book': newBook,
+        'new_music': newMusic,
         'issue_created': issueCreated,
         'agent_action_pending': agentActionPending,
         'plex_access_request': plexAccessRequest,
@@ -77,6 +81,7 @@ class NotificationPrefs {
     bool? newMovie,
     bool? newEpisode,
     bool? newBook,
+    bool? newMusic,
     bool? issueCreated,
     bool? agentActionPending,
     bool? plexAccessRequest,
@@ -91,6 +96,7 @@ class NotificationPrefs {
         newMovie: newMovie ?? this.newMovie,
         newEpisode: newEpisode ?? this.newEpisode,
         newBook: newBook ?? this.newBook,
+        newMusic: newMusic ?? this.newMusic,
         issueCreated: issueCreated ?? this.issueCreated,
         agentActionPending: agentActionPending ?? this.agentActionPending,
         plexAccessRequest: plexAccessRequest ?? this.plexAccessRequest,

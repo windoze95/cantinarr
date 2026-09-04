@@ -36,10 +36,15 @@ RUN set -eux; \
     install -m 0644 /tmp/CODEX-NOTICE /codex-license/NOTICE
 
 FROM alpine:3.19
-RUN apk add --no-cache ca-certificates
+# su-exec is what the entrypoint drops privileges with when PUID/PGID are set.
+RUN apk add --no-cache ca-certificates su-exec
 COPY --from=builder /build/cantinarr /usr/local/bin/
 COPY --from=codex-downloader /codex-app-server /usr/local/bin/
 COPY --from=codex-downloader /codex-license/ /usr/share/licenses/codex-app-server/
+# Shared with the root Dockerfile: honours PUID/PGID (own /config, run as that
+# user), otherwise exec's the command untouched, root as before.
+COPY --chmod=0755 docker/entrypoint.sh /entrypoint.sh
 EXPOSE 8585
 VOLUME /config
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["cantinarr"]

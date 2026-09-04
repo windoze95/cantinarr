@@ -409,6 +409,15 @@ class ChaptarrBook {
   /// Chaptarr (this fork) tracks a title's ebook and audiobook as separate book
   /// records distinguished by mediaType ("ebook"/"audiobook").
   final String? mediaType;
+
+  /// The series and position Chaptarr states on this record as one raw
+  /// display string ("Discworld #13"). For display only — never split for
+  /// navigation. The one implementation of that split (the last `" #"`) is
+  /// server-side (`parseSeriesTitle`), and the requester-visible
+  /// `/api/requests/book-library` digest's own `series`/`series_position`
+  /// fields are the only value proven to address the series page for this
+  /// library.
+  final String? seriesTitle;
   final bool anyEditionOk;
   final int pageCount;
   final ChaptarrAuthorContext? author;
@@ -427,6 +436,7 @@ class ChaptarrBook {
     this.releaseDate,
     this.monitored = true,
     this.mediaType,
+    this.seriesTitle,
     this.anyEditionOk = true,
     this.pageCount = 0,
     this.author,
@@ -449,6 +459,7 @@ class ChaptarrBook {
         releaseDate: _bookReleaseDate(json),
         monitored: json['monitored'] as bool? ?? true,
         mediaType: json['mediaType'] as String?,
+        seriesTitle: json['seriesTitle'] as String?,
         anyEditionOk: json['anyEditionOk'] as bool? ?? true,
         pageCount: json['pageCount'] as int? ?? 0,
         author: json['author'] != null
@@ -474,6 +485,7 @@ class ChaptarrBook {
         'releaseDate': releaseDate?.toIso8601String(),
         'monitored': monitored,
         'mediaType': mediaType,
+        'seriesTitle': seriesTitle,
         'anyEditionOk': anyEditionOk,
         'pageCount': pageCount,
         'editions': editions.map((e) => e.toJson()).toList(),

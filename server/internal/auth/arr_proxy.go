@@ -40,6 +40,17 @@ var arrReadResources = map[string]map[string]bool{
 		"wanted":     true,
 		"MediaCover": true,
 	},
+	"lidarr": {
+		"artist":     true,
+		"album":      true,
+		"track":      true,
+		"trackfile":  true,
+		"calendar":   true,
+		"queue":      true,
+		"history":    true,
+		"wanted":     true,
+		"mediacover": true,
+	},
 }
 
 // arrAPIPrefixes binds each supported arr service to the API version Cantinarr
@@ -48,6 +59,7 @@ var arrAPIPrefixes = map[string]string{
 	"radarr":   "api/v3/",
 	"sonarr":   "api/v3/",
 	"chaptarr": "api/v1/",
+	"lidarr":   "api/v1/",
 }
 
 // isArrReadResource reports whether forwardPath — the portion of an instance
@@ -88,20 +100,34 @@ func isArrReadResource(serviceType, forwardPath string) bool {
 		return len(segments) >= 3 && isPositiveDecimalID(segments[1])
 	}
 
+	if serviceType == "lidarr" && resource == "mediacover" {
+		// Lidarr's API-prefixed cover routes, each one numeric id deep:
+		// /mediacover/artist/{id}/... is a library artist's portrait and
+		// /mediacover/album/{id}/... an owned album's cover — what the
+		// requester Artists row and album tiles render. Neither tells a
+		// requester anything the artist and album records they already read
+		// do not. Every other subtree remains admin-only.
+		return len(segments) >= 4 && (segments[1] == "artist" || segments[1] == "album") &&
+			isPositiveDecimalID(segments[2])
+	}
+
 	suffix := segments[1:]
 	switch resource {
-	case "movie", "series", "episode", "author", "book", "bookfile":
+	case "movie", "series", "episode", "author", "book", "bookfile", "artist", "album", "track", "trackfile":
 		if len(suffix) == 0 {
 			return true
 		}
-		if serviceType == "chaptarr" && (resource == "book" || resource == "author") &&
+		if (serviceType == "chaptarr" && (resource == "book" || resource == "author") ||
+			serviceType == "lidarr" && (resource == "artist" || resource == "album")) &&
 			len(suffix) == 1 && suffix[0] == "lookup" {
-			// Book discovery has no Cantinarr metadata-provider equivalent and
-			// intentionally uses these exact read-only lookups. A Books search
-			// returns authors beside titles, so a requester needs author/lookup
-			// for the same reason it needs book/lookup — without it the author
-			// section 403s for everyone but admins, who skip this allowlist.
-			// The radarr/sonarr equivalents stay closed: TMDB covers those.
+			// Book and music discovery have no Cantinarr metadata-provider
+			// equivalent and intentionally use these exact read-only lookups.
+			// A Books search returns authors beside titles (and a Music search
+			// artists beside albums), so a requester needs the container
+			// lookup for the same reason it needs the title lookup — without
+			// it that search section 403s for everyone but admins, who skip
+			// this allowlist. The radarr/sonarr equivalents stay closed: TMDB
+			// covers those.
 			return true
 		}
 		return len(suffix) == 1 && isPositiveDecimalID(suffix[0])

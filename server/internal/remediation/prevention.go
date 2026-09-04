@@ -478,6 +478,8 @@ func (s *Service) preventionLiveBlock(instanceID, problemKind string) string {
 		entries, err = client.GetConfigSummary(section)
 	} else if client, cerr := s.registry.GetChaptarrClient(instanceID); cerr == nil {
 		entries, err = client.GetConfigSummary(section)
+	} else if client, cerr := s.registry.GetLidarrClient(instanceID); cerr == nil {
+		entries, err = client.GetConfigSummary(section)
 	} else {
 		return ""
 	}
@@ -551,7 +553,7 @@ func (s *Service) preventionInstanceName(instanceID string) string {
 	if s.registry == nil {
 		return instanceID
 	}
-	for _, svc := range []string{"sonarr", "radarr", "chaptarr"} {
+	for _, svc := range []string{"sonarr", "radarr", "chaptarr", "lidarr"} {
 		summaries, err := s.registry.ListInstanceSummaries(svc)
 		if err != nil {
 			continue

@@ -74,6 +74,11 @@ type TriggerSearchParams struct {
 	Episode   *int   `json:"episode,omitempty"`
 	AuthorID  int    `json:"author_id,omitempty"`
 	BookID    int    `json:"book_id,omitempty"`
+	// Music mirrors books over Lidarr's record ids: one album by album_id, or
+	// all of an artist's monitored albums by artist_id. Omitempty for the same
+	// fingerprint-stability rule as the book fields.
+	ArtistID int `json:"artist_id,omitempty"`
+	AlbumID  int `json:"album_id,omitempty"`
 }
 
 // DeleteMediaFilesParams removes files the *arr already imported. TV names an
@@ -91,6 +96,7 @@ type DeleteMediaFilesParams struct {
 	// addition, and vice versa.
 	TmdbID    int   `json:"tmdb_id,omitempty"`
 	BookID    int   `json:"book_id,omitempty"`
+	AlbumID   int   `json:"album_id,omitempty"`
 	Season    *int  `json:"season,omitempty"`
 	Episodes  []int `json:"episodes,omitempty"`
 	Blocklist bool  `json:"blocklist,omitempty"`
@@ -104,10 +110,13 @@ type RescanParams struct {
 	MediaType string `json:"media_type"`
 	TmdbID    int    `json:"tmdb_id,omitempty"`
 	AuthorID  int    `json:"author_id,omitempty"`
+	ArtistID  int    `json:"artist_id,omitempty"`
 }
 
 // validMediaType reports whether m is a supported media type.
-func validMediaType(m string) bool { return m == "movie" || m == "tv" || m == "book" }
+func validMediaType(m string) bool {
+	return m == "movie" || m == "tv" || m == "book" || m == "music"
+}
 
 // maxDeleteEpisodes bounds one delete_media_files proposal. A pre-air fill is a
 // season-shaped problem, so a whole long season must fit; anything past that is
@@ -153,7 +162,7 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			return nil, err
 		}
 		if !validMediaType(p.MediaType) {
-			return nil, fmt.Errorf("media_type must be \"movie\", \"tv\", or \"book\"")
+			return nil, fmt.Errorf("media_type must be \"movie\", \"tv\", \"book\", or \"music\"")
 		}
 		if p.GUID == "" || p.IndexerID <= 0 {
 			return nil, fmt.Errorf("grab_release requires guid and indexer_id (from search_releases)")
@@ -173,7 +182,7 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			return nil, err
 		}
 		if !validMediaType(p.MediaType) {
-			return nil, fmt.Errorf("media_type must be \"movie\", \"tv\", or \"book\"")
+			return nil, fmt.Errorf("media_type must be \"movie\", \"tv\", \"book\", or \"music\"")
 		}
 		if p.QueueID <= 0 {
 			return nil, fmt.Errorf("remediate_queue requires a positive queue_id")
@@ -191,7 +200,7 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			return nil, err
 		}
 		if !validMediaType(p.MediaType) {
-			return nil, fmt.Errorf("media_type must be \"movie\", \"tv\", or \"book\"")
+			return nil, fmt.Errorf("media_type must be \"movie\", \"tv\", \"book\", or \"music\"")
 		}
 		if p.QueueID <= 0 {
 			return nil, fmt.Errorf("manual_import requires a positive queue_id")
@@ -204,7 +213,7 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			return nil, err
 		}
 		if !validMediaType(p.MediaType) {
-			return nil, fmt.Errorf("media_type must be \"movie\", \"tv\", or \"book\"")
+			return nil, fmt.Errorf("media_type must be \"movie\", \"tv\", \"book\", or \"music\"")
 		}
 		if p.MediaType == "book" {
 			// Books carry no TMDB id: target a single book by book_id or all of
@@ -213,13 +222,32 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			if p.TmdbID != 0 || p.Season != nil || p.Episode != nil {
 				return nil, fmt.Errorf("trigger_search for a book must not set tmdb_id")
 			}
+			if p.ArtistID != 0 || p.AlbumID != 0 {
+				return nil, fmt.Errorf("artist_id and album_id apply only to media_type music")
+			}
 			if p.AuthorID <= 0 && p.BookID <= 0 {
 				return nil, fmt.Errorf("trigger_search for a book requires a positive author_id or book_id")
 			}
-		} else {
-			// Movies/TV are addressed by tmdb_id; the book fields don't apply.
+		} else if p.MediaType == "music" {
+			// Music carries no TMDB id either: one album by album_id, or all of
+			// an artist's monitored albums by artist_id.
+			if p.TmdbID != 0 || p.Season != nil || p.Episode != nil {
+				return nil, fmt.Errorf("trigger_search for music must not set tmdb_id")
+			}
 			if p.AuthorID != 0 || p.BookID != 0 {
 				return nil, fmt.Errorf("author_id and book_id apply only to media_type book")
+			}
+			if p.ArtistID <= 0 && p.AlbumID <= 0 {
+				return nil, fmt.Errorf("trigger_search for music requires a positive artist_id or album_id")
+			}
+		} else {
+			// Movies/TV are addressed by tmdb_id; the book and music fields
+			// don't apply.
+			if p.AuthorID != 0 || p.BookID != 0 {
+				return nil, fmt.Errorf("author_id and book_id apply only to media_type book")
+			}
+			if p.ArtistID != 0 || p.AlbumID != 0 {
+				return nil, fmt.Errorf("artist_id and album_id apply only to media_type music")
 			}
 			if p.TmdbID <= 0 {
 				return nil, fmt.Errorf("trigger_search requires a positive tmdb_id")
@@ -241,8 +269,8 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 		if err := strictUnmarshal(raw, &p); err != nil {
 			return nil, err
 		}
-		if p.MediaType != "movie" && p.MediaType != "tv" && p.MediaType != "book" {
-			return nil, fmt.Errorf("delete_media_files supports media_type \"movie\", \"tv\", or \"book\"")
+		if !validMediaType(p.MediaType) {
+			return nil, fmt.Errorf("delete_media_files supports media_type \"movie\", \"tv\", \"book\", or \"music\"")
 		}
 		if p.MediaType == "book" {
 			// Books are addressed by the durable Chaptarr record id; the wrong-book
@@ -250,13 +278,28 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			if p.BookID <= 0 {
 				return nil, fmt.Errorf("delete_media_files for a book requires the issue's book_id")
 			}
-			if p.TmdbID != 0 || p.Season != nil || len(p.Episodes) > 0 {
+			if p.TmdbID != 0 || p.AlbumID != 0 || p.Season != nil || len(p.Episodes) > 0 {
 				return nil, fmt.Errorf("book deletes take only book_id and blocklist")
+			}
+			return canonicalJSON(p)
+		}
+		if p.MediaType == "music" {
+			// The wrong-album repair mirrors the book one over the durable
+			// Lidarr record id: delete the album's track files and stand its
+			// grabs down.
+			if p.AlbumID <= 0 {
+				return nil, fmt.Errorf("delete_media_files for music requires the issue's album_id")
+			}
+			if p.TmdbID != 0 || p.BookID != 0 || p.Season != nil || len(p.Episodes) > 0 {
+				return nil, fmt.Errorf("music deletes take only album_id and blocklist")
 			}
 			return canonicalJSON(p)
 		}
 		if p.BookID != 0 {
 			return nil, fmt.Errorf("book_id applies only to media_type book")
+		}
+		if p.AlbumID != 0 {
+			return nil, fmt.Errorf("album_id applies only to media_type music")
 		}
 		if p.TmdbID <= 0 {
 			return nil, fmt.Errorf("delete_media_files requires a positive tmdb_id")
@@ -293,19 +336,30 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			return nil, err
 		}
 		if !validMediaType(p.MediaType) {
-			return nil, fmt.Errorf("media_type must be \"movie\", \"tv\", or \"book\"")
+			return nil, fmt.Errorf("media_type must be \"movie\", \"tv\", \"book\", or \"music\"")
 		}
 		if p.MediaType == "book" {
 			// Books carry no TMDB id and are rescanned by author_id.
-			if p.TmdbID != 0 {
+			if p.TmdbID != 0 || p.ArtistID != 0 {
 				return nil, fmt.Errorf("rescan for a book must not set tmdb_id")
 			}
 			if p.AuthorID <= 0 {
 				return nil, fmt.Errorf("rescan for a book requires a positive author_id")
 			}
+		} else if p.MediaType == "music" {
+			// Music rescans by artist_id, mirroring the book rule.
+			if p.TmdbID != 0 || p.AuthorID != 0 {
+				return nil, fmt.Errorf("rescan for music must not set tmdb_id")
+			}
+			if p.ArtistID <= 0 {
+				return nil, fmt.Errorf("rescan for music requires a positive artist_id")
+			}
 		} else {
 			if p.AuthorID != 0 {
 				return nil, fmt.Errorf("author_id applies only to media_type book")
+			}
+			if p.ArtistID != 0 {
+				return nil, fmt.Errorf("artist_id applies only to media_type music")
 			}
 			if p.TmdbID <= 0 {
 				return nil, fmt.Errorf("rescan requires a positive tmdb_id")
@@ -384,6 +438,37 @@ func validateActionScopeWith(q actionScopeQuerier, issueID int64, kind ActionKin
 			}
 		}
 	}
+	if mediaType == "music" {
+		switch kind {
+		case ActionDeleteMediaFiles:
+			// The wrong-album repair: bound to the issue's own durable record
+			// id, exactly like the book rule (the ids ride the generic
+			// author_id/book_id columns).
+			if bookID <= 0 {
+				return fmt.Errorf("%s is unavailable for music issues until an authoritative album id is stored", kind)
+			}
+			var p DeleteMediaFilesParams
+			if err := json.Unmarshal(canonical, &p); err != nil {
+				return fmt.Errorf("decode delete_media_files params: %w", err)
+			}
+			if p.MediaType != "music" || p.AlbumID != bookID {
+				return fmt.Errorf("delete_media_files must target this issue's own album record")
+			}
+			return nil
+		case ActionGrabRelease, ActionTriggerSearch:
+			if bookID <= 0 {
+				return fmt.Errorf("%s is unavailable for music issues until an authoritative album id is stored", kind)
+			}
+		case ActionRescan:
+			if authorID <= 0 {
+				return fmt.Errorf("%s is unavailable for music issues until an authoritative artist id is stored", kind)
+			}
+		case ActionRemediateQueue, ActionManualImport:
+			if queueID <= 0 {
+				return fmt.Errorf("%s requires the music issue's exact detector queue id", kind)
+			}
+		}
+	}
 
 	checkMedia := func(got string) error {
 		if got != mediaType {
@@ -451,20 +536,34 @@ func validateActionScopeWith(q actionScopeQuerier, issueID int64, kind ActionKin
 		if err := checkMedia(p.MediaType); err != nil {
 			return err
 		}
-		if p.MediaType != "book" {
-			return checkMediaID(p.TmdbID, p.Season, p.Episode)
-		}
-		// A single-book search must target the issue's exact book record; an
-		// author-wide search must target the issue's exact author.
-		if p.BookID > 0 {
-			if p.BookID != bookID {
-				return fmt.Errorf("book_id %d does not match issue book_id %d", p.BookID, bookID)
+		if p.MediaType == "book" {
+			// A single-book search must target the issue's exact book record;
+			// an author-wide search must target the issue's exact author.
+			if p.BookID > 0 {
+				if p.BookID != bookID {
+					return fmt.Errorf("book_id %d does not match issue book_id %d", p.BookID, bookID)
+				}
+				return nil
+			}
+			if authorID <= 0 || p.AuthorID != authorID {
+				return fmt.Errorf("author_id %d does not match issue author_id %d", p.AuthorID, authorID)
 			}
 			return nil
 		}
-		if authorID <= 0 || p.AuthorID != authorID {
-			return fmt.Errorf("author_id %d does not match issue author_id %d", p.AuthorID, authorID)
+		if p.MediaType == "music" {
+			// The album/artist ids ride the generic book/author columns.
+			if p.AlbumID > 0 {
+				if p.AlbumID != bookID {
+					return fmt.Errorf("album_id %d does not match issue album_id %d", p.AlbumID, bookID)
+				}
+				return nil
+			}
+			if authorID <= 0 || p.ArtistID != authorID {
+				return fmt.Errorf("artist_id %d does not match issue artist_id %d", p.ArtistID, authorID)
+			}
+			return nil
 		}
+		return checkMediaID(p.TmdbID, p.Season, p.Episode)
 	case ActionDeleteMediaFiles:
 		var p DeleteMediaFilesParams
 		if err := json.Unmarshal(canonical, &p); err != nil {
@@ -500,12 +599,19 @@ func validateActionScopeWith(q actionScopeQuerier, issueID int64, kind ActionKin
 		if err := checkMedia(p.MediaType); err != nil {
 			return err
 		}
-		if p.MediaType != "book" {
-			return checkMediaID(p.TmdbID, nil, nil)
+		if p.MediaType == "book" {
+			if p.AuthorID != authorID {
+				return fmt.Errorf("author_id %d does not match issue author_id %d", p.AuthorID, authorID)
+			}
+			return nil
 		}
-		if p.AuthorID != authorID {
-			return fmt.Errorf("author_id %d does not match issue author_id %d", p.AuthorID, authorID)
+		if p.MediaType == "music" {
+			if p.ArtistID != authorID {
+				return fmt.Errorf("artist_id %d does not match issue artist_id %d", p.ArtistID, authorID)
+			}
+			return nil
 		}
+		return checkMediaID(p.TmdbID, nil, nil)
 	}
 	return nil
 }

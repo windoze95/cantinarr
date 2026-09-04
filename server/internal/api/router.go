@@ -11,6 +11,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/ai"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/config"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/discover"
 	"github.com/windoze95/cantinarr-server/internal/downloads"
@@ -24,9 +25,9 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/remediation"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
-	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/update"
 	"github.com/windoze95/cantinarr-server/internal/version"
+	"github.com/windoze95/cantinarr-server/internal/watchhistory"
 	"github.com/windoze95/cantinarr-server/internal/web"
 	"github.com/windoze95/cantinarr-server/internal/webhooks"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
@@ -47,7 +48,7 @@ func NewRouter(
 	instanceStore *instance.Store,
 	downloadsHandler *downloads.Handler,
 	mediaFilesHandler *mediafiles.Handler,
-	tautulliHandler *tautulli.Handler,
+	watchHistoryHandler *watchhistory.Handler,
 	creds *credentials.Registry,
 	credHandler *credentials.Handler,
 	toolServer *mcp.ToolServer,
@@ -56,6 +57,7 @@ func NewRouter(
 	mediaAccessHandler *mediaaccess.Handler,
 	updateChecker *update.Checker,
 	serverSettings *serversettings.Service,
+	contentPolicyHandler *contentpolicy.Handler,
 ) http.Handler {
 	r := chi.NewRouter()
 
@@ -177,12 +179,20 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Patch("/users/{userID}/auth-methods", authHandler.HandleUpdateUserAuthMethods)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/ai-access", authHandler.HandleUpdateUserAIAccess)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}", authHandler.HandleDeleteUser)
+			// Kids accounts: the per-user content policy and the rating
+			// schemes the editor offers. The policy is enforced server-side
+			// on every title surface (internal/contentpolicy).
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users/{userID}/content-policy", contentPolicyHandler.GetUserPolicy)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/content-policy", contentPolicyHandler.PutUserPolicy)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}/content-policy", contentPolicyHandler.DeleteUserPolicy)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/certifications", contentPolicyHandler.Certifications)
 			// Send a test push to a specific user's devices (delivery diagnostics).
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/users/{userID}/test-push", pushHandler.TestPushToUser)
 
 			// Setup checklist: which features are configured, derived live on
 			// every request (drives the app's setup wizard + reminders).
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, aiHandler, serverSettings, remediationService))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/setup-status/skips", setupSkipHandler(serverSettings))
 
 			// Update availability + the admin-configured management-portal URL the
 			// app's version warnings link to. GET returns both; PUT sets the
@@ -371,6 +381,11 @@ func NewRouter(
 			r.Get("/requests/book-author", requestHandler.GetBookAuthor)
 			r.Get("/requests/book-series", requestHandler.GetBookSeries)
 			r.Get("/requests/book-series-detail", requestHandler.GetBookSeriesDetail)
+			r.Get("/requests/music-status", requestHandler.GetMusicStatus)
+			r.Get("/requests/music-library", requestHandler.GetMusicLibrary)
+			r.Get("/requests/music-recent", requestHandler.GetMusicRecent)
+			r.Get("/requests/music-artists", requestHandler.GetMusicArtists)
+			r.Get("/requests/music-artist", requestHandler.GetMusicArtist)
 			r.Get("/requests/{tmdb_id}/status", requestHandler.GetStatus)
 		})
 
@@ -401,11 +416,16 @@ func NewRouter(
 			r.Get("/discover/movies/top-rated", discoverHandler.TopRatedMovies)
 			r.Get("/discover/movies/upcoming", discoverHandler.UpcomingMovies)
 			r.Get("/discover/movies/now-playing", discoverHandler.NowPlayingMovies)
+			r.Get("/discover/tv/on-the-air", discoverHandler.OnTheAirTV)
+			r.Get("/discover/tv/top-rated", discoverHandler.TopRatedTV)
+			r.Get("/discover/tv/upcoming", discoverHandler.UpcomingTV)
 			r.Get("/discover/movies", discoverHandler.DiscoverMovies)
 			r.Get("/discover/tv", discoverHandler.DiscoverTV)
 
 			// Search
 			r.Get("/search", discoverHandler.Search)
+			r.Get("/search/keyword", discoverHandler.SearchKeywords)
+			r.Get("/search/company", discoverHandler.SearchCompanies)
 
 			// Media details
 			r.Get("/media/movie/{id}", discoverHandler.MovieDetail)
@@ -421,6 +441,9 @@ func NewRouter(
 			r.Get("/genres/movie", discoverHandler.MovieGenres)
 			r.Get("/genres/tv", discoverHandler.TVGenres)
 			r.Get("/providers/movie", discoverHandler.MovieWatchProviders)
+			r.Get("/providers/tv", discoverHandler.TVWatchProviders)
+			r.Get("/providers/regions", discoverHandler.WatchProviderRegions)
+			r.Get("/languages", discoverHandler.Languages)
 
 			// Trakt
 			r.Get("/trakt/trending", discoverHandler.TraktTrending)
@@ -532,14 +555,18 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionDownloadsRead)).Get("/downloads/{instanceID}/history", downloadsHandler.GetHistory)
 		})
 
-		// Tautulli (Plex monitoring) routes (admin only)
+		// Watch-history (Tautulli, Tracearr) routes (admin only). The
+		// /api/tautulli prefix predates Tracearr and stays mounted on the same
+		// handler so older apps keep working; new clients use /api/watch-history.
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
 			r.Use(auth.RequirePermission(auth.PermissionMonitoringRead))
 
-			r.Get("/tautulli/{instanceID}/activity", tautulliHandler.GetActivity)
-			r.Get("/tautulli/{instanceID}/history", tautulliHandler.GetHistory)
-			r.Get("/tautulli/{instanceID}/stats", tautulliHandler.GetStats)
+			for _, prefix := range []string{"/watch-history", "/tautulli"} {
+				r.Get(prefix+"/{instanceID}/activity", watchHistoryHandler.GetActivity)
+				r.Get(prefix+"/{instanceID}/history", watchHistoryHandler.GetHistory)
+				r.Get(prefix+"/{instanceID}/stats", watchHistoryHandler.GetStats)
+			}
 		})
 
 	})
@@ -662,7 +689,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			// Media servers are listed too so a granted user's app can offer
 			// the account guide; their grant-only rules make the visible set
 			// exactly the grants (see EffectiveDefaultInstanceID).
-			for _, serviceType := range append([]string{"radarr", "sonarr", "chaptarr"}, instance.MediaServerTypes()...) {
+			for _, serviceType := range append([]string{"radarr", "sonarr", "chaptarr", "lidarr"}, instance.MediaServerTypes()...) {
 				visibleIDs, err := store.VisibleInstanceIDs(userID, serviceType)
 				if err != nil {
 					http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
@@ -727,6 +754,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"radarr":          false,
 			"sonarr":          false,
 			"chaptarr":        false,
+			"lidarr":          false,
 			"media_downloads": false,
 			"ai":              aiAvailable,
 			"tmdb":            creds.TMDBAvailable(),
@@ -743,6 +771,8 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 				services["sonarr"] = true
 			case "chaptarr":
 				services["chaptarr"] = true
+			case "lidarr":
+				services["lidarr"] = true
 			}
 		}
 

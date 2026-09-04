@@ -1,9 +1,10 @@
+import '../../lidarr/data/lidarr_models.dart';
 import '../../radarr/data/radarr_models.dart';
 import '../../sonarr/data/sonarr_models.dart';
 
-/// Whether a [ReleaseEvent] represents a movie (Radarr) or a TV episode
-/// (Sonarr).
-enum ReleaseMediaType { movie, tv }
+/// Whether a [ReleaseEvent] represents a movie (Radarr), a TV episode
+/// (Sonarr), or an album (Lidarr).
+enum ReleaseMediaType { movie, tv, music }
 
 /// A single dated entry on the dashboard "Releases" timeline — either a movie
 /// becoming available (Radarr calendar) or a TV episode airing (Sonarr
@@ -21,8 +22,14 @@ class ReleaseEvent {
   final String? posterUrl;
   final ReleaseMediaType mediaType;
 
-  /// TMDB id used to open the media detail screen, when known.
+  /// TMDB id used to open the media detail screen, when known (movie/tv).
   final int? tmdbId;
+
+  /// Album identity for the music detail screen: the MusicBrainz
+  /// release-group id plus the Lidarr instance it was read from. Null for
+  /// movie/tv events.
+  final String? foreignId;
+  final String? instanceId;
 
   /// Whether the file already exists in the library.
   final bool hasFile;
@@ -34,6 +41,8 @@ class ReleaseEvent {
     this.subtitle,
     this.posterUrl,
     this.tmdbId,
+    this.foreignId,
+    this.instanceId,
     this.hasFile = false,
   });
 
@@ -119,6 +128,45 @@ ReleaseEvent? releaseEventFromSonarr(
     mediaType: ReleaseMediaType.tv,
     tmdbId: series?.tmdbId,
     hasFile: json['hasFile'] as bool? ?? false,
+  );
+}
+
+/// Builds an album [ReleaseEvent] from a Lidarr calendar entry, or null when
+/// the album carries no release date or no addressable MusicBrainz id.
+///
+/// Album release dates are calendar dates — read the components directly, the
+/// movie convention, so a midnight date never shifts a day. The poster is the
+/// external metadata-provider cover only: an arr-relative path must never be
+/// handed to this widget tree, which loads plain public URLs.
+ReleaseEvent? releaseEventFromLidarr(
+  LidarrAlbum album, {
+  required String instanceId,
+}) {
+  final release = album.releaseDate;
+  final foreignId = album.foreignAlbumId;
+  if (release == null || foreignId == null || foreignId.isEmpty) return null;
+
+  String? externalCover;
+  for (final image in album.images) {
+    final remote = image.remoteUrl;
+    if (remote != null && remote.startsWith('http')) {
+      externalCover = remote;
+      break;
+    }
+  }
+  externalCover ??= (album.remoteCover?.startsWith('http') ?? false)
+      ? album.remoteCover
+      : null;
+
+  return ReleaseEvent(
+    date: DateTime(release.year, release.month, release.day),
+    title: album.title,
+    subtitle: album.artistName.isEmpty ? 'Album' : album.artistName,
+    posterUrl: externalCover,
+    mediaType: ReleaseMediaType.music,
+    foreignId: foreignId,
+    instanceId: instanceId,
+    hasFile: album.hasFiles,
   );
 }
 

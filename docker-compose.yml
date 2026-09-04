@@ -15,16 +15,21 @@ services:
       # arr and Cantinarr paths may differ. Example:
       # - /mnt/nas/media:/media:ro
     environment:
-      # Self-hosted push gateway (https://push.julian.codes). Setting the URL
+      # Self-hosted push gateway (https://push.cantinarr.com). Setting the URL
       # ENABLES push: with no API key, the server auto-enrolls on first start and
       # persists its own key in the DB (./config volume) — zero manual setup.
       # Set CANTINARR_PUSH_API_KEY (in a gitignored .env) only to override; set
       # CANTINARR_PUSH_ENROLL_TOKEN only if the gateway uses gated enrollment.
       # Blank the URL to disable push entirely.
-      - CANTINARR_PUSH_GATEWAY_URL=https://push.julian.codes
+      - CANTINARR_PUSH_GATEWAY_URL=https://push.cantinarr.com
       - CANTINARR_PUSH_API_KEY=${CANTINARR_PUSH_API_KEY:-}
       - CANTINARR_PUSH_ENROLL_TOKEN=${CANTINARR_PUSH_ENROLL_TOKEN:-}
       # Comma-separated absolute container paths forming the outer media
       # allowlist. Empty keeps completed-media downloads disabled.
       - CANTINARR_MEDIA_ROOTS=${CANTINARR_MEDIA_ROOTS:-}
+      # Run as a specific user instead of root (Synology, Unraid, and other
+      # linuxserver-style stacks): the image makes ./config belong to that
+      # user on start. Leave both unset to keep running as root.
+      # - PUID=1000
+      # - PGID=1000
     restart: unless-stopped

@@ -77,6 +77,30 @@ func TestLoadValidatesArrCallbackURL(t *testing.T) {
 	}
 }
 
+// TestLoadRewritesLegacyPushGatewayHost pins the relay's rename: a deployment
+// still configured with push.julian.codes is moved to push.cantinarr.com at
+// load, whatever the scheme, case, or trailing slash, while any other value
+// is left exactly as given and an unset one stays unset (push disabled).
+func TestLoadRewritesLegacyPushGatewayHost(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{"https://push.julian.codes", "https://push.cantinarr.com"},
+		{"https://push.julian.codes/", "https://push.cantinarr.com"},
+		{"http://PUSH.julian.codes", "https://push.cantinarr.com"},
+		{"https://push.cantinarr.com", "https://push.cantinarr.com"},
+		{"https://push.example.org/", "https://push.example.org"},
+		{"", ""},
+	} {
+		t.Setenv("CANTINARR_PUSH_GATEWAY_URL", tc.raw)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() with %q: %v", tc.raw, err)
+		}
+		if cfg.PushGatewayURL != tc.want {
+			t.Fatalf("PushGatewayURL for %q = %q, want %q", tc.raw, cfg.PushGatewayURL, tc.want)
+		}
+	}
+}
+
 // TestLoadAcceptsDeprecatedPublicURL pins the compat promise: every existing
 // deployment sets CANTINARR_PUBLIC_URL and must keep working untouched, and
 // an invalid legacy value must fail naming the variable the admin actually

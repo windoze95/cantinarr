@@ -105,6 +105,7 @@ func TestConfigHandlerFiltersInstancesForNonAdmin(t *testing.T) {
 	createConfigInstance(t, store, "chaptarr", "Private Books", false)
 	createConfigInstance(t, store, "sabnzbd", "Downloads", false)
 	createConfigInstance(t, store, "tautulli", "Tautulli", false)
+	createConfigInstance(t, store, "tracearr", "Tracearr", false)
 	homeJellyfin := createConfigInstance(t, store, "jellyfin", "Home Jellyfin", false)
 	createConfigInstance(t, store, "jellyfin", "Other Jellyfin", false)
 	denEmby := createConfigInstance(t, store, "emby", "Den Emby", false)
@@ -533,7 +534,7 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			if err := json.Unmarshal(payload["services"], &services); err != nil {
 				t.Fatalf("decode services: %v", err)
 			}
-			assertExactMapKeys(t, services, "radarr", "sonarr", "chaptarr", "media_downloads", "ai", "tmdb", "trakt")
+			assertExactMapKeys(t, services, "radarr", "sonarr", "chaptarr", "lidarr", "media_downloads", "ai", "tmdb", "trakt")
 			for _, serviceType := range []string{"radarr", "sonarr", "chaptarr", "ai", "tmdb", "trakt"} {
 				if !services[serviceType] {
 					t.Errorf("services[%q] = false, want true", serviceType)

@@ -31,6 +31,27 @@ type Notifier struct {
 	healthMu         sync.Mutex
 	consecutiveFails int
 	healthSink       DeliveryHealthSink
+
+	// recipientPolicy drops kids accounts from a new-content alert about a
+	// title outside their limits. nil (push unconfigured in tests, or a
+	// server that never wired it) keeps every recipient.
+	recipientPolicy RecipientPolicy
+}
+
+// RecipientPolicy decides which recipients may hear about a title.
+// *contentpolicy.Service satisfies it; declared here so push stays
+// decoupled from that package.
+type RecipientPolicy interface {
+	AllowedRecipients(ctx context.Context, userIDs []int64, mediaType string, tmdbID int) ([]int64, error)
+}
+
+// SetContentPolicy wires the kids-account recipient filter. nil-receiver
+// safe, like the other setters: push may be unconfigured.
+func (n *Notifier) SetContentPolicy(policy RecipientPolicy) {
+	if n == nil {
+		return
+	}
+	n.recipientPolicy = policy
 }
 
 // deliveryFailureThreshold is how many sends must fail back to back before the
@@ -563,6 +584,57 @@ func bookReadyBody(title, format string) string {
 	}
 }
 
+// NotifyNewMusic pushes an "album became available" alert for a completed
+// Lidarr import. The audience is users opted into the new_music category (on
+// by default) whose music library is the instance the import landed on — a
+// lidarr assignment is the music access model, exactly like books, and it
+// scopes admins too; only an admin with no music assignment hears every
+// instance. artist rides along for copy only: an album title alone is far
+// more ambiguous than a book title, but the claim and collapse identity stays
+// the release-group id, which already names exactly one album.
+func (n *Notifier) NotifyNewMusic(title, artist, foreignID, instanceID string) {
+	client := n.client()
+	if client == nil || title == "" {
+		return
+	}
+	// The claim id carries the library: the audience is per-instance, so the
+	// same album importing on two Lidarr instances inside the window must
+	// alert both instances' listeners.
+	if !n.claimContentAlert(CategoryNewMusic, "music", contentClaimID(instanceID, foreignID), title) {
+		return
+	}
+	recipients, err := n.prefs.usersOptedIntoNewMusic(instanceID)
+	if err != nil {
+		n.logger.Error("push: resolve new-content recipients", "err", err, "category", CategoryNewMusic)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	// Music has no TMDB id: the payload carries the same deep-link identity a
+	// music request decision does (foreign_id, pinned instance, title hint),
+	// so the app's existing album tap routing applies unchanged.
+	data := map[string]any{
+		"type":        CategoryNewMusic,
+		"media_type":  "music",
+		"foreign_id":  foreignID,
+		"instance_id": instanceID,
+		"title":       title,
+	}
+	n.sendWithOptions(client, recipients, "New music available", musicReadyBody(title, artist), data, SendOptions{
+		CollapseID: fmt.Sprintf("%s:%s", CategoryNewMusic, foreignID),
+	})
+}
+
+// musicReadyBody names the artist when the record carries one and degrades to
+// the bare album title when it does not.
+func musicReadyBody(title, artist string) string {
+	if artist != "" {
+		return title + " by " + artist + " is ready to play"
+	}
+	return title + " is ready to play"
+}
+
 // NotifyUpgradedMovie pushes a "movie file was upgraded" alert to admins opted
 // into the content_upgraded category (off by default). See
 // notifyUpgradedContent for why the broadcast key is claimed first.
@@ -634,6 +706,56 @@ func bookUpgradedBody(title, format string) string {
 	}
 }
 
+// NotifyUpgradedMusic pushes an "album file was upgraded" alert to admins
+// opted into the content_upgraded category (off by default). Like books, the
+// audience is NOT narrowed to the instance's assigned listeners: an upgrade
+// is operational oversight, not a "ready to play" call to action, so it takes
+// the standard admin-scoped path. The payload still carries the same
+// deep-link identity as new_music so the app's album tap routing applies
+// unchanged.
+func (n *Notifier) NotifyUpgradedMusic(title, artist, foreignID, instanceID string) {
+	if title == "" {
+		return
+	}
+	// Absorb the poller before anything else can bail: the silent claim must
+	// land even when the gateway is unenrolled or the admin alert is deduped.
+	// Byte-identical to NotifyNewMusic's claim id for the same import.
+	n.claimContentAlertSilently(CategoryNewMusic, "music", contentClaimID(instanceID, foreignID), title)
+	client := n.client()
+	if client == nil {
+		return
+	}
+	if !n.claimContentAlertScoped(CategoryContentUpgraded, "music", contentClaimID(instanceID, foreignID), title, stormScopeUpgrade) {
+		return
+	}
+	recipients, err := n.prefs.usersOptedInto(CategoryContentUpgraded)
+	if err != nil {
+		n.logger.Error("push: resolve new-content recipients", "err", err, "category", CategoryContentUpgraded)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	data := map[string]any{
+		"type":        CategoryContentUpgraded,
+		"media_type":  "music",
+		"foreign_id":  foreignID,
+		"instance_id": instanceID,
+		"title":       title,
+	}
+	n.sendWithOptions(client, recipients, "Album upgraded", musicUpgradedBody(title, artist), data, SendOptions{
+		CollapseID: fmt.Sprintf("%s:%s", CategoryContentUpgraded, foreignID),
+	})
+}
+
+// musicUpgradedBody is musicReadyBody's upgrade twin.
+func musicUpgradedBody(title, artist string) string {
+	if artist != "" {
+		return title + " by " + artist + " was upgraded"
+	}
+	return title + " was upgraded"
+}
+
 // notifyUpgradedContent is the shared body for the movie/TV upgrade alerts.
 // The broadcast category's dedupe key (byte-identical to the one
 // notifyNewContent claims) is claimed silently FIRST: the queue poller
@@ -696,6 +818,16 @@ func (n *Notifier) notifyNewContent(category, mediaType, serviceType, title, bod
 	if err != nil {
 		n.logger.Error("push: resolve new-content recipients", "err", err, "category", category)
 		return
+	}
+	if n.recipientPolicy != nil {
+		// A kids account hears about a title only inside its limits. A
+		// title that cannot be identified or rated drops every child and
+		// says so in the log; the adults still hear about it.
+		kept, err := n.recipientPolicy.AllowedRecipients(context.Background(), recipients, mediaType, tmdbID)
+		if err != nil {
+			n.logger.Warn("push: kids accounts left out of a new-content alert", "err", err, "category", category, "tmdb_id", tmdbID)
+		}
+		recipients = kept
 	}
 	if len(recipients) == 0 {
 		return
@@ -1004,14 +1136,14 @@ func passthrough(eventType string, data map[string]interface{}) map[string]any {
 	if v := str(data["media_type"]); v != "" {
 		out["media_type"] = v
 	}
-	// Books have no TMDB id. Keep the canonical identity, selected library, title
-	// hint, and decision scope together so a tap cannot drift to whichever
-	// Chaptarr instance happens to be active later. Movie/TV payloads remain
-	// unchanged.
+	// Books and music have no TMDB id. Keep the canonical identity, selected
+	// library, title hint, and (for books) decision scope together so a tap
+	// cannot drift to whichever instance happens to be active later. Movie/TV
+	// payloads remain unchanged.
 	if v := str(data["foreign_id"]); v != "" {
 		out["foreign_id"] = v
 	}
-	if str(data["media_type"]) == "book" {
+	if mediaType := str(data["media_type"]); mediaType == "book" || mediaType == "music" {
 		if v := str(data["instance_id"]); v != "" {
 			out["instance_id"] = v
 		}

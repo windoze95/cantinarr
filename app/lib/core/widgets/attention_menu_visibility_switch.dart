@@ -59,7 +59,6 @@ class AttentionMenuVisibilitySwitch extends ConsumerWidget {
         key: ValueKey('${item.name}-conditional-menu-visibility'),
         value: value,
         onChanged: (next) => _set(ref, next),
-        activeThumbColor: AppTheme.accent,
       ),
       onTap: opensQueue ? () => context.push(_route) : null,
     );

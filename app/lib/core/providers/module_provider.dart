@@ -91,6 +91,14 @@ class ModuleNotifier extends Notifier<ModuleState> {
         ));
       }
 
+      if (isAdmin && connection.lidarrInstances.isNotEmpty) {
+        modules.add(const AppModule(
+          type: ModuleType.lidarr,
+          label: 'Lidarr',
+          icon: Icons.library_music,
+        ));
+      }
+
       if (isAdmin && connection.downloadInstances.isNotEmpty) {
         modules.add(const AppModule(
           type: ModuleType.downloads,
@@ -99,10 +107,12 @@ class ModuleNotifier extends Notifier<ModuleState> {
         ));
       }
 
-      if (isAdmin && connection.tautulliInstances.isNotEmpty) {
+      // One Monitoring row serves every watch-history provider; the
+      // instance selector lists Tautulli and Tracearr instances together.
+      if (isAdmin && connection.watchHistoryInstances.isNotEmpty) {
         modules.add(const AppModule(
-          type: ModuleType.tautulli,
-          label: 'Tautulli',
+          type: ModuleType.monitoring,
+          label: 'Monitoring',
           icon: Icons.monitor_heart,
         ));
       }

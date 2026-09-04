@@ -335,8 +335,14 @@ func TestMovieIssueScopeNormalized(t *testing.T) {
 func TestCreateUserIssueValidation(t *testing.T) {
 	svc, _, reporterID := setupTestService(t)
 
-	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "music", TmdbID: 1, Category: CategoryOther}); err == nil {
+	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "podcast", TmdbID: 1, Category: CategoryOther}); err == nil {
 		t.Fatal("expected error for unsupported media type")
+	}
+	// Music passed the media-type gate in the issue-parity wave. This call
+	// still fails — the fixture instance is a Radarr, not a music library —
+	// but it must no longer be refused as an unsupported type.
+	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "music", TmdbID: 1, Category: CategoryOther}); err == nil || strings.Contains(err.Error(), "unsupported media type") {
+		t.Fatalf("music must pass the media-type gate (got %v)", err)
 	}
 	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "movie", TmdbID: 1, Category: "nonsense"}); err == nil {
 		t.Fatal("expected error for invalid category")

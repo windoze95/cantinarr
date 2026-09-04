@@ -1,1 +1,1 @@
-radarr,sonarr,plex,jellyfin,emby,media,request,server,selfhosted,homelab,library,tv,movies,mcp
+radarr,sonarr,lidarr,plex,jellyfin,emby,music,request,selfhosted,homelab,library,tv,movies,mcp

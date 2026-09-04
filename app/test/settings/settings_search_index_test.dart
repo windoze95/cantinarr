@@ -8,6 +8,7 @@ const _user = UserProfile(id: 2, username: 'user', role: 'user');
 const _adminGates = SettingsSearchGates(
   user: _admin,
   chaptarrEnabled: true,
+  lidarrEnabled: true,
   donateVisible: true,
   phoneAppsVisible: true,
   mediaServersVisible: true,
@@ -82,6 +83,22 @@ void main() {
   });
 
   group('matching', () {
+    test('tracearr and monitoring find Add Instance for admins only', () {
+      for (final query in ['tracearr', 'monitoring']) {
+        expect(
+          searchSettingsIndex(query, _adminGates).map((e) => e.id),
+          contains('screen.add-instance'),
+          reason: '$query must reach the add-instance entry',
+        );
+        expect(
+          searchSettingsIndex(query, _userGates)
+              .map((e) => e.id)
+              .contains('screen.add-instance'),
+          isFalse,
+        );
+      }
+    });
+
     test('empty and whitespace queries return nothing', () {
       expect(searchSettingsIndex('', _adminGates), isEmpty);
       expect(searchSettingsIndex('   ', _adminGates), isEmpty);
@@ -122,6 +139,20 @@ void main() {
         searchSettingsIndex('book', noBooks)
             .map((e) => e.id)
             .contains('notifications.new-book'),
+        isFalse,
+      );
+    });
+
+    test('lidarr gate controls the new-music toggle', () {
+      expect(
+        searchSettingsIndex('music', _adminGates).map((e) => e.id),
+        contains('notifications.new-music'),
+      );
+      const noMusic = SettingsSearchGates(user: _admin);
+      expect(
+        searchSettingsIndex('music', noMusic)
+            .map((e) => e.id)
+            .contains('notifications.new-music'),
         isFalse,
       );
     });

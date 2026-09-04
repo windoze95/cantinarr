@@ -13,6 +13,7 @@ type Prefs struct {
 	NewMovie           bool `json:"new_movie"`
 	NewEpisode         bool `json:"new_episode"`
 	NewBook            bool `json:"new_book"`
+	NewMusic           bool `json:"new_music"`
 	IssueCreated       bool `json:"issue_created"`
 	AgentActionPending bool `json:"agent_action_pending"`
 	PlexAccessRequest  bool `json:"plex_access_request"`
@@ -36,6 +37,12 @@ const (
 	// household running one library per person is not cross-paged. Only an
 	// admin with no books assignment at all hears every instance.
 	CategoryNewBook = "new_book"
+	// CategoryNewMusic tells users a Lidarr album import landed. On by default
+	// and scoped per instance exactly like new_book (usersOptedIntoNewMusic):
+	// a lidarr assignment is the music access model, so the audience is the
+	// users assigned to the instance the import landed on — admins included.
+	// Only an admin with no music assignment at all hears every instance.
+	CategoryNewMusic = "new_music"
 	// CategoryIssueCreated notifies admins of a new AI-remediation issue
 	// (user-reported or auto-detected). Admin-scoped, on by default.
 	CategoryIssueCreated = "issue_created"
@@ -75,12 +82,12 @@ const (
 	// mapping keeps notification_prefs and its full-row PUT contract
 	// untouched.
 	CategoryProfileChangePending = "profile_change_pending"
-	// CategoryContentUpgraded tells admins an existing movie/episode/book file
-	// was replaced by a quality upgrade. Admin-scoped and OFF by default:
+	// CategoryContentUpgraded tells admins an existing movie/episode/book/album
+	// file was replaced by a quality upgrade. Admin-scoped and OFF by default:
 	// upgrades are library maintenance, not news — a requester already has the
 	// content, and re-paging the household about a better copy is noise. The
-	// broadcast new_movie/new_episode/new_book alert is suppressed only on
-	// positive proof of an upgrade (webhook isUpgrade, or a paired
+	// broadcast new_movie/new_episode/new_book/new_music alert is suppressed
+	// only on positive proof of an upgrade (webhook isUpgrade, or a paired
 	// delete-for-upgrade history record on catch-up); without proof the event
 	// broadcasts as new content, never the other way around.
 	CategoryContentUpgraded = "content_upgraded"
@@ -95,6 +102,7 @@ var defaultPrefs = Prefs{
 	NewMovie:           true,
 	NewEpisode:         true,
 	NewBook:            true,
+	NewMusic:           true,
 	IssueCreated:       true,
 	AgentActionPending: true,
 	PlexAccessRequest:  true,
@@ -116,6 +124,7 @@ var categoryColumn = map[string]struct {
 	CategoryNewMovie:           {"new_movie", defaultPrefs.NewMovie},
 	CategoryNewEpisode:         {"new_episode", defaultPrefs.NewEpisode},
 	CategoryNewBook:            {"new_book", defaultPrefs.NewBook},
+	CategoryNewMusic:           {"new_music", defaultPrefs.NewMusic},
 	CategoryIssueCreated:       {"issue_created", defaultPrefs.IssueCreated},
 	CategoryAgentActionPending: {"agent_action_pending", defaultPrefs.AgentActionPending},
 	// Shares the agent_action_pending column by design (see the category const).
@@ -145,10 +154,10 @@ func NewPrefsStore(db *sql.DB) *PrefsStore {
 func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 	p := defaultPrefs
 	err := s.db.QueryRow(
-		`SELECT request_decision, request_pending, new_movie, new_episode, new_book, issue_created, agent_action_pending, plex_access_request, plex_invite_sent, issue_report_update, agent_digest, content_upgraded
+		`SELECT request_decision, request_pending, new_movie, new_episode, new_book, new_music, issue_created, agent_action_pending, plex_access_request, plex_invite_sent, issue_report_update, agent_digest, content_upgraded
 		 FROM notification_prefs WHERE user_id = ?`,
 		userID,
-	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.NewBook, &p.IssueCreated, &p.AgentActionPending, &p.PlexAccessRequest, &p.PlexInviteSent, &p.IssueReportUpdate, &p.AgentDigest, &p.ContentUpgraded)
+	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.NewBook, &p.NewMusic, &p.IssueCreated, &p.AgentActionPending, &p.PlexAccessRequest, &p.PlexInviteSent, &p.IssueReportUpdate, &p.AgentDigest, &p.ContentUpgraded)
 	if err == sql.ErrNoRows {
 		return defaultPrefs, nil
 	}
@@ -162,14 +171,15 @@ func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 func (s *PrefsStore) Set(userID int64, p Prefs) error {
 	_, err := s.db.Exec(
 		`INSERT INTO notification_prefs
-		   (user_id, request_decision, request_pending, new_movie, new_episode, new_book, issue_created, agent_action_pending, plex_access_request, plex_invite_sent, issue_report_update, agent_digest, content_upgraded)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		   (user_id, request_decision, request_pending, new_movie, new_episode, new_book, new_music, issue_created, agent_action_pending, plex_access_request, plex_invite_sent, issue_report_update, agent_digest, content_upgraded)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(user_id) DO UPDATE SET
 		   request_decision = excluded.request_decision,
 		   request_pending  = excluded.request_pending,
 		   new_movie        = excluded.new_movie,
 		   new_episode      = excluded.new_episode,
 		   new_book         = excluded.new_book,
+		   new_music        = excluded.new_music,
 		   issue_created    = excluded.issue_created,
 		   agent_action_pending = excluded.agent_action_pending,
 		   plex_access_request  = excluded.plex_access_request,
@@ -177,7 +187,7 @@ func (s *PrefsStore) Set(userID int64, p Prefs) error {
 		   issue_report_update  = excluded.issue_report_update,
 		   agent_digest         = excluded.agent_digest,
 		   content_upgraded     = excluded.content_upgraded`,
-		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode, p.NewBook, p.IssueCreated, p.AgentActionPending, p.PlexAccessRequest, p.PlexInviteSent, p.IssueReportUpdate, p.AgentDigest, p.ContentUpgraded,
+		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode, p.NewBook, p.NewMusic, p.IssueCreated, p.AgentActionPending, p.PlexAccessRequest, p.PlexInviteSent, p.IssueReportUpdate, p.AgentDigest, p.ContentUpgraded,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert notification prefs: %w", err)
@@ -196,6 +206,10 @@ func (s *PrefsStore) usersOptedInto(category string) ([]int64, error) {
 		// model, so an unscoped audience would leak book alerts to users who
 		// cannot see any books. Force callers through the scoped query.
 		return nil, fmt.Errorf("category %q requires usersOptedIntoNewBook", category)
+	case CategoryNewMusic:
+		// new_music follows the same per-instance access model via lidarr
+		// assignments. Force callers through the scoped query.
+		return nil, fmt.Errorf("category %q requires usersOptedIntoNewMusic", category)
 	case CategoryNewMovie, CategoryNewEpisode:
 		// new_movie/new_episode are per-library too: an import on the 4K
 		// library must not page users who cannot see the 4K library.
@@ -329,6 +343,43 @@ func (s *PrefsStore) usersOptedIntoNewBook(instanceID string) ([]int64, error) {
 		     SELECT 1 FROM user_instance_grants g
 		     JOIN service_instances si ON si.id = g.instance_id
 		     WHERE g.user_id = u.id AND si.service_type = 'chaptarr')))`,
+		col.column, def,
+	)
+	return s.queryUserIDs(query, instanceID, instanceID)
+}
+
+// usersOptedIntoNewMusic returns the ids of every user opted into new_music
+// whose music library is the given Lidarr instance. Lidarr shares Chaptarr's
+// access model — the per-user assignment IS the grant — so the audience rule
+// is usersOptedIntoNewBook's exactly: a default pin or an access grant on the
+// importing instance, plus the one deliberate exception of an admin with no
+// music assignment at all, who browses Music through the default-instance
+// fallback and so keeps hearing every instance.
+func (s *PrefsStore) usersOptedIntoNewMusic(instanceID string) ([]int64, error) {
+	col := categoryColumn[CategoryNewMusic]
+	def := 0
+	if col.defaultVal {
+		def = 1
+	}
+	// Column name comes from the trusted categoryColumn table, never user
+	// input.
+	query := fmt.Sprintf(
+		`SELECT u.id FROM users u
+		 LEFT JOIN notification_prefs p ON p.user_id = u.id
+		 WHERE COALESCE(p.%s, %d) = 1
+		   AND (EXISTS (
+		     SELECT 1 FROM user_default_instances d
+		     WHERE d.user_id = u.id AND d.instance_id = ?)
+		   OR EXISTS (
+		     SELECT 1 FROM user_instance_grants g
+		     WHERE g.user_id = u.id AND g.instance_id = ?)
+		   OR (u.role = 'admin' AND NOT EXISTS (
+		     SELECT 1 FROM user_default_instances d
+		     WHERE d.user_id = u.id AND d.service_type = 'lidarr')
+		     AND NOT EXISTS (
+		     SELECT 1 FROM user_instance_grants g
+		     JOIN service_instances si ON si.id = g.instance_id
+		     WHERE g.user_id = u.id AND si.service_type = 'lidarr')))`,
 		col.column, def,
 	)
 	return s.queryUserIDs(query, instanceID, instanceID)

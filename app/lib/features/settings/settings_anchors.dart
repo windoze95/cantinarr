@@ -36,6 +36,7 @@ abstract final class SettingsAnchors {
   static const notificationsNewMovie = 'notifications.new-movie';
   static const notificationsNewEpisode = 'notifications.new-episode';
   static const notificationsNewBook = 'notifications.new-book';
+  static const notificationsNewMusic = 'notifications.new-music';
   static const notificationsPlexInviteSent = 'notifications.plex-invite-sent';
   static const notificationsReportUpdates = 'notifications.report-updates';
 

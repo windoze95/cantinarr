@@ -26,6 +26,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
 )
@@ -42,6 +43,7 @@ type Broadcaster interface {
 type AvailabilityInvalidator interface {
 	InvalidateAvailabilityDigests(instanceID string)
 	InvalidateBookDigests(instanceID string)
+	InvalidateMusicDigests(instanceID string)
 }
 
 // PreAirImportWitness is told when an import lands on an episode that has not
@@ -131,6 +133,15 @@ type arrPayload struct {
 	Books []struct {
 		ID int `json:"id"`
 	} `json:"books"`
+	// Lidarr sends a plural albums list on both grab and import (and a singular
+	// album on delete events). Only the record id is read; identity comes from
+	// a live lookup.
+	Album *struct {
+		ID int `json:"id"`
+	} `json:"album"`
+	Albums []struct {
+		ID int `json:"id"`
+	} `json:"albums"`
 }
 
 // checkPreAirImport hands an import that landed on an unaired episode to the
@@ -201,6 +212,31 @@ func (p arrPayload) bookIDs() []int {
 	return ids
 }
 
+// albumIDs is bookIDs' Lidarr twin: the usable album record ids in the
+// payload, deduplicated and ordered.
+func (p arrPayload) albumIDs() []int {
+	seen := make(map[int]struct{})
+	var ids []int
+	add := func(id int) {
+		if id <= 0 {
+			return
+		}
+		if _, dup := seen[id]; dup {
+			return
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if p.Album != nil {
+		add(p.Album.ID)
+	}
+	for _, a := range p.Albums {
+		add(a.ID)
+	}
+	sort.Ints(ids)
+	return ids
+}
+
 // HandleArr receives the server-managed Sonarr/Radarr Connect webhook. The
 // server-only credential is carried as the Basic Auth password, never in a URL
 // that an HTTP access logger could persist.
@@ -229,9 +265,12 @@ func (h *Handler) HandleArr(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if inst.ServiceType == "chaptarr" {
+	switch inst.ServiceType {
+	case "chaptarr":
 		h.handleBookEvent(instanceID, payload)
-	} else {
+	case "lidarr":
+		h.handleMusicEvent(instanceID, payload)
+	default:
 		h.handleVideoEvent(instanceID, inst.ServiceType, payload)
 	}
 
@@ -389,6 +428,99 @@ func (h *Handler) bookImported(instanceID string, bookID int, isUpgrade bool) {
 		h.content.NotifyUpgradedBook(book.Title, book.ForeignBookID, instanceID, book.MediaType)
 	} else {
 		h.content.NotifyNewBook(book.Title, book.ForeignBookID, instanceID, book.MediaType)
+	}
+}
+
+// musicLibraryEvents are the normalized non-import Lidarr event names that
+// still change what the library shows (grabs, adds, deletes, retags): they
+// invalidate caches and ping clients. Lidarr's import event arrives as
+// "Download" and is recognized by lidarr.IsImportEventType — the same
+// vocabulary the queue poller's catch-up uses.
+var musicLibraryEvents = map[string]struct{}{
+	"grab": {}, "albumadd": {}, "albumadded": {}, "artistadd": {}, "artistadded": {},
+	"albumdelete": {}, "artistdelete": {}, "trackfiledelete": {}, "rename": {},
+	"retag": {}, "trackretag": {},
+}
+
+// handleMusicEvent applies a Lidarr callback.
+//
+// Music has no TMDB id, so this path never emits request_status_changed;
+// arr_queue_changed is the invalidation ping the app already consumes. The
+// payload is treated purely as a trigger, exactly like handleBookEvent: only
+// the event name and record id are read, and the alert itself is built from a
+// live read of the record, so a drifted or forged body cannot fabricate an
+// alert.
+func (h *Handler) handleMusicEvent(instanceID string, payload arrPayload) {
+	event := lidarr.NormalizeEventType(payload.EventType)
+	if event == "test" {
+		return
+	}
+	isImport := lidarr.IsImportEventType(payload.EventType)
+	_, isLibraryChange := musicLibraryEvents[event]
+	if !isImport && !isLibraryChange {
+		return
+	}
+
+	// Invalidate before announcing so a user who taps the alert lands on fresh
+	// availability rather than a cached "Requested".
+	h.requests.InvalidateMusicDigests(instanceID)
+	h.hub.Broadcast(ws.Event{
+		Type: "arr_queue_changed",
+		Data: map[string]interface{}{
+			"instance_id":  instanceID,
+			"service_type": "lidarr",
+		},
+	})
+	if !isImport {
+		return
+	}
+
+	ids := payload.albumIDs()
+	if len(ids) == 0 {
+		log.Printf("webhooks: lidarr %q import carried no album id; leaving it to the queue poller", payload.EventType)
+		return
+	}
+	for _, id := range ids {
+		h.musicImported(instanceID, id, payload.IsUpgrade)
+	}
+}
+
+// musicImported announces a completed album import after confirming it against
+// the live record, applying the same guards as the queue-departure witness so
+// the two witnesses produce an identical alert and dedupe against each other.
+// isUpgrade reroutes the alert to the admin content_upgraded category.
+func (h *Handler) musicImported(instanceID string, albumID int, isUpgrade bool) {
+	if h.content == nil || h.registry == nil {
+		return
+	}
+	client, err := h.registry.GetLidarrClient(instanceID)
+	if err != nil {
+		log.Printf("webhooks: lidarr client for imported album %d: %v", albumID, err)
+		return
+	}
+	album, err := client.GetAlbum(albumID)
+	if err != nil {
+		log.Printf("webhooks: get imported lidarr album %d: %v", albumID, err)
+		return
+	}
+	// Lidarr answers 404 with (nil, nil) for a record deleted between the
+	// import and this read.
+	if album == nil {
+		return
+	}
+	// No file means the import ghosted or the files were already removed; the
+	// queue witness stays silent in the same case.
+	if album.Statistics.TrackFileCount == 0 {
+		return
+	}
+	artist := ""
+	if album.Artist != nil {
+		artist = album.Artist.ArtistName
+	}
+	if isUpgrade {
+		h.content.NotifyUpgradedMusic(album.Title, artist, album.ForeignAlbumID, instanceID)
+	} else {
+		h.content.NotifyNewMusic(album.Title, artist, album.ForeignAlbumID, instanceID)
 	}
 }
 

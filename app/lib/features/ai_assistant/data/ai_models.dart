@@ -105,9 +105,10 @@ class MediaResultItem {
   final String? overview;
   final String? mediaType;
 
-  /// Book identity/artwork: books have no TMDB id ([id] stays 0). [foreignId]
-  /// is the Chaptarr foreignBookId the detail route keys on and [posterUrl] is
-  /// an absolute external cover URL (used verbatim instead of a TMDB path).
+  /// Book and album identity/artwork: neither has a TMDB id ([id] stays 0).
+  /// [foreignId] is the Chaptarr foreignBookId or Lidarr foreignAlbumId the
+  /// detail route keys on and [posterUrl] is an absolute external cover URL
+  /// (used verbatim instead of a TMDB path).
   final String? foreignId;
   final String? posterUrl;
 

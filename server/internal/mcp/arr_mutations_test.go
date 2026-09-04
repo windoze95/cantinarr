@@ -10,19 +10,19 @@ func TestMutationHelpersReportNoDispatchAsPreflightFailure(t *testing.T) {
 		{
 			name: "grab missing guid",
 			run: func() (string, error) {
-				return GrabReleaseHelper(nil, nil, nil, "movie", "", 0, 0)
+				return GrabReleaseHelper(nil, nil, nil, nil, "movie", "", 0, 0)
 			},
 		},
 		{
 			name: "search target unavailable",
 			run: func() (string, error) {
-				return TriggerSearchHelper(nil, nil, nil, nil, "movie", 42, nil, nil, false, 0, nil)
+				return TriggerSearchHelper(nil, nil, nil, nil, nil, "movie", 42, nil, nil, false, 0, nil, 0, nil)
 			},
 		},
 		{
 			name: "rescan target unavailable",
 			run: func() (string, error) {
-				return RescanMediaHelper(nil, nil, nil, nil, "tv", 42, 0)
+				return RescanMediaHelper(nil, nil, nil, nil, nil, "tv", 42, 0, 0)
 			},
 		},
 	}

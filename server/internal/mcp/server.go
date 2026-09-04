@@ -12,8 +12,11 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/discover"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
@@ -105,7 +108,24 @@ type ToolServer struct {
 	// change awaiting their approval. nil when push is not configured — the
 	// proposal still parks and the app's approval screen still lists it.
 	adminNotifier AdminNotifier
+
+	// discoveryPrefs is the admin's discovery settings, read per call so
+	// browse_titles applies the same English-only default the app's browse
+	// grid does. nil reads as the shipped default.
+	discoveryPrefs discover.DiscoveryPrefs
+
+	// browseCatalog caches the genre, language, and streaming-service tables
+	// browse_titles resolves plain names against.
+	browseCatalog *browseCatalog
+
+	// contentPolicy is the kids-account service. Every discover tool filters
+	// its titles through the caller's policy, resolved once per call. nil
+	// until wired (main.go wires it); a server without it filters nothing.
+	contentPolicy *contentpolicy.Service
 }
+
+// SetContentPolicy wires the kids-account service.
+func (s *ToolServer) SetContentPolicy(svc *contentpolicy.Service) { s.contentPolicy = svc }
 
 // AdminNotifier pushes an admin-scoped event. *push.Notifier satisfies it;
 // declared here so the mcp package stays decoupled from push.
@@ -144,7 +164,15 @@ func NewToolServer(creds *credentials.Registry, requestSvc *request.Service, reg
 		bridge:                bridge,
 		settingsMutationLocks: make(map[string]chan struct{}),
 		profileChanges:        newProfileChangeStore(),
+		browseCatalog:         newBrowseCatalog(),
 	}
+}
+
+// SetDiscoveryPrefs wires the admin's discovery preferences so browse_titles
+// applies the same English-only default the app's browse grid does. Optional:
+// unset reads as the shipped default.
+func (s *ToolServer) SetDiscoveryPrefs(prefs discover.DiscoveryPrefs) {
+	s.discoveryPrefs = prefs
 }
 
 // authorizeCall re-checks the current device-bound role for an interactive
@@ -233,6 +261,31 @@ func (s *ToolServer) GetChaptarrFor(instanceID string) *chaptarr.Client {
 			return nil
 		}
 		client, _, err := s.registry.GetDefaultChaptarrClient()
+		if err == nil && client != nil {
+			return client
+		}
+	}
+	return nil
+}
+
+// GetLidarr returns the default Lidarr client. Lidarr has no global default
+// flag (grant-only, like Chaptarr), so GetDefaultLidarrClient resolves an
+// arbitrary configured instance (and returns a nil client, no error, when
+// none is configured).
+func (s *ToolServer) GetLidarr() *lidarr.Client {
+	return s.GetLidarrFor("")
+}
+
+func (s *ToolServer) GetLidarrFor(instanceID string) *lidarr.Client {
+	if s.registry != nil {
+		if instanceID != "" {
+			client, err := s.registry.GetLidarrClient(instanceID)
+			if err == nil {
+				return client
+			}
+			return nil
+		}
+		client, _, err := s.registry.GetDefaultLidarrClient()
 		if err == nil && client != nil {
 			return client
 		}
@@ -343,21 +396,31 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 		return &ToolResult{Text: "This action is not permitted for your role."}, nil
 	}
 
+	// A kids account's limits apply to every title a tool hands back. The
+	// policy is read once here; a read that fails is a failed call, never
+	// an unfiltered one.
+	policy, err := s.callerPolicy(callCtx)
+	if err != nil {
+		return nil, fmt.Errorf("content limits: %w", err)
+	}
+
 	switch name {
 	case "search_movies":
-		return s.searchMovies(input)
+		return s.searchMovies(ctx, input, policy)
 	case "search_movie_collections":
-		return s.searchMovieCollections(input)
+		return s.searchMovieCollections(ctx, input, policy)
 	case "search_tv_shows":
-		return s.searchTVShows(input)
+		return s.searchTVShows(ctx, input, policy)
 	case "get_trending":
-		return s.getTrending(input)
+		return s.getTrending(ctx, input, policy)
+	case "browse_titles":
+		return s.browseTitles(ctx, input, policy)
 	case "get_movie_details":
-		return s.getMovieDetails(input)
+		return s.getMovieDetails(ctx, input, policy)
 	case "get_tv_details":
-		return s.getTVDetails(input)
+		return s.getTVDetails(ctx, input, policy)
 	case "get_recommendations":
-		return s.getRecommendations(input)
+		return s.getRecommendations(ctx, input, policy)
 	case "check_request_status":
 		return s.checkRequestStatus(input, callCtx.UserID)
 	case "get_request_options":
@@ -368,8 +431,10 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 		return s.listMyRequests(callCtx.UserID)
 	case "search_books":
 		return s.searchBooks(input, callCtx.UserID)
+	case "search_music":
+		return s.searchMusic(input, callCtx.UserID)
 	case "display_media":
-		return s.displayMedia(input, callCtx.UserID)
+		return s.displayMedia(ctx, input, callCtx.UserID, policy)
 	case "get_queue":
 		return s.getQueue(input, callCtx.InstanceID)
 	case "get_calendar":
@@ -400,6 +465,8 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 		return s.getServiceConfig(input, callCtx.InstanceID)
 	case "get_book_timeline":
 		return s.getBookTimeline(input, callCtx.InstanceID)
+	case "get_album_timeline":
+		return s.getAlbumTimeline(input, callCtx.InstanceID)
 	case "get_manual_import_candidates":
 		return s.getManualImportCandidates(input, callCtx.InstanceID)
 	case "execute_manual_import":

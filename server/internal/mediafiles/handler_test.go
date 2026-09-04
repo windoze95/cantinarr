@@ -810,3 +810,43 @@ func assertDownloadHeaders(t *testing.T, response *httptest.ResponseRecorder, ex
 		}
 	}
 }
+
+// The download gates treat Lidarr as a first-class media service: a granted
+// listener can turn a track-file id into a working ticket, resolved through
+// the lidarr metadata path.
+func TestLidarrTrackFileTicketsDownload(t *testing.T) {
+	root := t.TempDir()
+	mediaPath := filepath.Join(root, "Music", "track01.flac")
+	if err := os.MkdirAll(filepath.Dir(mediaPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mediaPath, []byte("flac-bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &fakeInstanceStore{
+		instances: map[string]*instance.Instance{
+			"music-1": {ID: "music-1", ServiceType: "lidarr"},
+		},
+		allowed: true,
+	}
+	resolver := &fakeMetadataResolver{paths: map[int]string{19: mediaPath}}
+	h := newTestHandler(t, store, resolver, []string{root})
+
+	response, body := issueTicket(t, h, &auth.Claims{UserID: 8, Role: auth.RoleUser},
+		`{"instance_id":"music-1","file_id":19}`)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("issue status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if body.Filename != "track01.flac" {
+		t.Fatalf("ticket filename = %q", body.Filename)
+	}
+	if got := resolver.calls[0]; got.serviceType != "lidarr" || got.fileID != 19 {
+		t.Fatalf("resolve call = %#v", got)
+	}
+
+	download := downloadRequest(h, http.MethodGet, body.URL, "")
+	if download.Code != http.StatusOK || download.Body.String() != "flac-bytes" {
+		t.Fatalf("download = %d %q", download.Code, download.Body.String())
+	}
+}

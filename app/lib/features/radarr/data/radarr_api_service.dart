@@ -93,6 +93,37 @@ class RadarrApiService {
     });
   }
 
+  /// Re-reads the movie and PUTs it back with only [fields] changed, so every
+  /// field Radarr keeps on the resource that the app does not model survives
+  /// the round-trip (Radarr's PUT replaces the whole movie).
+  Future<void> updateMovieFields(
+      int movieId, Map<String, dynamic> fields) async {
+    final resp = await _dio.get('$_basePath/movie/$movieId');
+    final movie = Map<String, dynamic>.from(resp.data as Map);
+    movie.addAll(fields);
+    await _dio.put('$_basePath/movie/$movieId', data: movie);
+  }
+
+  /// Toggles monitoring for a movie.
+  Future<void> setMovieMonitored(int movieId, {required bool monitored}) =>
+      updateMovieFields(movieId, {'monitored': monitored});
+
+  /// Asks Radarr to refresh the movie's metadata and rescan its folder.
+  Future<void> refreshMovie(int movieId) async {
+    await _dio.post('$_basePath/command', data: {
+      'name': 'RefreshMovie',
+      'movieIds': [movieId],
+    });
+  }
+
+  /// Lists the instance's tags (id + label).
+  Future<List<RadarrTag>> getTags() async {
+    final resp = await _dio.get('$_basePath/tag');
+    return (resp.data as List<dynamic>)
+        .map((t) => RadarrTag.fromJson(t as Map<String, dynamic>))
+        .toList();
+  }
+
   Future<List<Map<String, dynamic>>> getQueue() async {
     final resp = await _dio.get('$_basePath/queue',
         queryParameters: {'includeMovie': true, 'pageSize': 50});

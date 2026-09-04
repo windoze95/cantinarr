@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
@@ -75,7 +76,7 @@ func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, 
 		return "", beforeMutation(err)
 	}
 
-	rc, sc, cc, err := e.clientsFor(ic)
+	rc, sc, cc, lc, err := e.clientsFor(ic)
 	if err != nil {
 		return "", beforeMutation(err)
 	}
@@ -86,7 +87,7 @@ func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, 
 		if err := json.Unmarshal(params, &p); err != nil {
 			return "", beforeMutation(fmt.Errorf("decode grab_release params: %w", err))
 		}
-		if err := requireConfiguredClient(p.MediaType, rc, sc, cc); err != nil {
+		if err := requireConfiguredClient(p.MediaType, rc, sc, cc, lc); err != nil {
 			return "", beforeMutation(err)
 		}
 		// Stable-invariant gate: if replacing a queue item, confirm it still belongs
@@ -94,11 +95,11 @@ func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, 
 		// release search and require the exact GUID/indexer tuple immediately before
 		// dispatch, so stale or invented release identifiers fail before mutation.
 		if p.QueueIDToReplace > 0 {
-			if err := e.validateQueueItem(p.MediaType, p.QueueIDToReplace, ic, rc, sc, cc); err != nil {
+			if err := e.validateQueueItem(p.MediaType, p.QueueIDToReplace, ic, rc, sc, cc, lc); err != nil {
 				return "", beforeMutation(err)
 			}
 		}
-		liveGUID, err := e.validateGrabReleaseCandidate(p, ic, rc, sc, cc)
+		liveGUID, err := e.validateGrabReleaseCandidate(p, ic, rc, sc, cc, lc)
 		if err != nil {
 			return "", beforeMutation(err)
 		}
@@ -106,61 +107,65 @@ func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, 
 		// the raw GUID from this fresh scoped search for the immediate dispatch;
 		// never persist or return that capability.
 		p.GUID = liveGUID
-		return mcp.GrabReleaseHelper(rc, sc, cc, p.MediaType, p.GUID, p.IndexerID, p.QueueIDToReplace)
+		return mcp.GrabReleaseHelper(rc, sc, cc, lc, p.MediaType, p.GUID, p.IndexerID, p.QueueIDToReplace)
 
 	case ActionRemediateQueue:
 		var p RemediateQueueParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return "", beforeMutation(fmt.Errorf("decode remediate_queue params: %w", err))
 		}
-		if err := requireConfiguredClient(p.MediaType, rc, sc, cc); err != nil {
+		if err := requireConfiguredClient(p.MediaType, rc, sc, cc, lc); err != nil {
 			return "", beforeMutation(err)
 		}
-		if err := e.validateQueueItem(p.MediaType, p.QueueID, ic, rc, sc, cc); err != nil {
+		if err := e.validateQueueItem(p.MediaType, p.QueueID, ic, rc, sc, cc, lc); err != nil {
 			return "", beforeMutation(err)
 		}
-		return mcp.RemediateQueueItemHelper(rc, sc, cc, p.MediaType, p.QueueID, p.Action)
+		return mcp.RemediateQueueItemHelper(rc, sc, cc, lc, p.MediaType, p.QueueID, p.Action)
 
 	case ActionManualImport:
 		var p ManualImportParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return "", beforeMutation(fmt.Errorf("decode manual_import params: %w", err))
 		}
-		if err := requireConfiguredClient(p.MediaType, rc, sc, cc); err != nil {
+		if err := requireConfiguredClient(p.MediaType, rc, sc, cc, lc); err != nil {
 			return "", beforeMutation(err)
 		}
-		if err := e.validateQueueItem(p.MediaType, p.QueueID, ic, rc, sc, cc); err != nil {
+		if err := e.validateQueueItem(p.MediaType, p.QueueID, ic, rc, sc, cc, lc); err != nil {
 			return "", beforeMutation(err)
 		}
-		importScope, err := e.manualImportScope(p.MediaType, p.QueueID, ic, rc, sc, cc)
+		importScope, err := e.manualImportScope(p.MediaType, p.QueueID, ic, rc, sc, cc, lc)
 		if err != nil {
 			return "", beforeMutation(err)
 		}
-		return mcp.ExecuteManualImportHelper(rc, sc, cc, p.MediaType, p.QueueID, p.Force, importScope)
+		return mcp.ExecuteManualImportHelper(rc, sc, cc, lc, p.MediaType, p.QueueID, p.Force, importScope)
 
 	case ActionTriggerSearch:
 		var p TriggerSearchParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return "", beforeMutation(fmt.Errorf("decode trigger_search params: %w", err))
 		}
-		if err := requireConfiguredClient(p.MediaType, rc, sc, cc); err != nil {
+		if err := requireConfiguredClient(p.MediaType, rc, sc, cc, lc); err != nil {
 			return "", beforeMutation(err)
 		}
 		var bookIDs []int
 		if p.BookID != 0 {
 			bookIDs = []int{p.BookID}
 		}
+		var albumIDs []int
+		if p.AlbumID != 0 {
+			albumIDs = []int{p.AlbumID}
+		}
 		// airedOnly is false here on purpose: replacing what a bad import
 		// destroyed belongs to delete_media_files, so a proposed search is
 		// always the plain one. See TriggerSearchParams.
-		return mcp.TriggerSearchHelper(e.bridge, rc, sc, cc, p.MediaType, p.TmdbID, p.Season, p.Episode, false, p.AuthorID, bookIDs)
+		return mcp.TriggerSearchHelper(e.bridge, rc, sc, cc, lc, p.MediaType, p.TmdbID, p.Season, p.Episode, false, p.AuthorID, bookIDs, p.ArtistID, albumIDs)
 
 	case ActionDeleteMediaFiles:
 		var p DeleteMediaFilesParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return "", beforeMutation(fmt.Errorf("decode delete_media_files params: %w", err))
 		}
-		if err := requireConfiguredClient(p.MediaType, rc, sc, cc); err != nil {
+		if err := requireConfiguredClient(p.MediaType, rc, sc, cc, lc); err != nil {
 			return "", beforeMutation(err)
 		}
 		// There is no queue row to re-validate here — the download this is
@@ -171,6 +176,9 @@ func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, 
 		if p.MediaType == "book" {
 			return mcp.DeleteBookFilesHelper(cc, p.BookID, p.Blocklist, proposedAt)
 		}
+		if p.MediaType == "music" {
+			return mcp.DeleteTrackFilesHelper(lc, p.AlbumID, p.Blocklist, proposedAt)
+		}
 		return mcp.DeleteMediaFilesHelper(e.bridge, rc, sc, p.MediaType, p.TmdbID, p.Season, p.Episodes, p.Blocklist, proposedAt)
 
 	case ActionRescan:
@@ -178,17 +186,17 @@ func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, 
 		if err := json.Unmarshal(params, &p); err != nil {
 			return "", beforeMutation(fmt.Errorf("decode rescan params: %w", err))
 		}
-		if err := requireConfiguredClient(p.MediaType, rc, sc, cc); err != nil {
+		if err := requireConfiguredClient(p.MediaType, rc, sc, cc, lc); err != nil {
 			return "", beforeMutation(err)
 		}
-		return mcp.RescanMediaHelper(e.bridge, rc, sc, cc, p.MediaType, p.TmdbID, p.AuthorID)
+		return mcp.RescanMediaHelper(e.bridge, rc, sc, cc, lc, p.MediaType, p.TmdbID, p.AuthorID, p.ArtistID)
 
 	default:
 		return "", fmt.Errorf("unknown action kind: %s", kind)
 	}
 }
 
-func requireConfiguredClient(mediaType string, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client) error {
+func requireConfiguredClient(mediaType string, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, lc *lidarr.Client) error {
 	switch mediaType {
 	case "movie":
 		if rc == nil {
@@ -201,6 +209,10 @@ func requireConfiguredClient(mediaType string, rc *radarr.Client, sc *sonarr.Cli
 	case "book":
 		if cc == nil {
 			return fmt.Errorf("the issue's Chaptarr instance is not configured or no longer exists")
+		}
+	case "music":
+		if lc == nil {
+			return fmt.Errorf("the issue's Lidarr instance is not configured or no longer exists")
 		}
 	default:
 		return fmt.Errorf("unsupported media_type %q", mediaType)
@@ -241,28 +253,30 @@ func (e *Executor) loadIssueContext(issueID int64) (issueContext, error) {
 // fine — the shared helpers return a "<service> is not configured" message for
 // the wrong media_type. An error is only returned when a NAMED instance fails to
 // resolve as ANY of the three service kinds.
-func (e *Executor) clientsFor(ic issueContext) (*radarr.Client, *sonarr.Client, *chaptarr.Client, error) {
+func (e *Executor) clientsFor(ic issueContext) (*radarr.Client, *sonarr.Client, *chaptarr.Client, *lidarr.Client, error) {
 	if e.registry == nil {
-		return nil, nil, nil, fmt.Errorf("instance registry not configured")
+		return nil, nil, nil, nil, fmt.Errorf("instance registry not configured")
 	}
 	if ic.instanceID != "" {
 		// A specific instance was recorded (auto issue). Try it as a Radarr, a
-		// Sonarr, and a Chaptarr instance; whichever matches yields a client, the
-		// others stay nil.
+		// Sonarr, a Chaptarr, and a Lidarr instance; whichever matches yields a
+		// client, the others stay nil.
 		rc, rErr := e.registry.GetRadarrClient(ic.instanceID)
 		sc, sErr := e.registry.GetSonarrClient(ic.instanceID)
 		cc, cErr := e.registry.GetChaptarrClient(ic.instanceID)
-		if rErr != nil && sErr != nil && cErr != nil {
-			return nil, nil, nil, fmt.Errorf("resolve instance %q: %v / %v / %v", ic.instanceID, rErr, sErr, cErr)
+		lc, lErr := e.registry.GetLidarrClient(ic.instanceID)
+		if rErr != nil && sErr != nil && cErr != nil && lErr != nil {
+			return nil, nil, nil, nil, fmt.Errorf("resolve instance %q: %v / %v / %v / %v", ic.instanceID, rErr, sErr, cErr, lErr)
 		}
-		return rc, sc, cc, nil
+		return rc, sc, cc, lc, nil
 	}
 	// User issue with no instance: fall back to the default Radarr + Sonarr +
-	// Chaptarr.
+	// Chaptarr + Lidarr.
 	rc, _, _ := e.registry.GetDefaultRadarrClient()
 	sc, _, _ := e.registry.GetDefaultSonarrClient()
 	cc, _, _ := e.registry.GetDefaultChaptarrClient()
-	return rc, sc, cc, nil
+	lc, _, _ := e.registry.GetDefaultLidarrClient()
+	return rc, sc, cc, lc, nil
 }
 
 // validateQueueItem is the stable-invariant gate for a queue-targeting action.
@@ -270,7 +284,7 @@ func (e *Executor) clientsFor(ic issueContext) (*radarr.Client, *sonarr.Client, 
 // and authoritative media scope. For user issues without an arr_queue_id this
 // title/season/episode check is what prevents a model-selected queue id from
 // targeting an unrelated download.
-func (e *Executor) validateQueueItem(mediaType string, queueID int, ic issueContext, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client) error {
+func (e *Executor) validateQueueItem(mediaType string, queueID int, ic issueContext, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, lc *lidarr.Client) error {
 	if queueID <= 0 {
 		return fmt.Errorf("queue_id must be positive")
 	}
@@ -344,8 +358,29 @@ func (e *Executor) validateQueueItem(mediaType string, queueID int, ic issueCont
 		}
 		return fmt.Errorf("queue item %d is no longer in the Chaptarr queue (already handled or removed); not executing", queueID)
 
+	case "music":
+		if lc == nil {
+			return nil
+		}
+		items, err := lc.GetQueueDetailed()
+		if err != nil {
+			return fmt.Errorf("validate queue item: %w", err)
+		}
+		for i := range items {
+			if items[i].ID == queueID {
+				if err := validateDownloadIdentity(queueID, ic.downloadID, items[i].DownloadID); err != nil {
+					return err
+				}
+				if err := validateLidarrMediaIdentity(queueID, ic, items[i]); err != nil {
+					return err
+				}
+				return nil
+			}
+		}
+		return fmt.Errorf("queue item %d is no longer in the Lidarr queue (already handled or removed); not executing", queueID)
+
 	default:
-		return fmt.Errorf("media_type must be \"movie\", \"tv\", or \"book\"")
+		return fmt.Errorf("media_type must be \"movie\", \"tv\", \"book\", or \"music\"")
 	}
 }
 
@@ -376,6 +411,29 @@ func validateChaptarrMediaIdentity(queueID int, ic issueContext, item chaptarr.D
 	}
 	if actual != ic.bookID {
 		return fmt.Errorf("queue item %d belongs to book %d, not this issue's book %d; not executing", queueID, actual, ic.bookID)
+	}
+	return nil
+}
+
+// validateLidarrMediaIdentity is the music analogue: with a stored album
+// record id (riding the generic book_id column) the queue row must belong to
+// that exact album.
+func validateLidarrMediaIdentity(queueID int, ic issueContext, item lidarr.DetailedQueueItem) error {
+	if ic.bookID <= 0 {
+		if ic.arrQueueID > 0 && ic.downloadID != "" {
+			return nil
+		}
+		return fmt.Errorf("queue item %d cannot be proven to belong to this music issue; not executing", queueID)
+	}
+	actual := item.AlbumID
+	if actual == 0 && item.Album != nil {
+		actual = item.Album.ID
+	}
+	if actual == 0 {
+		return fmt.Errorf("queue item %d has no verifiable Lidarr album identity; not executing", queueID)
+	}
+	if actual != ic.bookID {
+		return fmt.Errorf("queue item %d belongs to album %d, not this issue's album %d; not executing", queueID, actual, ic.bookID)
 	}
 	return nil
 }
@@ -485,7 +543,7 @@ func (e *Executor) validateSonarrMediaIdentity(queueID int, ic issueContext, ite
 // input: sending it directly would let a compromised model grab a release for a
 // different title. Search-result expiry now fails closed before any removal or
 // grab is dispatched.
-func (e *Executor) validateGrabReleaseCandidate(p GrabReleaseParams, ic issueContext, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client) (string, error) {
+func (e *Executor) validateGrabReleaseCandidate(p GrabReleaseParams, ic issueContext, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, lc *lidarr.Client) (string, error) {
 	switch p.MediaType {
 	case "movie":
 		movieID := 0
@@ -651,6 +709,48 @@ func (e *Executor) validateGrabReleaseCandidate(p GrabReleaseParams, ic issueCon
 			}
 		}
 
+	case "music":
+		albumID := 0
+		if p.QueueIDToReplace > 0 {
+			items, err := lc.GetQueueDetailed()
+			if err != nil {
+				return "", fmt.Errorf("re-read replacement queue item: %w", err)
+			}
+			for _, item := range items {
+				if item.ID == p.QueueIDToReplace {
+					albumID = item.AlbumID
+					if albumID == 0 && item.Album != nil {
+						albumID = item.Album.ID
+					}
+					break
+				}
+			}
+		}
+		if albumID == 0 {
+			albumID = ic.bookID
+		}
+		if albumID == 0 {
+			return "", fmt.Errorf("cannot establish the issue's Lidarr album for release validation; not executing")
+		}
+		if ic.bookID > 0 && albumID != ic.bookID {
+			return "", fmt.Errorf("replacement queue item belongs to album %d, not this issue's album %d; not executing", albumID, ic.bookID)
+		}
+		releases, err := lc.SearchReleases(albumID)
+		if err != nil {
+			return "", fmt.Errorf("refresh scoped album releases: %w", err)
+		}
+		for _, release := range releases {
+			if release.IndexerID == p.IndexerID && releaseReferenceMatches(p.GUID, release.GUID) {
+				// Lidarr's release quality is opaque JSON too; the proposal's
+				// empty quality matches that.
+				if err := validateObservedReleaseMetadata(p, release.Title, "",
+					release.Size, release.Protocol, release.Indexer, release.Rejected, release.Rejections); err != nil {
+					return "", err
+				}
+				return release.GUID, nil
+			}
+		}
+
 	default:
 		return "", fmt.Errorf("unsupported media_type %q", p.MediaType)
 	}
@@ -718,7 +818,7 @@ func (e *Executor) resolveIssueSeries(ic issueContext, client *sonarr.Client) (*
 	return nil, nil
 }
 
-func (e *Executor) manualImportScope(mediaType string, queueID int, ic issueContext, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client) (*mcp.ManualImportScope, error) {
+func (e *Executor) manualImportScope(mediaType string, queueID int, ic issueContext, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, lc *lidarr.Client) (*mcp.ManualImportScope, error) {
 	scope := &mcp.ManualImportScope{
 		SeasonNumber:  ic.seasonNumber,
 		EpisodeNumber: ic.episodeNumber,
@@ -793,6 +893,30 @@ func (e *Executor) manualImportScope(mediaType string, queueID int, ic issueCont
 			}
 			if scope.BookID <= 0 {
 				return nil, fmt.Errorf("queue item %d has no verifiable Chaptarr book id; not importing", queueID)
+			}
+			return scope, nil
+		}
+	case "music":
+		items, err := lc.GetQueueDetailed()
+		if err != nil {
+			return nil, fmt.Errorf("re-read queue before manual import: %w", err)
+		}
+		for _, item := range items {
+			if item.ID != queueID {
+				continue
+			}
+			if err := validateDownloadIdentity(queueID, ic.downloadID, item.DownloadID); err != nil {
+				return nil, err
+			}
+			if err := validateLidarrMediaIdentity(queueID, ic, item); err != nil {
+				return nil, err
+			}
+			scope.DownloadID, scope.AlbumID = item.DownloadID, item.AlbumID
+			if scope.AlbumID == 0 && item.Album != nil {
+				scope.AlbumID = item.Album.ID
+			}
+			if scope.AlbumID <= 0 {
+				return nil, fmt.Errorf("queue item %d has no verifiable Lidarr album id; not importing", queueID)
 			}
 			return scope, nil
 		}

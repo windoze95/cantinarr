@@ -8,12 +8,14 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/day_sections.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../lidarr/data/lidarr_api_service.dart';
 import '../../radarr/data/radarr_api_service.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../data/release_event.dart';
 
 /// Dashboard "Releases" tab — a unified view of what drops when, aggregating
-/// the default Radarr (movie) and Sonarr (episode) calendars.
+/// the default Radarr (movie) and Sonarr (episode) calendars, plus the
+/// granted Lidarr (album) calendar for users with Music access.
 ///
 /// Defaults to a date-separated list of upcoming releases, with a toggleable
 /// month-calendar view whose selected day filters the scrollable list below.
@@ -49,7 +51,8 @@ class _DashboardReleasesTabState extends ConsumerState<DashboardReleasesTab> {
   String _instanceSignature(AuthState? auth) {
     final conn = auth?.connection;
     return '${conn?.defaultRadarrInstance?.id ?? ''}'
-        '|${conn?.defaultSonarrInstance?.id ?? ''}';
+        '|${conn?.defaultSonarrInstance?.id ?? ''}'
+        '|${conn?.defaultLidarrInstance?.id ?? ''}';
   }
 
   Future<void> _load() async {
@@ -57,8 +60,13 @@ class _DashboardReleasesTabState extends ConsumerState<DashboardReleasesTab> {
     final conn = ref.read(authProvider).valueOrNull?.connection;
     final radarr = conn?.defaultRadarrInstance;
     final sonarr = conn?.defaultSonarrInstance;
+    // Lidarr is grant-only: services.lidarr is the grant bit, and the
+    // connection's instance list already contains only what this user may
+    // read, so the effective instance is theirs, never a sibling library's.
+    final lidarr =
+        (conn?.services.lidarr ?? false) ? conn?.defaultLidarrInstance : null;
 
-    if (radarr == null && sonarr == null) {
+    if (radarr == null && sonarr == null && lidarr == null) {
       if (mounted && token == _loadToken) {
         setState(() {
           _events = [];
@@ -113,6 +121,20 @@ class _DashboardReleasesTabState extends ConsumerState<DashboardReleasesTab> {
       }
     }
 
+    if (lidarr != null) {
+      try {
+        final service =
+            LidarrApiService(backendDio: dio, instanceId: lidarr.id);
+        final albums = await service.getCalendar(start: start, end: end);
+        for (final album in albums) {
+          final event = releaseEventFromLidarr(album, instanceId: lidarr.id);
+          if (event != null) events.add(event);
+        }
+      } catch (_) {
+        anyError = true;
+      }
+    }
+
     if (!mounted || token != _loadToken) return;
     events.sort((a, b) => a.date.compareTo(b.date));
     setState(() {
@@ -146,7 +168,9 @@ class _DashboardReleasesTabState extends ConsumerState<DashboardReleasesTab> {
 
     final conn = ref.watch(authProvider).valueOrNull?.connection;
     final hasInstances = conn?.defaultRadarrInstance != null ||
-        conn?.defaultSonarrInstance != null;
+        conn?.defaultSonarrInstance != null ||
+        ((conn?.services.lidarr ?? false) &&
+            conn?.defaultLidarrInstance != null);
 
     if (_isLoading) {
       return const Center(
@@ -158,8 +182,8 @@ class _DashboardReleasesTabState extends ConsumerState<DashboardReleasesTab> {
       return const _StatusMessage(
         icon: Icons.event_outlined,
         title: 'Nothing to schedule yet',
-        message: 'Connect a Radarr or Sonarr service to see when your '
-            'movies and shows drop.',
+        message: 'Connect a Radarr, Sonarr, or Lidarr service to see when '
+            'your movies, shows, and albums drop.',
       );
     }
 
@@ -371,19 +395,33 @@ class _ReleaseTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isTv = event.mediaType == ReleaseMediaType.tv;
+    final isMusic = event.mediaType == ReleaseMediaType.music;
     final tmdbId = event.tmdbId;
     final timeLabel = isTv ? DateFormat('h:mm a').format(event.date) : null;
 
-    return InkWell(
-      onTap: tmdbId != null
+    final VoidCallback? onTap;
+    if (isMusic) {
+      final foreignId = event.foreignId;
+      onTap = foreignId != null
+          ? () => context.push(
+              '/detail/album/$foreignId'
+              '?title=${Uri.encodeComponent(event.title)}'
+              '${event.instanceId != null ? '&instance_id=${event.instanceId}' : ''}')
+          : null;
+    } else {
+      onTap = tmdbId != null
           ? () => context.push('/detail/${isTv ? 'tv' : 'movie'}/$tmdbId')
-          : null,
+          : null;
+    }
+
+    return InkWell(
+      onTap: onTap,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            _poster(isTv),
+            _poster(isTv, isMusic),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -404,14 +442,17 @@ class _ReleaseTile extends StatelessWidget {
                   Row(
                     children: [
                       Icon(
-                        isTv ? Icons.tv : Icons.movie_outlined,
+                        isMusic
+                            ? Icons.album_outlined
+                            : (isTv ? Icons.tv : Icons.movie_outlined),
                         size: 13,
                         color: AppTheme.textSecondary,
                       ),
                       const SizedBox(width: 5),
                       Expanded(
                         child: Text(
-                          event.subtitle ?? (isTv ? 'Episode' : 'Movie'),
+                          event.subtitle ??
+                              (isMusic ? 'Album' : (isTv ? 'Episode' : 'Movie')),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -433,12 +474,14 @@ class _ReleaseTile extends StatelessWidget {
     );
   }
 
-  Widget _poster(bool isTv) {
+  Widget _poster(bool isTv, bool isMusic) {
     final placeholder = Container(
       color: AppTheme.surfaceVariant,
       child: Center(
         child: Icon(
-          isTv ? Icons.tv : Icons.movie_outlined,
+          isMusic
+              ? Icons.album_outlined
+              : (isTv ? Icons.tv : Icons.movie_outlined),
           color: AppTheme.textSecondary,
           size: 20,
         ),

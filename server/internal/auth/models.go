@@ -22,6 +22,21 @@ type User struct {
 	PlexEmail     string     `json:"plex_email"`
 	PlexInvitedAt *time.Time `json:"plex_invited_at,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
+	// Child reports a kids account: a user_content_policies row exists and
+	// every title surface filters this user's payloads server-side.
+	// ContentLimits is the row's summary for the user's own Settings line;
+	// nil for an unrestricted account.
+	Child         bool           `json:"child"`
+	ContentLimits *ContentLimits `json:"content_limits,omitempty"`
+}
+
+// ContentLimits is what a kids account may see, as the account's own
+// profile carries it. It mirrors contentpolicy.Limits without importing the
+// package: the JSON keys are the contract.
+type ContentLimits struct {
+	MaxMovieRating string `json:"max_movie_rating"`
+	MaxTVRating    string `json:"max_tv_rating"`
+	RatingRegion   string `json:"rating_region"`
 }
 
 // UserSummary is an enriched view of a user for admin user-management screens.
@@ -41,6 +56,8 @@ type UserSummary struct {
 	HasPendingInvite bool         `json:"has_pending_invite"`
 	PlexEmail        string       `json:"plex_email"`
 	PlexInvitedAt    *time.Time   `json:"plex_invited_at,omitempty"`
+	// Child reports a kids account (see User.Child).
+	Child bool `json:"child"`
 }
 
 // UpdateUserRoleRequest changes a user's role.

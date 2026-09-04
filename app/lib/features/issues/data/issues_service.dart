@@ -31,12 +31,12 @@ class IssuesService {
   /// investigation.
   Future<IssueReportResult> reportProblem({
     required String instanceId,
-    required String mediaType, // 'movie' | 'tv' | 'book'
+    required String mediaType, // 'movie' | 'tv' | 'book' | 'music'
     required int tmdbId,
     int? tvdbId,
     int? seasonNumber,
     int? episodeNumber,
-    String? foreignId, // book: Chaptarr foreignBookId
+    String? foreignId, // book/music: the library's foreign id
     String? bookFormat, // book: 'ebook' | 'audiobook'
     required IssueCategory category,
     String? reason,
@@ -47,13 +47,14 @@ class IssuesService {
       'media_type': mediaType,
       'category': category.value,
     };
-    // Books have no TMDB identity; their scope is the library foreignBookId
-    // (plus format when the title exists as both ebook and audiobook).
-    if (mediaType == 'book') {
+    // Books and music have no TMDB identity; their scope is the library's
+    // foreign id (plus format for books, where a title's ebook and audiobook
+    // are distinct records — music has no format axis).
+    if (mediaType == 'book' || mediaType == 'music') {
       if (foreignId != null && foreignId.isNotEmpty) {
         body['foreign_id'] = foreignId;
       }
-      if (bookFormat != null && bookFormat.isNotEmpty) {
+      if (mediaType == 'book' && bookFormat != null && bookFormat.isNotEmpty) {
         body['book_format'] = bookFormat;
       }
     } else {

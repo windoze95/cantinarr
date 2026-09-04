@@ -55,6 +55,8 @@ type Config struct {
 	// on first start and persists the issued key (see ensurePushAPIKey). An
 	// explicit key always wins. PushEnrollToken is sent as X-Enroll-Token during
 	// auto-enroll, needed only when the gateway uses gated enrollment.
+	// The relay's original name, push.julian.codes, is rewritten to the
+	// current one at load; see communityPushGatewayURL.
 	PushGatewayURL  string
 	PushAPIKey      string
 	PushEnrollToken string
@@ -72,6 +74,26 @@ type Config struct {
 	// boundaries from which completed media may be served. Per-instance mappings
 	// may target these roots or their descendants; empty disables media delivery.
 	MediaDownloadRoots []string
+}
+
+const (
+	// communityPushGatewayURL is the shared relay's current address.
+	communityPushGatewayURL = "https://push.cantinarr.com"
+	// legacyPushGatewayHost is the relay's original hostname. It still
+	// answers, but a deployment configured with it is moved to
+	// communityPushGatewayURL at load so the old name can eventually be
+	// retired. Same key, same tenant: nothing is stored per host.
+	legacyPushGatewayHost = "push.julian.codes"
+)
+
+// isLegacyPushGatewayHost reports whether raw names the relay's original
+// hostname, whatever its scheme, port, or letter case.
+func isLegacyPushGatewayHost(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Hostname(), legacyPushGatewayHost)
 }
 
 func Load() (*Config, error) {
@@ -110,6 +132,15 @@ func Load() (*Config, error) {
 		CodexBin:           strings.TrimSpace(os.Getenv("CANTINARR_CODEX_BIN")),
 		CodexRuntimeDir:    strings.TrimSpace(os.Getenv("CANTINARR_CODEX_RUNTIME_DIR")),
 		MediaDownloadRoots: splitEnvList(os.Getenv("CANTINARR_MEDIA_ROOTS")),
+	}
+
+	// The community relay moved from push.julian.codes to push.cantinarr.com
+	// in September 2026. The old name still answers, so this is not what keeps
+	// pushes flowing; it moves every never-edited compose file onto the new
+	// name at its next start, so the old one can be measured down and retired.
+	if isLegacyPushGatewayHost(cfg.PushGatewayURL) {
+		log.Printf("CANTINARR_PUSH_GATEWAY_URL=%s is the push relay's old name; using %s (same gateway, same enrollment)", cfg.PushGatewayURL, communityPushGatewayURL)
+		cfg.PushGatewayURL = communityPushGatewayURL
 	}
 
 	cfg.DisableUpdateCheck = envBool(os.Getenv("CANTINARR_DISABLE_UPDATE_CHECK"))

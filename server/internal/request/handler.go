@@ -38,8 +38,8 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "media_type required"})
 		return
 	}
-	// Books are keyed by the Readarr foreignBookId (no tmdb_id); everything else
-	// is keyed by tmdb_id.
+	// Books are keyed by the Readarr foreignBookId and music by the MusicBrainz
+	// release-group id (no tmdb_id); everything else is keyed by tmdb_id.
 	if req.MediaType == "book" {
 		req.ForeignID = strings.TrimSpace(req.ForeignID)
 		req.Title = strings.TrimSpace(req.Title)
@@ -54,6 +54,22 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.BookFormat != "" && !validBookFormat(req.BookFormat) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "book_format must be ebook, audiobook, or both"})
+			return
+		}
+	} else if req.MediaType == "music" {
+		req.ForeignID = strings.TrimSpace(req.ForeignID)
+		req.Title = strings.TrimSpace(req.Title)
+		req.SearchTerm = strings.TrimSpace(req.SearchTerm)
+		if req.ForeignID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required for music requests"})
+			return
+		}
+		if req.Title == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "title required for music requests"})
+			return
+		}
+		if req.BookFormat != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "music requests carry no book_format"})
 			return
 		}
 	} else if req.TmdbID == 0 {
@@ -265,16 +281,133 @@ func (h *Handler) GetBookSeriesDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, detail)
 }
 
+// GetMusicStatus reports the current user's request state for an album, keyed
+// by the MusicBrainz release-group id (music has no tmdb_id).
+func (h *Handler) GetMusicStatus(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	foreignID := strings.TrimSpace(r.URL.Query().Get("foreign_id"))
+	if foreignID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required"})
+		return
+	}
+	resp, err := h.service.GetUserMusicStatusForInstance(claims.UserID, foreignID, r.URL.Query().Get("instance_id"))
+	if err != nil {
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// GetMusicLibrary returns the current user's reduced, cached Lidarr library
+// digest (one entry per album with ownership), so the app can mark search
+// results as already-owned. A user with no Lidarr access gets an empty digest,
+// not an error.
+func (h *Handler) GetMusicLibrary(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	digest, err := h.service.GetMusicLibraryDigestForInstance(claims.UserID, r.URL.Query().Get("instance_id"))
+	if err != nil {
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, digest)
+}
+
+// GetMusicRecent returns the newest music imports for the Lidarr instance this
+// user may see, so the Music tab can show what recently landed. A user with no
+// Lidarr access gets an empty list, not an error.
+func (h *Handler) GetMusicRecent(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	limit := recentAlbumsDefaultLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	if limit > recentAlbumsMaxItems {
+		limit = recentAlbumsMaxItems
+	}
+	digest, err := h.service.GetRecentAlbumsForInstance(claims.UserID, r.URL.Query().Get("instance_id"), limit)
+	if err != nil {
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, digest)
+}
+
+// GetMusicArtists returns the artists of the Lidarr library this user may see,
+// so the Music tab can offer an artists browse row. The optional sort selects
+// the row's order (albums, name, added); an unknown value falls back to the
+// default rather than erroring. A user with no Lidarr access gets an empty
+// list, not an error.
+func (h *Handler) GetMusicArtists(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	digest, err := h.service.GetLibraryArtistsForInstance(
+		claims.UserID,
+		r.URL.Query().Get("instance_id"),
+		r.URL.Query().Get("sort"),
+	)
+	if err != nil {
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, digest)
+}
+
+// GetMusicArtist returns one artist of the Lidarr library plus every album of
+// theirs it tracks, with the ownership the requester-facing artist page
+// renders.
+func (h *Handler) GetMusicArtist(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	foreignID := strings.TrimSpace(r.URL.Query().Get("foreign_id"))
+	if foreignID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required"})
+		return
+	}
+	detail, err := h.service.GetLibraryArtistDetailForInstance(claims.UserID, foreignID, r.URL.Query().Get("instance_id"))
+	if err != nil {
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
 func requestErrorStatus(err error) int {
 	switch {
-	case errors.Is(err, ErrChaptarrInstanceForbidden), errors.Is(err, ErrArrInstanceForbidden):
+	case errors.Is(err, ErrChaptarrInstanceForbidden), errors.Is(err, ErrLidarrInstanceForbidden), errors.Is(err, ErrArrInstanceForbidden):
 		return http.StatusForbidden
-	case errors.Is(err, ErrChaptarrInstanceInvalid), errors.Is(err, ErrArrInstanceInvalid):
+	case errors.Is(err, ErrChaptarrInstanceInvalid), errors.Is(err, ErrLidarrInstanceInvalid), errors.Is(err, ErrArrInstanceInvalid):
 		return http.StatusBadRequest
 	case errors.Is(err, ErrBookFormatUnresolved):
 		return http.StatusConflict
-	case errors.Is(err, ErrBookAuthorNotFound), errors.Is(err, ErrBookSeriesNotFound):
+	case errors.Is(err, ErrBookAuthorNotFound), errors.Is(err, ErrBookSeriesNotFound), errors.Is(err, ErrMusicArtistNotFound):
 		return http.StatusNotFound
+	case errors.Is(err, ErrTitleNotAvailable):
+		// The same answer the detail route gives a kids account for the same
+		// title, so the app keeps one "not available" branch. A 403 here
+		// means "library not granted", a different thing.
+		return http.StatusNotFound
+	case errors.Is(err, ErrContentPolicyUnavailable):
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError
 	}

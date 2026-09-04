@@ -28,8 +28,12 @@ func (s mediaReadScope) searchedScope() string {
 		return fmt.Sprintf("queue item %d", s.QueueID)
 	case s.BookID > 0:
 		return "this book"
+	case s.AlbumID > 0:
+		return "this album"
 	case s.AuthorID > 0:
 		return "this author"
+	case s.ArtistID > 0:
+		return "this artist"
 	case s.EpisodeNumber > 0:
 		return fmt.Sprintf("season %d episode %d of this series", s.SeasonNumber, s.EpisodeNumber)
 	case s.SeasonNumber > 0:
@@ -103,5 +107,26 @@ func noQueueProblemsText(healthy int, scope mediaReadScope) string {
 		return sb.String()
 	}
 	sb.WriteString(" The queue is empty, so there was nothing to diagnose; the Doctor reads downloads in flight and only those.")
+	return sb.String()
+}
+
+// noBrowseResultsText explains an empty browse page. A browse is a
+// conjunction, so an empty answer says only that nothing satisfies ALL the
+// named filters at once; it says nothing about titles outside them, and when
+// the admin's English-only preference was applied, nothing about non-English
+// originals, which were never searched.
+func noBrowseResultsText(mediaLabel, applied string, englishOnlyApplied bool, page, totalPages int) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "No %s matched %s.", mediaLabel, applied)
+	if totalPages > 0 && page > totalPages {
+		fmt.Fprintf(&sb, " Page %d is past the last page (%d); the earlier pages did match.", page, totalPages)
+		return sb.String()
+	}
+	sb.WriteString(" TMDB has no title meeting all of these at once. That rules out nothing outside them:" +
+		" loosen one filter (drop a genre, widen the years, lower min_rating) rather than concluding none exist.")
+	if englishOnlyApplied {
+		sb.WriteString(" Only English-language originals were searched (the admin's discovery preference);" +
+			" a non-English title would not appear unless original_language names its language.")
+	}
 	return sb.String()
 }

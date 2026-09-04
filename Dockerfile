@@ -58,10 +58,15 @@ RUN CGO_ENABLED=0 go build -ldflags "-X github.com/windoze95/cantinarr-server/in
 
 # Stage 3: Final image
 FROM alpine:3.19
-RUN apk add --no-cache ca-certificates
+# su-exec is what the entrypoint drops privileges with when PUID/PGID are set.
+RUN apk add --no-cache ca-certificates su-exec
 COPY --from=go-builder /build/cantinarr /usr/local/bin/
 COPY --from=codex-downloader /codex-app-server /usr/local/bin/
 COPY --from=codex-downloader /codex-license/ /usr/share/licenses/codex-app-server/
+# Shared with server/Dockerfile: honours PUID/PGID (own /config, run as that
+# user), otherwise exec's the command untouched, root as before.
+COPY --chmod=0755 server/docker/entrypoint.sh /entrypoint.sh
 EXPOSE 8585
 VOLUME /config
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["cantinarr"]

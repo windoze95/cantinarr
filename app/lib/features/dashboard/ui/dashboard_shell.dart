@@ -5,9 +5,11 @@ import '../../../core/widgets/module_scaffold.dart';
 import '../../auth/logic/auth_provider.dart';
 
 /// Dashboard module shell: Movies | TV Shows | Releases, plus a Books tab when
-/// the user has Chaptarr access (services.chaptarr). Books is the LAST branch
-/// so showing/hiding it never shifts the other tabs' indices. Pages render as
-/// a bottom nav on mobile and sidebar items on desktop.
+/// the user has Chaptarr access (services.chaptarr) and a Music tab with
+/// Lidarr access (services.lidarr). The grant-gated tabs are the LAST
+/// branches — Books, then Music — so showing/hiding either never shifts the
+/// other tabs' indices. Pages render as a bottom nav on mobile and sidebar
+/// items on desktop.
 class DashboardShell extends ConsumerWidget {
   final int currentIndex;
   final ValueChanged<int> onTabChanged;
@@ -27,9 +29,15 @@ class DashboardShell extends ConsumerWidget {
         (a) => a.valueOrNull?.connection?.services.chaptarr ?? false,
       ),
     );
+    final showMusic = ref.watch(
+      authProvider.select(
+        (a) => a.valueOrNull?.connection?.services.lidarr ?? false,
+      ),
+    );
 
     return ModuleScaffold(
-      pages: modulePagesFor(ModuleType.dashboard, includeBooks: showBooks),
+      pages: modulePagesFor(ModuleType.dashboard,
+          includeBooks: showBooks, includeMusic: showMusic),
       currentIndex: currentIndex,
       onTabChanged: onTabChanged,
       child: child,

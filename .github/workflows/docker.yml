@@ -147,9 +147,40 @@ jobs:
             sleep 1
           done
           [ -n "$served" ] || docker logs cantinarr-version-smoke
+          # PID 1 is the server itself (the entrypoint exec's it) and, with no
+          # PUID set, still root: the default must never move under an
+          # existing deployment.
+          uid=$(docker exec cantinarr-version-smoke awk '/^Uid:/{print $2}' /proc/1/status)
           docker rm -f cantinarr-version-smoke
+          [ "$uid" = 0 ]
           cat /tmp/version.json
           grep -q '"build_number":"${{ steps.app_build.outputs.number }}"' /tmp/version.json
+
+      - name: Verify PUID/PGID runs the server as that user and hands it /config
+        # Issue #508: with PUID/PGID set, the entrypoint must take ownership
+        # of /config and exec the server as that uid/gid, so the database and
+        # the encryption key it creates land on the host owned by that user.
+        run: |
+          confdir="$RUNNER_TEMP/puid-config"
+          mkdir -p "$confdir"
+          docker run --rm -d --name cantinarr-puid-smoke \
+            -e PUID=1234 -e PGID=4321 -v "$confdir:/config" \
+            cantinarr-root-smoke:${{ github.sha }}
+          healthy=""
+          for _ in $(seq 1 60); do
+            docker exec cantinarr-puid-smoke wget -q -O /dev/null http://localhost:8585/api/health \
+              && { healthy=1; break; }
+            sleep 1
+          done
+          [ -n "$healthy" ] || docker logs cantinarr-puid-smoke
+          ids=$(docker exec cantinarr-puid-smoke awk '/^Uid:/{u=$2} /^Gid:/{g=$2} END{print u ":" g}' /proc/1/status)
+          docker rm -f cantinarr-puid-smoke
+          echo "pid 1 ran as $ids"
+          [ "$ids" = "1234:4321" ]
+          ls -ln "$confdir"
+          for path in "$confdir" "$confdir/cantinarr.db" "$confdir/encryption.key"; do
+            [ "$(stat -c '%u:%g' "$path")" = "1234:4321" ]
+          done
 
       - name: Build arm64 published image for smoke test
         if: github.event_name != 'pull_request'
@@ -198,10 +229,56 @@ jobs:
             test -s /usr/share/licenses/codex-app-server/NOTICE
             /usr/local/bin/codex-app-server --help | grep -q -- --listen
           '
+          # The entrypoint is wired into this image too: PUID/PGID select the
+          # uid/gid the command runs as.
+          test "$(docker run --rm -e PUID=1234 -e PGID=4321 cantinarr-server-smoke:${{ github.sha }} id -u)" = 1234
+          test "$(docker run --rm -e PUID=1234 -e PGID=4321 cantinarr-server-smoke:${{ github.sha }} id -g)" = 4321
+
+      # Fork PRs run with a read-only GITHUB_TOKEN, so pushing their pr-N tag
+      # from this job is denied. Instead the already-cached amd64 build is
+      # retagged with the labels the direct push would have applied and handed
+      # to pr-preview-publish.yml as a run artifact; that workflow pushes the
+      # tag from base-repo context, so fork PRs get the same pullable preview
+      # image as same-repo PRs, a couple of minutes after this run completes.
+      - name: Build preview image for the fork handoff
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            APP_BUILD_NUMBER=${{ steps.app_build.outputs.number }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ghcr.io/windoze95/cantinarr:pr-${{ github.event.pull_request.number }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=published
+          cache-to: type=gha,mode=max,scope=published
+
+      - name: Save preview image for the publish workflow
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          docker save ghcr.io/windoze95/cantinarr:pr-${{ github.event.pull_request.number }} \
+            | zstd -T0 -o "$RUNNER_TEMP/pr-preview-image.tar.zst"
+
+      - name: Upload preview image artifact
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-preview-image
+          path: ${{ runner.temp }}/pr-preview-image.tar.zst
+          # Only needs to survive the minutes until pr-preview-publish.yml
+          # picks it up; days are headroom for manual re-runs.
+          retention-days: 3
+          # The tarball is already zstd-compressed; zipping it again would
+          # spend minutes for nothing.
+          compression-level: 0
 
       - name: Build and push
-        # Fork PRs run with a read-only GITHUB_TOKEN, so pushing the pr-N tag
-        # is denied; the smoke-test builds above still prove both Dockerfiles.
+        # Fork PRs can't push from this run (read-only GITHUB_TOKEN); their
+        # preview is published by pr-preview-publish.yml from the artifact
+        # saved above.
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/build-push-action@v6
         with:

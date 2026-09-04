@@ -1,3 +1,30 @@
+/// What a kids account may see, as the account's own profile carries it:
+/// enough for the Account line in Settings. Mirrors the server's
+/// `content_limits`; null on an unrestricted account.
+class ContentLimits {
+  final String maxMovieRating;
+  final String maxTvRating;
+  final String ratingRegion;
+
+  const ContentLimits({
+    required this.maxMovieRating,
+    required this.maxTvRating,
+    required this.ratingRegion,
+  });
+
+  factory ContentLimits.fromJson(Map<String, dynamic> json) => ContentLimits(
+        maxMovieRating: json['max_movie_rating'] as String? ?? '',
+        maxTvRating: json['max_tv_rating'] as String? ?? '',
+        ratingRegion: json['rating_region'] as String? ?? '',
+      );
+
+  Map<String, dynamic> toJson() => {
+        'max_movie_rating': maxMovieRating,
+        'max_tv_rating': maxTvRating,
+        'rating_region': ratingRegion,
+      };
+}
+
 /// Represents the currently authenticated user.
 class UserProfile {
   final int id;
@@ -20,6 +47,11 @@ class UserProfile {
   final String plexEmail;
   final String? plexInvitedAt;
 
+  /// A kids account: the server filters every title this account is shown.
+  /// [contentLimits] is the summary it may render; the app filters nothing.
+  final bool child;
+  final ContentLimits? contentLimits;
+
   const UserProfile({
     required this.id,
     required this.username,
@@ -30,6 +62,8 @@ class UserProfile {
     this.passkeyEnabled = false,
     this.plexEmail = '',
     this.plexInvitedAt,
+    this.child = false,
+    this.contentLimits,
   });
 
   bool get isAdmin => role == 'admin';
@@ -54,6 +88,10 @@ class UserProfile {
         passkeyEnabled: json['passkey_enabled'] as bool? ?? false,
         plexEmail: json['plex_email'] as String? ?? '',
         plexInvitedAt: json['plex_invited_at'] as String?,
+        child: json['child'] as bool? ?? false,
+        contentLimits: json['content_limits'] is Map<String, dynamic>
+            ? ContentLimits.fromJson(json['content_limits'] as Map<String, dynamic>)
+            : null,
       );
 
   UserProfile copyWith({
@@ -71,6 +109,8 @@ class UserProfile {
         passkeyEnabled: passkeyEnabled,
         plexEmail: plexEmail ?? this.plexEmail,
         plexInvitedAt: clearPlexInvitedAt ? null : plexInvitedAt,
+        child: child,
+        contentLimits: contentLimits,
       );
 
   Map<String, dynamic> toJson() => {
@@ -83,5 +123,7 @@ class UserProfile {
         'passkey_enabled': passkeyEnabled,
         'plex_email': plexEmail,
         if (plexInvitedAt != null) 'plex_invited_at': plexInvitedAt,
+        'child': child,
+        if (contentLimits != null) 'content_limits': contentLimits!.toJson(),
       };
 }

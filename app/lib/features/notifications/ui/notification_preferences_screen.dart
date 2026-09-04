@@ -181,8 +181,9 @@ class _NotificationPreferencesScreenState
     final isAdmin = auth?.user?.isAdmin ?? false;
     // Same gate as the Books tab: a user without Chaptarr access is never in
     // a new-book audience (the server scopes recipients by instance grant),
-    // so don't show them a toggle that can't do anything.
+    // so don't show them a toggle that can't do anything. Music mirrors it.
     final showBooks = auth?.connection?.services.chaptarr ?? false;
+    final showMusic = auth?.connection?.services.lidarr ?? false;
 
     return ListView(
       // Build every child while a settings-search highlight needs to find
@@ -248,7 +249,7 @@ class _NotificationPreferencesScreenState
           _toggle(
             title: 'Quality upgrades',
             subtitle:
-                'When an existing movie, episode, or book is replaced with a better version',
+                'When an existing movie, episode, book, or album is replaced with a better version',
             value: prefs.contentUpgraded,
             onChanged: (v) => _save(prefs.copyWith(contentUpgraded: v), prefs),
             anchor: SettingsAnchors.notificationsQualityUpgrades,
@@ -275,6 +276,14 @@ class _NotificationPreferencesScreenState
             value: prefs.newBook,
             onChanged: (v) => _save(prefs.copyWith(newBook: v), prefs),
             anchor: SettingsAnchors.notificationsNewBook,
+          ),
+        if (showMusic)
+          _toggle(
+            title: 'New music available',
+            subtitle: 'When an album finishes downloading',
+            value: prefs.newMusic,
+            onChanged: (v) => _save(prefs.copyWith(newMusic: v), prefs),
+            anchor: SettingsAnchors.notificationsNewMusic,
           ),
         _toggle(
           title: 'Plex invite sent',
@@ -405,7 +414,6 @@ class _NotificationPreferencesScreenState
     final tile = SwitchListTile(
       value: value,
       onChanged: onChanged,
-      activeThumbColor: AppTheme.accent,
       title: Text(title,
           style: const TextStyle(
               color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),

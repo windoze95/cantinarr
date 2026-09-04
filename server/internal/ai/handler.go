@@ -13,6 +13,7 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/grokoauth"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
@@ -32,7 +33,13 @@ type Handler struct {
 	settingsMu          sync.Mutex
 	admissionOnce       sync.Once
 	admission           *chatAdmission
+	// contentPolicy is the kids-account service; a child's chat carries its
+	// limits in the instructions. nil until wired.
+	contentPolicy *contentpolicy.Service
 }
+
+// SetContentPolicy wires the kids-account service.
+func (h *Handler) SetContentPolicy(svc *contentpolicy.Service) { h.contentPolicy = svc }
 
 func (h *Handler) chatAdmission() *chatAdmission {
 	h.admissionOnce.Do(func() { h.admission = newChatAdmission() })
@@ -194,6 +201,20 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		Services:          h.configuredServices(),
 		TrustedUserText:   trustedUserText,
 		InteractiveTurnID: interactiveTurnID,
+	}
+	if h.contentPolicy != nil {
+		policy, err := h.contentPolicy.PolicyFor(claims.UserID, claims.Role)
+		if err != nil {
+			// A limit that cannot be read is a chat that cannot start: the
+			// tools would refuse the same way, and the instructions must
+			// never be silently lighter than the account.
+			emit(map[string]string{"error": "Content limits are temporarily unavailable. Try again shortly."})
+			return
+		}
+		if policy != nil {
+			chatCtx.KidsAccount = true
+			chatCtx.ContentLimits = h.contentPolicy.DescribeLimits(r.Context(), policy)
+		}
 	}
 	if h.toolServer.IsAIDebugEnabled() {
 		log.Printf("ai debug: chat start source=%s provider=%s model=%s user_id=%d role=%s requested_conversation_id=%s messages=%d latest_user=%q",
@@ -459,6 +480,9 @@ func (h *Handler) configuredServices() []string {
 	}
 	if h.toolServer.GetChaptarr() != nil {
 		services = append(services, "Chaptarr (books)")
+	}
+	if h.toolServer.GetLidarr() != nil {
+		services = append(services, "Lidarr (music)")
 	}
 	return services
 }

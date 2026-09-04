@@ -70,6 +70,22 @@ func TestIsArrReadPath(t *testing.T) {
 		{"chaptarr history", "chaptarr", "api/v1/history", true},
 		{"chaptarr wanted", "chaptarr", "api/v1/wanted/missing", true},
 
+		// Allowlisted Lidarr v1 read resources.
+		{"lidarr artist", "lidarr", "api/v1/artist", true},
+		{"lidarr artist detail", "lidarr", "api/v1/artist/7", true},
+		{"lidarr album", "lidarr", "api/v1/album/123", true},
+		{"lidarr album lookup", "lidarr", "api/v1/album/lookup", true},
+		{"lidarr artist lookup", "lidarr", "api/v1/artist/lookup", true},
+		{"lidarr calendar", "lidarr", "api/v1/calendar", true},
+		{"lidarr queue", "lidarr", "api/v1/queue", true},
+		{"lidarr history", "lidarr", "api/v1/history", true},
+		{"lidarr wanted", "lidarr", "api/v1/wanted/missing", true},
+		{"lidarr track list", "lidarr", "api/v1/track", true},
+		{"lidarr album track files", "lidarr", "api/v1/trackfile", true},
+		{"lidarr track file detail", "lidarr", "api/v1/trackfile/19", true},
+		{"lidarr artist portrait", "lidarr", "api/v1/mediacover/artist/7/poster.jpg", true},
+		{"lidarr album cover", "lidarr", "api/v1/mediacover/album/9/cover.jpg", true},
+
 		// Service identity and version are part of the allowlist.
 		{"radarr cannot read sonarr resource", "radarr", "api/v3/series", false},
 		{"sonarr cannot read radarr resource", "sonarr", "api/v3/movie", false},
@@ -117,6 +133,25 @@ func TestIsArrReadPath(t *testing.T) {
 		{"chaptarr lowercase media cover", "chaptarr", "api/v1/mediacover/Books/9/cover.jpg", false},
 		{"radarr media cover remains admin only", "radarr", "api/v3/MediaCover/1/poster.jpg", false},
 
+		{"lidarr cannot read chaptarr resource", "lidarr", "api/v1/book", false},
+		{"chaptarr cannot read lidarr resource", "chaptarr", "api/v1/artist", false},
+		{"lidarr v3 rejected", "lidarr", "api/v3/artist", false},
+		{"lidarr quality profiles", "lidarr", "api/v1/qualityprofile", false},
+		{"lidarr metadata profiles", "lidarr", "api/v1/metadataprofile", false},
+		{"lidarr root folders", "lidarr", "api/v1/rootfolder", false},
+		{"lidarr command", "lidarr", "api/v1/command", false},
+		{"lidarr release search", "lidarr", "api/v1/release", false},
+		{"lidarr config", "lidarr", "api/v1/config/host", false},
+		{"lidarr bare media cover", "lidarr", "api/v1/mediacover", false},
+		{"lidarr media cover unknown subtree", "lidarr", "api/v1/mediacover/config/9/secret.txt", false},
+		{"lidarr media cover zero id", "lidarr", "api/v1/mediacover/artist/0/poster.jpg", false},
+		{"lidarr media cover without file", "lidarr", "api/v1/mediacover/album/9", false},
+		// The app builds lowercase mediacover paths; the root-level uppercase
+		// shape is deliberately not allowlisted for lidarr.
+		{"lidarr uppercase media cover", "lidarr", "api/v1/MediaCover/7/poster.jpg", false},
+		{"lidarr artist lookup subroute", "lidarr", "api/v1/artist/lookup/1", false},
+		{"lidarr album editor subroute", "lidarr", "api/v1/album/editor", false},
+
 		// Traversal, embedded markers, and empty resources fail closed.
 		{"radarr traversal", "radarr", "api/v3/movie/../config/host", false},
 		{"chaptarr traversal", "chaptarr", "api/v1/author/../config/host", false},
@@ -126,6 +161,7 @@ func TestIsArrReadPath(t *testing.T) {
 		{"empty path", "radarr", "", false},
 		{"empty v3 resource", "radarr", "api/v3/", false},
 		{"empty v1 resource", "chaptarr", "api/v1/", false},
+		{"lidarr cover traversal", "lidarr", "api/v1/mediacover/album/9/../config.xml", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -275,6 +311,7 @@ func TestRequireArrProxyAccess_ServiceBoundary(t *testing.T) {
 		{"nzbget rejects arr-shaped path", "nzbget", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
 		{"transmission rejects arr-shaped path", "transmission", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
 		{"tautulli rejects arr-shaped path", "tautulli", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
+		{"tracearr rejects arr-shaped path", "tracearr", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
 		{"jellyfin rejects arr-shaped path", "jellyfin", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
 		{"emby rejects arr-shaped path", "emby", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
 		{"plex rejects arr-shaped path", "plex", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},

@@ -25,6 +25,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/cache"
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/config"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	projectdb "github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/discover"
@@ -39,9 +40,9 @@ import (
 	requestsvc "github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
-	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 	"github.com/windoze95/cantinarr-server/internal/update"
+	"github.com/windoze95/cantinarr-server/internal/watchhistory"
 	"github.com/windoze95/cantinarr-server/internal/webhooks"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
 )
@@ -86,6 +87,7 @@ func TestRouterRBACMatrixWithAdminAndRequesterTokens(t *testing.T) {
 		{http.MethodGet, "/api/instances"},
 		{http.MethodGet, "/api/downloads/missing/queue"},
 		{http.MethodGet, "/api/tautulli/missing/activity"},
+		{http.MethodGet, "/api/watch-history/missing/activity"},
 		{http.MethodGet, "/api/admin/media-servers/accounts"},
 	}
 	for _, route := range adminRoutes {
@@ -328,6 +330,7 @@ func privilegedRoutes(t *testing.T, router http.Handler) []rbacRoute {
 		privileged := strings.HasPrefix(pattern, "/api/admin/") ||
 			strings.HasPrefix(pattern, "/api/downloads/") ||
 			strings.HasPrefix(pattern, "/api/tautulli/") ||
+			strings.HasPrefix(pattern, "/api/watch-history/") ||
 			(strings.HasPrefix(pattern, "/api/instances") && !strings.HasSuffix(pattern, "/*"))
 		if privileged {
 			out = append(out, rbacRoute{method: method, pattern: pattern})
@@ -463,7 +466,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 			t.Errorf("close media files handler: %v", err)
 		}
 	})
-	tautulliHandler := tautulli.NewHandler(store, instanceRegistry)
+	watchHistoryHandler := watchhistory.NewHandler(store, instanceRegistry)
 	proxyHandler := proxy.NewHandler(store)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	pushHandler := push.NewHandler(database, nil, logger)
@@ -473,6 +476,12 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 	discoverCache := cache.New()
 	t.Cleanup(discoverCache.Close)
 	discoverHandler := discover.NewHandler(registry, discoverCache, serversettings.NewService(database, func() bool { return registry.Trakt() != nil }))
+	contentPolicy := contentpolicy.New(database, func() contentpolicy.RawGetter {
+		if client := registry.TMDB(); client != nil {
+			return client
+		}
+		return nil
+	}, discoverCache)
 
 	cfg := &config.Config{
 		ArrCallbackURL:     "http://cantinarr.test",
@@ -496,7 +505,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		store,
 		downloadsHandler,
 		mediaFilesHandler,
-		tautulliHandler,
+		watchHistoryHandler,
 		registry,
 		credentialHandler,
 		toolServer,
@@ -505,6 +514,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		mediaAccessHandler,
 		update.NewChecker("dev", true),
 		serversettings.NewService(database, func() bool { return registry.Trakt() != nil }),
+		contentpolicy.NewHandler(contentPolicy),
 	)
 	return &rbacRouterHarness{
 		router:            router,

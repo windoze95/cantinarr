@@ -58,7 +58,8 @@ class _PreviewApp extends ConsumerWidget {
 /// sidebar instance selector), Sonarr, Chaptarr, three download clients
 /// (exercises the aggregate "All" downloads view; torrent clients listed
 /// before usenet here to prove the menu reorders them usenet-first),
-/// Tautulli, a Jellyfin media server (exercises the "Watch on Jellyfin" menu
+/// Tautulli and Tracearr (exercises the Monitoring instance selector), a
+/// Jellyfin media server (exercises the "Watch on Jellyfin" menu
 /// entry, the access guide, and the editor's media-server sections), plus
 /// AI + Chaptarr services for the assistant module and Books tab.
 const _adminState = AuthState(
@@ -117,6 +118,12 @@ const _adminState = AuthState(
         id: 'tautulli-main',
         serviceType: 'tautulli',
         name: 'Tautulli',
+        isDefault: true,
+      ),
+      ServiceInstance(
+        id: 'tracearr-main',
+        serviceType: 'tracearr',
+        name: 'Tracearr',
         isDefault: true,
       ),
       ServiceInstance(

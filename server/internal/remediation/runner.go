@@ -41,6 +41,7 @@ var readToolAllowList = []string{
 	"get_arr_health",
 	"get_episode_timeline",
 	"get_book_timeline",
+	"get_album_timeline",
 	// The file the library actually holds — the arr's own ffprobe truth
 	// (resolution, audio languages, subtitles). "Wrong audio" and "bad copy"
 	// are unjudgeable from a release name; this is the read that makes those
@@ -1265,7 +1266,7 @@ func (r *Runner) dispatchTool(ctx context.Context, issue *Issue, runID int64, tu
 // responses rather than Go errors.
 func isVerificationRead(name string, result *mcp.ToolResult) bool {
 	switch name {
-	case "get_queue", "diagnose_queue", "get_manual_import_candidates", "get_history", "get_library", "get_episode_timeline", "get_book_timeline":
+	case "get_queue", "diagnose_queue", "get_manual_import_candidates", "get_history", "get_library", "get_episode_timeline", "get_book_timeline", "get_album_timeline":
 	default:
 		return false
 	}
@@ -1276,6 +1277,27 @@ func isVerificationRead(name string, result *mcp.ToolResult) bool {
 	return !strings.Contains(text, "not configured") &&
 		!strings.Contains(text, "disabled by the administrator") &&
 		!strings.Contains(text, "not permitted")
+}
+
+
+// injectArrRecordIDs writes the issue's generic arr record ids back under the
+// keys the read tools actually take: book_id/author_id for a book issue,
+// album_id/artist_id for a music one (both ride the same issue columns).
+func injectArrRecordIDs(params map[string]any, issue *Issue) {
+	if issue.BookID > 0 {
+		if issue.MediaType == "music" {
+			params["album_id"] = issue.BookID
+		} else {
+			params["book_id"] = issue.BookID
+		}
+	}
+	if issue.AuthorID > 0 {
+		if issue.MediaType == "music" {
+			params["artist_id"] = issue.AuthorID
+		} else {
+			params["author_id"] = issue.AuthorID
+		}
+	}
 }
 
 func releaseCandidateKey(reference string, indexerID int) string {
@@ -1359,7 +1381,7 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 	// choice is dropped here (the settings tools re-inject the issue's id below;
 	// the callCtx-plumbed tools get it as trusted call context instead).
 	modelQueueID := params["queue_id"]
-	for _, key := range []string{"media_type", "instance_id", "tmdb_id", "tvdb_id", "season_number", "episode_number", "queue_id", "download_id", "book_id", "author_id"} {
+	for _, key := range []string{"media_type", "instance_id", "tmdb_id", "tvdb_id", "season_number", "episode_number", "queue_id", "download_id", "book_id", "author_id", "artist_id", "album_id"} {
 		delete(params, key)
 	}
 	params["media_type"] = issue.MediaType
@@ -1379,6 +1401,10 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		case "book":
 			if issue.BookID <= 0 && !(queueScopedTool && issue.ArrQueueID > 0 && issue.DownloadID != "") {
 				return nil, fmt.Errorf("issue has no authoritative book identity for scoped %s", toolName)
+			}
+		case "music":
+			if issue.BookID <= 0 && !(queueScopedTool && issue.ArrQueueID > 0 && issue.DownloadID != "") {
+				return nil, fmt.Errorf("issue has no authoritative music identity for scoped %s", toolName)
 			}
 		}
 	}
@@ -1404,12 +1430,7 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		if issue.EpisodeNumber > 0 {
 			params["episode_number"] = issue.EpisodeNumber
 		}
-		if issue.BookID > 0 {
-			params["book_id"] = issue.BookID
-		}
-		if issue.AuthorID > 0 {
-			params["author_id"] = issue.AuthorID
-		}
+		injectArrRecordIDs(params, issue)
 	case "search_releases":
 		if issue.TmdbID > 0 {
 			params["tmdb_id"] = issue.TmdbID
@@ -1423,6 +1444,9 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		if issue.MediaType == "book" && issue.BookID > 0 {
 			params["book_id"] = issue.BookID
 		}
+		if issue.MediaType == "music" && issue.BookID > 0 {
+			params["album_id"] = issue.BookID
+		}
 	case "get_library":
 		delete(params, "query")
 		if issue.TmdbID > 0 {
@@ -1431,12 +1455,7 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		if issue.TvdbID > 0 {
 			params["tvdb_id"] = issue.TvdbID
 		}
-		if issue.BookID > 0 {
-			params["book_id"] = issue.BookID
-		}
-		if issue.AuthorID > 0 {
-			params["author_id"] = issue.AuthorID
-		}
+		injectArrRecordIDs(params, issue)
 		if issue.TmdbID == 0 && issue.TvdbID == 0 && issue.BookID == 0 && issue.AuthorID == 0 && issue.Title != "" {
 			params["query"] = issue.Title
 		}
@@ -1453,12 +1472,7 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		if issue.EpisodeNumber > 0 {
 			params["episode_number"] = issue.EpisodeNumber
 		}
-		if issue.BookID > 0 {
-			params["book_id"] = issue.BookID
-		}
-		if issue.AuthorID > 0 {
-			params["author_id"] = issue.AuthorID
-		}
+		injectArrRecordIDs(params, issue)
 	case "get_quality_profiles", "get_custom_formats", "get_service_config":
 		// Refusing an issue with no instance is MANDATORY, not defensive. Unlike
 		// every other read tool these two are not handed callCtx.InstanceID, and
@@ -1501,14 +1515,23 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		if issue.BookID > 0 {
 			params["book_id"] = issue.BookID
 		}
+	case "get_album_timeline":
+		// Same re-injection for music: the album record id rides the issue's
+		// generic BookID column.
+		if issue.BookID > 0 {
+			params["album_id"] = issue.BookID
+		}
 	case "get_media_file_details":
 		// Same unreachable-when-scrubbed shape as get_book_timeline: the tool
-		// requires tmdb_id, which the scrub deleted.
+		// requires tmdb_id (or, for music, album_id), which the scrub deleted.
 		if issue.TmdbID > 0 {
 			params["tmdb_id"] = issue.TmdbID
 		}
 		if issue.SeasonNumber > 0 {
 			params["season_number"] = issue.SeasonNumber
+		}
+		if issue.MediaType == "music" && issue.BookID > 0 {
+			params["album_id"] = issue.BookID
 		}
 	}
 	return json.Marshal(params)

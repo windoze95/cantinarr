@@ -205,8 +205,9 @@ class InstanceApiService {
   }
 
   /// Library root folders the saved arr instance reports right now, read
-  /// through the admin arr proxy (Radarr/Sonarr speak v3, Chaptarr v1). These
-  /// are the only path prefixes a media path mapping can ever match, so the
+  /// through the admin arr proxy (Radarr/Sonarr speak v3, Chaptarr and
+  /// Lidarr v1). These are the only path prefixes a media path mapping can
+  /// ever match, so the
   /// editor offers them as mapping sources. Arr responses may arrive without
   /// a JSON content type, so a String body is decoded here; unexpected shapes
   /// yield an empty list while transport failures propagate for a retry.
@@ -214,7 +215,9 @@ class InstanceApiService {
     required String instanceId,
     required String serviceType,
   }) async {
-    final version = serviceType == 'chaptarr' ? 'v1' : 'v3';
+    // Chaptarr (Readarr lineage) and Lidarr speak the Servarr v1 API.
+    const v1Services = {'chaptarr', 'lidarr'};
+    final version = v1Services.contains(serviceType) ? 'v1' : 'v3';
     final resp =
         await _dio.get('/api/instances/$instanceId/api/$version/rootfolder');
     dynamic data = resp.data;

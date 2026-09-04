@@ -463,6 +463,32 @@ class _RequesterBookDetailScreenState
       live?.author?.authorName,
       owned?.author,
     ]);
+    // Navigation is gated on the digest for the same reason the series line is:
+    // /detail/author/{id} resolves the LIBRARY's author identity, and the
+    // digest is the only source stamped from the library's own author record.
+    // A name that came from a metadata lookup or a live record may belong to a
+    // different provider's idea of this author, so it renders as plain,
+    // untappable text rather than pointing at a page that cannot resolve it.
+    final authorNavigableId = owned?.authorForeignId.trim() ?? '';
+    // Navigation is gated on the digest specifically (D-06): only the
+    // digest's series name was produced by parseSeriesTitle against this
+    // library, so only it is guaranteed to address
+    // /api/requests/book-series-detail. A label sourced from a live Chaptarr
+    // record or from metadata always renders as plain, untappable text.
+    final seriesNavigableName = owned?.series.trim() ?? '';
+    // The digest's assembled "Name #Position" label leads, and a live/
+    // metadata record's raw seriesTitle is only a display fallback for a book
+    // whose digest row hasn't resolved yet (admin / downloads-enabled path).
+    // This deliberately inverts the _metadata-first order the neighbouring
+    // title/author/overview derivations use: the series page shows the
+    // library's own run, and the digest is the one value that was parsed
+    // against it, so the label and the tap target always agree on source
+    // (D-06). The navigable name above stays the digest's alone regardless.
+    final seriesLabel = _firstText([
+      _seriesLabel(seriesNavigableName, owned?.seriesPosition ?? ''),
+      live?.seriesTitle,
+      _metadata?.seriesTitle,
+    ]);
     final releaseDate = _metadata?.releaseDate ?? live?.releaseDate;
     final year = releaseDate?.year ?? owned?.year ?? 0;
     final overview = _firstText([
@@ -545,13 +571,60 @@ class _RequesterBookDetailScreenState
           ),
           if (author.isNotEmpty) ...[
             const SizedBox(height: 6),
-            Text(
-              author,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: AppTheme.textSecondary,
+            authorNavigableId.isEmpty
+                ? Text(
+                    author,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                          color: AppTheme.textSecondary,
+                        ),
+                  )
+                : InkWell(
+                    key: const ValueKey('book-author-link'),
+                    onTap: () {
+                      final instanceId = _instanceId;
+                      context.push(
+                        '/detail/author/${Uri.encodeComponent(authorNavigableId)}'
+                        '?name=${Uri.encodeQueryComponent(author)}'
+                        '${instanceId == null ? '' : '&instance_id=${Uri.encodeQueryComponent(instanceId)}'}',
+                      );
+                    },
+                    child: Text(
+                      author,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                            color: AppTheme.accent,
+                          ),
+                    ),
                   ),
-            ),
+          ],
+          if (seriesLabel.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            seriesNavigableName.isEmpty
+                ? Text(
+                    seriesLabel,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: AppTheme.textSecondary,
+                        ),
+                  )
+                : InkWell(
+                    key: const ValueKey('book-series-link'),
+                    onTap: () {
+                      final instanceId = _instanceId;
+                      context.push(
+                        '/detail/series/${Uri.encodeComponent(seriesNavigableName)}'
+                        '${instanceId == null ? '' : '?instance_id=${Uri.encodeQueryComponent(instanceId)}'}',
+                      );
+                    },
+                    child: Text(
+                      seriesLabel,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: AppTheme.accent,
+                          ),
+                    ),
+                  ),
           ],
           if (year > 0 || pageCount > 0) ...[
             const SizedBox(height: 6),
@@ -807,6 +880,19 @@ String _bookFileLabel(ChaptarrBookFile file, int index) {
   final path = file.path?.replaceAll('\\', '/') ?? '';
   final parts = path.split('/').where((part) => part.isNotEmpty).toList();
   return parts.isEmpty ? 'File ${index + 1}' : parts.last;
+}
+
+/// Combines a series name and its position into one display label
+/// ("Name #Position"). This is the single place that assembly happens, so an
+/// empty position can never produce a trailing separator, and a blank name
+/// always yields a blank label.
+String _seriesLabel(String name, String position) {
+  final trimmedName = name.trim();
+  if (trimmedName.isEmpty) return '';
+  final trimmedPosition = position.trim();
+  return trimmedPosition.isEmpty
+      ? trimmedName
+      : '$trimmedName #$trimmedPosition';
 }
 
 String _firstText(Iterable<String?> values) {

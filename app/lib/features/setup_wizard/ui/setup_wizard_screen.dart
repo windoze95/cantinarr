@@ -39,6 +39,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       case 'download_client':
       case 'tautulli':
       case 'books':
+      case 'music':
       case 'media_servers':
         return '/settings/instance/new';
       case 'media_downloads':
@@ -80,6 +81,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return Icons.live_tv_outlined;
       case 'books':
         return Icons.menu_book;
+      case 'music':
+        return Icons.library_music_outlined;
       case 'ai':
         return Icons.smart_toy_outlined;
       case 'remediation':
@@ -90,9 +93,10 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   }
 
   /// Route extras for the instance rows: the add-instance form opens already
-  /// on the service type this row named. The download-client row names a
-  /// category with four members, so instead of guessing one it sends a
-  /// selection prompt the form shows as its disabled placeholder option.
+  /// on the service type this row named. Rows that name a category with
+  /// several members (download clients, media servers, and the monitoring
+  /// row, whose key predates Tracearr) send a selection prompt instead of
+  /// guessing one; the form shows it as its disabled placeholder option.
   Map<String, dynamic>? _extraFor(String key) {
     switch (key) {
       case 'radarr':
@@ -100,9 +104,11 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       case 'sonarr':
         return {'service_type': 'sonarr'};
       case 'tautulli':
-        return {'service_type': 'tautulli'};
+        return {'service_type_prompt': 'Select a monitoring service'};
       case 'books':
         return {'service_type': 'chaptarr'};
+      case 'music':
+        return {'service_type': 'lidarr'};
       case 'media_servers':
         return {'service_type_prompt': 'Select a media server'};
       case 'download_client':
@@ -118,6 +124,23 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     // Re-derive on return: whatever the admin just configured (or didn't)
     // is reflected immediately.
     ref.read(setupStatusProvider.notifier).refresh();
+  }
+
+  /// Records or clears one skip, then re-derives so every surface — the
+  /// section counts, the Settings tile, the drawer reminder — follows in the
+  /// same breath. Failures are named; a tap that silently changed nothing
+  /// would read as the checklist ignoring the admin.
+  Future<void> _setSkipped(SetupItem item, bool skipped) async {
+    try {
+      await ref.read(setupStatusServiceProvider).setSkipped(item.key, skipped);
+      await ref.read(setupStatusProvider.notifier).refresh();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(skipped
+              ? 'Could not skip "${item.title}". Try again.'
+              : 'Could not restore "${item.title}". Try again.')));
+    }
   }
 
   @override
@@ -155,7 +178,9 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         status.items.where((i) => !i.optional).toList(growable: false);
     final optional =
         status.items.where((i) => i.optional).toList(growable: false);
-    final progress = status.total == 0 ? 0.0 : status.configured / status.total;
+    final progress = status.effectiveTotal == 0
+        ? 0.0
+        : status.configured / status.effectiveTotal;
 
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -166,7 +191,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '${status.configured} of ${status.total} features configured',
+                '${status.configured} of ${status.effectiveTotal} features configured',
                 style: const TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 18,
@@ -203,7 +228,10 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
           const SizedBox(height: 8),
           _SectionHeader(
             title: 'Nice to have',
-            remaining: optional.where((i) => !i.configured).length,
+            // Skipped rows are acknowledged, not outstanding: they must not
+            // hold the section (or any other surface) at "N left" forever.
+            remaining:
+                optional.where((i) => !i.configured && !i.skipped).length,
           ),
           ...optional.map((i) => _buildItem(i, urgent: status.isUrgent(i))),
         ],
@@ -213,7 +241,6 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
           value: ref.watch(setupReminderEnabledProvider),
           onChanged: (v) =>
               ref.read(setupReminderEnabledProvider.notifier).set(v),
-          activeThumbColor: AppTheme.accent,
           secondary: const Icon(Icons.notifications_outlined,
               color: AppTheme.textSecondary),
           title: const Text('Remind me in the menu',
@@ -239,25 +266,67 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   Widget _buildItem(SetupItem item, {required bool urgent}) {
     final route = _routeFor(item.key);
     final actionColor = urgent ? AppTheme.danger : AppTheme.accent;
+    final dismissed = item.dismissed;
+    // An unconfigured row with nowhere to go (push is a server env var, and
+    // unknown keys come from newer servers) gets no chip: there is no action
+    // here to offer. Its full-strength title still reads as outstanding.
+    //
+    // A skippable row pairs the Set up chip with a Skip one, so an admin who
+    // deliberately doesn't run this feature can acknowledge it instead of
+    // wearing its count forever. A skipped row dims to a receipt like a
+    // configured one, keeps its tap-through (setting it up later needs no
+    // un-skip first), and its "Skipped" chip is the undo.
+    final Widget? trailing;
+    if (item.configured) {
+      trailing =
+          const Icon(Icons.check_circle, color: AppTheme.available, size: 20);
+    } else if (dismissed) {
+      trailing = InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _setSkipped(item, false),
+        child: const Tooltip(
+          message: 'Restore to the checklist',
+          child: StatusPill(text: 'Skipped', color: AppTheme.textSecondary),
+        ),
+      );
+    } else if (route != null) {
+      trailing = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (item.optional) ...[
+            InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => _setSkipped(item, true),
+              child: const Tooltip(
+                message: 'Acknowledge and stop counting this',
+                child:
+                    StatusPill(text: 'Skip', color: AppTheme.textSecondary),
+              ),
+            ),
+            const SizedBox(width: 6),
+          ],
+          StatusPill(text: 'Set up', color: actionColor),
+        ],
+      );
+    } else {
+      trailing = null;
+    }
     return ListTile(
       leading: Icon(_iconFor(item.key),
-          color: item.configured ? AppTheme.available : actionColor),
+          color: item.configured
+              ? AppTheme.available
+              : dismissed
+                  ? AppTheme.textSecondary
+                  : actionColor),
       title: Text(item.title,
           style: TextStyle(
-              color: item.configured
+              color: item.configured || dismissed
                   ? AppTheme.textSecondary
                   : AppTheme.textPrimary,
               fontWeight: FontWeight.w500)),
       subtitle: Text(item.description,
           style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-      // An unconfigured row with nowhere to go (push is a server env var, and
-      // unknown keys come from newer servers) gets no chip: there is no action
-      // here to offer. Its full-strength title still reads as outstanding.
-      trailing: item.configured
-          ? const Icon(Icons.check_circle, color: AppTheme.available, size: 20)
-          : route != null
-              ? StatusPill(text: 'Set up', color: actionColor)
-              : null,
+      trailing: trailing,
       onTap: route != null
           ? () => _openItem(route, extra: _extraFor(item.key))
           : null,

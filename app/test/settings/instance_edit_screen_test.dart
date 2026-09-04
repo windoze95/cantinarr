@@ -350,6 +350,31 @@ void main() {
     expect(post.body['is_default'], isTrue);
   });
 
+  testWidgets('Tracearr is a plain name + URL + API key form with a default',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter, users: [_user(1, 'alice')]);
+
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Tracearr').last);
+    await tester.pumpAndSettle();
+
+    // Hints name the port and where the key comes from.
+    expect(find.text('http://tracearr:3000'), findsOneWidget);
+    expect(find.textContaining('trr_pub_'), findsOneWidget);
+    // Admin-only monitoring: a global default, no per-user assignment, no
+    // username/password, no media downloads or instant updates.
+    final toggle = tester.widget<SwitchListTile>(
+        find.widgetWithText(SwitchListTile, 'Default Instance'));
+    expect(toggle.value, isTrue);
+    expect(find.text('Use this as the default Tracearr instance'),
+        findsOneWidget);
+    expect(find.text('Assigned Users'), findsNothing);
+    expect(find.text('Password'), findsNothing);
+    expect(find.text('Media Downloads'), findsNothing);
+  });
+
   testWidgets('Chaptarr hides the default toggle and assigns selected users',
       (tester) async {
     final adapter = _FakeAdapter();
@@ -434,6 +459,40 @@ void main() {
     expect(post.body['media_path_mappings'], [
       for (var i = 0; i < 4; i++)
         {'arr_path': sources[i], 'cantinarr_path': targets[i]},
+    ]);
+  });
+
+  testWidgets('Lidarr create saves a media path mapping', (tester) async {
+    // Per-track downloads ride the same mappings form as the other arrs, so
+    // a Lidarr instance offers it whenever the server reports media roots.
+    final adapter = _FakeAdapter(mediaRoots: const ['/media']);
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Lidarr').last);
+    await tester.pumpAndSettle();
+    await _fillForm(tester, 'Music');
+
+    final add = find.widgetWithText(OutlinedButton, 'Add path');
+    await tester.ensureVisible(add);
+    await tester.tap(add);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Lidarr path'), '/music');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Cantinarr path'), '/media/music');
+
+    final save = find.widgetWithText(ElevatedButton, 'Add Instance');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    final post = adapter.requests.singleWhere(
+        (request) => request.method == 'POST' && request.path == '/api/instances');
+    expect(post.body['service_type'], 'lidarr');
+    expect(post.body['media_path_mappings'], [
+      {'arr_path': '/music', 'cantinarr_path': '/media/music'},
     ]);
   });
 
@@ -984,10 +1043,12 @@ void main() {
     await tester.tap(find.text('qBittorrent'));
     await tester.pumpAndSettle();
 
-    // qBittorrent authenticates with username/password, not an API key.
+    // qBittorrent opens on its WebUI sign-in, the shape every version has,
+    // with the 5.2+ API key offered as the other shape.
     expect(find.widgetWithText(TextField, 'Username'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Password'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'API Key'), findsNothing);
+    expect(find.text('API key'), findsOneWidget);
     expect(find.widgetWithText(SwitchListTile, 'Default Instance'),
         findsOneWidget);
 
@@ -997,6 +1058,152 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Name and URL are required'), findsOneWidget);
     expect(find.text('Choose a service type'), findsNothing);
+  });
+
+  testWidgets(
+      'qBittorrent switched to an API key swaps the fields and saves only '
+      'the key', (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('qBittorrent').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Username & password'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Username'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'API Key'), findsNothing);
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Username'), 'admin');
+
+    await tester.tap(find.text('API key'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(TextField, 'API Key'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Username'), findsNothing);
+    expect(find.widgetWithText(TextField, 'Password'), findsNothing);
+    expect(find.textContaining('5.2 or newer'), findsWidgets);
+
+    await _fillForm(tester, 'Torrents');
+    final save = find.widgetWithText(ElevatedButton, 'Add Instance');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    // The username typed before the switch is gone from the save, so the
+    // server stores exactly one shape.
+    final post = adapter.requests
+        .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
+    expect(post.body['service_type'], 'qbittorrent');
+    expect(post.body['api_key'], 'key');
+    expect(post.body['username'], '');
+    expect(post.body['password'], '');
+  });
+
+  testWidgets(
+      'editing a qBittorrent instance stored with an API key opens on the '
+      'key, and moving it to a password requires that password',
+      (tester) async {
+    final adapter = _FakeAdapter(instances: [
+      {
+        'id': 'qbittorrent-b',
+        'service_type': 'qbittorrent',
+        'name': 'Torrents',
+        'url': 'http://qbittorrent:8081',
+        'is_default': true,
+        'has_api_key': true,
+        'media_path_mappings': <dynamic>[],
+      },
+    ]);
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'qbittorrent-b',
+        initialServiceType: 'qbittorrent',
+        initialName: 'Torrents',
+        initialUrl: 'http://qbittorrent:8081',
+      ),
+    );
+
+    // The stored shape wins: the key field, blank to keep the stored key.
+    expect(find.widgetWithText(TextField, 'API Key'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Username'), findsNothing);
+    expect(find.text('Leave blank to keep existing'), findsOneWidget);
+
+    await tester.tap(find.text('Username & password'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(TextField, 'Username'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Password'), findsOneWidget);
+    // Nothing is stored on this shape, so blank is no longer "keep".
+    expect(find.text('Leave blank to keep existing'), findsNothing);
+    final save = find.widgetWithText(ElevatedButton, 'Save Changes');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(find.text('Username and password are required'), findsOneWidget);
+    expect(
+        adapter.requests.where((r) =>
+            r.method == 'PUT' && r.path == '/api/instances/qbittorrent-b'),
+        isEmpty);
+
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Username'), 'admin');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Password'), 'secret');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    final update = adapter.requests.singleWhere((r) =>
+        r.method == 'PUT' && r.path == '/api/instances/qbittorrent-b');
+    expect(update.body['username'], 'admin');
+    expect(update.body['password'], 'secret');
+    expect(update.body['api_key'], '');
+  });
+
+  testWidgets(
+      'Lidarr hides the default toggle, assigns selected users, and installs '
+      'its webhook on create', (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester,
+        adapter: adapter, users: [_user(1, 'alice'), _user(2, 'bob')]);
+
+    // Switch the service type to Lidarr.
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Lidarr').last);
+    await tester.pumpAndSettle();
+
+    // Grant-only like Chaptarr: no global default, per-user assignment.
+    expect(
+        find.widgetWithText(SwitchListTile, 'Default Instance'), findsNothing);
+    expect(find.text('Assigned Users'), findsOneWidget);
+
+    await _fillForm(tester, 'Music');
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'alice'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Add Instance'));
+    await tester.pumpAndSettle();
+
+    final post = adapter.requests
+        .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
+    expect(post.body['service_type'], 'lidarr');
+    expect(post.body['is_default'], isFalse);
+    final putGrants = adapter.requests.singleWhere((r) =>
+        r.method == 'PUT' &&
+        r.path == '/api/instances/lidarr-new/grant-users');
+    expect(putGrants.body, {
+      'user_ids': [1]
+    });
+    // Instant updates install automatically at create, exactly like the
+    // other webhook-capable arrs.
+    expect(
+      adapter.requests.any((r) =>
+          r.method == 'POST' &&
+          r.path == '/api/instances/lidarr-new/webhook'),
+      isTrue,
+    );
   });
 
   testWidgets('offers instant updates for a Chaptarr instance',

@@ -186,6 +186,168 @@ func TestReduceLibraryAggregatesDuplicateFormatTruth(t *testing.T) {
 	}
 }
 
+// TestReduceLibraryExtractsSeriesFirstStatingRecordWins asserts the digest
+// splits a record's seriesTitle into name+position via parseSeriesTitle, and
+// that an audiobook record stating no series does not clear what the ebook
+// record already established — the two records are the same work, and one of
+// them simply not repeating the series is not a claim that there is none.
+func TestReduceLibraryExtractsSeriesFirstStatingRecordWins(t *testing.T) {
+	books := []chaptarr.Book{
+		{
+			ID:            1,
+			Title:         "Lady of Shadows",
+			ForeignBookID: "fb-lady",
+			MediaType:     "ebook",
+			SeriesTitle:   "Lady of Darkness #2",
+		},
+		{
+			ID:            2,
+			Title:         "Lady of Shadows",
+			ForeignBookID: "fb-lady",
+			MediaType:     "audiobook",
+			SeriesTitle:   "",
+		},
+	}
+
+	digest := reduceLibrary(books)
+	lt := findTitle(t, digest, "Lady of Shadows")
+	if lt.Series != "Lady of Darkness" || lt.SeriesPosition != "2" {
+		t.Fatalf("series = %+v, want Lady of Darkness / 2", lt)
+	}
+}
+
+// TestReduceLibraryNoSeriesLeavesFieldsEmpty asserts a book with no
+// SeriesTitle leaves both digest fields empty rather than inventing a value.
+func TestReduceLibraryNoSeriesLeavesFieldsEmpty(t *testing.T) {
+	books := []chaptarr.Book{
+		{ID: 40, Title: "Standalone", ForeignBookID: "fb-standalone", MediaType: "ebook"},
+	}
+
+	digest := reduceLibrary(books)
+	lt := findTitle(t, digest, "Standalone")
+	if lt.Series != "" || lt.SeriesPosition != "" {
+		t.Fatalf("series = %+v, want both empty", lt)
+	}
+}
+
+// TestStampAuthorsFromLibraryFillsBlankAuthor asserts the join fills a title
+// whose reduction left Author blank, using the book's authorId to find the
+// matching author record.
+func TestStampAuthorsFromLibraryFillsBlankAuthor(t *testing.T) {
+	books := []chaptarr.Book{
+		{ID: 1, Title: "Lady of Shadows", ForeignBookID: "fb-lady", MediaType: "ebook", AuthorID: 7},
+	}
+	titles := reduceLibrary(books).Titles
+	authors := []chaptarr.Author{{ID: 7, AuthorName: "Melissa K. Roehrich"}}
+
+	stampAuthorsFromLibrary(titles, books, authors)
+
+	lt := titles[0]
+	if lt.Author != "Melissa K. Roehrich" {
+		t.Fatalf("author = %q, want Melissa K. Roehrich", lt.Author)
+	}
+}
+
+// TestStampAuthorsFromLibraryNeverOverwritesStatedName asserts a title whose
+// reduction already filled Author (the record embedded an author object)
+// keeps that name — the join never overwrites a name the record itself
+// stated.
+func TestStampAuthorsFromLibraryNeverOverwritesStatedName(t *testing.T) {
+	books := []chaptarr.Book{
+		{
+			ID: 1, Title: "Heir to the Empire", ForeignBookID: "fb-1", MediaType: "ebook",
+			AuthorID: 9, Author: &chaptarr.AuthorContext{AuthorName: "Timothy Zahn"},
+		},
+	}
+	titles := reduceLibrary(books).Titles
+	authors := []chaptarr.Author{{ID: 9, AuthorName: "Wrong Name"}}
+
+	stampAuthorsFromLibrary(titles, books, authors)
+
+	if titles[0].Author != "Timothy Zahn" {
+		t.Fatalf("author = %q, want the record's own stated name unchanged", titles[0].Author)
+	}
+}
+
+// TestStampAuthorsFromLibraryUnmatchedAuthorIDStaysBlank asserts a title
+// whose authorId matches no author record stays blank rather than guessing.
+func TestStampAuthorsFromLibraryUnmatchedAuthorIDStaysBlank(t *testing.T) {
+	books := []chaptarr.Book{
+		{ID: 1, Title: "Orphaned", ForeignBookID: "fb-orphan", MediaType: "ebook", AuthorID: 99},
+	}
+	titles := reduceLibrary(books).Titles
+	authors := []chaptarr.Author{{ID: 1, AuthorName: "Someone Else"}}
+
+	stampAuthorsFromLibrary(titles, books, authors)
+
+	if titles[0].Author != "" {
+		t.Fatalf("author = %q, want empty (authorId 99 matches no author record)", titles[0].Author)
+	}
+}
+
+// TestStampAuthorsFromLibraryFillsForeignAuthorID asserts the join stamps the
+// library's own author identity alongside the name. That id is what
+// /detail/author/{id} resolves, so without it the author line cannot be tapped.
+func TestStampAuthorsFromLibraryFillsForeignAuthorID(t *testing.T) {
+	books := []chaptarr.Book{
+		{ID: 1, Title: "Lady of Shadows", ForeignBookID: "fb-lady", MediaType: "ebook", AuthorID: 7},
+	}
+	titles := reduceLibrary(books).Titles
+	authors := []chaptarr.Author{
+		{ID: 7, AuthorName: "Melissa K. Roehrich", ForeignAuthorID: "hc:auth-42"},
+	}
+
+	stampAuthorsFromLibrary(titles, books, authors)
+
+	if got := titles[0].AuthorForeignID; got != "hc:auth-42" {
+		t.Fatalf("AuthorForeignID = %q, want hc:auth-42", got)
+	}
+}
+
+// TestStampAuthorsFromLibraryStampsForeignIDWhenNameAlreadyStated pins the
+// independence of the two stamps. A record that embedded its own author object
+// arrives with Author already filled but never with the library's author
+// identity, so an early return on a non-empty name would leave exactly those
+// rows unlinkable — the name renders, the tap target silently does not.
+func TestStampAuthorsFromLibraryStampsForeignIDWhenNameAlreadyStated(t *testing.T) {
+	books := []chaptarr.Book{
+		{
+			ID: 1, Title: "Heir to the Empire", ForeignBookID: "fb-1", MediaType: "ebook",
+			AuthorID: 9, Author: &chaptarr.AuthorContext{AuthorName: "Timothy Zahn"},
+		},
+	}
+	titles := reduceLibrary(books).Titles
+	authors := []chaptarr.Author{
+		{ID: 9, AuthorName: "Wrong Name", ForeignAuthorID: "gr:auth-9"},
+	}
+
+	stampAuthorsFromLibrary(titles, books, authors)
+
+	if titles[0].Author != "Timothy Zahn" {
+		t.Fatalf("author = %q, want the record's own stated name unchanged", titles[0].Author)
+	}
+	if got := titles[0].AuthorForeignID; got != "gr:auth-9" {
+		t.Fatalf("AuthorForeignID = %q, want gr:auth-9 stamped despite the stated name", got)
+	}
+}
+
+// TestStampAuthorsFromLibraryUnmatchedAuthorIDLeavesForeignIDBlank asserts an
+// unresolvable author yields no id rather than a guess — an author line with a
+// wrong id would navigate to someone else's page.
+func TestStampAuthorsFromLibraryUnmatchedAuthorIDLeavesForeignIDBlank(t *testing.T) {
+	books := []chaptarr.Book{
+		{ID: 1, Title: "Orphaned", ForeignBookID: "fb-orphan", MediaType: "ebook", AuthorID: 99},
+	}
+	titles := reduceLibrary(books).Titles
+	authors := []chaptarr.Author{{ID: 1, AuthorName: "Someone Else", ForeignAuthorID: "hc:auth-1"}}
+
+	stampAuthorsFromLibrary(titles, books, authors)
+
+	if got := titles[0].AuthorForeignID; got != "" {
+		t.Fatalf("AuthorForeignID = %q, want empty (authorId 99 matches no author record)", got)
+	}
+}
+
 func TestSelectBookRootFailsClosedOnAmbiguity(t *testing.T) {
 	if _, ok := selectBookRoot([]chaptarr.RootFolder{
 		{Path: "/one/books", Accessible: true},

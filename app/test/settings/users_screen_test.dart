@@ -14,6 +14,60 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('a kids account carries a Child tag, others do not',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final auth = _FakeAuthNotifier(users: const [
+      UserSummary(
+        id: 7,
+        username: 'living-room',
+        role: 'user',
+        permissions: [],
+        createdAt: '',
+        deviceCount: 1,
+        hasPassword: false,
+        passwordEnabled: false,
+        passkeyEnabled: false,
+        hasPendingInvite: false,
+        child: true,
+      ),
+      UserSummary(
+        id: 8,
+        username: 'parent',
+        role: 'user',
+        permissions: [],
+        createdAt: '',
+        deviceCount: 1,
+        hasPassword: false,
+        passwordEnabled: false,
+        passkeyEnabled: false,
+        hasPendingInvite: false,
+      ),
+    ]);
+    final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
+      ..httpClientAdapter = _CredentialsAdapter(provider: 'codex');
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(() => auth),
+          backendClientProvider.overrideWithValue(dio),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const UsersScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Child'), findsOneWidget);
+    expect(find.text('living-room'), findsOneWidget);
+    expect(find.text('parent'), findsOneWidget);
+  });
+
   testWidgets(
       'shared ChatGPT access warns about sharing and waits for confirmation',
       (tester) async {
@@ -818,6 +872,7 @@ class _FakeAuthNotifier extends AuthNotifier {
       passkeyEnabled: current.passkeyEnabled,
       hasPendingInvite: current.hasPendingInvite,
       sharedAiEnabled: sharedAiEnabled,
+      child: current.child,
     );
     _users = [updated];
     return updated;

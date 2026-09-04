@@ -728,6 +728,53 @@ func TestNotifyUpgradedBookIsAdminScopedNotInstanceScoped(t *testing.T) {
 	}
 }
 
+// TestNotifyUpgradedMusicIsAdminScopedNotInstanceScoped pins the same
+// deliberate asymmetry for music: the instance's assigned listener (a regular
+// user) is NOT paged for an upgrade, while the payload still carries the full
+// album deep-link identity.
+func TestNotifyUpgradedMusicIsAdminScopedNotInstanceScoped(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'root', '', 'admin')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (1, 'lidarr', 'music-a')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_music, content_upgraded) VALUES (1, 1, 1)")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, content_upgraded) VALUES (2, 1)")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyUpgradedMusic("Fear Inoculum", "Tool", "1f4a9e6b", "music-a")
+
+	body := cap.waitForNotification(t)
+	ids := userIDsOf(t, body)
+	if len(ids) != 1 || ids[0] != "2" {
+		t.Errorf("album upgrade recipients = %v, want only the admin [\"2\"]", ids)
+	}
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "Album upgraded" {
+		t.Errorf("title = %v, want \"Album upgraded\"", notif["title"])
+	}
+	if notif["body"] != "Fear Inoculum by Tool was upgraded" {
+		t.Errorf("body = %v, want the artist-named upgrade copy", notif["body"])
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["type"] != "content_upgraded" || data["media_type"] != "music" ||
+		data["foreign_id"] != "1f4a9e6b" || data["instance_id"] != "music-a" ||
+		data["title"] != "Fear Inoculum" {
+		t.Errorf("data = %v, want the full album deep-link identity", data)
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["collapse_id"] != "content_upgraded:1f4a9e6b" {
+		t.Errorf("collapse_id = %v, want content_upgraded:1f4a9e6b", opts["collapse_id"])
+	}
+	if n.claimContentAlert(CategoryNewMusic, "music", contentClaimID("music-a", "1f4a9e6b"), "Fear Inoculum") {
+		t.Error("new_music key was claimable after the upgrade alert — the poller would double-page")
+	}
+}
+
 func TestNotifyNewMovieReachesOptedInUsers(t *testing.T) {
 	database, err := dbOpen(t)
 	if err != nil {
@@ -950,6 +997,84 @@ func TestNotifyNewBookNoEligibleRecipientsIsNoop(t *testing.T) {
 	select {
 	case <-cap.ch:
 		t.Fatal("unexpected notification: nobody can see books-a")
+	case <-time.After(200 * time.Millisecond):
+		// expected: nothing sent
+	}
+}
+
+// A music import alerts the users who can actually play it: opted-in holders
+// of that instance's assignment plus admins — never a sibling instance's
+// users — and the payload carries the album deep-link identity the app
+// already routes.
+func TestNotifyNewMusicScopesRecipientsAndCarriesMusicIdentity(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// admin(1) has implicit access; alice(2) is assigned music-a; carol(3) is
+	// assigned the sibling music-b and must not hear about music-a imports.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin', '', 'admin')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'carol', '', 'user')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (2, 'lidarr', 'music-a')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (3, 'lidarr', 'music-b')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyNewMusic("Fear Inoculum", "Tool", "1f4a9e6b", "music-a")
+
+	body := cap.waitForNotification(t)
+	ids := userIDsOf(t, body)
+	got := map[string]bool{}
+	for _, id := range ids {
+		got[id] = true
+	}
+	if len(ids) != 2 || !got["1"] || !got["2"] {
+		t.Errorf("new_music recipients = %v, want admin(1) and alice(2)", ids)
+	}
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "New music available" {
+		t.Errorf("title = %v, want \"New music available\"", notif["title"])
+	}
+	if notif["body"] != "Fear Inoculum by Tool is ready to play" {
+		t.Errorf("body = %v, want the artist-named availability copy", notif["body"])
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["type"] != "new_music" || data["media_type"] != "music" {
+		t.Errorf("data = %v, want type/media_type new_music/music", data)
+	}
+	if data["foreign_id"] != "1f4a9e6b" || data["instance_id"] != "music-a" ||
+		data["title"] != "Fear Inoculum" {
+		t.Errorf("album deep-link data = %v, want foreign_id/instance/title", data)
+	}
+	// Music has no format axis: the book-only key must never appear.
+	if _, hasFormat := data["book_format"]; hasFormat {
+		t.Errorf("data = %v, want no book_format on a music alert", data)
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["collapse_id"] != "new_music:1f4a9e6b" {
+		t.Errorf("collapse_id = %v, want new_music:1f4a9e6b", opts["collapse_id"])
+	}
+}
+
+func TestNotifyNewMusicNoEligibleRecipientsIsNoop(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// dave is opted in by default but holds no lidarr assignment, so an album
+	// import has no eligible audience and nothing is sent.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (5, 'dave', '', 'user')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyNewMusic("Fear Inoculum", "Tool", "1f4a9e6b", "music-a")
+
+	select {
+	case <-cap.ch:
+		t.Fatal("unexpected notification: nobody can see music-a")
 	case <-time.After(200 * time.Millisecond):
 		// expected: nothing sent
 	}

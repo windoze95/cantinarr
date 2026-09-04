@@ -114,6 +114,12 @@ const _adminState = AuthState(
         isDefault: true,
       ),
       ServiceInstance(
+        id: 'tracearr-main',
+        serviceType: 'tracearr',
+        name: 'Tracearr',
+        isDefault: true,
+      ),
+      ServiceInstance(
         id: 'jellyfin-main',
         serviceType: 'jellyfin',
         name: 'Home Jellyfin',

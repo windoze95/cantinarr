@@ -21,6 +21,7 @@ void main() {
           'new_movie',
           'new_episode',
           'new_book',
+          'new_music',
           'issue_created',
           'agent_action_pending',
           'plex_access_request',
@@ -47,6 +48,25 @@ void main() {
       expect(prefs.copyWith(newBook: true).newBook, isTrue);
       // copyWith without the flag preserves the current value.
       expect(prefs.copyWith(newMovie: true).newBook, isFalse);
+    });
+
+    test('new_music defaults on when an older server omits the key', () {
+      final prefs = NotificationPrefs.fromJson(const {
+        'request_decision': false,
+        'request_pending': true,
+        'new_movie': true,
+        'new_episode': true,
+      });
+      expect(prefs.newMusic, isTrue);
+    });
+
+    test('new_music round-trips through json and copyWith', () {
+      final prefs = NotificationPrefs.fromJson(const {'new_music': false});
+      expect(prefs.newMusic, isFalse);
+      expect(prefs.toJson()['new_music'], isFalse);
+      expect(prefs.copyWith(newMusic: true).newMusic, isTrue);
+      // copyWith without the flag preserves the current value.
+      expect(prefs.copyWith(newMovie: true).newMusic, isFalse);
     });
 
     test('content_upgraded defaults OFF when the key is absent', () {

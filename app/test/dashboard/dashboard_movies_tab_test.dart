@@ -8,6 +8,7 @@ import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/widgets/featured_media_hero.dart';
 import 'package:cantinarr/core/widgets/horizontal_item_row.dart';
 import 'package:cantinarr/core/widgets/media_card.dart';
+import 'package:cantinarr/core/widgets/see_all_button.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/dashboard/ui/dashboard_movies_tab.dart';
 import 'package:cantinarr/features/discover/data/tmdb_models.dart';
@@ -15,6 +16,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 /// Covers the wiring dashboard_tv_tab_test.dart established for TV: that the
 /// Movies tab's existing Radarr fetch also feeds Available/Requested badges
@@ -90,6 +92,165 @@ void main() {
     expect(unreachable, isNotEmpty);
     expect(unreachable.first.statusLabel, isNull);
   });
+
+  testWidgets('In Theaters renders the now-playing feed as a browse row',
+      (tester) async {
+    final adapter = _RadarrAdapter(
+      movies: const [],
+      featured: [_featured(id: 100, title: 'Hero Movie')],
+      nowPlaying: [_featured(id: 301, title: 'Theater Movie')],
+    );
+
+    await _pumpMoviesTab(tester, adapter);
+
+    expect(find.text('In Theaters'), findsOneWidget);
+    expect(_browseRowCards(tester).map((c) => c.title), contains('Theater Movie'));
+  });
+
+  testWidgets(
+      'Top Rated keeps loading toward its end without repeating a title',
+      (tester) async {
+    final adapter = _RadarrAdapter(
+      movies: const [],
+      featured: [_featured(id: 100, title: 'Hero Movie')],
+      topRatedPages: {
+        1: [
+          _featured(id: 201, title: 'First Page Movie'),
+          _featured(id: 202, title: 'Shared Movie'),
+        ],
+        2: [
+          _featured(id: 202, title: 'Shared Movie'),
+          _featured(id: 203, title: 'Second Page Movie'),
+        ],
+      },
+    );
+
+    // Two posters do not fill a 390px row, so the row is already within
+    // reach of its end on first layout: the same trigger a scroll fires.
+    await _pumpMoviesTab(tester, adapter);
+
+    final titles = _browseRowCards(tester).map((c) => c.title).toList();
+    expect(titles, containsAll(['First Page Movie', 'Shared Movie', 'Second Page Movie']));
+    expect(titles.where((t) => t == 'Shared Movie'), hasLength(1));
+    expect(adapter.topRatedPagesRequested, [1, 2]);
+  });
+
+  testWidgets(
+      'every discovery row offers See all, and the headline one continues the feed that answered',
+      (tester) async {
+    final adapter = _RadarrAdapter(
+      movies: const [],
+      featured: [
+        _featured(id: 100, title: 'Hero Movie'),
+        _featured(id: 101, title: 'Row Movie'),
+      ],
+      nowPlaying: [_featured(id: 301, title: 'Theater Movie')],
+      topRatedPages: {
+        1: [_featured(id: 201, title: 'Rated Movie')],
+      },
+    );
+    final (:opened, :router) = await _pumpMoviesTabWithRouter(tester, adapter);
+
+    // Featured, In Theaters, Top Rated are showing; Coming Soon and Most
+    // Anticipated are empty and hidden, and the library rows never offer it.
+    expect(find.byType(SeeAllButton), findsNWidgets(3));
+
+    await tester.tap(_seeAllFor('Trending This Week'));
+    await tester.pumpAndSettle();
+    expect(opened.last.path, '/browse/movie/featured');
+    expect(opened.last.queryParameters['title'], 'Trending This Week');
+
+    router.pop();
+    await tester.pumpAndSettle();
+    // Top Rated sits below the fold on a phone; let the scroll finish.
+    await tester.ensureVisible(_seeAllFor('Top Rated'));
+    await tester.pumpAndSettle();
+    await tester.tap(_seeAllFor('Top Rated'));
+    await tester.pumpAndSettle();
+    expect(opened.last.path, '/browse/movie/top-rated');
+    expect(opened.last.queryParameters['title'], 'Top Rated');
+  });
+
+  testWidgets('a genre chip opens the Browse grid filtered to that genre',
+      (tester) async {
+    final adapter = _RadarrAdapter(
+      movies: const [],
+      featured: [_featured(id: 100, title: 'Hero Movie')],
+      genres: const [
+        {'id': 28, 'name': 'Action'},
+      ],
+    );
+    final (:opened, :router) = await _pumpMoviesTabWithRouter(tester, adapter);
+    expect(find.text('Browse by genre'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(ActionChip, 'Action'));
+    await tester.pumpAndSettle();
+    expect(opened.last.path, '/browse/movie/discover');
+    expect(opened.last.queryParameters['genres'], '28');
+    expect(opened.last.queryParameters['title'], 'Action');
+
+    router.pop();
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ActionChip, 'All movies'));
+    await tester.pumpAndSettle();
+    expect(opened.last.path, '/browse/movie/discover');
+    expect(opened.last.queryParameters.containsKey('genres'), isFalse);
+  });
+}
+
+Finder _seeAllFor(String rowTitle) => find.byWidgetPredicate(
+      (w) => w is SeeAllButton && w.rowTitle == rowTitle,
+    );
+
+/// Pumps the tab inside a router whose browse route records every location
+/// it was asked to open.
+Future<({List<Uri> opened, GoRouter router})> _pumpMoviesTabWithRouter(
+  WidgetTester tester,
+  _RadarrAdapter adapter,
+) async {
+  tester.view.physicalSize = const Size(390, 844);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(() {
+    tester.view.resetPhysicalSize();
+    tester.view.resetDevicePixelRatio();
+  });
+
+  final opened = <Uri>[];
+  final router = GoRouter(
+    routes: [
+      GoRoute(
+        path: '/',
+        builder: (_, __) => const Scaffold(body: DashboardMoviesTab()),
+      ),
+      GoRoute(
+        path: '/browse/:type/:feed',
+        builder: (_, state) {
+          opened.add(state.uri);
+          return const Scaffold(body: Text('grid'));
+        },
+      ),
+    ],
+  );
+
+  final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+  dio.httpClientAdapter = adapter;
+  final container = ProviderContainer(
+    overrides: [
+      authProvider.overrideWith(() => _FakeAuthNotifier(_moviesState)),
+      backendClientProvider.overrideWithValue(dio),
+    ],
+  );
+  addTearDown(container.dispose);
+
+  await container.read(authProvider.future);
+  await tester.pumpWidget(
+    UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
+    ),
+  );
+  await tester.pumpAndSettle();
+  return (opened: opened, router: router);
 }
 
 /// The MediaCards rendered by Discover browse rows (CategoryRow), as opposed
@@ -194,11 +355,20 @@ class _RadarrAdapter implements HttpClientAdapter {
   _RadarrAdapter({
     required this.movies,
     required this.featured,
+    this.nowPlaying = const [],
+    this.topRatedPages = const {},
+    this.genres = const [],
     this.failMovies = false,
   });
 
   final List<Map<String, dynamic>> movies;
   final List<Map<String, dynamic>> featured;
+  final List<Map<String, dynamic>> nowPlaying;
+  final List<Map<String, dynamic>> genres;
+
+  /// Top Rated by page number; the feed reports as many pages as there are.
+  final Map<int, List<Map<String, dynamic>>> topRatedPages;
+  final List<int> topRatedPagesRequested = [];
   final bool failMovies;
 
   static const _base = '/api/instances/movies/api/v3';
@@ -228,9 +398,27 @@ class _RadarrAdapter implements HttpClientAdapter {
         'total_pages': 1,
         'total_results': featured.length,
       };
+    } else if (options.path == '/api/discover/movies/now-playing') {
+      body = {
+        'page': 1,
+        'results': nowPlaying,
+        'total_pages': nowPlaying.isEmpty ? 0 : 1,
+        'total_results': nowPlaying.length,
+      };
+    } else if (options.path == '/api/genres/movie') {
+      body = {'genres': genres};
+    } else if (options.path == '/api/discover/movies/top-rated') {
+      final page = int.parse(options.uri.queryParameters['page'] ?? '1');
+      topRatedPagesRequested.add(page);
+      body = {
+        'page': page,
+        'results': topRatedPages[page] ?? <Object>[],
+        'total_pages': topRatedPages.length,
+        'total_results': 0,
+      };
     } else {
-      // Top Rated, Coming Soon, Most Anticipated: empty is enough, and every
-      // fetch there is guarded.
+      // Coming Soon, Most Anticipated: empty is enough, and every fetch there
+      // is guarded.
       body = {
         'page': 1,
         'results': <Object>[],

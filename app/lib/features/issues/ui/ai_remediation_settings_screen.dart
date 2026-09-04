@@ -254,7 +254,6 @@ class _AiRemediationSettingsScreenState
           SettingsAnchors.remediationEnabled,
           SwitchListTile(
             value: s.enabled,
-            activeThumbColor: AppTheme.accent,
             onChanged: (v) => setState(() => _edited = s.copyWith(enabled: v)),
             title: const Text(
               'Enabled',
@@ -271,7 +270,6 @@ class _AiRemediationSettingsScreenState
           SettingsAnchors.remediationAutoDispatch,
           SwitchListTile(
             value: s.autoDispatch,
-            activeThumbColor: AppTheme.accent,
             onChanged: (v) =>
                 setState(() => _edited = s.copyWith(autoDispatch: v)),
             title: const Text(
@@ -290,7 +288,6 @@ class _AiRemediationSettingsScreenState
           SettingsAnchors.remediationAllowReporting,
           SwitchListTile(
             value: s.allowReporting,
-            activeThumbColor: AppTheme.accent,
             onChanged: (v) =>
                 setState(() => _edited = s.copyWith(allowReporting: v)),
             title: const Text(
@@ -308,7 +305,6 @@ class _AiRemediationSettingsScreenState
           SettingsAnchors.remediationMarkResolvedRead,
           SwitchListTile(
             value: s.markResolvedAsRead,
-            activeThumbColor: AppTheme.accent,
             onChanged: (v) =>
                 setState(() => _edited = s.copyWith(markResolvedAsRead: v)),
             title: const Text(

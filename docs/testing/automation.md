@@ -34,7 +34,7 @@ need, to run.
 
 Go integration proof runs against in-process fakes, never live services:
 the service clients take constructor-injected base URLs (`radarr`, `sonarr`,
-`chaptarr`, the download clients, `tautulli`, `plex`, the push gateway) and
+`chaptarr`, the download clients, `tautulli`, `tracearr`, `plex`, the push gateway) and
 the AI SDKs honor base-URL environment overrides, so tests point them at
 `httptest` servers replaying real API shapes. Contract, authorization, and
 failure vectors run deterministically with zero credentials.

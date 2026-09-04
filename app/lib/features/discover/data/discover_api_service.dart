@@ -16,9 +16,27 @@ class FeaturedFeed {
   final String source;
   final List<MediaItem> items;
 
-  const FeaturedFeed({required this.source, required this.items});
+  /// Where this page sits in the feed. Page one is the row; the server
+  /// continues the same source on later pages for the grid under it.
+  final int page;
+  final int totalPages;
+
+  const FeaturedFeed({
+    required this.source,
+    required this.items,
+    this.page = 1,
+    this.totalPages = 1,
+  });
 
   static const empty = FeaturedFeed(source: '', items: []);
+
+  /// The page in the shape every other feed uses, for paging helpers.
+  TmdbPage<MediaItem> get asPage => TmdbPage(
+        page: page,
+        totalPages: totalPages,
+        totalResults: items.length,
+        results: items,
+      );
 }
 
 /// The row's title for a given source. A row named "Popular" over a trending
@@ -73,14 +91,20 @@ class DiscoverApiService {
 
   /// The configured headline TV feed (TMDB trending, Trakt trending, or TMDB
   /// popular). Every source arrives in the TMDB page shape.
-  Future<FeaturedFeed> fetchFeaturedTV() async {
-    final resp = await _dio.get('/api/discover/tv/featured');
+  Future<FeaturedFeed> fetchFeaturedTV({int page = 1}) async {
+    final resp = await _dio.get(
+      '/api/discover/tv/featured',
+      queryParameters: {'page': page},
+    );
     return _featuredFeed(resp.data, MediaItem.fromTVJson);
   }
 
   /// The configured headline movie feed.
-  Future<FeaturedFeed> fetchFeaturedMovies() async {
-    final resp = await _dio.get('/api/discover/movies/featured');
+  Future<FeaturedFeed> fetchFeaturedMovies({int page = 1}) async {
+    final resp = await _dio.get(
+      '/api/discover/movies/featured',
+      queryParameters: {'page': page},
+    );
     return _featuredFeed(resp.data, MediaItem.fromMovieJson);
   }
 
@@ -89,9 +113,12 @@ class DiscoverApiService {
     MediaItem Function(Map<String, dynamic>) fromJson,
   ) {
     final json = (data as Map).cast<String, dynamic>();
+    final parsed = TmdbPage.fromJson(json, fromJson);
     return FeaturedFeed(
       source: json['source'] as String? ?? '',
-      items: TmdbPage.fromJson(json, fromJson).results,
+      items: parsed.results,
+      page: parsed.page,
+      totalPages: parsed.totalPages,
     );
   }
 
@@ -119,6 +146,33 @@ class DiscoverApiService {
     return TmdbPage.fromJson(resp.data, MediaItem.fromMovieJson);
   }
 
+  /// Series with an episode airing in the next seven days.
+  Future<TmdbPage<MediaItem>> fetchOnTheAirTV({int page = 1}) async {
+    final resp = await _dio.get(
+      '/api/discover/tv/on-the-air',
+      queryParameters: {'page': page},
+    );
+    return TmdbPage.fromJson(resp.data, MediaItem.fromTVJson);
+  }
+
+  Future<TmdbPage<MediaItem>> fetchTopRatedTV({int page = 1}) async {
+    final resp = await _dio.get(
+      '/api/discover/tv/top-rated',
+      queryParameters: {'page': page},
+    );
+    return TmdbPage.fromJson(resp.data, MediaItem.fromTVJson);
+  }
+
+  /// Series premiering in the next three months. The server discovers on the
+  /// first air date, so a returning season stays out.
+  Future<TmdbPage<MediaItem>> fetchUpcomingTV({int page = 1}) async {
+    final resp = await _dio.get(
+      '/api/discover/tv/upcoming',
+      queryParameters: {'page': page},
+    );
+    return TmdbPage.fromJson(resp.data, MediaItem.fromTVJson);
+  }
+
   // ─── Search ─────────────────────────────────────────
 
   Future<TmdbPage<MediaItem>> multiSearch({
@@ -134,24 +188,40 @@ class DiscoverApiService {
 
   // ─── Discover ───────────────────────────────────────
 
+  /// TMDB discover for movies. [releasedFrom]/[releasedTo] are inclusive
+  /// `YYYY-MM-DD` bounds on the primary release date; [minVotes] is worth
+  /// sending with a rating floor or a rating sort so one-vote titles do not
+  /// lead (the server floors rating sorts itself when it is absent).
   Future<TmdbPage<MediaItem>> discoverMovies({
     int page = 1,
     List<int>? genreIds,
     String? sortBy,
     int? year,
+    String? releasedFrom,
+    String? releasedTo,
+    double? minRating,
+    int? minVotes,
+    String? language,
     List<int>? watchProviderIds,
     String? watchRegion,
+    List<int>? keywordIds,
+    List<int>? companyIds,
   }) async {
-    final params = <String, dynamic>{'page': page};
-    if (genreIds != null && genreIds.isNotEmpty) {
-      params['with_genres'] = genreIds.join(',');
-    }
-    if (sortBy != null) params['sort_by'] = sortBy;
+    final params = _discoverParams(
+      page: page,
+      genreIds: genreIds,
+      sortBy: sortBy,
+      minRating: minRating,
+      minVotes: minVotes,
+      language: language,
+      watchProviderIds: watchProviderIds,
+      watchRegion: watchRegion,
+      keywordIds: keywordIds,
+      companyIds: companyIds,
+    );
     if (year != null) params['primary_release_year'] = year;
-    if (watchProviderIds != null && watchProviderIds.isNotEmpty) {
-      params['with_watch_providers'] = watchProviderIds.join('|');
-      params['watch_region'] = watchRegion ?? 'US';
-    }
+    if (releasedFrom != null) params['primary_release_date.gte'] = releasedFrom;
+    if (releasedTo != null) params['primary_release_date.lte'] = releasedTo;
     final resp = await _dio.get(
       '/api/discover/movies',
       queryParameters: params,
@@ -159,29 +229,80 @@ class DiscoverApiService {
     return TmdbPage.fromJson(resp.data, MediaItem.fromMovieJson);
   }
 
+  /// TMDB discover for TV; the date bounds apply to the first air date.
   Future<TmdbPage<MediaItem>> discoverTV({
     int page = 1,
     List<int>? genreIds,
     String? sortBy,
     int? year,
+    String? airedFrom,
+    String? airedTo,
+    double? minRating,
+    int? minVotes,
+    String? language,
     List<int>? watchProviderIds,
     String? watchRegion,
+    List<int>? keywordIds,
+    List<int>? companyIds,
   }) async {
-    final params = <String, dynamic>{'page': page};
-    if (genreIds != null && genreIds.isNotEmpty) {
-      params['with_genres'] = genreIds.join(',');
-    }
-    if (sortBy != null) params['sort_by'] = sortBy;
+    final params = _discoverParams(
+      page: page,
+      genreIds: genreIds,
+      sortBy: sortBy,
+      minRating: minRating,
+      minVotes: minVotes,
+      language: language,
+      watchProviderIds: watchProviderIds,
+      watchRegion: watchRegion,
+      keywordIds: keywordIds,
+      companyIds: companyIds,
+    );
     if (year != null) params['first_air_date_year'] = year;
-    if (watchProviderIds != null && watchProviderIds.isNotEmpty) {
-      params['with_watch_providers'] = watchProviderIds.join('|');
-      params['watch_region'] = watchRegion ?? 'US';
-    }
+    if (airedFrom != null) params['first_air_date.gte'] = airedFrom;
+    if (airedTo != null) params['first_air_date.lte'] = airedTo;
     final resp = await _dio.get(
       '/api/discover/tv',
       queryParameters: params,
     );
     return TmdbPage.fromJson(resp.data, MediaItem.fromTVJson);
+  }
+
+  /// The keys shared by both media types. A named language is an explicit
+  /// ask the server never English-filters; keywords must all match (comma)
+  /// while any of the companies may (pipe).
+  Map<String, dynamic> _discoverParams({
+    required int page,
+    List<int>? genreIds,
+    String? sortBy,
+    double? minRating,
+    int? minVotes,
+    String? language,
+    List<int>? watchProviderIds,
+    String? watchRegion,
+    List<int>? keywordIds,
+    List<int>? companyIds,
+  }) {
+    final params = <String, dynamic>{'page': page};
+    if (genreIds != null && genreIds.isNotEmpty) {
+      params['with_genres'] = genreIds.join(',');
+    }
+    if (sortBy != null) params['sort_by'] = sortBy;
+    if (minRating != null) params['vote_average.gte'] = minRating;
+    if (minVotes != null) params['vote_count.gte'] = minVotes;
+    if (language != null && language.isNotEmpty) {
+      params['with_original_language'] = language;
+    }
+    if (watchProviderIds != null && watchProviderIds.isNotEmpty) {
+      params['with_watch_providers'] = watchProviderIds.join('|');
+      params['watch_region'] = watchRegion ?? 'US';
+    }
+    if (keywordIds != null && keywordIds.isNotEmpty) {
+      params['with_keywords'] = keywordIds.join(',');
+    }
+    if (companyIds != null && companyIds.isNotEmpty) {
+      params['with_companies'] = companyIds.join('|');
+    }
+    return params;
   }
 
   // ─── Details ────────────────────────────────────────
@@ -284,13 +405,57 @@ class DiscoverApiService {
   // ─── Watch Providers ────────────────────────────────
 
   Future<List<WatchProvider>> movieWatchProviders(
-      {String region = 'US'}) async {
-    final resp = await _dio.get(
-      '/api/providers/movie',
-      queryParameters: {'region': region},
-    );
-    return (resp.data['results'] as List<dynamic>)
+      {String region = 'US'}) =>
+      _watchProviders('/api/providers/movie', region);
+
+  Future<List<WatchProvider>> tvWatchProviders({String region = 'US'}) =>
+      _watchProviders('/api/providers/tv', region);
+
+  /// The services TMDB knows for one region, in TMDB's display order.
+  Future<List<WatchProvider>> _watchProviders(String path, String region) async {
+    final resp = await _dio.get(path, queryParameters: {'region': region});
+    final providers = (resp.data['results'] as List<dynamic>)
         .map((p) => WatchProvider.fromJson(p as Map<String, dynamic>))
+        .toList();
+    providers.sort((a, b) => a.displayPriority.compareTo(b.displayPriority));
+    return providers;
+  }
+
+  /// The countries TMDB tracks streaming availability for, by English name.
+  Future<List<WatchRegion>> watchRegions() async {
+    final resp = await _dio.get('/api/providers/regions');
+    final regions = (resp.data['results'] as List<dynamic>)
+        .map((r) => WatchRegion.fromJson(r as Map<String, dynamic>))
+        .toList();
+    regions.sort((a, b) => a.name.compareTo(b.name));
+    return regions;
+  }
+
+  // ─── Languages ─────────────────────────────────────
+
+  /// Every language TMDB can filter on, by English name.
+  Future<List<TmdbLanguage>> languages() async {
+    final resp = await _dio.get('/api/languages');
+    final languages = (resp.data as List<dynamic>)
+        .map((l) => TmdbLanguage.fromJson(l as Map<String, dynamic>))
+        .toList();
+    languages.sort((a, b) =>
+        a.englishName.toLowerCase().compareTo(b.englishName.toLowerCase()));
+    return languages;
+  }
+
+  // ─── Keyword and studio lookups ────────────────────
+
+  Future<List<TaggedId>> searchKeywords(String query) =>
+      _taggedSearch('/api/search/keyword', query);
+
+  Future<List<TaggedId>> searchCompanies(String query) =>
+      _taggedSearch('/api/search/company', query);
+
+  Future<List<TaggedId>> _taggedSearch(String path, String query) async {
+    final resp = await _dio.get(path, queryParameters: {'query': query});
+    return (resp.data['results'] as List<dynamic>)
+        .map((r) => TaggedId.fromJson(r as Map<String, dynamic>))
         .toList();
   }
 

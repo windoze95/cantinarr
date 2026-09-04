@@ -134,6 +134,28 @@ AgentAction _deleteFiles({required bool blocklist}) => AgentAction.fromJson({
       'instance_service_type': 'sonarr',
     });
 
+/// The wrong-book repair: a deletion addressed by the durable Chaptarr record
+/// id, with no episode scope at all.
+AgentAction _deleteBookFiles() => AgentAction.fromJson({
+      'id': 17,
+      'issue_id': 7,
+      'kind': 'delete_media_files',
+      'params': {
+        'media_type': 'book',
+        'book_id': 912,
+        'blocklist': true,
+      },
+      'rationale': 'The imported file is a different book with the same title.',
+      'status': 'proposed',
+      'can_decide': true,
+      'issue_status': 'awaiting_approval',
+      'issue_title': 'The Wrong Book',
+      'issue_media_type': 'book',
+      'instance_id': 'chaptarr-main',
+      'instance_name': 'Main Books',
+      'instance_service_type': 'chaptarr',
+    });
+
 /// A fake service that returns canned decision results without any network I/O.
 class _FakeIssuesService extends IssuesService {
   _FakeIssuesService() : super(backendDio: Dio());
@@ -428,6 +450,49 @@ void main() {
       find.textContaining('If blocking those releases already sent your media '
           'service looking for replacements itself, Cantinarr leaves that to '
           'it.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('a book deletion is approvable and names its record target',
+      (tester) async {
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: _FakeIssuesService(),
+      action: _deleteBookFiles(),
+    );
+
+    // Plural on purpose: a book delete covers every file the record holds.
+    expect(
+      find.text('Delete the wrong files, block those releases from coming '
+          'back, and look for replacements'),
+      findsOneWidget,
+    );
+    expect(find.text('Book'), findsOneWidget);
+    expect(find.text('Book id'), findsOneWidget);
+    expect(find.text('912'), findsOneWidget);
+    expect(find.text('Block the release'), findsOneWidget);
+    // The whole point of the repair: an admin can actually approve it.
+    expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
+
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining(
+          'permanently delete every file this book holds in your library'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining(
+          'This cannot be undone: the files are removed from disk'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Cantinarr then looks for a replacement.'),
       findsOneWidget,
     );
     await tester.tap(find.widgetWithText(TextButton, 'Cancel'));

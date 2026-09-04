@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../core/config/app_config.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
@@ -12,19 +13,23 @@ import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
 import '../../../core/widgets/app_sheet.dart';
+import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
 import '../../../core/widgets/phone_apps_sheet.dart';
 import '../../../core/widgets/section_header.dart';
+import '../../../core/widgets/see_all_button.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../discover/data/discover_api_service.dart';
+import '../../discover/logic/browse_query.dart';
 import '../../issues/logic/issues_provider.dart';
 import '../../issues/ui/report_problem_sheet.dart';
 import '../../media_access/data/media_access_service.dart';
 import '../../media_download/data/media_download_models.dart';
 import '../../media_download/ui/media_download_button.dart';
+import '../../person/ui/person_detail_sheet.dart';
 import '../../radarr/data/radarr_api_service.dart';
 import '../../radarr/data/radarr_models.dart';
 import '../../radarr/ui/radarr_movie_detail_screen.dart';
@@ -38,7 +43,11 @@ import '../../sonarr/data/sonarr_models.dart';
 import '../../sonarr/ui/sonarr_series_detail_screen.dart';
 import '../logic/arr_deep_link.dart';
 import '../logic/media_detail_provider.dart';
+import '../logic/title_links.dart';
+import '../logic/release_schedule.dart';
 import '../logic/release_window.dart';
+import '../logic/title_facts.dart';
+import 'cast_crew_sheet.dart';
 import 'media_hero.dart';
 import 'season_table.dart';
 
@@ -58,6 +67,22 @@ class MediaDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
+  /// Opens a browse grid anchored on this title or on one of its genres.
+  void _browse(
+    BrowseFeed feed, {
+    required String title,
+    BrowseFilters filters = BrowseFilters.none,
+  }) =>
+      context.push(
+        BrowseQuery(
+          type: widget.mediaType,
+          feed: feed,
+          id: feed.needsId ? widget.id : null,
+          title: title,
+          filters: filters,
+        ).toLocation(),
+      );
+
   late final MediaDetailNotifier _detailNotifier;
   late final RequestNotifier _requestNotifier;
 
@@ -234,6 +259,26 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
           );
         }
 
+        // A title the server keeps from this account is an answer, not a
+        // failure: a plain line rather than the red error.
+        if (state.titleUnavailable &&
+            state.movieDetail == null &&
+            state.tvDetail == null) {
+          return Scaffold(
+            appBar: AppBar(),
+            body: const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Text(
+                  "This title isn't available on this account.",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: AppTheme.textSecondary),
+                ),
+              ),
+            ),
+          );
+        }
+
         if (state.error != null &&
             state.movieDetail == null &&
             state.tvDetail == null) {
@@ -258,7 +303,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                 pinned: true,
                 delegate: MediaHeroDelegate(
                   title: state.title,
-                  year: tmdbPremiereYear(state.movieDetail?.releaseDate),
+                  year: tmdbPremiereYear(state.movieDetail?.releaseDate ??
+                      state.tvDetail?.firstAirDate),
                   posterPath: state.posterPath,
                   backdropPath: state.backdropPath,
                   expandedExtent: MediaHeroDelegate.expandedExtentFor(
@@ -447,7 +493,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                           ),
                           const SizedBox(height: 16),
 
-                          // Genres
+                          // Genres: each opens the Browse grid for that genre.
                           if (state.genres.isNotEmpty)
                             Padding(
                               padding:
@@ -456,10 +502,11 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                 spacing: 6,
                                 runSpacing: 6,
                                 children: state.genres
-                                    .map((g) => Chip(
+                                    .map((g) => ActionChip(
                                           label: Text(g.name,
                                               style: const TextStyle(
                                                   fontSize: 12)),
+                                          tooltip: 'Browse ${g.name}',
                                           backgroundColor:
                                               AppTheme.surfaceVariant,
                                           side: const BorderSide(
@@ -467,6 +514,12 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                           materialTapTargetSize:
                                               MaterialTapTargetSize.shrinkWrap,
                                           visualDensity: VisualDensity.compact,
+                                          onPressed: () => _browse(
+                                            BrowseFeed.discover,
+                                            title: g.name,
+                                            filters: BrowseFilters(
+                                                genreIds: [g.id]),
+                                          ),
                                         ))
                                     .toList(),
                               ),
@@ -557,6 +610,69 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                             ),
                           ],
 
+                          // Cast: billing order, a person sheet per tap,
+                          // See all for everyone credited.
+                          if (state.credits.cast.isNotEmpty) ...[
+                            const SizedBox(height: 24),
+                            _CastRow(
+                              cast: state.credits.cast,
+                              onSeeAll: () => showCastCrewSheet(
+                                context,
+                                title: state.title,
+                                cast: state.credits.cast,
+                                crew: state.crew,
+                              ),
+                            ),
+                          ],
+
+                          // Details: the few lines worth reading before
+                          // deciding, never a spec sheet. Only known lines
+                          // render; the Links line closes it with the
+                          // title's own pages elsewhere (TMDB's is always
+                          // known, so the section is there once loaded).
+                          if (state.facts.isNotEmpty ||
+                              state.studios.isNotEmpty ||
+                              state.links.isNotEmpty) ...[
+                            const SizedBox(height: 24),
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
+                              child: _DetailsSection(
+                                facts: state.facts,
+                                studios: state.studios,
+                                onStudio: (studio) => _browse(
+                                  BrowseFeed.discover,
+                                  title: studio.name!,
+                                  filters:
+                                      BrowseFilters(companies: [studio]),
+                                ),
+                                links: state.links,
+                                onLink: _openTitleLink,
+                              ),
+                            ),
+                          ],
+
+                          // Release dates: TMDB-backed cinema/digital/disc
+                          // schedule for any movie, library or not. See D-02
+                          // in the plan — this is deliberately separate from
+                          // _PendingReleaseLine in the request dock above.
+                          // The region is the device's, read the way the
+                          // browse screen reads it: a widget-level locale
+                          // here is always en_US.
+                          if (state.movieDetail != null)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16),
+                              child: _ReleaseDatesSection(
+                                regions: state.movieDetail!.releaseDates,
+                                deviceRegion: watchRegionFor(WidgetsBinding
+                                    .instance
+                                    .platformDispatcher
+                                    .locale
+                                    .countryCode),
+                              ),
+                            ),
+
                           // Seasons (TV only): interactive per-season request table
                           // fed by live availability from the request notifier.
                           if (state.seasons.isNotEmpty) ...[
@@ -587,6 +703,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                             _SectionRow(
                               title: 'Recommended',
                               items: state.recommendations,
+                              onSeeAll: () => _browse(
+                                BrowseFeed.recommendations,
+                                title: 'Recommended',
+                              ),
                             ),
                           ],
 
@@ -596,6 +716,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                             _SectionRow(
                               title: 'Similar',
                               items: state.similar,
+                              onSeeAll: () =>
+                                  _browse(BrowseFeed.similar, title: 'Similar'),
                             ),
                           ],
 
@@ -918,6 +1040,23 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     ));
   }
 
+  /// Opens the title's own page on an outside site (IMDb, TMDB, Trakt) in
+  /// the browser, or the site's app when it claims the address, and says so
+  /// when nothing could open it.
+  Future<void> _openTitleLink(TitleLink link) async {
+    var opened = false;
+    try {
+      opened = await launchUrl(Uri.parse(link.url),
+          mode: LaunchMode.externalApplication);
+    } catch (_) {
+      opened = false;
+    }
+    if (opened || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text("Couldn't open ${link.label}."),
+    ));
+  }
+
   /// Pushes the matched arr detail screen (movie → Radarr, TV → Sonarr) over
   /// the root navigator, mirroring how the arr home screens open an item.
   void _openInArr() {
@@ -1190,6 +1329,98 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   }
 }
 
+/// The full release schedule for a movie: cinema, digital and disc dates
+/// TMDB knows for the resolved region, for any movie whether or not it is in
+/// a library. Renders nothing at all — not even a header — when
+/// [resolveReleaseSchedule] finds no shown milestone anywhere in the
+/// payload, matching the shrink-to-nothing discipline `_PendingReleaseLine`
+/// already uses below: the page never asserts a schedule it does not have.
+class _ReleaseDatesSection extends StatelessWidget {
+  final List<TmdbReleaseDateRegion> regions;
+
+  /// The device's country, tried first; `resolveReleaseSchedule` falls
+  /// back from it the same way whatever it is.
+  final String deviceRegion;
+
+  const _ReleaseDatesSection({
+    required this.regions,
+    required this.deviceRegion,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final schedule = resolveReleaseSchedule(
+      regions,
+      preferredRegion: deviceRegion,
+    );
+    if (schedule == null) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // The leading gap lives inside the Column, past the early return
+        // above, so a movie with no resolvable schedule leaves no dead space
+        // between the trailer button and whatever follows.
+        const SizedBox(height: 24),
+        SectionHeader(
+          title: 'Release dates',
+          trailing: Text(
+            schedule.regionCode,
+            style: const TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 12,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        ...schedule.milestones.map((m) => Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Icon(_iconFor(m.type), size: 18, color: AppTheme.textSecondary),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      m.label,
+                      style: const TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    formatReleaseDate(m.date),
+                    style: TextStyle(
+                      color: m.isUpcoming
+                          ? AppTheme.accent
+                          : AppTheme.textPrimary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            )),
+      ],
+    );
+  }
+
+  /// Keyed on the TMDB release type, not the display label — rewording a
+  /// label must never silently drop a row back to the generic icon.
+  IconData _iconFor(int type) {
+    switch (type) {
+      case 2:
+      case 3:
+        return Icons.theaters_outlined;
+      case 4:
+        return Icons.play_circle_outline;
+      case 5:
+        return Icons.album_outlined;
+      default:
+        return Icons.event_outlined;
+    }
+  }
+}
+
 /// The release milestones a movie hasn't reached yet, e.g.
 /// "In cinemas Jun 12 • Digital Sep 4".
 ///
@@ -1288,9 +1519,13 @@ class _SectionRow extends StatelessWidget {
   final String title;
   final List<MediaItem> items;
 
+  /// Opens the row's feed as a full grid that pages past this first page.
+  final VoidCallback? onSeeAll;
+
   const _SectionRow({
     required this.title,
     required this.items,
+    this.onSeeAll,
   });
 
   @override
@@ -1300,7 +1535,12 @@ class _SectionRow extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: SectionHeader(title: title),
+          child: SectionHeader(
+            title: title,
+            trailing: onSeeAll == null
+                ? null
+                : SeeAllButton(rowTitle: title, onPressed: onSeeAll!),
+          ),
         ),
         const SizedBox(height: 12),
         HorizontalItemRow<MediaItem>(
@@ -1319,4 +1559,216 @@ class _SectionRow extends StatelessWidget {
       ],
     );
   }
+}
+
+/// The Cast row: billing order, a person sheet per tap, See all for the
+/// whole cast and crew. Same footprint as [_SectionRow] so the page keeps
+/// one rhythm.
+class _CastRow extends StatelessWidget {
+  final List<CastMember> cast;
+  final VoidCallback onSeeAll;
+
+  /// How much of the billing the row itself carries; the sheet has the rest.
+  static const shown = 20;
+
+  const _CastRow({required this.cast, required this.onSeeAll});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: SectionHeader(
+            title: 'Cast',
+            trailing: SeeAllButton(rowTitle: 'Cast', onPressed: onSeeAll),
+          ),
+        ),
+        const SizedBox(height: 12),
+        HorizontalItemRow<CastMember>(
+          items: cast.take(shown).toList(),
+          isLoading: false,
+          itemBuilder: (member) => _CastCard(
+            member: member,
+            onTap: () => showPersonDetailSheet(
+              context,
+              personId: member.id,
+              personName: member.name,
+              profilePath: member.profilePath,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// One person in the Cast row: a 2:3 headshot (TMDB profiles share the
+/// poster ratio), their name, and who they played.
+class _CastCard extends StatelessWidget {
+  final CastMember member;
+  final VoidCallback onTap;
+
+  const _CastCard({required this.member, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final path = member.profilePath;
+    return SizedBox(
+      width: 100,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: SizedBox(
+                width: 100,
+                height: 150,
+                child: CachedImage(
+                  url: path == null
+                      ? null
+                      : AppConfig.tmdbPoster(path, width: 185),
+                  fit: BoxFit.cover,
+                  icon: Icons.person,
+                  iconSize: 28,
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              member.name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (member.character case final character?)
+              Text(
+                character,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 12,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The Details section: one label/value row per known fact, in the
+/// release-dates row style, plus the studios as chips that open the browse
+/// grid for that studio.
+class _DetailsSection extends StatelessWidget {
+  final List<TitleFact> facts;
+  final List<TaggedId> studios;
+  final ValueChanged<TaggedId> onStudio;
+  final List<TitleLink> links;
+  final ValueChanged<TitleLink> onLink;
+
+  const _DetailsSection({
+    required this.facts,
+    required this.studios,
+    required this.onStudio,
+    required this.links,
+    required this.onLink,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SectionHeader(title: 'Details'),
+        const SizedBox(height: 12),
+        for (final fact in facts)
+          _row(
+            fact.label,
+            Text(
+              fact.value,
+              style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        if (studios.isNotEmpty)
+          _row(
+            'Studio',
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final studio in studios)
+                  ActionChip(
+                    label: Text(studio.name!,
+                        style: const TextStyle(fontSize: 12)),
+                    tooltip: 'Browse ${studio.name}',
+                    backgroundColor: AppTheme.surfaceVariant,
+                    side: const BorderSide(color: AppTheme.border),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => onStudio(studio),
+                  ),
+              ],
+            ),
+          ),
+        // Outbound, unlike the studio chips, and marked as such.
+        if (links.isNotEmpty)
+          _row(
+            'Links',
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final link in links)
+                  ActionChip(
+                    avatar: const Icon(Icons.open_in_new,
+                        size: 14, color: AppTheme.textSecondary),
+                    label: Text(link.label,
+                        style: const TextStyle(fontSize: 12)),
+                    tooltip: 'Open on ${link.label}',
+                    backgroundColor: AppTheme.surfaceVariant,
+                    side: const BorderSide(color: AppTheme.border),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => onLink(link),
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _row(String label, Widget value) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 96,
+              child: Text(
+                label,
+                style: const TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+            Expanded(child: value),
+          ],
+        ),
+      );
 }
