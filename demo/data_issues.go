@@ -30,7 +30,7 @@ type issIssue struct {
 	ReporterID     int    // 0 = null
 	ReporterName   string
 	TmdbID         int
-	MediaType      string // movie | tv | book
+	MediaType      string // movie | tv | book | music (system rows carry "system")
 	Title          string
 	SeasonNumber   int
 	EpisodeNumber  int
@@ -45,7 +45,7 @@ type issIssue struct {
 	InstanceID     string
 	IsPrevention   bool   // recurrence notice (real: derived from the dedupe namespace)
 	ProblemKind    string // internal: Import-Doctor problem label ("" = none)
-	ForeignID      string // internal: book scope for dedupe ("" = not a book)
+	ForeignID      string // internal: book/album scope for dedupe ("" = movie/tv)
 }
 
 // issMsg is one append-only issue-thread entry.
@@ -627,9 +627,9 @@ func issValidateParams(kind string, p map[string]any) string {
 		"manual_import":   {"media_type": true, "queue_id": true, "force": true},
 		"trigger_search": {
 			"media_type": true, "tmdb_id": true, "season": true, "episode": true,
-			"author_id": true, "book_id": true,
+			"author_id": true, "book_id": true, "artist_id": true, "album_id": true,
 		},
-		"rescan": {"media_type": true, "tmdb_id": true, "author_id": true},
+		"rescan": {"media_type": true, "tmdb_id": true, "author_id": true, "artist_id": true},
 	}
 	ak, ok := allowed[kind]
 	if !ok {
@@ -641,8 +641,8 @@ func issValidateParams(kind string, p map[string]any) string {
 		}
 	}
 	mt, _ := p["media_type"].(string)
-	if mt != mediaTypeMovie && mt != mediaTypeTV && mt != mediaTypeBook {
-		return "media_type must be movie, tv, or book"
+	if mt != mediaTypeMovie && mt != mediaTypeTV && mt != mediaTypeBook && mt != mediaTypeMusic {
+		return "media_type must be movie, tv, book, or music"
 	}
 	hasInt := func(key string) bool { _, ok := issPInt(p, key); return ok }
 	optInt := func(key string) bool {
@@ -716,11 +716,13 @@ func issValidateParams(kind string, p map[string]any) string {
 			}
 		}
 	case "trigger_search":
-		for _, k := range []string{"tmdb_id", "season", "episode", "author_id", "book_id"} {
+		for _, k := range []string{"tmdb_id", "season", "episode", "author_id", "book_id", "artist_id", "album_id"} {
 			if !optInt(k) {
 				return fmt.Sprintf("%s must be an integer", k)
 			}
 		}
+		artistID, _ := issPInt(p, "artist_id")
+		albumID, _ := issPInt(p, "album_id")
 		if mt == mediaTypeBook {
 			aid, _ := issPInt(p, "author_id")
 			bid, _ := issPInt(p, "book_id")
@@ -730,13 +732,39 @@ func issValidateParams(kind string, p map[string]any) string {
 			if tid, _ := issPInt(p, "tmdb_id"); tid != 0 {
 				return "a book search must not carry a tmdb_id"
 			}
+			if artistID != 0 || albumID != 0 {
+				return "artist_id and album_id apply only to media_type music"
+			}
 			if _, present := p["season"]; present {
 				return "a book search must not carry a season"
 			}
 			if _, present := p["episode"]; present {
 				return "a book search must not carry an episode"
 			}
+		} else if mt == mediaTypeMusic {
+			// Music carries no TMDB id either: one album by album_id, or all
+			// of an artist's monitored albums by artist_id.
+			if artistID <= 0 && albumID <= 0 {
+				return "artist_id or album_id is required for a music search"
+			}
+			if tid, _ := issPInt(p, "tmdb_id"); tid != 0 {
+				return "a music search must not carry a tmdb_id"
+			}
+			aid, _ := issPInt(p, "author_id")
+			bid, _ := issPInt(p, "book_id")
+			if aid != 0 || bid != 0 {
+				return "author_id and book_id apply only to media_type book"
+			}
+			if _, present := p["season"]; present {
+				return "a music search must not carry a season"
+			}
+			if _, present := p["episode"]; present {
+				return "a music search must not carry an episode"
+			}
 		} else {
+			if artistID != 0 || albumID != 0 {
+				return "artist_id and album_id apply only to media_type music"
+			}
 			if tid, _ := issPInt(p, "tmdb_id"); tid <= 0 {
 				return "tmdb_id is required"
 			}
@@ -764,11 +792,12 @@ func issValidateParams(kind string, p map[string]any) string {
 			}
 		}
 	case "rescan":
-		for _, k := range []string{"tmdb_id", "author_id"} {
+		for _, k := range []string{"tmdb_id", "author_id", "artist_id"} {
 			if !optInt(k) {
 				return fmt.Sprintf("%s must be an integer", k)
 			}
 		}
+		artistID, _ := issPInt(p, "artist_id")
 		if mt == mediaTypeBook {
 			if aid, _ := issPInt(p, "author_id"); aid <= 0 {
 				return "author_id is required for a book rescan"
@@ -776,8 +805,27 @@ func issValidateParams(kind string, p map[string]any) string {
 			if tid, _ := issPInt(p, "tmdb_id"); tid != 0 {
 				return "a book rescan must not carry a tmdb_id"
 			}
-		} else if tid, _ := issPInt(p, "tmdb_id"); tid <= 0 {
-			return "tmdb_id is required"
+			if artistID != 0 {
+				return "artist_id applies only to media_type music"
+			}
+		} else if mt == mediaTypeMusic {
+			// Music rescans by artist_id, mirroring the book rule.
+			if artistID <= 0 {
+				return "artist_id is required for a music rescan"
+			}
+			if tid, _ := issPInt(p, "tmdb_id"); tid != 0 {
+				return "a music rescan must not carry a tmdb_id"
+			}
+			if aid, _ := issPInt(p, "author_id"); aid != 0 {
+				return "author_id applies only to media_type book"
+			}
+		} else {
+			if artistID != 0 {
+				return "artist_id applies only to media_type music"
+			}
+			if tid, _ := issPInt(p, "tmdb_id"); tid <= 0 {
+				return "tmdb_id is required"
+			}
 		}
 	}
 	return ""
@@ -1148,9 +1196,72 @@ func init() {
 			CreatedAt: waitingCreated},
 	}
 
-	issNextIssueID = 6
-	issNextMsgID = 18
-	issNextActionID = 4
-	issNextRunID = 4
+	// (i) The music showcase: user 2 reports a bad copy of Neapolitan Songs
+	// (Caruso, album 2 in the fake Lidarr — the MP3-320 set under a Lossless
+	// profile). The complaint arrived long after the queue emptied, so the
+	// agent diagnosed it from the library's files and the album's history
+	// (get_album_timeline) and proposed a fresh search so Lidarr grabs a
+	// release that meets the cutoff. Approving the proposal enqueues that grab
+	// in the fake Lidarr for real (issMusicSearchEffect).
+	musicCreated := now.Add(-90 * time.Minute)
+	musicProposed := now.Add(-85 * time.Minute)
+	musicDetail := "Neapolitan Songs sounds thin and crackly on every track — it plays like a low-bitrate rip, nothing like the other Caruso set."
+	issIssues[6] = &issIssue{
+		ID: 6, Source: "user", Status: "awaiting_approval", Category: "bad_copy",
+		ReporterID: 2, ReporterName: "user",
+		MediaType: mediaTypeMusic, Title: "Neapolitan Songs",
+		Detail:      musicDetail,
+		Occurrences: 1, Read: false,
+		CreatedAt: musicCreated, UpdatedAt: musicProposed,
+		InstanceID: instLidarr, ForeignID: lidAlbumFID(2),
+	}
+	issThreads[6] = []*issMsg{
+		{ID: 18, AuthorKind: "user", AuthorName: "user",
+			Body:      musicDetail,
+			CreatedAt: musicCreated},
+		{ID: 19, AuthorKind: "agent",
+			Body:      "Thanks for the report. The queue is empty — this album imported a month ago — so I checked what Lidarr holds for Neapolitan Songs: all eight track files are MP3 at 320 kbps, below the Lossless profile's FLAC cutoff, and the import in history matches that release. That fits what you're hearing.",
+			CreatedAt: musicCreated.Add(2 * time.Minute)},
+		{ID: 20, AuthorKind: "agent",
+			Body:      "A lossless copy would replace it. I've proposed a new search for the album so Lidarr grabs a release that meets the cutoff; an administrator needs to approve it before anything runs.",
+			CreatedAt: musicProposed},
+	}
+	issRuns[4] = &issRun{
+		ID: 4, IssueID: 6, Trigger: "user_report", Status: "waiting_approval",
+		Model: "claude-sonnet-4-5", StepCount: 4,
+		InputTokens: 12880, OutputTokens: 1420,
+		CacheCreationTokens: 3620, CacheReadTokens: 9260,
+		StopReason: "awaiting_approval",
+		StartedAt:  musicCreated.Add(1 * time.Minute),
+	}
+	issSteps[4] = []*issStep{
+		{ID: 22, Seq: 1, Kind: "assistant",
+			Text:      strPtr("A bad-copy report came in for Neapolitan Songs. The queue is empty — the album imported weeks ago — so I'll read what the library holds for it and the album's grab and import history."),
+			CreatedAt: musicCreated.Add(1 * time.Minute)},
+		{ID: 23, Seq: 2, Kind: "tool_call", ToolName: strPtr("get_album_timeline"),
+			ToolInput: strPtr(`{"instance_id":"` + instLidarr + `","album_id":2}`),
+			CreatedAt: musicCreated.Add(1*time.Minute + 9*time.Second)},
+		{ID: 24, Seq: 3, Kind: "tool_result", ToolName: strPtr("get_album_timeline"),
+			ToolOut:   strPtr(`{"album":{"id":2,"title":"Neapolitan Songs","monitored":true,"trackFileCount":8,"trackCount":8},"files":[{"id":200201,"path":"/music/Enrico Caruso/Neapolitan Songs/01 - O sole mio.mp3","quality":"MP3-320","mediaInfo":{"audioCodec":"MP3","audioBitRate":"320 kbps"}},{"id":200202,"path":"/music/Enrico Caruso/Neapolitan Songs/02 - Santa Lucia.mp3","quality":"MP3-320","mediaInfo":{"audioCodec":"MP3","audioBitRate":"320 kbps"}}],"files_total":8,"history":[{"eventType":"trackFileImported","sourceTitle":"Enrico.Caruso.Neapolitan.Songs.MP3-320-DEMO","quality":"MP3-320"},{"eventType":"grabbed","sourceTitle":"Enrico.Caruso.Neapolitan.Songs.MP3-320-DEMO","indexer":"DemoNZB (Prowlarr)"}],"cutoff_unmet":true}`),
+			CreatedAt: musicCreated.Add(1*time.Minute + 12*time.Second)},
+		{ID: 25, Seq: 4, Kind: "assistant",
+			Text:      strPtr("Every file is MP3-320 and the profile cutoff is FLAC, so Lidarr already lists the album as cutoff-unmet. Proposing a new search for album 2 so a lossless release replaces the files; this needs admin approval."),
+			CreatedAt: musicProposed},
+	}
+	issActions[4] = &issAction{
+		ID: 4, IssueID: 6, RunID: 4, Kind: "trigger_search",
+		Params: map[string]any{
+			"media_type": mediaTypeMusic,
+			"album_id":   2,
+		},
+		Rationale: "Every track file of Neapolitan Songs is an MP3 at 320 kbps under a Lossless profile whose cutoff is FLAC, which matches the thin, crackly playback reported. Searching the album again lets Lidarr grab a lossless release and upgrade the files in place.",
+		Risk:      "mutating", Status: "proposed",
+		CreatedAt: musicProposed,
+	}
+
+	issNextIssueID = 7
+	issNextMsgID = 21
+	issNextActionID = 5
+	issNextRunID = 5
 	issNextRuleID = 3
 }

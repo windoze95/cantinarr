@@ -585,6 +585,11 @@ func issDecideApprove(adminID, actionID int, override map[string]any, remember b
 		title = issue.Title
 	}
 	result := issExecutionResult(a.Kind, paramsToRun, title)
+	// The demo's executions are otherwise narrative, but a music search acts
+	// on the fake Lidarr for real: the album gains a healthy queue item, so
+	// the Queue screen shows the grab the approval promised. Runs after the
+	// store lock is released (the music domain holds its own lock).
+	afterExecute := issMusicSearchEffect(a.Kind, paramsToRun)
 
 	a.Status = "executed"
 	a.ApprovedParams = paramsToRun
@@ -625,6 +630,9 @@ func issDecideApprove(adminID, actionID int, override map[string]any, remember b
 	issueID := a.IssueID
 	issMu.Unlock()
 
+	if afterExecute != nil {
+		afterExecute()
+	}
 	wsToAdmins(evtAgentActionDecided, map[string]any{
 		"issue_id": issueID, "status": "executed", "pending_count": pending,
 	})
@@ -633,6 +641,30 @@ func issDecideApprove(adminID, actionID int, override map[string]any, remember b
 		wsToUser(reporterID, evtIssueUpdated, map[string]any{"issue_id": issueID})
 	}
 	return payload, nil
+}
+
+// issMusicSearchEffect is the one approved fix the demo carries through to a
+// fake arr: a music trigger_search enqueues the album (or the artist's
+// missing albums) in the fake Lidarr, exactly what the real executor's
+// AlbumSearch/ArtistSearch command would do. Nil for every other action.
+func issMusicSearchEffect(kind string, params map[string]any) func() {
+	if kind != "trigger_search" {
+		return nil
+	}
+	if mt, _ := params["media_type"].(string); mt != mediaTypeMusic {
+		return nil
+	}
+	albumID, _ := issPInt(params, "album_id")
+	artistID, _ := issPInt(params, "artist_id")
+	return func() {
+		if albumID > 0 {
+			lidarrOnAlbumSearch(albumID)
+			return
+		}
+		if artistID > 0 {
+			lidarrOnArtistSearch(artistID)
+		}
+	}
 }
 
 type issDecisionBody struct {
