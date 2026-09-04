@@ -35,6 +35,17 @@ DateTime? _bookReleaseDate(Map<String, dynamic> json) {
   return year > 0 ? DateTime(year) : null;
 }
 
+/// A provider id Chaptarr may serialize as a JSON number or a string: an
+/// edition's `goodreadsEditionId` is a nullable number on the wire, while the
+/// book-level ids are prefixed strings such as `gr:5907`. Held as text
+/// either way, since an id is only ever compared or placed in a URL.
+String? _idString(dynamic value) {
+  if (value == null) return null;
+  if (value is num) return value.toInt().toString();
+  final text = value.toString().trim();
+  return text.isEmpty ? null : text;
+}
+
 List<String> _stringList(dynamic value, {bool splitCommaString = false}) {
   if (value is List) {
     return value
@@ -315,6 +326,24 @@ class ChaptarrBookStatistics {
   String get sizeFormatted => _formatBytes(sizeOnDisk);
 }
 
+/// One outbound page Chaptarr's metadata declares for a book or edition
+/// (`links: [{name, url}]` on the wire). Chaptarr does not assemble these
+/// itself; they are the metadata server's own provider URLs, which is why a
+/// slug-addressed site such as Hardcover is only ever linked from here.
+class ChaptarrLink {
+  final String name;
+  final String url;
+
+  const ChaptarrLink({required this.name, required this.url});
+
+  factory ChaptarrLink.fromJson(Map<String, dynamic> json) => ChaptarrLink(
+        name: json['name'] as String? ?? '',
+        url: json['url'] as String? ?? '',
+      );
+
+  Map<String, dynamic> toJson() => {'name': name, 'url': url};
+}
+
 /// One edition of a book (a specific publication: ebook/audiobook, publisher,
 /// ISBN). Mirrors Sonarr's per-season granularity for a book.
 class ChaptarrEdition {
@@ -324,6 +353,15 @@ class ChaptarrEdition {
   final String? format;
   final String? asin;
   final String? isbn13;
+  final String? isbn10;
+
+  /// This edition's Goodreads id, a JSON number on the wire and held as text
+  /// like every other provider id.
+  final String? goodreadsEditionId;
+
+  /// This edition's Open Library edition key (`OL...M`), in Chaptarr's
+  /// prefixed form (`ol:OL...M`) when it normalized it.
+  final String? openLibraryEditionId;
   final String? overview;
   final String? publisher;
   final int pageCount;
@@ -339,6 +377,9 @@ class ChaptarrEdition {
     this.format,
     this.asin,
     this.isbn13,
+    this.isbn10,
+    this.goodreadsEditionId,
+    this.openLibraryEditionId,
     this.overview,
     this.publisher,
     this.pageCount = 0,
@@ -356,6 +397,9 @@ class ChaptarrEdition {
         format: json['format'] as String?,
         asin: json['asin'] as String?,
         isbn13: json['isbn13'] as String?,
+        isbn10: json['isbn10'] as String?,
+        goodreadsEditionId: _idString(json['goodreadsEditionId']),
+        openLibraryEditionId: _idString(json['openLibraryEditionId']),
         overview: json['overview'] as String?,
         publisher: json['publisher'] as String?,
         pageCount: json['pageCount'] as int? ?? 0,
@@ -372,6 +416,12 @@ class ChaptarrEdition {
         'format': format,
         'asin': asin,
         'isbn13': isbn13,
+        'isbn10': isbn10,
+        // Back to the wire's number when it is one, so a re-encoded edition
+        // keeps Chaptarr's own shape.
+        'goodreadsEditionId':
+            int.tryParse(goodreadsEditionId ?? '') ?? goodreadsEditionId,
+        'openLibraryEditionId': openLibraryEditionId,
         'overview': overview,
         'publisher': publisher,
         'pageCount': pageCount,
@@ -426,6 +476,19 @@ class ChaptarrBook {
   final List<ChaptarrImage> images;
   final List<String> genres;
 
+  /// Per-provider ids Chaptarr states beside [foreignBookId], in its
+  /// normalized prefixed form (`gr:231198689`, `ol:OL262758W`, `hc:12345`).
+  /// [goodreadsBookId] is the Goodreads id of the edition Chaptarr leads with
+  /// (monitored first, then manually added, then by id), so it is Chaptarr's
+  /// own answer to which edition a reader should land on.
+  final String? goodreadsBookId;
+  final String? goodreadsWorkId;
+  final String? openLibraryWorkId;
+  final String? hardcoverBookId;
+
+  /// Outbound pages the metadata server declared for this book.
+  final List<ChaptarrLink> links;
+
   const ChaptarrBook({
     required this.id,
     required this.title,
@@ -444,6 +507,11 @@ class ChaptarrBook {
     this.editions = const [],
     this.images = const [],
     this.genres = const [],
+    this.goodreadsBookId,
+    this.goodreadsWorkId,
+    this.openLibraryWorkId,
+    this.hardcoverBookId,
+    this.links = const [],
   });
 
   factory ChaptarrBook.fromJson(Map<String, dynamic> json) => ChaptarrBook(
@@ -473,6 +541,11 @@ class ChaptarrBook {
         editions: _modelList(json['editions'], ChaptarrEdition.fromJson),
         images: _modelList(json['images'], ChaptarrImage.fromJson),
         genres: _stringList(json['genres'], splitCommaString: true),
+        goodreadsBookId: _idString(json['goodreadsBookId']),
+        goodreadsWorkId: _idString(json['goodreadsWorkId']),
+        openLibraryWorkId: _idString(json['openLibraryWorkId']),
+        hardcoverBookId: _idString(json['hardcoverBookId']),
+        links: _modelList(json['links'], ChaptarrLink.fromJson),
       );
 
   Map<String, dynamic> toJson() => {
@@ -491,6 +564,11 @@ class ChaptarrBook {
         'editions': editions.map((e) => e.toJson()).toList(),
         'images': images.map((i) => i.toJson()).toList(),
         'genres': genres,
+        'goodreadsBookId': goodreadsBookId,
+        'goodreadsWorkId': goodreadsWorkId,
+        'openLibraryWorkId': openLibraryWorkId,
+        'hardcoverBookId': hardcoverBookId,
+        'links': links.map((l) => l.toJson()).toList(),
       };
 
   String? get coverUrl => _pickCoverUrl(images);

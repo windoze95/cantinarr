@@ -15,8 +15,11 @@ import '../../auth/logic/auth_provider.dart';
 import '../../chaptarr/data/chaptarr_api_service.dart';
 import '../../chaptarr/data/chaptarr_image.dart';
 import '../../chaptarr/data/chaptarr_models.dart';
+import '../../chaptarr/logic/book_links.dart';
 import '../../chaptarr/ui/chaptarr_book_screen.dart';
+import '../../chaptarr/ui/widgets/book_link_chips.dart';
 import '../../issues/ui/report_problem_sheet.dart';
+import '../../media_detail/logic/title_links.dart';
 import '../../media_download/data/media_download_models.dart';
 import '../../media_download/ui/media_download_button.dart';
 import '../../request/data/book_ownership.dart';
@@ -502,6 +505,13 @@ class _RequesterBookDetailScreenState
     final genres = _metadata?.genres.isNotEmpty ?? false
         ? _metadata!.genres
         : (live?.genres ?? const <String>[]);
+    // The lookup record leads, as it does for every line above; a live
+    // library record fills in only when the lookup named no outside page.
+    final metadataLinks =
+        _metadata == null ? const <TitleLink>[] : bookLinks(_metadata!);
+    final links = metadataLinks.isNotEmpty
+        ? metadataLinks
+        : (live == null ? const <TitleLink>[] : bookLinks(live));
     final ownership = owned?.ownership;
     // Only a page that could not bind to its own library record needs the
     // pointer; a bound page's format panel already tells the whole truth.
@@ -735,6 +745,14 @@ class _RequesterBookDetailScreenState
                     color: AppTheme.textPrimary,
                   ),
             ),
+          ],
+          // Outbound, and marked as such. Shown with or without an overview:
+          // the page is the reader's route to the book's own page elsewhere.
+          if (links.isNotEmpty) ...[
+            const SizedBox(height: 24),
+            Text('Links', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Center(child: BookLinkChips(links)),
           ],
         ],
       ),

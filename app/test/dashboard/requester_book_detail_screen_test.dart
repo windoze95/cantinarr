@@ -461,6 +461,42 @@ void main() {
     expect(authorScreen.instanceId, 'books');
   });
 
+  testWidgets('a resolved book links out to Goodreads and Open Library',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester);
+
+    router.go('/detail/book/555?title=Dune%20Messiah');
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.widgetWithText(ActionChip, 'Open Library'),
+      250,
+      scrollable: _detailScrollable(),
+    );
+    expect(find.text('Links'), findsOneWidget);
+    expect(find.widgetWithText(ActionChip, 'Goodreads'), findsOneWidget);
+    expect(find.widgetWithText(ActionChip, 'Open Library'), findsOneWidget);
+    expect(find.byTooltip('Open on Goodreads'), findsOneWidget);
+    // Hardcover pages are slug-addressed, so a chip needs a declared link and
+    // the fixture declares none.
+    expect(find.widgetWithText(ActionChip, 'Hardcover'), findsNothing);
+  });
+
+  testWidgets('a book whose record names no outside page has no Links line',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: _BooksAdapter(noLinkIds: true),
+    );
+
+    router.go('/detail/book/555?title=Dune%20Messiah');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Dune Messiah'), findsOneWidget);
+    expect(find.text('Links', skipOffstage: false), findsNothing);
+    expect(find.byType(ActionChip, skipOffstage: false), findsNothing);
+  });
+
   testWidgets('an unresolvable id shows a graceful state with a Books tab exit',
       (tester) async {
     final (:router, container: _) = await _pumpRouter(tester);
@@ -655,6 +691,10 @@ class _BooksAdapter implements HttpClientAdapter {
   /// author name is stated without the library identity that makes it tappable.
   final bool noAuthorLink;
 
+  /// Suppresses the provider ids on the Dune Messiah lookup record, so the
+  /// page has no outside page to link to.
+  final bool noLinkIds;
+
   /// Coverage verdicts by reported path; unlisted paths count as covered.
   final Map<String, bool> coverage;
   final coveragePaths = <String>[];
@@ -673,6 +713,7 @@ class _BooksAdapter implements HttpClientAdapter {
     this.bookFiles = false,
     this.noSeries = false,
     this.noAuthorLink = false,
+    this.noLinkIds = false,
     this.coverage = const {},
   });
 
@@ -798,6 +839,10 @@ class _BooksAdapter implements HttpClientAdapter {
           'overview': '<b>The desert planet has a new emperor.</b><br/><br/>'
               'A second chapter &amp; more.',
           'genres': ['Science Fiction'],
+          if (!noLinkIds) ...{
+            'goodreadsBookId': 'gr:5907',
+            'openLibraryWorkId': 'ol:OL262758W',
+          },
           'author': {
             'id': 0,
             'authorName': mismatchedLookupAuthor
