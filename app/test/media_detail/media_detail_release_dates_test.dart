@@ -33,6 +33,10 @@ void main() {
       tester.view.resetPhysicalSize();
       tester.view.resetDevicePixelRatio();
     });
+    // The region comes from the device locale, not the widget tree: the
+    // app resolves no locales, so a widget-level locale is always en_US.
+    tester.platformDispatcher.localeTestValue = locale;
+    addTearDown(tester.platformDispatcher.clearLocaleTestValue);
 
     final router = GoRouter(
       initialLocation: '/detail/movie/$_tmdbId',
@@ -57,7 +61,7 @@ void main() {
           backendClientProvider.overrideWithValue(dio),
           realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
         ],
-        child: MaterialApp.router(routerConfig: router, locale: locale),
+        child: MaterialApp.router(routerConfig: router),
       ),
     );
     await tester.pumpAndSettle();
@@ -93,6 +97,37 @@ void main() {
 
     expect(find.text('Blu-ray / DVD'), findsOneWidget);
     expect(find.text('Jun 1, 1994'), findsOneWidget);
+  });
+
+  testWidgets('the device country is tried first when it has milestones',
+      (tester) async {
+    await pumpDetail(
+      tester,
+      locale: const Locale('en', 'GB'),
+      adapter: _DetailAdapter(releaseDates: {
+        'results': [
+          {
+            'iso_3166_1': 'US',
+            'release_dates': [
+              {'type': 3, 'release_date': '2094-02-01T00:00:00.000Z'},
+            ],
+          },
+          {
+            'iso_3166_1': 'GB',
+            'release_dates': [
+              {'type': 4, 'release_date': '2094-03-01T00:00:00.000Z'},
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(find.text('Release dates'), findsOneWidget);
+    expect(find.text('GB'), findsOneWidget);
+    expect(find.text('US'), findsNothing);
+    expect(find.text('Digital'), findsOneWidget);
+    expect(find.text('Mar 1, 2094'), findsOneWidget);
+    expect(find.text('In cinemas'), findsNothing);
   });
 
   testWidgets(

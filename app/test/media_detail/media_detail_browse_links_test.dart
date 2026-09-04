@@ -19,8 +19,8 @@ import 'package:go_router/go_router.dart';
 const _tmdbId = 603;
 
 /// The doors a title page opens into the browse grid: a genre chip browses
-/// that genre, and the Recommended and Similar rows continue past their
-/// first page.
+/// that genre, a studio chip browses that studio, and the Recommended and
+/// Similar rows continue past their first page.
 void main() {
   testWidgets('a genre chip opens the Browse grid for that genre',
       (tester) async {
@@ -30,6 +30,18 @@ void main() {
     expect(opened.last.path, '/browse/movie/discover');
     expect(opened.last.queryParameters['genres'], '28');
     expect(opened.last.queryParameters['title'], 'Action');
+    expect(opened.last.queryParameters.containsKey('id'), isFalse);
+    router.pop();
+  });
+
+  testWidgets('a studio chip opens the Browse grid for that studio',
+      (tester) async {
+    final (:opened, :router) = await _pumpDetail(tester);
+
+    await _tap(tester, find.widgetWithText(ActionChip, 'Warner Bros. Pictures'));
+    expect(opened.last.path, '/browse/movie/discover');
+    expect(opened.last.queryParameters['co'], '174');
+    expect(opened.last.queryParameters['title'], 'Warner Bros. Pictures');
     expect(opened.last.queryParameters.containsKey('id'), isFalse);
     router.pop();
   });
@@ -168,6 +180,9 @@ class _DetailAdapter implements HttpClientAdapter {
         'title': 'The Matrix',
         'genres': [
           {'id': 28, 'name': 'Action'},
+        ],
+        'production_companies': [
+          {'id': 174, 'name': 'Warner Bros. Pictures'},
         ],
       };
     } else {

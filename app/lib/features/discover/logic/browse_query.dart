@@ -80,10 +80,10 @@ enum BrowseSort {
   }
 }
 
-/// The streaming region to browse in for a device country code: two ASCII
-/// letters uppercased, else the US. The country comes from the device's own
-/// locale (the app resolves no locales of its own, so a widget-level locale
-/// is always en_US).
+/// The device region for streaming services and release schedules, from a
+/// device country code: two ASCII letters uppercased, else the US. The
+/// country comes from the device's own locale (the app resolves no locales
+/// of its own, so a widget-level locale is always en_US).
 String watchRegionFor(String? countryCode) {
   final code = countryCode?.trim().toUpperCase() ?? '';
   return RegExp(r'^[A-Z]{2}$').hasMatch(code) ? code : 'US';
