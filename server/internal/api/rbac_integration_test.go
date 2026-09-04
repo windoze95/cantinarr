@@ -25,6 +25,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/cache"
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/config"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	projectdb "github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/discover"
@@ -475,6 +476,12 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 	discoverCache := cache.New()
 	t.Cleanup(discoverCache.Close)
 	discoverHandler := discover.NewHandler(registry, discoverCache, serversettings.NewService(database, func() bool { return registry.Trakt() != nil }))
+	contentPolicy := contentpolicy.New(database, func() contentpolicy.RawGetter {
+		if client := registry.TMDB(); client != nil {
+			return client
+		}
+		return nil
+	}, discoverCache)
 
 	cfg := &config.Config{
 		ArrCallbackURL:     "http://cantinarr.test",
@@ -507,6 +514,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		mediaAccessHandler,
 		update.NewChecker("dev", true),
 		serversettings.NewService(database, func() bool { return registry.Trakt() != nil }),
+		contentpolicy.NewHandler(contentPolicy),
 	)
 	return &rbacRouterHarness{
 		router:            router,

@@ -11,6 +11,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/ai"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/config"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/discover"
 	"github.com/windoze95/cantinarr-server/internal/downloads"
@@ -56,6 +57,7 @@ func NewRouter(
 	mediaAccessHandler *mediaaccess.Handler,
 	updateChecker *update.Checker,
 	serverSettings *serversettings.Service,
+	contentPolicyHandler *contentpolicy.Handler,
 ) http.Handler {
 	r := chi.NewRouter()
 
@@ -177,6 +179,13 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Patch("/users/{userID}/auth-methods", authHandler.HandleUpdateUserAuthMethods)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/ai-access", authHandler.HandleUpdateUserAIAccess)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}", authHandler.HandleDeleteUser)
+			// Kids accounts: the per-user content policy and the rating
+			// schemes the editor offers. The policy is enforced server-side
+			// on every title surface (internal/contentpolicy).
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users/{userID}/content-policy", contentPolicyHandler.GetUserPolicy)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/content-policy", contentPolicyHandler.PutUserPolicy)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}/content-policy", contentPolicyHandler.DeleteUserPolicy)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/certifications", contentPolicyHandler.Certifications)
 			// Send a test push to a specific user's devices (delivery diagnostics).
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/users/{userID}/test-push", pushHandler.TestPushToUser)
 
