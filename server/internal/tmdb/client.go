@@ -1,6 +1,7 @@
 package tmdb
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 )
 
 // Client talks to the TMDB v3 API. baseURL is a field so tests can point it
@@ -31,6 +34,7 @@ func NewClientWithBaseURL(accessToken, baseURL string) *Client {
 		accessToken: accessToken,
 		baseURL:     baseURL,
 		httpClient: &http.Client{
+			Transport:     httpx.External(),
 			Timeout:       10 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
@@ -565,4 +569,33 @@ func (c *Client) Languages() ([]Language, error) {
 		return nil, fmt.Errorf("decode languages: %w", err)
 	}
 	return out, nil
+}
+
+// Probe fetches /configuration through rt -- the outbound-proxy test. Any 2xx
+// proves the transport carried the request to TMDB. A non-2xx answer means
+// the proxy worked and TMDB itself objected (a bad token, say); the error
+// text says so, so the admin fixes the right thing. Transport failures (a
+// refused proxy port, a rejected proxy password, DNS) surface as-is.
+func (c *Client) Probe(ctx context.Context, rt http.RoundTripper) error {
+	client := &http.Client{
+		Transport:     rt,
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/configuration", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.accessToken)
+	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("the proxy reached TMDB, which answered status %d", resp.StatusCode)
+	}
+	return nil
 }

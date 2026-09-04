@@ -65,7 +65,7 @@ func (h *Handler) ResolveSharedAutonomousTurn(ctx context.Context, override Auto
 	case credentials.AIProviderOpenAI:
 		runner = NewOpenAIService(resolved.APIKey, model, resolved.BaseURL, resolved.ReasoningEffort, h.toolServer)
 	case credentials.AIProviderLocalOpenAI:
-		runner = NewOpenAIService(localOpenAICredential(resolved.APIKey), model, resolved.BaseURL, resolved.ReasoningEffort, h.toolServer)
+		runner = NewLocalOpenAIService(resolved.APIKey, model, resolved.BaseURL, resolved.ReasoningEffort, h.toolServer)
 	case credentials.AIProviderGemini:
 		runner = NewGeminiService(resolved.APIKey, model, h.toolServer)
 	case credentials.AIProviderGrok:

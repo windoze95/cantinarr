@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
@@ -78,7 +79,7 @@ func NewManager(db *sql.DB, cipher *secrets.Cipher, opts Options) *Manager {
 	}
 	httpClient := opts.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: upstreamTimeout}
+		httpClient = &http.Client{Transport: httpx.External(), Timeout: upstreamTimeout}
 	}
 	nowFn := opts.Clock
 	if nowFn == nil {

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	arrcommon "github.com/windoze95/cantinarr-server/internal/arr"
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 	"github.com/windoze95/cantinarr-server/internal/transporterr"
 )
 
@@ -37,6 +38,7 @@ func NewClient(baseURL, apiKey string) *Client {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		httpClient: &http.Client{
+			Transport:     httpx.Internal(),
 			Timeout:       30 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
@@ -433,6 +435,7 @@ func (c *Client) GetAlbumsForArtist(artistID int) ([]Album, error) {
 // libraries big enough to matter.
 func libraryFetchClient() *http.Client {
 	return &http.Client{
+		Transport:     httpx.Internal(),
 		Timeout:       120 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}
@@ -503,6 +506,7 @@ func (c *Client) GetRootFolders() ([]RootFolder, error) {
 // call, which for a large discography can far outlast the normal 30s budget.
 func addClient() *http.Client {
 	return &http.Client{
+		Transport:     httpx.Internal(),
 		Timeout:       120 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}

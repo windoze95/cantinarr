@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
+import '../../../core/network/api_error_message.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
@@ -327,7 +327,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (code == 404 || code == 405) return;
       // Blindness, not absence: the state could not be read, which is a
       // different answer than "not configured".
-      result = 'Could not check instant updates: ${_errorMessage(e)}';
+      result = 'Could not check instant updates: ${apiErrorMessage(e)}';
     } catch (_) {
       return;
     }
@@ -624,7 +624,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _mediaServerLibrariesLoading = false;
         _mediaServerLibrariesError =
             "Couldn't load the libraries this server reports: "
-            '${_errorMessage(e)}';
+            '${apiErrorMessage(e)}';
       });
     }
   }
@@ -829,7 +829,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       setState(() {
         _plexServersLoading = false;
         _plexServersError =
-            "Couldn't list the account's servers: ${_errorMessage(e)}";
+            "Couldn't list the account's servers: ${apiErrorMessage(e)}";
       });
     }
   }
@@ -891,7 +891,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       setState(() {
         _isTesting = false;
         _testSucceeded = false;
-        _testResult = _errorMessage(e);
+        _testResult = apiErrorMessage(e);
       });
     }
   }
@@ -938,43 +938,6 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       }
     } else if (_apiKeyController.text.trim().isEmpty) {
       return 'API key is required';
-    }
-    return null;
-  }
-
-  String _errorMessage(Object e) {
-    if (e is DioException) {
-      final data = e.response?.data;
-      final responseMessage = _responseErrorMessage(data);
-      if (responseMessage != null) return responseMessage;
-      return e.message ?? e.toString();
-    }
-    return e.toString();
-  }
-
-  /// Several instance handlers use Go's `http.Error`, which labels even a JSON
-  /// error body as text/plain. Dio intentionally leaves that response as a
-  /// string, so decode the small app-owned `{ "error": ... }` envelope here
-  /// before falling back to its generic status-code message.
-  String? _responseErrorMessage(Object? data) {
-    Object? decoded = data;
-    if (data is String) {
-      final text = data.trim();
-      if (text.isEmpty) return null;
-      try {
-        decoded = jsonDecode(text);
-      } catch (_) {
-        // A concise plain-text backend error is still more useful than Dio's
-        // generic validateStatus explanation. Avoid surfacing HTML/proxy pages.
-        if (text.length <= 500 && !text.toLowerCase().contains('<html')) {
-          return text;
-        }
-        return null;
-      }
-    }
-    if (decoded is Map && decoded['error'] is String) {
-      final message = (decoded['error'] as String).trim();
-      return message.isEmpty ? null : message;
     }
     return null;
   }
@@ -1220,7 +1183,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                   content: Text('Instance saved, but assigning users '
-                      'failed: ${_errorMessage(e)}')),
+                      'failed: ${apiErrorMessage(e)}')),
             );
             return;
           }
@@ -1254,7 +1217,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         try {
           await service.updateInstanceGrantUsers(created.id, assignedIds);
         } catch (e) {
-          assignmentError = _errorMessage(e);
+          assignmentError = apiErrorMessage(e);
         }
       }
       // Instant updates are on by default: install the server-managed webhook
@@ -1269,7 +1232,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           await service.configureWebhook(created.id);
           webhookConfigured = true;
         } catch (e) {
-          webhookError = _errorMessage(e);
+          webhookError = apiErrorMessage(e);
         }
       }
       await _refreshConfigAfterSave();
@@ -1295,7 +1258,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (!mounted) return;
       setState(() => _isSaving = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to save: ${_errorMessage(e)}')),
+        SnackBar(content: Text('Failed to save: ${apiErrorMessage(e)}')),
       );
     }
   }
@@ -1391,7 +1354,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to delete: ${_errorMessage(e)}')),
+          SnackBar(content: Text('Failed to delete: ${apiErrorMessage(e)}')),
         );
       }
     }
@@ -1418,7 +1381,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (!mounted) return;
       setState(() {
         _isConfiguringWebhook = false;
-        _webhookResult = _errorMessage(e);
+        _webhookResult = apiErrorMessage(e);
         _webhookResultColor = AppTheme.error;
       });
     }

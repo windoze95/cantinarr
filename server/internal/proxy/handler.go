@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 )
 
@@ -78,7 +79,7 @@ func (h *Handler) InstanceProxy() http.HandlerFunc {
 		}
 
 		stripPrefix := "/api/instances/" + instanceID
-		h.proxyRequest(w, r, target, inst.APIKey, stripPrefix, gate)
+		h.proxyRequest(w, r, target, inst.ServiceType, inst.APIKey, stripPrefix, gate)
 	}
 }
 
@@ -88,8 +89,9 @@ func isUnsafeProxyMethod(method string) bool {
 		strings.EqualFold(method, "TRACK")
 }
 
-func (h *Handler) proxyRequest(w http.ResponseWriter, r *http.Request, target *url.URL, apiKey, stripPrefix string, gate *arrGate) {
+func (h *Handler) proxyRequest(w http.ResponseWriter, r *http.Request, target *url.URL, serviceType, apiKey, stripPrefix string, gate *arrGate) {
 	proxy := &httputil.ReverseProxy{
+		Transport: transportForInstance(serviceType),
 		Rewrite: func(proxyRequest *httputil.ProxyRequest) {
 			req := proxyRequest.Out
 			// The inbound Cantinarr session and every credential-like client header
@@ -385,4 +387,14 @@ func isClientIdentityCredentialHeader(name string) bool {
 	default:
 		return false
 	}
+}
+
+// transportForInstance picks the outbound class for an instance. A Plex
+// instance is plex.tv -- an internet host that rides the admin's outbound proxy
+// like any other; every other instance type is a LAN service and never does.
+func transportForInstance(serviceType string) http.RoundTripper {
+	if serviceType == "plex" {
+		return httpx.External()
+	}
+	return httpx.Internal()
 }

@@ -205,6 +205,13 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/discovery-settings", discoverySettingsHandler(serverSettings, creds))
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/discovery-settings", updateDiscoverySettingsHandler(serverSettings, creds))
 
+			// Outbound proxy for the server's internet-bound traffic (TMDB, Trakt,
+			// hosted AI, plex.tv, GitHub, the push relay); LAN instances never ride
+			// it. The test fetches TMDB through the candidate proxy without saving.
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/outbound-proxy", outboundProxyHandler(serverSettings))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/outbound-proxy", updateOutboundProxyHandler(serverSettings))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Post("/outbound-proxy/test", testOutboundProxyHandler(serverSettings, creds))
+
 			// Media-server accounts (Jellyfin, Emby, Plex): the linked-account
 			// rows the Users screen tags, the server's own account list for the
 			// link picker, link/unlink, and the import that turns picked

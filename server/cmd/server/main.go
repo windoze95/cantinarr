@@ -25,6 +25,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/discover"
 	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/grokoauth"
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/mediaaccess"
@@ -96,6 +97,30 @@ func main() {
 		credentials.WithDefaultTraktClientID(trakt.DefaultClientID),
 	)
 	credHandler := credentials.NewHandler(creds)
+
+	// Server settings: the admin-configured management-portal URL the app's
+	// version warnings link to, the external address outward links are built
+	// from, the discovery preferences the rows read per request, and the
+	// outbound proxy. The Trakt probe is read per call, so adding or removing
+	// that credential moves the default row source without a restart. The
+	// cipher is for the proxy row, the one setting that carries a secret.
+	serverSettings := serversettings.NewService(database, func() bool { return creds.Trakt() != nil }, serversettings.WithCipher(cipher))
+
+	// Outbound proxy for internet-bound traffic, installed before anything
+	// dials out (push enrollment, the update check, the AI health monitor). A
+	// stored value the server cannot use is fatal: a privacy proxy must never
+	// silently degrade into direct egress.
+	outboundProxy, err := serverSettings.OutboundProxy()
+	if err != nil {
+		log.Fatalf("Stored outbound proxy is unusable: %v", err)
+	}
+	if err := httpx.SetOutboundProxyString(outboundProxy.ProxyURL()); err != nil {
+		log.Fatalf("Stored outbound proxy is unusable: %v", err)
+	}
+	if outboundProxy.Configured() {
+		// The address only; credentials never reach the log.
+		log.Printf("Outbound proxy for internet-bound traffic: %s", outboundProxy.URL)
+	}
 
 	// Shared TTL cache for discovery payloads and the kids-account rating
 	// lookups; both key it themselves.
@@ -330,14 +355,9 @@ func main() {
 	wsHub.SetIssueOpener(autoDispatcher)
 	go wsHub.Run(ctx)
 
-	// Server settings: the admin-configured management-portal URL the app's
-	// version warnings link to, plus the discovery preferences the rows read
-	// per request.
-	// The Trakt probe is read per call, so adding or removing that credential
-	// moves the default row source without a restart.
-	serverSettings := serversettings.NewService(database, func() bool { return creds.Trakt() != nil })
-	// Read per call so a settings change reaches the next link without a
-	// restart. Wired late for the same reason as the access-request hook.
+	// External address sources: read per call so a settings change reaches the
+	// next link without a restart. Wired late for the same reason as the
+	// access-request hook.
 	authHandler.SetExternalURLSource(func() string { return serverSettings.Get().ExternalURL })
 	mediaAccessHandler.SetExternalURLSource(func() string { return serverSettings.Get().ExternalURL })
 

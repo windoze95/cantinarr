@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 	"github.com/windoze95/cantinarr-server/internal/version"
 )
 
@@ -24,6 +25,7 @@ func NewClient(clientID string) *Client {
 		clientID: clientID,
 		baseURL:  "https://api.trakt.tv",
 		httpClient: &http.Client{
+			Transport:     httpx.External(),
 			Timeout:       10 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},

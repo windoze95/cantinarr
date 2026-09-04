@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/models/user_profile.dart';
+import '../../../core/network/api_error_message.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
@@ -14,10 +15,12 @@ import '../../../core/widgets/phone_apps_sheet.dart';
 import '../../../core/widgets/settings_highlight.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../data/outbound_proxy_service.dart';
 import '../data/settings_search_index.dart';
 import '../data/setup_status_service.dart';
 import '../logic/app_version_provider.dart';
 import '../logic/external_address_provider.dart';
+import '../logic/outbound_proxy_provider.dart';
 import '../logic/setup_status_provider.dart';
 import '../logic/update_status_provider.dart';
 import '../settings_anchors.dart';
@@ -62,6 +65,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ref.read(setupStatusProvider.notifier).refresh();
       ref.read(updateStatusProvider.notifier).refresh();
       ref.read(externalAddressProvider.notifier).refresh();
+      ref.read(outboundProxyProvider.notifier).refresh();
     });
   }
 
@@ -75,6 +79,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final setupStatus = ref.watch(setupStatusProvider);
     final updateStatus = ref.watch(updateStatusProvider);
     final externalAddress = ref.watch(externalAddressProvider);
+    final outboundProxy = ref.watch(outboundProxyProvider);
     final aiSettings = ref.watch(aiSettingsProvider).valueOrNull;
     final appVersion = ref.watch(appVersionProvider).valueOrNull;
     final mediaServersVisible = connection?.mediaAccessGuideVisible ?? false;
@@ -280,6 +285,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     : 'Address invite links use outside your network',
                 onTap: () =>
                     _showExternalAddressDialog(context, externalAddress ?? ''),
+              ),
+              _SettingsTile(
+                icon: Icons.vpn_lock_outlined,
+                title: 'Outbound Proxy',
+                subtitle: (outboundProxy?.url.isNotEmpty ?? false)
+                    ? outboundProxy!.url
+                    : 'Route internet traffic through a proxy',
+                onTap: () => _showOutboundProxyDialog(
+                  context,
+                  outboundProxy ?? OutboundProxySettings.empty,
+                ),
               ),
               _SettingsTile(
                 icon: Icons.devices,
@@ -556,6 +572,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ref.read(externalAddressProvider) ?? '',
         );
         return;
+      case 'root.outbound-proxy':
+        _showOutboundProxyDialog(
+          context,
+          ref.read(outboundProxyProvider) ?? OutboundProxySettings.empty,
+        );
+        return;
       case 'root.update-portal':
         _showManagementUrlDialog(
           context,
@@ -694,6 +716,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
+  void _showOutboundProxyDialog(
+    BuildContext context,
+    OutboundProxySettings current,
+  ) {
+    showDialog(
+      context: context,
+      builder: (_) => _OutboundProxyDialog(current: current),
+    );
+  }
+
   void _showManagementUrlDialog(BuildContext context, String current) {
     final controller = TextEditingController(text: current);
     bool saving = false;
@@ -767,6 +799,204 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// The Outbound Proxy editor. A widget of its own rather than the sibling
+/// dialogs' StatefulBuilder so its three controllers are disposed with the
+/// dialog, after the close transition, and so a test result has state to
+/// live in.
+class _OutboundProxyDialog extends ConsumerStatefulWidget {
+  final OutboundProxySettings current;
+
+  const _OutboundProxyDialog({required this.current});
+
+  @override
+  ConsumerState<_OutboundProxyDialog> createState() =>
+      _OutboundProxyDialogState();
+}
+
+class _OutboundProxyDialogState extends ConsumerState<_OutboundProxyDialog> {
+  late final _addressController =
+      TextEditingController(text: widget.current.url);
+  late final _usernameController =
+      TextEditingController(text: widget.current.username);
+
+  /// Always starts empty: the server never returns the stored password.
+  final _passwordController = TextEditingController();
+  bool _saving = false;
+  bool _testing = false;
+
+  /// The last test's verdict line; null until a test ran, and null again the
+  /// moment any field changes, so a stale pass is never mistaken for a fresh
+  /// one.
+  String? _testResult;
+  bool _testSucceeded = false;
+
+  @override
+  void dispose() {
+    _addressController.dispose();
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  String get _url => _addressController.text.trim();
+  String get _username => _usernameController.text.trim();
+
+  /// On the fields' onChanged rather than the controllers: a controller also
+  /// notifies for focus and selection moves, which must not retire a result.
+  void _onEdited(String _) => setState(() => _testResult = null);
+
+  Future<void> _test() async {
+    setState(() {
+      _testing = true;
+      _testResult = null;
+    });
+    try {
+      await ref.read(outboundProxyServiceProvider).test(
+            url: _url,
+            username: _username,
+            password: _passwordController.text,
+          );
+      if (!mounted) return;
+      setState(() {
+        _testing = false;
+        _testSucceeded = true;
+        _testResult = 'Proxy works: TMDB reached through it.';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _testing = false;
+        _testSucceeded = false;
+        _testResult = apiErrorMessage(e);
+      });
+    }
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      await ref.read(outboundProxyProvider.notifier).set(
+            url: _url,
+            username: _username,
+            password: _passwordController.text,
+          );
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to save: ${apiErrorMessage(e)}')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = _saving || _testing;
+    return AlertDialog(
+      title: const Text('Outbound Proxy'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              "Optional. Send this server's internet traffic (TMDB, Trakt, "
+              'hosted AI providers, plex.tv, the update check, the push relay) '
+              'through a proxy, for example a VPN-tunnelled Privoxy on the '
+              'same host. Your arr instances, download clients, Jellyfin, '
+              'Emby, and a local AI endpoint always connect directly. Leave '
+              'the address blank to clear.',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _addressController,
+              decoration: const InputDecoration(
+                labelText: 'Proxy address',
+                hintText: 'http://proxy:8118',
+                prefixIcon: Icon(Icons.vpn_lock_outlined),
+              ),
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+              textInputAction: TextInputAction.next,
+              onChanged: _onEdited,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _usernameController,
+              decoration: const InputDecoration(
+                labelText: 'Username (optional)',
+              ),
+              autocorrect: false,
+              textInputAction: TextInputAction.next,
+              onChanged: _onEdited,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _passwordController,
+              decoration: InputDecoration(
+                labelText: 'Password',
+                helperText: widget.current.hasPassword
+                    ? 'Leave blank to keep the saved password'
+                    : null,
+              ),
+              obscureText: true,
+              autocorrect: false,
+              enableSuggestions: false,
+              textInputAction: TextInputAction.done,
+              onChanged: _onEdited,
+            ),
+            if (_testing || _testResult != null) ...[
+              const SizedBox(height: 12),
+              if (_testing)
+                const Center(
+                  child: SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: AppTheme.accent),
+                  ),
+                )
+              else
+                Text(
+                  _testResult!,
+                  style: TextStyle(
+                    color:
+                        _testSucceeded ? AppTheme.available : AppTheme.error,
+                    fontSize: 13,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        // Nothing to test without an address; the server would only say so.
+        TextButton(
+          onPressed: busy || _url.isEmpty ? null : _test,
+          child: const Text('Test'),
+        ),
+        ElevatedButton(
+          onPressed: busy ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Save'),
+        ),
+      ],
     );
   }
 }

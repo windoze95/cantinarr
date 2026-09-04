@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 )
 
 // Client talks to the Tautulli API v2:
@@ -27,6 +29,7 @@ func NewClient(baseURL, apiKey string) *Client {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		httpClient: &http.Client{
+			Transport:     httpx.Internal(),
 			Timeout:       30 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},

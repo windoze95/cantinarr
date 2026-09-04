@@ -1611,7 +1611,7 @@ func assertAppServerCommandSurface(t *testing.T, path string, prefix []string) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, appServerArgs(prefix)...)
 	cmd.Dir = work
-	cmd.Env = isolatedEnvironment(home, tmp)
+	cmd.Env = isolatedEnvironment(home, tmp, "")
 	cmd.Stderr = io.Discard
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

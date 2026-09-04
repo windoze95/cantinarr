@@ -43,14 +43,28 @@ type openAIService struct {
 // implicit OPENAI_BASE_URL env seam that tests and the lab stack point at
 // fake upstreams. When baseURL is set it is applied after the SDK's env
 // default, so the configured value wins over the env var. reasoningEffort is
-// the admin-pinned effort for every turn (empty = auto).
+// the admin-pinned effort for every turn (empty = auto). The endpoint counts
+// as internet-bound and rides the admin's outbound proxy; NewLocalOpenAIService
+// is the LAN twin.
 func NewOpenAIService(apiKey, model, baseURL, reasoningEffort string, toolServer *mcp.ToolServer) *openAIService {
+	return newOpenAIService(apiKey, model, baseURL, reasoningEffort, toolServer, newHostedProviderHTTPClient(httpProviderStreamTimeout))
+}
+
+// NewLocalOpenAIService is NewOpenAIService for the Local (OpenAI-compatible)
+// provider: the endpoint is admin-typed and usually a LAN host, so its client
+// never uses a proxy, and a missing key becomes the placeholder bearer most
+// local servers ignore (localOpenAICredential).
+func NewLocalOpenAIService(apiKey, model, baseURL, reasoningEffort string, toolServer *mcp.ToolServer) *openAIService {
+	return newOpenAIService(localOpenAICredential(apiKey), model, baseURL, reasoningEffort, toolServer, newLocalProviderHTTPClient(httpProviderStreamTimeout))
+}
+
+func newOpenAIService(apiKey, model, baseURL, reasoningEffort string, toolServer *mcp.ToolServer, client *http.Client) *openAIService {
 	if model == "" {
 		model = "gpt-5.6-sol"
 	}
 	options := []openaioption.RequestOption{
 		openaioption.WithAPIKey(apiKey),
-		openaioption.WithHTTPClient(newCredentialHTTPClient(httpProviderStreamTimeout)),
+		openaioption.WithHTTPClient(client),
 		openaioption.WithRequestTimeout(httpProviderStreamTimeout),
 	}
 	if baseURL = strings.TrimSpace(baseURL); baseURL != "" {
@@ -91,7 +105,7 @@ func NewGrokService(credential, model string, toolServer *mcp.ToolServer) *openA
 		client: openai.NewClient(
 			openaioption.WithAPIKey(credential),
 			openaioption.WithBaseURL(baseURL),
-			openaioption.WithHTTPClient(newCredentialHTTPClient(httpProviderStreamTimeout)),
+			openaioption.WithHTTPClient(newHostedProviderHTTPClient(httpProviderStreamTimeout)),
 			openaioption.WithRequestTimeout(httpProviderStreamTimeout),
 		),
 		model:      openai.ChatModel(model),
@@ -451,7 +465,7 @@ func NewGeminiService(apiKey, model string, toolServer *mcp.ToolServer) *geminiS
 	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
 		APIKey:     apiKey,
 		Backend:    genai.BackendGeminiAPI,
-		HTTPClient: newCredentialHTTPClient(httpProviderStreamTimeout),
+		HTTPClient: newHostedProviderHTTPClient(httpProviderStreamTimeout),
 		HTTPOptions: genai.HTTPOptions{
 			Timeout: genai.Ptr(httpProviderStreamTimeout),
 		},

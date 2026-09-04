@@ -2,8 +2,10 @@
 // in the settings key/value table (mirroring the remediation/request settings
 // pattern). It holds the optional management-portal URL that the app's
 // "update the server" warning links to, the external address that outward
-// links (connect invites, passkey setup) are built from, and the discovery
-// preferences that decide which feed backs the headline discovery rows.
+// links (connect invites, passkey setup) are built from, the discovery
+// preferences that decide which feed backs the headline discovery rows, and
+// -- as its own encrypted row, see outbound_proxy.go -- the outbound proxy for
+// the server's internet-bound traffic.
 package serversettings
 
 import (
@@ -12,6 +14,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
 const settingsKey = "server_settings"
@@ -110,20 +114,38 @@ type Settings struct {
 	SetupSkippedItems []string `json:"setup_skipped_items,omitempty"`
 }
 
-// Service reads and writes the server settings blob.
+// Service reads and writes the server settings blob, plus the one setting
+// that carries a secret (the outbound proxy, outbound_proxy.go).
 type Service struct {
 	db *sql.DB
+	// cipher encrypts the outbound proxy row at rest. Nil (tests) stores it
+	// in plaintext; the server binary always supplies one.
+	cipher *secrets.Cipher
 	// traktConfigured reports whether Trakt can answer right now. It is a
 	// callback rather than a stored flag because credentials change under us,
 	// and the default source has to follow them without a restart.
 	traktConfigured func() bool
 }
 
+// Option customizes a Service at construction.
+type Option func(*Service)
+
+// WithCipher supplies the cipher that encrypts the outbound proxy row. The
+// server binary always passes it; a Service built without one stores that
+// row in plaintext, which only tests do.
+func WithCipher(cipher *secrets.Cipher) Option {
+	return func(s *Service) { s.cipher = cipher }
+}
+
 // NewService returns a settings service backed by the given database.
 // traktConfigured decides the default row source; a nil probe reads as "no
 // Trakt", which keeps a caller that has no credential registry working.
-func NewService(db *sql.DB, traktConfigured func() bool) *Service {
-	return &Service{db: db, traktConfigured: traktConfigured}
+func NewService(db *sql.DB, traktConfigured func() bool, opts ...Option) *Service {
+	s := &Service{db: db, traktConfigured: traktConfigured}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Get returns the stored settings, or the defaults when none are saved.
