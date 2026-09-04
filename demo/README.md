@@ -13,7 +13,8 @@ The server starts on **port 8484**.
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
-| `DEMO_SERVER_URL` | `http://localhost:8484` | Advertised base URL, embedded in generated `cantinarr://connect` links |
+| `DEMO_SERVER_URL` | `http://localhost:<port>` | Advertised base URL, embedded in generated `cantinarr://connect` links |
+| `DEMO_PORT` | `8484` | Listen port override for running several local copies side by side (the deployed demo never sets it) |
 
 ## Demo Credentials
 
@@ -21,6 +22,7 @@ The server starts on **port 8484**.
 |----------|----------|-------|
 | admin    | demo     | admin |
 | user     | demo     | user  |
+| kid      | demo     | user (kids account: movies up to PG, shows up to TV-PG, unrated and Horror hidden) |
 
 There is **no registration endpoint and no invite code** — accounts come from the seeds above or from admin-generated connect links (a third seeded account, `riley`, has a pending invite to demo that flow).
 
@@ -35,26 +37,30 @@ cantinarr://connect?token=demo00000000000000000000000000000000000000000000000000
 Full parity with the current Cantinarr API surface:
 
 - **Auth & session** — JWT login, opaque `cnr1.` refresh tokens, connect-link redemption, per-user permissions, device management
-- **Discovery** — trending/popular rows, full-text search, movie/TV/person details, genres, watch providers, Trakt lists/anticipated/calendar
-- **Requests** — movie, TV (per-season), and book (ebook/audiobook) requests with the full approval flow: pending → approve/deny → simulated download progress → available/partial, routed to a chosen library
+- **Discovery** — trending, popular, top-rated, upcoming, and now-playing rows for movies, Airing This Week / Top Rated / Coming Soon for TV, real paging, full-text search, browse by genre, year range, rating, language, streaming service (per region), keyword, and studio, movie/TV/person details with cast, crew, studios, countries, budget and revenue, release dates by region, and IMDb/TMDB/Trakt link ids, Trakt lists/anticipated/calendar
+- **Requests** — movie, TV (per-season), book (ebook/audiobook), and album requests with the full approval flow: pending → approve/deny → simulated download progress → available/partial, routed to a chosen library
+- **Kids accounts** — the `kid` account carries a content policy (rating caps, unrated and genre blocks); every title surface hides what it may not see, a hidden title's page reads "not available to your account", and its requests are refused; admins edit the policy from the user's request settings, with the real certification catalog (US and GB)
 - **Multiple libraries** — two Radarr and two Sonarr instances, reached through additive per-user grants, so the Library chooser, the per-library status chips, and instance-scoped quality profiles all have something to show
 - **Books browsing** — the Chaptarr library by author and by series, with per-format ownership on every title
+- **Music browsing** — the Lidarr library by artist, Recently Added, owned-aware search, requestable albums that walk pending → requested → downloading → available, and the admin Music module (library, queue with the Import Doctor, wanted, calendar, history, release search)
 - **Media-server access** — Jellyfin, Emby, and Plex as instances: create your own account, link one you already have, sign in with Plex, ask where a title can be watched; admins tag the Users screen, link/unlink, and import a server's existing accounts
-- **AI chat** — streaming SSE assistant with tool calls and media results, plus AI settings/credentials surfaces and the Codex and xAI Grok OAuth device flows
-- **Admin console** — instance management (arrs, download clients, Tautulli, media servers), per-user library grants, arr library browsing (fake Radarr/Sonarr/Chaptarr proxies), download-client queue/history, Tautulli monitoring, issues + AI remediation (agent actions, runs, approval rules), configuration change history, the external address invite links are built from, users/devices, the setup checklist, and update status
+- **AI chat** — streaming SSE assistant with tool calls and media results (kid-safe for the kids account), plus AI settings/credentials surfaces, the 41-tool registry, and the Codex and xAI Grok OAuth device flows
+- **Admin console** — instance management (arrs incl. Lidarr, download clients incl. a qBittorrent in API-key mode, Tautulli and Tracearr, media servers), per-user library grants, arr library browsing and editing (fake Radarr/Sonarr/Chaptarr/Lidarr proxies; Radarr Edit Movie, tags, refresh), download-client queue/history for two clients, Monitoring with both providers, issues + AI remediation (agent actions, runs, approval rules, music included), configuration change history, the external address invite links are built from, users/devices, the 14-item setup checklist with skippable items, and update status
 - **Live updates** — WebSocket hub pushing download progress, request status changes, queue snapshots, approvals, issues, agent actions, and Plex invite events to the right audiences
 
 ## File Map
 
 | File | Owns |
 |------|------|
-| `main.go` | Env/flags (`DEMO_SERVER_URL`), middleware (auth/CORS), router assembly, landing page |
+| `main.go` | Env/flags (`DEMO_SERVER_URL`, `DEMO_PORT`), middleware (auth/CORS), router assembly, landing page |
 | `types.go` | Shared enums/constants (statuses, media/service types, WS event names), JSON helpers |
 | `state.go` | In-memory store: users, devices, tokens, instances, sessions; seeds and accessors |
 | `ws.go` | WebSocket hub: auth, broadcast/admin/user scopes, envelope, pings |
 | `auth.go` | `/api/auth/*` — status, login, refresh, connect, me, logout, password, plex-email, passkey stubs |
 | `config.go` | `/api/config` (per-user visibility), `/api/admin/setup-status`, `/api/admin/update-status` |
 | `users_admin.go` | Admin users, devices, connect tokens, test-push, per-user default instances and access grants |
+| `contentpolicy.go` | Kids accounts: `/api/admin/certifications`, per-user content policies, the decision helpers every title chokepoint calls |
+| `data_policy.go` | Per-title certifications (US/GB) for the catalog and the seeded kids policy |
 | `external_address.go` | `/api/admin/external-address` — the origin invite links are built from |
 | `mediaaccess.go` | `/api/media-servers*` + `/api/admin/media-servers*` — accounts, linking, Plex sign-in, watch links, import |
 | `plex.go` | The simulated plex.tv PIN flow, shared by the instance editor and the user sign-in |
@@ -62,7 +68,8 @@ Full parity with the current Cantinarr API surface:
 | `requests.go` | `/api/requests*` — create, options, TMDB status, lifecycle machine |
 | `requests_admin.go` | Admin request queue, approve/deny, global request settings |
 | `books.go` | Book status/library/recent/authors/series + the book request lifecycle |
-| `discover.go` | `/api/discover/*`, `/api/search`, `/api/media/*`, genres, providers |
+| `music.go` | `/api/requests/music-*` (status, library, recent, artists, artist) + the music request lifecycle |
+| `discover.go` | `/api/discover/*` (paged rows, browse filters, TV rows), `/api/search`, `/api/media/*` (details with credits and release dates), genres, providers, regions, languages, keyword and company search |
 | `trakt.go` | `/api/trakt/*` — flat lists, anticipated, calendar |
 | `ai.go` | `/api/ai/chat` SSE + AI settings/credentials + personal Codex and Grok OAuth flows |
 | `ai_admin.go` | Admin credentials, shared Codex/Grok, AI tools, debug, external settings changes |
@@ -72,20 +79,25 @@ Full parity with the current Cantinarr API surface:
 | `arr_radarr.go` | Fake Radarr v3 behind `/api/instances/{id}/api/v3` + non-admin allowlist |
 | `arr_sonarr.go` | Fake Sonarr v3 |
 | `arr_chaptarr.go` | Fake Chaptarr v1 + generated MediaCover image bytes (book and author covers) |
-| `downloads.go` | `/api/downloads/{instanceID}/*` — queue, history, actions |
-| `tautulli.go` | `/api/tautulli/{instanceID}/*` — activity, history, stats |
+| `arr_lidarr.go` | Fake Lidarr v1 behind `/api/instances/{id}/api/v1` (artists, albums, tracks, queue, history, wanted, calendar, releases, manual import, commands) + generated album and artist covers + the non-admin allowlist |
+| `downloads.go` | `/api/downloads/{instanceID}/*` — queue, history, actions for SABnzbd and qBittorrent |
+| `watchhistory.go` | `/api/watch-history/{instanceID}/*` and the `/api/tautulli/{instanceID}/*` alias — activity, history, stats for Tautulli and Tracearr |
 | `mediafiles.go` | Media-file coverage, tickets, ticketed downloads |
 | `notifications.go` | Push tokens + notification preferences |
 | `data_movies.go` | 18-film public-domain catalog with poster/backdrop maps |
 | `data_tv.go` | 6 fictional shows with seasons/episodes fixtures |
-| `data_people.go` | Person entries + credits |
+| `data_people.go` | Every person named on a title page (real cast, crew, and creators for the films; invented for the shows); credits are derived from `data_credits.go` |
+| `data_credits.go` | Per-title extras: cast and crew refs, studios, countries, budget and revenue, release milestones, networks, creators |
+| `data_browse.go` | Browse-filter vocabulary: watch providers by region, keywords, companies, languages, regions, and the title → attachment maps |
 | `data_books.go` | Public-domain authors/books/editions/bookfiles/series + lookup corpus |
 | `data_arr.go` | Arr queues, history, wanted, calendar, release fixtures |
 | `data_issues.go` | Issues, threads, agent actions/runs/rules seeds |
 | `data_requests.go` | Request-log rows, request policy, availability states, quality-profile fixtures |
 | `data_ai.go` | Canned AI chat scripts + seeded external-settings-changes history |
-| `data_misc.go` | Genres, fictional watch providers, Trakt list fixtures |
+| `data_music.go` | Public-domain artists/albums/tracks/track files, Lidarr queue and history fixtures, the music cross-domain hooks |
+| `data_misc.go` | Genres and Trakt list fixtures |
 | `assets/` | `go:embed` — sample download file, landing HTML (covers are generated PNGs, not files) |
+| `tools/smoke.sh` | Read-mostly parity smoke test (about 220 checks; `--mutate` adds the create/approve/deny flows). Run it against a local or the live demo |
 
 ## Branch Workflow
 
@@ -287,6 +299,10 @@ curl -s https://demo.cantinarr.com/api/health
 curl -s -X POST https://demo.cantinarr.com/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"demo"}'
+
+# Full parity smoke test (read-only; add --mutate locally, then restart the
+# demo to drop the junk it leaves in memory)
+demo/tools/smoke.sh https://demo.cantinarr.com
 
 # Confirm direct IP access is blocked (substitute the droplet's own address —
 # `doctl compute droplet get cantinarr-demo --format PublicIPv4`)

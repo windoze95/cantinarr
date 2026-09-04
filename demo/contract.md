@@ -8,8 +8,14 @@ shared type lacks a field you need, add a domain-local supplementary map keyed
 by the entity id in your own file — do NOT edit `types.go`, `state.go`,
 `ws.go`, `auth.go`, or `main.go`.
 
+The 2026-09-04 parity refresh was one integrated pass rather than a parallel
+Stage B build, so it edited the frozen files where this document says so
+(§2 constants, §3 seeds, §4 the `child` decoration, §5 the register list).
+The no-edit rule stands for any future parallel build.
+
 Package facts: single package `main`, module `github.com/windoze95/cantinarr-demo`,
-go 1.25, port **8484**, chi v5 router. Allowed deps: chi v5, go-chi/cors,
+go 1.25, port **8484** (`DEMO_PORT` overrides it for side-by-side local runs;
+the deployed demo never sets it), chi v5 router. Allowed deps: chi v5, go-chi/cors,
 golang-jwt/jwt/v5, gorilla/websocket, google/uuid, stdlib (incl. `embed`,
 `image/png`). No new modules. Files will not compile alone until all siblings
 land — still run `gofmt -l` on your files (must be clean) and eyeball imports.
@@ -46,12 +52,16 @@ Helpers (types.go):
 
 Roles: `roleAdmin` = `"admin"`, `roleUser` = `"user"`.
 
-Media types: `mediaTypeMovie` `mediaTypeTV` `mediaTypeBook` (= `movie`/`tv`/`book`).
-Service types: `serviceRadarr` `serviceSonarr` `serviceChaptarr` `serviceSabnzbd`
-`serviceNzbget` `serviceQbittorrent` `serviceTransmission` `serviceTautulli`
-`serviceJellyfin` `serviceEmby` `servicePlex`
+Media types: `mediaTypeMovie` `mediaTypeTV` `mediaTypeBook` `mediaTypeMusic`
+(= `movie`/`tv`/`book`/`music`).
+Service types: `serviceRadarr` `serviceSonarr` `serviceChaptarr` `serviceLidarr`
+`serviceSabnzbd` `serviceNzbget` `serviceQbittorrent` `serviceTransmission`
+`serviceTautulli` `serviceTracearr` `serviceJellyfin` `serviceEmby` `servicePlex`
 (exact strings, lowercase). Media types describe media, service types describe
-services — never conflate.
+services — never conflate. Lidarr follows the Chaptarr rule (never a global
+default; the per-user pin IS the grant). The watch-history providers are
+`watchHistoryTypes()` (tautulli, tracearr; `isWatchHistoryType(st)`): admin
+surfaces with a global default, never granted per user.
 
 Media servers (`jellyfin`, `emby`, `plex`) are the types Cantinarr manages user
 ACCESS on, never library routing. They follow the Chaptarr rule: **never a
@@ -96,6 +106,14 @@ Auth/session constants (state.go): `demoJWTSecret` = `"demo-jwt-secret-cantinarr
 | `instJellyfin` | `jellyfin-1f2e3d4c` | jellyfin | Jellyfin | http://jellyfin:8096 | **false — never default** | false | `[]` |
 | `instEmby` | `emby-5b6a7988` | emby | Emby | http://emby:8096 | **false — never default** | false | `[]` |
 | `instPlex` | `plex-0a1b2c3d` | plex | Demo Plex | https://plex.tv | **false — never default** | false | `[]` |
+| `instQbittorrent` | `qbittorrent-4b5c6d7e` | qbittorrent | qBittorrent | http://qbittorrent:8081 | true | false | `[]` |
+| `instTracearr` | `tracearr-8e9f0a1b` | tracearr | Tracearr | http://tracearr:3000 | true | false | `[]` |
+| `instLidarr` | `lidarr-4d5e6f7a` | lidarr | Lidarr | http://lidarr:8686 | **false — lidarr is never default** | true | `/music` → `/media/music` |
+
+`instQbittorrent` is stored in qBittorrent's API-key credential shape
+(`instMgmtQbitKeyed` in instances.go), so its `/api/instances` row carries
+`has_api_key: true`; every other row omits the key. Submitting the other shape
+(username + password) flips it, exactly like the real `applyQbittorrentAuthMode`.
 
 `plexDemoMachineIdentifier` = `d3m0p1exmach1ne0000000000000001` — the Plex
 Media Server the seeded Plex instance shares. `instJellyfin` shares libraries
@@ -116,8 +134,9 @@ map to `/media/movies`, `/media/tv`, `/media/books` (cantinarr-side).
 | ID | Username | Password | Role | Flags |
 |---|---|---|---|---|
 | 1 | `admin` | `demo` | admin | `PasswordEnabled` `PasskeyEnabled` `HasPassword` `AISharedEnabled` all true |
-| 2 | `user` | `demo` | user | `PasswordEnabled` `HasPassword` `AISharedEnabled` true; `RequireApproval = &true` (per-user approval override → the approvals loop is demonstrable); `DefaultInstances = {"chaptarr": instChaptarr}` (Books access grant); `InstanceGrants = {radarr:[instRadarr4K], sonarr:[instSonarrAnime], jellyfin:[instJellyfin]}` (additive — the Library chooser and the sibling status chips) |
+| 2 | `user` | `demo` | user | `PasswordEnabled` `HasPassword` `AISharedEnabled` true; `RequireApproval = &true` (per-user approval override → the approvals loop is demonstrable); `DefaultInstances = {"chaptarr": instChaptarr, "lidarr": instLidarr}` (the Books and Music access grants); `InstanceGrants = {radarr:[instRadarr4K], sonarr:[instSonarrAnime], jellyfin:[instJellyfin]}` (additive — the Library chooser and the sibling status chips) |
 | 3 | `riley` | — (no password; connect-only) | user | `HasPendingInvite:true` (a live single-use connect token is seeded for riley), `PlexEmail:"riley@example.net"` and no share yet (drives the "Plex invites waiting" badge), `InstanceGrants = {plex:[instPlex]}`, `PasswordEnabled`/`PasskeyEnabled`/`HasPassword` false |
+| 4 | `kid` | `demo` | user | The kids account: a `contentpolicy.go` policy row (US, movies up to PG, shows up to TV-PG, unrated hidden, Horror hidden) makes it a child. No grants (sees the global Radarr and Sonarr only, no Books or Music tab), `RequireApproval = &true` (the app pre-sets it when a kids account is turned on), `AISharedEnabled` true so the AI chokepoint is demonstrable. Two seeded request rows (The General available, Charade pending) |
 
 User 1 (`admin`) additionally holds `InstanceGrants = {emby:[instEmby]}` with
 **no** Emby account, so the guide's "you already have an account" card has an
@@ -131,7 +150,7 @@ Each media server holds a roster independent of Cantinarr. `instJellyfin`:
 `emby-2 admin`, `emby-3 jules`. `instPlex`: `plex-1 demoplex` (the owner),
 `plex-2 casey`. Exactly one Cantinarr link is seeded: user 2 ↔ `jf-2`.
 
-New users minted by connect-token get ids 4+ (`demoNextUserID`).
+New users minted by connect-token get ids 5+ (`demoNextUserID`).
 
 ### Devices (one per real user; frozen ids)
 
@@ -184,8 +203,8 @@ type DemoInstance struct {
 | `setUserPassword(id, pw) bool` | Store password, `HasPassword=true` |
 | `setUserPlexEmail(id, email) (changed, ok bool)` | Store email; a CHANGE clears `PlexInvitedAt` |
 | `permissionsFor(role) []string` | Exact sorted permission lists (admin 19, user 6 — see below); unknown role → `[]` |
-| `userSummaryJSON(u) map[string]any` | One `GET /api/admin/users` element: id, username, role, permissions, created_at, device_count, has_password, password_enabled, passkey_enabled, `ai_shared_enabled`, `has_pending_invite`, plex_email always present; `plex_invited_at` only when set |
-| `userAuthJSON(u) map[string]any` | TokenResponse `user` object: id, username, role, permissions, password_enabled, passkey_enabled, plex_email, created_at (+ plex_invited_at only when set) |
+| `userSummaryJSON(u) map[string]any` | One `GET /api/admin/users` element: id, username, role, permissions, created_at, device_count, has_password, password_enabled, passkey_enabled, `ai_shared_enabled`, `has_pending_invite`, plex_email, `child` always present; `plex_invited_at` only when set (`cpDecorateUserJSON`) |
+| `userAuthJSON(u) map[string]any` | TokenResponse `user` object: id, username, role, permissions, password_enabled, passkey_enabled, plex_email, created_at, `child` (+ plex_invited_at only when set; `content_limits` only for a child). `GET /api/auth/me` additionally carries an explicit `content_limits: null` for a non-child |
 | `deviceUpsert(userID, hardwareID, name, platform) *DemoDevice` | Reuse the user's device matching non-empty hardwareID, else new UUID device + fresh stable refresh token; empty name → `"Unknown Device"` |
 | `devicesJSON() []map[string]any` | Admin device list, `last_seen_at` DESC, exactly six fields per row: id, user_id, username, device_name, created_at, last_seen_at |
 | `revokeDevice(id) bool` | Remove device, kill refresh token (`refresh` then answers 401 `device has been revoked`); false when unknown |
@@ -200,8 +219,8 @@ type DemoInstance struct {
 | `allInstances() []*DemoInstance` | Stable seed order (radarr, sonarr, chaptarr, sabnzbd, tautulli, then created) |
 | `withInstance(id, fn func(*DemoInstance)) bool` | Mutate instance fields under the state lock |
 | `visibleInstances(u) []*DemoInstance` | Admin: all. User: every access-granted instance PLUS their effective default, across `grantableServiceTypes()`, in registry order. Grants are additive, so a user's list can hold several instances of a type — renderers mark `is_default` with `effectiveInstanceIDFor`, never blanket-true |
-| `grantableServiceTypes() []string` | radarr, sonarr, chaptarr, jellyfin, emby, plex |
-| `effectiveInstanceFor(u, serviceType) *DemoInstance` · `effectiveInstanceIDFor(u, st) string` | Per-user pin → for chaptarr AND every media-server type the first grant with **no** global fallback → otherwise global default → first of type. **A pin is never media-server eligibility** (mirrors the server's `grantedMediaServers`); chaptarr is the opposite — its pin IS the grant |
+| `grantableServiceTypes() []string` | radarr, sonarr, chaptarr, lidarr, jellyfin, emby, plex |
+| `effectiveInstanceFor(u, serviceType) *DemoInstance` · `effectiveInstanceIDFor(u, st) string` | Per-user pin → for chaptarr, lidarr, AND every media-server type the first grant with **no** global fallback → otherwise global default → first of type. **A pin is never media-server eligibility** (mirrors the server's `grantedMediaServers`); chaptarr and lidarr are the opposite — their pin IS the grant |
 | `grantedInstanceIDs(u, st) []string` | Explicit grants, plus the pin for every type EXCEPT the media servers; registry order; never nil |
 | `visibleInstanceIDs(u, st) []string` | `grantedInstanceIDs` ∪ the effective default; never nil |
 | `userCanSeeInstance(u, id) bool` | Admin: any live instance. User: the instance is in their visible set for its type |
@@ -258,23 +277,28 @@ state accessors from `init()` (cross-file init order is not guaranteed).
    explicitly for SSE (`text/event-stream`) and image bytes (MediaCover).
 
 Register functions `main.go` mounts (must exist, exact names):
-`registerConfig`, `registerUsersAdmin`, `registerExternalAddress`,
-`registerMediaAccess`, `registerNotifications`, `registerRequests`,
-`registerRequestsAdmin`, `registerBooks`, `registerDiscover`, `registerTrakt`,
-`registerAI`, `registerAIAdmin`, `registerIssues`, `registerRemediation`,
-`registerProposals`, `registerInstances`, `registerDownloads`,
-`registerTautulli`, `registerMediaFiles` (public — see rule 1). Stage A
-provides `registerAuth` + `registerWS`. (`registerPlex` is gone: the real
-server deleted the `/api/admin/plex/*` console when Plex became an instance,
-and `plex.go` is now only the shared PIN simulation.) `registerInstances` also owns the proxy dispatcher
-`/instances/{instanceID}/*` → `handleRadarrProxy` / `handleSonarrProxy` /
-`handleChaptarrProxy` (hook table, §7).
+`registerConfig`, `registerUsersAdmin`, `registerContentPolicy`,
+`registerExternalAddress`, `registerMediaAccess`, `registerNotifications`,
+`registerRequests`, `registerRequestsAdmin`, `registerBooks`, `registerMusic`,
+`registerDiscover`, `registerTrakt`, `registerAI`, `registerAIAdmin`,
+`registerIssues`, `registerRemediation`, `registerProposals`,
+`registerInstances`, `registerDownloads`, `registerWatchHistory` (formerly
+`registerTautulli`; serves `/api/watch-history/{id}/*` and the `/api/tautulli`
+alias for both provider types), `registerMediaFiles` (public — see rule 1).
+Stage A provides `registerAuth` + `registerWS`. (`registerPlex` is gone: the
+real server deleted the `/api/admin/plex/*` console when Plex became an
+instance, and `plex.go` is now only the shared PIN simulation.)
+`registerInstances` also owns the proxy dispatcher `/instances/{instanceID}/*`
+→ `handleRadarrProxy` / `handleSonarrProxy` / `handleChaptarrProxy` /
+`handleLidarrProxy` (hook table, §7); the non-admin read allowlist selects
+`api/v1` for chaptarr and lidarr.
 
 `startSimulations()` is a no-op hook in main.go; the integration pass wires
 the tickers there. Domain files must NOT define it.
 
 `demoServerURL` (main.go) is the advertised base URL from `DEMO_SERVER_URL`
-(default `http://localhost:8484`).
+(default `http://localhost:<listen port>`). `demoListenPort()` is `DEMO_PORT`
+when set, else `demoPort` (8484).
 
 ## 6. WebSocket hub (ws.go)
 
@@ -309,9 +333,16 @@ signatures. Callers may invoke any of them; nobody else defines them.
 findMovie(tmdbID int) (*DemoMovie, bool)
 findShow(tmdbID int) (*DemoShow, bool)
 var demoMovies []*DemoMovie   // seed order = old-demo order (18 PD films)
-var demoShows  []*DemoShow    // 6 fictional shows, tmdb 90001–90006, tvdb 390001–390006
+var demoShows  []*DemoShow    // 7 fictional shows, tmdb 90001–90007, tvdb 390001–390007
 discoveryPrefsSaved() bool    // true once seeded/saved (demo seeds SAVED)
+discShowNetworkName(tmdbID int) string // the network a show airs on (TMDB detail, Sonarr document, Trakt object agree)
+discLinkCredits()                      // init-time: derives every person's credits from the per-title extras table (data_credits.go)
 ```
+
+Discover reads the kids domain's `cpMovieCerts` / `cpShowCerts` to emit
+`release_dates[].certification` and `content_ratings`, and the arr domain's
+`arrMovieReleaseMilestones` for the digital/physical release milestones, so
+the title page, the Radarr calendar, and the policy decision agree.
 
 **D1 media access (mediaaccess.go) + the shared Plex PIN flow (plex.go)**:
 
@@ -336,6 +367,8 @@ handleRadarrProxy(w http.ResponseWriter, r *http.Request, inst *DemoInstance, is
 handleSonarrProxy(w http.ResponseWriter, r *http.Request, inst *DemoInstance, isAdmin bool, rest string)
 arrOnRequestStarted(tmdbID int, mediaType string)                  // seed/refresh the fake queue item
 arrOnRequestCompleted(tmdbID int, mediaType string, seasons []int) // flip hasFile / episode stats at completion
+arrMovieReleaseDates(tmdbID int) (inCinemas, digital string)       // calendar dates, "" when no record
+arrMovieReleaseMilestones(tmdbID int) (inCinemas, digital, physical string)
 ```
 
 `rest` is the path after `/api/instances/{id}/` (e.g. `api/v3/movie`), query
@@ -367,6 +400,63 @@ startDownloadSimulation(tmdbID int, mediaType string, instanceID string, seasons
 `arrOnRequestStarted`/`arrOnRequestCompleted` in lockstep.
 
 **D6: none exported.**
+
+**D9 music (data_music.go, music.go, arr_lidarr.go)**:
+
+```go
+handleLidarrProxy(w http.ResponseWriter, r *http.Request, inst *DemoInstance, isAdmin bool, rest string)
+albumByForeignID(foreignID string) (*DemoAlbum, bool)   // alias-aware
+allAlbums() []*DemoAlbum
+lidCanonicalForeignID(foreignID string) (canonical string, aliased bool)
+lidarrAlbumLiveStatus(foreignID string) string           // available | downloading | partial | requested | ""
+lidarrOnAlbumRequested(foreignID string) bool            // monitor (and add) the record; never a second record
+lidarrOnAlbumDownloading(foreignID string)               // queue item + grabbed history
+lidarrOnAlbumAvailable(foreignID string)                 // files land, trackFileImported, recent-albums entry
+musicResolveInstance(u *DemoUser, explicitID string) (*DemoInstance, int, string)
+musicStatusFor(u *DemoUser, foreignID, instanceID string) (status, canonical string)
+```
+
+Music lifecycle: `reqCreateMusic` (requests.go dispatches `media_type: "music"`
+to it), `reqAdminApproveMusic`, `musicRowLiveStatus` (the history overlay),
+`musicStartSimulation` (requested → downloading → available, driven ONLY by
+`arr_queue_changed {instance_id, service_type: "lidarr"}`). Music never emits
+`download_progress` or `request_status_changed`; both key on a TMDB id and
+production never sends them for music. `reqUpsertMusicRow` (requests.go) is
+the book-row analogue without formats. Album and artist artwork are generated
+400×400 PNGs served at `api/v1/mediacover/{album|artist}/{id}/<file>`, the
+only image path the requester allowlist admits; no `remoteUrl` is ever emitted.
+
+**D10 kids accounts (contentpolicy.go, data_policy.go)**:
+
+```go
+type cpPolicy struct{ MaxMovieRating, MaxTVRating, RatingRegion string; BlockUnrated bool; BlockedMovieGenres, BlockedTVGenres []int }
+var cpMovieCerts, cpShowCerts map[int]map[string]string   // TMDB id -> region -> certification
+cpPolicyFor(u *DemoUser) *cpPolicy          // nil for admins and unrestricted users
+cpIsChild(userID int) bool
+cpForgetUser(userID int)                    // on user delete
+cpDescribe(p *cpPolicy) string
+cpDecorateUserJSON(out map[string]any, u *DemoUser, explicitNull bool)
+policyAllowsMovie(u, *DemoMovie) bool · policyAllowsShow(u, *DemoShow) bool           // TMDB-shaped surfaces
+policyAllowsMovieRecord(u, *DemoMovie) bool · policyAllowsShowRecord(u, *DemoShow) bool // arr-shaped surfaces (record's US string, region-then-US fallback)
+cpAllowsTmdb(u, mediaType string, tmdbID int) bool   // ids the catalog lacks are allowed; books/music always pass
+cpKeepMovies · cpKeepShows · cpKeepItems · cpKeepGenres                                // never nil
+```
+
+Every surface that can name a movie or show calls one of these AFTER it has
+rendered or matched (the demo has no shared cache; "post-cache" means
+post-render, per request, never stored): discover lists, search, details
+(`404 {"error":"not available"}` after the existing unknown-id 502), related,
+person credits, genre lists, featured pages (`total_results` = served count),
+the Trakt handlers, `reqCreateMovieTV` (`404 that title is not available for
+this account`), `reqTmdbStatusHandler` (`200 unavailable, status_known true`),
+`reqHistoryHandler`, every non-admin read in the Radarr and Sonarr fakes
+(single record → `404 not found`, rows dropped from arrays and `records`), and
+the canned AI router. Books and music carry no rating and are never gated.
+Admins are never children in either direction (`409 admin accounts cannot be
+kids accounts`, `409 turn off the kids account first`). Ratings are in-process
+map reads that cannot fail, so the real server's 502/503 fail-closed branches
+have no trigger here; the one rule that carries over is that a title with no
+entry for the policy region is unrated, never "unknown, allow".
 
 ## 8. Catalog types (types.go — do not extend; supplement locally)
 
@@ -415,6 +505,37 @@ snake_case vs arr camelCase).
   `stop_reason` use the server enums.
 - external-settings-changes detail returns the BARE change object.
 - media-files feature ENABLED (coverage always answers 200).
+
+- Discover lists page for real: page size 20, `page` clamped to 1..500,
+  truthful `total_pages`, an empty slice past the end; featured pages honour
+  `page`, keep `source`, and report `total_results` as the served count (the
+  real per-page quirk, mirrored on purpose).
+- Browse filters honour the server's full allowlist per media type with the
+  real 400 messages; `with_genres` comma = every id, pipe = any.
+- Trakt `anticipated` pages by 10 (movies 1-10, 11-18, then `[]`); every Trakt
+  item carries `ids.tmdb` (the app drops items without it).
+- The fictional shows carry **no IMDb id** (`DemoShow.ImdbID == ""`): the
+  synthesized `tt009000x` ids resolved to unrelated real titles. TV detail
+  emits `external_ids.imdb_id: null`, Sonarr documents omit `imdbId`, Trakt
+  show objects emit `ids.imdb: null`.
+- The latest season of every returning show is anchored to process start so
+  "Airing This Week" and the Sonarr calendar always have episodes; show 90007
+  "The Lantern Society" premieres 45 days after start so "Coming Soon" has a
+  premiere. Restarts re-anchor.
+- `profile_path` is JSON `null` when unknown, never `""`.
+- The Radarr and Sonarr documents carry a `qualityProfileId` that the same
+  fake's `qualityprofile` route serves (6 = HD-1080p), so the Edit screens
+  resolve a name; `PUT api/v3/movie/{id}` round-trips the whole document.
+- Watch history: one fixture set rendered per provider type; Tautulli names
+  no server (`server: ""`, `server_type: "plex"`), Tracearr names three.
+- Setup checklist: 14 items; the `tautulli` key is kept (stored skips survive)
+  but reads "Monitoring (Tautulli or Tracearr)"; skips live in `cfgSkipped`.
+- Notification preferences are the real 13-key row; PUT is a full-row replace.
+- Kids accounts: see §7 D10. The kid's certifications for the real films are
+  chosen for a visible split (7 of 18 films and 4 of 7 shows survive the
+  seeded policy); GB values follow TMDB where TMDB has them.
+- Music: see §7 D9. Seeded request rows: kids rows 8-9, music rows 10-14,
+  `reqNextID` starts at 15.
 
 Additional Stage A notes: the WS upgrader's `CheckOrigin` allows every origin
 (consistent with the permissive-CORS decision); trakt artwork strings are

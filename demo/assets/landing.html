@@ -13,7 +13,7 @@
   .card{background:#16213e;border-radius:12px;padding:1.5rem;margin:1rem 0;text-align:left}
   .card h3{color:#ffd700;margin-bottom:.5rem}
   code{background:#0f3460;padding:.2rem .5rem;border-radius:4px;font-size:.9rem;color:#e94560}
-  .credentials{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+  .credentials{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem}
   .cred{background:#0f3460;border-radius:8px;padding:1rem;text-align:center}
   .cred .label{color:#888;font-size:.8rem;text-transform:uppercase}
   .cred .value{color:#ffd700;font-size:1.2rem;margin-top:.25rem}
@@ -26,11 +26,12 @@
   <p class="subtitle">Demo Server</p>
   <div class="card">
     <h3>Connect Your App</h3>
-    <p>Point your Cantinarr app at <code>__DEMO_SERVER_URL__</code> and sign in with either account below, or open the connect link on a device with the app installed.</p>
+    <p>Point your Cantinarr app at <code>__DEMO_SERVER_URL__</code> and sign in with one of the accounts below, or open the connect link on a device with the app installed.</p>
   </div>
   <div class="credentials">
     <div class="cred"><div class="label">Admin Login</div><div class="value">admin / demo</div></div>
     <div class="cred"><div class="label">User Login</div><div class="value">user / demo</div></div>
+    <div class="cred"><div class="label">Kids Login</div><div class="value">kid / demo</div></div>
   </div>
   <div class="card">
     <h3>Connect Link</h3>
@@ -38,7 +39,7 @@
   </div>
   <div class="card">
     <h3>What You Can Try</h3>
-    <p>Discover public-domain movies &amp; TV, request titles (books included, via Chaptarr), pick which library a request goes to, browse books by author and series, watch simulated downloads complete in real time, and chat with the AI assistant. Get access to a media server from the app: create a Jellyfin or Emby account, link one you already have, or ask for a Plex invite. As <strong>admin</strong>, explore the full console: instance management, per-user library access, importing media-server users, download-client and Tautulli monitoring, issues with AI remediation, and request approvals.</p>
+    <p>Discover public-domain movies &amp; TV, browse by genre, year, rating, language, streaming service, keyword, or studio, open any title for its cast and crew, studios, and release dates, request titles (books via Chaptarr and albums via Lidarr included), pick which library a request goes to, browse books by author and series and music by artist, watch simulated downloads complete in real time, and chat with the AI assistant. Sign in as <strong>kid</strong> to see the same catalog through a kids account with rating limits. Get access to a media server from the app: create a Jellyfin or Emby account, link one you already have, or ask for a Plex invite. As <strong>admin</strong>, explore the full console: instance management, per-user library access and kids-account limits, importing media-server users, download clients (SABnzbd, qBittorrent), monitoring (Tautulli, Tracearr), the music library and Import Doctor, issues with AI remediation, and request approvals.</p>
   </div>
   <p class="footer">All content is public domain or fictional. Explore freely — nothing here touches a real media server.</p>
 </div>
