@@ -4,12 +4,15 @@ import '../../../core/widgets/cached_image.dart';
 import '../data/radarr_models.dart';
 
 /// List of Radarr movies with explicit, keyboard-accessible row actions.
+/// Long-pressing a tile opens the movie action sheet when [onLongPress] is
+/// wired.
 class RadarrMovieList extends StatelessWidget {
   final List<RadarrMovie> movies;
   final void Function(int id, {bool deleteFiles}) onDelete;
   final void Function(int id) onSearch;
   final void Function(RadarrMovie movie)? onInteractiveSearch;
   final void Function(RadarrMovie movie)? onOpen;
+  final void Function(RadarrMovie movie)? onLongPress;
   final bool embedded;
 
   const RadarrMovieList({
@@ -19,6 +22,7 @@ class RadarrMovieList extends StatelessWidget {
     required this.onSearch,
     this.onInteractiveSearch,
     this.onOpen,
+    this.onLongPress,
     this.embedded = false,
   });
 
@@ -51,6 +55,7 @@ class RadarrMovieList extends StatelessWidget {
               ? () => onInteractiveSearch!(movie)
               : null,
           onOpen: onOpen != null ? () => onOpen!(movie) : null,
+          onLongPress: onLongPress != null ? () => onLongPress!(movie) : null,
         );
       },
     );
@@ -105,6 +110,7 @@ class _MovieTile extends StatelessWidget {
   final VoidCallback onSearch;
   final VoidCallback? onInteractiveSearch;
   final VoidCallback? onOpen;
+  final VoidCallback? onLongPress;
 
   const _MovieTile({
     required this.movie,
@@ -112,12 +118,14 @@ class _MovieTile extends StatelessWidget {
     required this.onSearch,
     this.onInteractiveSearch,
     this.onOpen,
+    this.onLongPress,
   });
 
   @override
   Widget build(BuildContext context) {
     return ListTile(
       onTap: onOpen,
+      onLongPress: onLongPress,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       leading: ClipRRect(
         borderRadius: BorderRadius.circular(6),
@@ -191,6 +199,8 @@ class _MovieTile extends StatelessWidget {
               onSearch();
             case 'interactive':
               onInteractiveSearch?.call();
+            case 'more':
+              onLongPress?.call();
             case 'delete':
               onDelete();
           }
@@ -215,6 +225,21 @@ class _MovieTile extends StatelessWidget {
                       size: 18, color: AppTheme.textSecondary),
                   SizedBox(width: 10),
                   Text('Interactive search'),
+                ],
+              ),
+            ),
+          if (onLongPress != null)
+            const PopupMenuItem(
+              value: 'more',
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.more_horiz_rounded,
+                    size: 18,
+                    color: AppTheme.textSecondary,
+                  ),
+                  SizedBox(width: 10),
+                  Text('More actions…'),
                 ],
               ),
             ),
