@@ -471,7 +471,6 @@ class _UserRequestSettingsScreenState
           onChanged: _kidsLoading || (catalog == null && !_childEnabled)
               ? null
               : _onChildToggled,
-          activeThumbColor: AppTheme.accent,
           title: const Text(
             'Kids account',
             style: TextStyle(
@@ -507,7 +506,6 @@ class _UserRequestSettingsScreenState
           SwitchListTile(
             value: _blockUnrated,
             onChanged: (v) => setState(() => _blockUnrated = v),
-            activeThumbColor: AppTheme.accent,
             title: const Text(
               'Hide unrated titles',
               style: TextStyle(
