@@ -134,6 +134,13 @@ func reqCreateHandler(w http.ResponseWriter, r *http.Request) {
 
 func reqCreateMovieTV(w http.ResponseWriter, u *DemoUser, body *reqCreateBody) {
 	mt := body.MediaType
+	// Kids accounts: a title outside the account's content limits cannot be
+	// requested, and the refusal comes before any library or settings
+	// lookup, where the real CreateMediaRequest checks the policy.
+	if !cpAllowsTmdb(u, mt, body.TmdbID) {
+		writeErr(w, http.StatusNotFound, "that title is not available for this account")
+		return
+	}
 	pol := reqEffectivePolicy(u)
 
 	instanceID, errStatus, errMsg := reqResolveArrInstance(u, mt, body.InstanceID)
@@ -786,6 +793,13 @@ func reqHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		row := e.row
+		// Kids accounts: a movie or show outside the account's limits (a
+		// request made before the limits were set, say) is left out of its
+		// own history. Book and music rows carry no rating and stay.
+		if (row.MediaType == mediaTypeMovie || row.MediaType == mediaTypeTV) &&
+			!cpAllowsTmdb(u, row.MediaType, row.TmdbID) {
+			continue
+		}
 		status := reqOverlayRowStatus(&row, e.formatSlice)
 		bookFormat := reqNormalizeBookFormat(row.BookFormat)
 		if row.MediaType == mediaTypeBook && e.formatSlice != "" {
@@ -994,6 +1008,16 @@ func reqTmdbStatusHandler(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusForbidden, serviceType+" instance is not available to you")
 			return
 		}
+	}
+
+	// A title a kids account may not see has no state to report: it reads
+	// unavailable, the same as a title the library does not hold, and
+	// carries nothing else (no seasons, releases, or sibling libraries).
+	if !cpAllowsTmdb(u, mediaType, tmdbID) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": statusUnavailable, "progress": 0, "status_known": true,
+		})
+		return
 	}
 
 	// Release dates let a title that reads "Requested" say it is simply not
