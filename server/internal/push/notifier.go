@@ -31,6 +31,27 @@ type Notifier struct {
 	healthMu         sync.Mutex
 	consecutiveFails int
 	healthSink       DeliveryHealthSink
+
+	// recipientPolicy drops kids accounts from a new-content alert about a
+	// title outside their limits. nil (push unconfigured in tests, or a
+	// server that never wired it) keeps every recipient.
+	recipientPolicy RecipientPolicy
+}
+
+// RecipientPolicy decides which recipients may hear about a title.
+// *contentpolicy.Service satisfies it; declared here so push stays
+// decoupled from that package.
+type RecipientPolicy interface {
+	AllowedRecipients(ctx context.Context, userIDs []int64, mediaType string, tmdbID int) ([]int64, error)
+}
+
+// SetContentPolicy wires the kids-account recipient filter. nil-receiver
+// safe, like the other setters: push may be unconfigured.
+func (n *Notifier) SetContentPolicy(policy RecipientPolicy) {
+	if n == nil {
+		return
+	}
+	n.recipientPolicy = policy
 }
 
 // deliveryFailureThreshold is how many sends must fail back to back before the
@@ -797,6 +818,16 @@ func (n *Notifier) notifyNewContent(category, mediaType, serviceType, title, bod
 	if err != nil {
 		n.logger.Error("push: resolve new-content recipients", "err", err, "category", category)
 		return
+	}
+	if n.recipientPolicy != nil {
+		// A kids account hears about a title only inside its limits. A
+		// title that cannot be identified or rated drops every child and
+		// says so in the log; the adults still hear about it.
+		kept, err := n.recipientPolicy.AllowedRecipients(context.Background(), recipients, mediaType, tmdbID)
+		if err != nil {
+			n.logger.Warn("push: kids accounts left out of a new-content alert", "err", err, "category", category, "tmdb_id", tmdbID)
+		}
+		recipients = kept
 	}
 	if len(recipients) == 0 {
 		return

@@ -17,6 +17,7 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/cache"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
@@ -247,6 +248,97 @@ type Service struct {
 	// webhook-driven resume may fire together, and two concurrent passes would
 	// race their probes over the same parked rows.
 	parkSweepRunMu sync.Mutex
+	// contentPolicy is the kids-account service: a child cannot request,
+	// see the status of, or list a title outside their limits. nil until
+	// wired (SetContentPolicy); a server without it gates nothing.
+	contentPolicy *contentpolicy.Service
+}
+
+// SetContentPolicy wires the kids-account service.
+func (s *Service) SetContentPolicy(svc *contentpolicy.Service) { s.contentPolicy = svc }
+
+var (
+	// ErrTitleNotAvailable is a kids account asking for a title outside its
+	// limits, in the requester's own words: the same "not available" the
+	// detail route answers, never a hint at what was hidden.
+	ErrTitleNotAvailable = errors.New("that title is not available for this account")
+	// ErrContentPolicyUnavailable is a limit that could not be checked; the
+	// request is refused rather than let through.
+	ErrContentPolicyUnavailable = errors.New("content limits are temporarily unavailable, retry shortly")
+)
+
+// contentPolicyFor reads a requester's policy; nil means unrestricted.
+func (s *Service) contentPolicyFor(userID int64, isAdmin bool) (*contentpolicy.Policy, error) {
+	if s.contentPolicy == nil || isAdmin {
+		return nil, nil
+	}
+	policy, err := s.contentPolicy.Store.Get(userID)
+	if err != nil {
+		return nil, ErrContentPolicyUnavailable
+	}
+	return policy, nil
+}
+
+// checkContentPolicy refuses a movie or show a kids account may not see.
+func (s *Service) checkContentPolicy(userID int64, isAdmin bool, mediaType string, tmdbID int) error {
+	if mediaType != contentpolicy.MediaMovie && mediaType != contentpolicy.MediaTV {
+		return nil
+	}
+	policy, err := s.contentPolicyFor(userID, isAdmin)
+	if err != nil || policy == nil {
+		return err
+	}
+	allowed, err := s.contentPolicy.Allows(context.Background(), policy, contentpolicy.Candidate{MediaType: mediaType, TMDBID: tmdbID})
+	if err != nil {
+		return ErrContentPolicyUnavailable
+	}
+	if !allowed {
+		return ErrTitleNotAvailable
+	}
+	return nil
+}
+
+// hideBlockedRequests drops the movie and show rows a kids account may not
+// see from their own history (a request made before the limits were set,
+// say). A lookup that fails fails the read: a list that looks complete but
+// is not would be worse than an error.
+func (s *Service) hideBlockedRequests(userID int64, isAdmin bool, requests []RequestLog) ([]RequestLog, error) {
+	policy, err := s.contentPolicyFor(userID, isAdmin)
+	if err != nil || policy == nil {
+		return requests, err
+	}
+	cands := make([]contentpolicy.Candidate, 0, len(requests))
+	indexes := make([]int, 0, len(requests))
+	for i, r := range requests {
+		if r.MediaType != contentpolicy.MediaMovie && r.MediaType != contentpolicy.MediaTV {
+			continue
+		}
+		cands = append(cands, contentpolicy.Candidate{MediaType: r.MediaType, TMDBID: r.TmdbID})
+		indexes = append(indexes, i)
+	}
+	if len(cands) == 0 {
+		return requests, nil
+	}
+	keep, err := s.contentPolicy.Filter(context.Background(), policy, cands)
+	if err != nil {
+		return nil, ErrContentPolicyUnavailable
+	}
+	drop := map[int]struct{}{}
+	for i, ok := range keep {
+		if !ok {
+			drop[indexes[i]] = struct{}{}
+		}
+	}
+	if len(drop) == 0 {
+		return requests, nil
+	}
+	kept := make([]RequestLog, 0, len(requests)-len(drop))
+	for i, r := range requests {
+		if _, dropped := drop[i]; !dropped {
+			kept = append(kept, r)
+		}
+	}
+	return kept, nil
 }
 
 func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, notifier Notifier) *Service {
@@ -988,6 +1080,11 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 	}
 
 	isAdmin := s.userIsAdmin(userID)
+	// A kids account's limits come before anything is resolved or written:
+	// a title outside them is not available, in those words.
+	if err := s.checkContentPolicy(userID, isAdmin, req.MediaType, req.TmdbID); err != nil {
+		return nil, err
+	}
 	eff, err := s.effectiveSettings(userID, isAdmin)
 	if err != nil {
 		return nil, err
@@ -2753,6 +2850,16 @@ func (s *Service) GetUserStatus(userID int64, tmdbID int, mediaType, instanceID 
 		}
 	}
 
+	// A title a kids account may not see has no state to report: it reads
+	// unavailable, the same as a title the library does not hold.
+	if err := s.checkContentPolicy(userID, s.userIsAdmin(userID), mediaType, tmdbID); err != nil {
+		if errors.Is(err, ErrTitleNotAvailable) {
+			known := true
+			return &StatusResponse{Status: StatusUnavailable, StatusKnown: &known}, nil
+		}
+		return nil, err
+	}
+
 	resp, err := s.userStatusForInstance(userID, tmdbID, mediaType, instanceID)
 	if err != nil {
 		return nil, err
@@ -3607,7 +3714,7 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 		}
 		requests[i] = history[i].log
 	}
-	return requests, nil
+	return s.hideBlockedRequests(userID, s.userIsAdmin(userID), requests)
 }
 
 // overlayLiveStatuses recomputes each history row's status from the live arr

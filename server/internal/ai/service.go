@@ -74,6 +74,11 @@ type ChatContext struct {
 	// history or provider/model output.
 	TrustedUserText   string
 	InteractiveTurnID string
+	// KidsAccount and ContentLimits describe a child's limits for the
+	// instructions. The tools already hide everything outside them; the
+	// line keeps the model from working around that from memory.
+	KidsAccount   bool
+	ContentLimits string
 }
 
 // StreamCallbacks receives streaming output from the agent loop. All callbacks
@@ -327,6 +332,13 @@ func dynamicContext(chatCtx ChatContext) string {
 	}
 	if len(chatCtx.Services) > 0 {
 		fmt.Fprintf(&sb, " Configured services: %s.", strings.Join(chatCtx.Services, ", "))
+	}
+	if chatCtx.KidsAccount {
+		sb.WriteString(" This is a kids account")
+		if chatCtx.ContentLimits != "" {
+			fmt.Fprintf(&sb, " limited to %s", chatCtx.ContentLimits)
+		}
+		sb.WriteString(". Only discuss, recommend, or request titles within those limits. The tools already hide everything outside them; never work around that, and never name or describe a title outside the limits, even from memory. Keep the tone age-appropriate.")
 	}
 	return sb.String()
 }

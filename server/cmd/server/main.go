@@ -341,6 +341,14 @@ func main() {
 
 	// Discover handler (always created — checks credentials at request time)
 	discoverHandler := discover.NewHandler(creds, apiCache, serverSettings)
+	// Kids accounts: every title surface applies the caller's policy after
+	// its own cache read; each of these is a chokepoint (AGENTS.md).
+	discoverHandler.SetContentPolicy(contentPolicy)
+	toolServer.SetContentPolicy(contentPolicy)
+	requestService.SetContentPolicy(contentPolicy)
+	aiHandler.SetContentPolicy(contentPolicy)
+	pushNotifier.SetContentPolicy(contentPolicy)
+	proxyHandler.SetContentPolicy(contentPolicy)
 	// browse_titles honors the same English-only default the browse grid does.
 	toolServer.SetDiscoveryPrefs(serverSettings)
 
