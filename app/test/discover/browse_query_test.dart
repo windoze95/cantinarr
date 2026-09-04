@@ -61,7 +61,8 @@ void main() {
         '/browse/movie/bogus',
         '/browse/movie/recommendations',
         '/browse/movie/similar?id=0',
-        '/browse/tv/top-rated',
+        '/browse/tv/now-playing',
+        '/browse/movie/on-the-air',
         '/browse/movie',
         '/detail/movie/1',
       ]) {
@@ -124,10 +125,21 @@ void main() {
   });
 
   group('BrowseFeed', () {
-    test('movie-only feeds are not offered for TV', () {
-      expect(BrowseFeed.topRated.supports(MediaType.tv), isFalse);
+    test('feeds follow the routes the server has for each type', () {
+      expect(BrowseFeed.topRated.supports(MediaType.tv), isTrue);
+      expect(BrowseFeed.upcoming.supports(MediaType.tv), isTrue);
+      expect(BrowseFeed.nowPlaying.supports(MediaType.tv), isFalse);
+      expect(BrowseFeed.onTheAir.supports(MediaType.movie), isFalse);
+      expect(BrowseFeed.onTheAir.supports(MediaType.tv), isTrue);
       expect(BrowseFeed.popular.supports(MediaType.tv), isTrue);
       expect(BrowseFeed.featured.supports(MediaType.tv), isTrue);
+    });
+
+    test('the on-the-air feed has its own slug', () {
+      const query = BrowseQuery(type: MediaType.tv, feed: BrowseFeed.onTheAir);
+      expect(query.toLocation(), '/browse/tv/on-the-air');
+      expect(BrowseQuery.tryParse(Uri.parse('/browse/tv/on-the-air'))?.feed,
+          BrowseFeed.onTheAir);
     });
   });
 }

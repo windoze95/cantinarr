@@ -9,6 +9,9 @@ enum BrowseFeed {
   topRated('top-rated'),
   upcoming('upcoming'),
   nowPlaying('now-playing'),
+
+  /// TMDB's on-the-air list: TV's counterpart to In Theaters.
+  onTheAir('on-the-air'),
   anticipated('anticipated'),
 
   /// TMDB discover with the user's filters and sort.
@@ -31,9 +34,11 @@ enum BrowseFeed {
   /// Feeds anchored on one title carry its TMDB id.
   bool get needsId => this == recommendations || this == similar;
 
-  /// The server has movie-only routes for these three.
+  /// In Theaters is a movie route and Airing This Week a TV one; every other
+  /// feed has a route for both types.
   bool supports(MediaType type) => switch (this) {
-        topRated || upcoming || nowPlaying => type == MediaType.movie,
+        nowPlaying => type == MediaType.movie,
+        onTheAir => type == MediaType.tv,
         _ => type == MediaType.movie || type == MediaType.tv,
       };
 

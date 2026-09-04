@@ -88,6 +88,12 @@ void main() {
           '/api/discover/movies/upcoming',
       BrowseQuery(type: MediaType.movie, feed: BrowseFeed.nowPlaying):
           '/api/discover/movies/now-playing',
+      BrowseQuery(type: MediaType.tv, feed: BrowseFeed.topRated):
+          '/api/discover/tv/top-rated',
+      BrowseQuery(type: MediaType.tv, feed: BrowseFeed.upcoming):
+          '/api/discover/tv/upcoming',
+      BrowseQuery(type: MediaType.tv, feed: BrowseFeed.onTheAir):
+          '/api/discover/tv/on-the-air',
       BrowseQuery(type: MediaType.movie, feed: BrowseFeed.discover):
           '/api/discover/movies',
       BrowseQuery(type: MediaType.tv, feed: BrowseFeed.discover):

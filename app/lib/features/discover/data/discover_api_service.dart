@@ -146,6 +146,33 @@ class DiscoverApiService {
     return TmdbPage.fromJson(resp.data, MediaItem.fromMovieJson);
   }
 
+  /// Series with an episode airing in the next seven days.
+  Future<TmdbPage<MediaItem>> fetchOnTheAirTV({int page = 1}) async {
+    final resp = await _dio.get(
+      '/api/discover/tv/on-the-air',
+      queryParameters: {'page': page},
+    );
+    return TmdbPage.fromJson(resp.data, MediaItem.fromTVJson);
+  }
+
+  Future<TmdbPage<MediaItem>> fetchTopRatedTV({int page = 1}) async {
+    final resp = await _dio.get(
+      '/api/discover/tv/top-rated',
+      queryParameters: {'page': page},
+    );
+    return TmdbPage.fromJson(resp.data, MediaItem.fromTVJson);
+  }
+
+  /// Series premiering in the next three months. The server discovers on the
+  /// first air date, so a returning season stays out.
+  Future<TmdbPage<MediaItem>> fetchUpcomingTV({int page = 1}) async {
+    final resp = await _dio.get(
+      '/api/discover/tv/upcoming',
+      queryParameters: {'page': page},
+    );
+    return TmdbPage.fromJson(resp.data, MediaItem.fromTVJson);
+  }
+
   // ─── Search ─────────────────────────────────────────
 
   Future<TmdbPage<MediaItem>> multiSearch({

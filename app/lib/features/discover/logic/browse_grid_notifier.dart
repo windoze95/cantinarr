@@ -98,11 +98,17 @@ class BrowseGridNotifier extends ChangeNotifier {
             ? _api.fetchPopularTV(page: page)
             : _api.fetchPopularMovies(page: page);
       case BrowseFeed.topRated:
-        return _api.fetchTopRatedMovies(page: page);
+        return tv
+            ? _api.fetchTopRatedTV(page: page)
+            : _api.fetchTopRatedMovies(page: page);
       case BrowseFeed.upcoming:
-        return _api.fetchUpcomingMovies(page: page);
+        return tv
+            ? _api.fetchUpcomingTV(page: page)
+            : _api.fetchUpcomingMovies(page: page);
       case BrowseFeed.nowPlaying:
         return _api.fetchNowPlayingMovies(page: page);
+      case BrowseFeed.onTheAir:
+        return _api.fetchOnTheAirTV(page: page);
       case BrowseFeed.anticipated:
         final items =
             await _api.getTraktAnticipated(tv ? 'shows' : 'movies', page: page);

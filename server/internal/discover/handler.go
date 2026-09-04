@@ -165,6 +165,22 @@ func (h *Handler) PopularTV(w http.ResponseWriter, r *http.Request) {
 	h.cachedTMDBFeed(w, key, ttlTrending, "/tv/popular", params)
 }
 
+// OnTheAirTV backs the Airing This Week row: TMDB's /tv/on_the_air lists
+// series with an episode airing in the next seven days.
+func (h *Handler) OnTheAirTV(w http.ResponseWriter, r *http.Request) {
+	page := queryPage(r)
+	key := fmt.Sprintf("on_air_tv:%d", page)
+	params := url.Values{"page": {strconv.Itoa(page)}}
+	h.cachedTMDBFeed(w, key, ttlTrending, "/tv/on_the_air", params)
+}
+
+func (h *Handler) TopRatedTV(w http.ResponseWriter, r *http.Request) {
+	page := queryPage(r)
+	key := fmt.Sprintf("top_tv:%d", page)
+	params := url.Values{"page": {strconv.Itoa(page)}}
+	h.cachedTMDBFeed(w, key, ttlTrending, "/tv/top_rated", params)
+}
+
 func (h *Handler) TopRatedMovies(w http.ResponseWriter, r *http.Request) {
 	page := queryPage(r)
 	key := fmt.Sprintf("top_movies:%d", page)
@@ -179,23 +195,36 @@ func (h *Handler) TopRatedMovies(w http.ResponseWriter, r *http.Request) {
 // released anywhere yet, and the three-month cap leaves far-future titles to
 // the Most Anticipated row.
 func (h *Handler) UpcomingMovies(w http.ResponseWriter, r *http.Request) {
+	h.upcoming(w, r, "upcoming", "/discover/movie", "primary_release_date")
+}
+
+// UpcomingTV discovers on the first air date, so the row is premieres only: a
+// returning season carries a first air date years back and stays out. The
+// three-month cap leaves far-future titles to Most Anticipated.
+func (h *Handler) UpcomingTV(w http.ResponseWriter, r *http.Request) {
+	h.upcoming(w, r, "upcoming_tv", "/discover/tv", "first_air_date")
+}
+
+// upcoming backs both Coming Soon rows: a discover query on the type's own
+// date field from today through three months out, most popular first.
+func (h *Handler) upcoming(w http.ResponseWriter, r *http.Request, keyPrefix, path, dateField string) {
 	page := queryPage(r)
 	now := time.Now()
 	from := now.Format("2006-01-02")
 	to := now.AddDate(0, 3, 0).Format("2006-01-02")
-	key := fmt.Sprintf("upcoming:%s:%d", from, page)
+	key := fmt.Sprintf("%s:%s:%d", keyPrefix, from, page)
 	params := url.Values{
-		"page":                     {strconv.Itoa(page)},
-		"sort_by":                  {"popularity.desc"},
-		"primary_release_date.gte": {from},
-		"primary_release_date.lte": {to},
+		"page":             {strconv.Itoa(page)},
+		"sort_by":          {"popularity.desc"},
+		dateField + ".gte": {from},
+		dateField + ".lte": {to},
 	}
 	// A discover query, so the language preference goes upstream and the
 	// row's page arrives full (see discoverQuery).
 	if _, englishOnly := h.discoveryPrefs(); englishOnly {
 		params.Set("with_original_language", "en")
 	}
-	h.cachedTMDBFeed(w, key, ttlTrending, "/discover/movie", params)
+	h.cachedTMDBFeed(w, key, ttlTrending, path, params)
 }
 
 func (h *Handler) NowPlayingMovies(w http.ResponseWriter, r *http.Request) {
