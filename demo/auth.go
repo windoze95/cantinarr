@@ -166,6 +166,9 @@ func authMeHandler(w http.ResponseWriter, r *http.Request) {
 	if at := userPlexInvitedAt(u); at != nil {
 		out["plex_invited_at"] = *at
 	}
+	// child is always present; content_limits is an explicit null for a
+	// non-child (the TokenResponse user omits it instead).
+	cpDecorateUserJSON(out, u, true)
 	writeJSON(w, http.StatusOK, out)
 }
 

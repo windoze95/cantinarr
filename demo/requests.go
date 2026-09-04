@@ -115,6 +115,8 @@ func reqCreateHandler(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "media_type required")
 	case mediaTypeBook:
 		reqCreateBook(w, u, &body)
+	case mediaTypeMusic:
+		reqCreateMusic(w, u, &body)
 	case mediaTypeMovie, mediaTypeTV:
 		if body.TmdbID == 0 {
 			writeErr(w, http.StatusBadRequest, "tmdb_id required")
@@ -548,6 +550,36 @@ func reqUpsertBookRow(userID int, foreignID, instanceID, title, format, searchTe
 	reqNextID++
 }
 
+// reqUpsertMusicRow records a directly-executed music request (one row per
+// user and album, like reqUpsertBookRow without formats).
+func reqUpsertMusicRow(userID int, foreignID, instanceID, title, searchTerm, status string) {
+	now := time.Now()
+	reqMu.Lock()
+	defer reqMu.Unlock()
+	for i := len(reqLog) - 1; i >= 0; i-- {
+		row := reqLog[i]
+		if row.UserID == userID && row.MediaType == mediaTypeMusic &&
+			row.ForeignID == foreignID && row.InstanceID == instanceID &&
+			row.Status != statusPending {
+			row.Status = status
+			row.DenyReason = ""
+			row.AddFailureReason = ""
+			if searchTerm != "" {
+				row.SearchTerm = searchTerm
+			}
+			row.RequestedAt = now
+			return
+		}
+	}
+	reqLog = append(reqLog, &reqLogRow{
+		ID: reqNextID, UserID: userID, ForeignID: foreignID,
+		InstanceID: instanceID, MediaType: mediaTypeMusic,
+		Title: title, Status: status, SearchTerm: searchTerm,
+		RequestedAt: now, Waiters: map[int]string{},
+	})
+	reqNextID++
+}
+
 // reqSeasonsForScope resolves a coarse scope to concrete season numbers
 // (real season_numbers from the catalog; never season 0).
 func reqSeasonsForScope(tmdbID int, scope string) []int {
@@ -761,12 +793,15 @@ func reqHistoryHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		m := map[string]any{
 			"tmdb_id":      row.TmdbID,
-			"book_format":  bookFormat,
 			"media_type":   row.MediaType,
 			"title":        row.Title,
 			"status":       status,
 			"status_known": true,
 			"requested_at": row.RequestedAt,
+		}
+		// book_format rides only on book rows; the app reads it as "" elsewhere.
+		if row.MediaType == mediaTypeBook {
+			m["book_format"] = bookFormat
 		}
 		// A server-owned author-import park reads as requested — same mapping
 		// as the detail status endpoint — and carries the same wait, so the
@@ -820,6 +855,9 @@ func reqOverlayRowStatus(row *reqLogRow, formatSlice string) string {
 		}
 		return bookCollapse(statuses)
 	}
+	if row.MediaType == mediaTypeMusic {
+		return musicRowLiveStatus(row)
+	}
 	live, _ := requestStatusForTmdb(row.TmdbID, row.MediaType)
 	// History rows never show "downloading" (the digest has no queue view).
 	if live == statusDownloading {
@@ -845,7 +883,7 @@ func reqOptionsHandler(w http.ResponseWriter, r *http.Request) {
 	// Quality profiles are per-library, so a named instance scopes them. A
 	// library the caller does not hold is refused rather than answered with
 	// their default library's profiles under someone else's name.
-	if requested := strings.TrimSpace(r.URL.Query().Get("instance_id")); requested != "" && mediaType != mediaTypeBook {
+	if requested := strings.TrimSpace(r.URL.Query().Get("instance_id")); requested != "" && mediaType != mediaTypeBook && mediaType != mediaTypeMusic {
 		if _, errStatus, errMsg := reqResolveArrInstance(u, mediaType, requested); errMsg != "" {
 			writeErr(w, errStatus, errMsg)
 			return
@@ -853,7 +891,7 @@ func reqOptionsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	pol := reqEffectivePolicy(u)
 	canSeason := pol.AllowSeasonChoice && mediaType == mediaTypeTV
-	canQuality := pol.AllowQualityChoice && mediaType != mediaTypeBook
+	canQuality := pol.AllowQualityChoice && mediaType != mediaTypeBook && mediaType != mediaTypeMusic
 	profiles := []reqQualityProfile{}
 	if canQuality {
 		if mediaType == mediaTypeTV {

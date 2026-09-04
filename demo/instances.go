@@ -27,13 +27,13 @@ const instMgmtMediaRoot = "/media"
 
 // instMgmtServiceTypes is the exact service_type enum (srv-instances §0).
 var instMgmtServiceTypes = map[string]bool{
-	serviceRadarr: true, serviceSonarr: true, serviceChaptarr: true,
+	serviceRadarr: true, serviceSonarr: true, serviceChaptarr: true, serviceLidarr: true,
 	serviceSabnzbd: true, serviceQbittorrent: true, serviceNzbget: true,
-	serviceTransmission: true, serviceTautulli: true,
+	serviceTransmission: true, serviceTautulli: true, serviceTracearr: true,
 	serviceJellyfin: true, serviceEmby: true, servicePlex: true,
 }
 
-const instMgmtEnumError = "service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli', 'jellyfin', 'emby', 'plex'"
+const instMgmtEnumError = "service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'lidarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli', 'tracearr', 'jellyfin', 'emby', 'plex'"
 
 const instMgmtMediaServerEnumError = "service_type must be a media server type ('jellyfin', 'emby', 'plex')"
 
@@ -158,7 +158,7 @@ type instMgmtMediaServerBody struct {
 }
 
 func instMgmtIsArrType(st string) bool {
-	return st == serviceRadarr || st == serviceSonarr || st == serviceChaptarr
+	return st == serviceRadarr || st == serviceSonarr || st == serviceChaptarr || st == serviceLidarr
 }
 
 // instMgmtValidateMediaServerConfig turns the request shape into the stored
@@ -399,16 +399,16 @@ func instMgmtHandleCreate(w http.ResponseWriter, r *http.Request) {
 	if body.MediaPathMappings != nil && len(*body.MediaPathMappings) > 0 {
 		if !instMgmtIsArrType(body.ServiceType) {
 			writeErr(w, http.StatusBadRequest,
-				"media path mappings are supported only for Radarr, Sonarr, and Chaptarr")
+				"media path mappings are supported only for Radarr, Sonarr, Chaptarr, and Lidarr")
 			return
 		}
 		mappings, mediaDownloads = instMgmtMappingsDerive(*body.MediaPathMappings)
 	}
 
 	isDefault := body.IsDefault
-	if body.ServiceType == serviceChaptarr || isMediaServerType(body.ServiceType) {
-		// Chaptarr and the media servers are never a global default: access
-		// to them is the per-user grant, not a fallback everyone inherits.
+	if body.ServiceType == serviceChaptarr || body.ServiceType == serviceLidarr || isMediaServerType(body.ServiceType) {
+		// Chaptarr, Lidarr, and the media servers are never a global default:
+		// access to them is the per-user grant, not a fallback everyone inherits.
 		isDefault = false
 	}
 	inst := &DemoInstance{
@@ -463,7 +463,7 @@ func instMgmtHandleUpdate(w http.ResponseWriter, r *http.Request) {
 	if body.MediaPathMappings != nil {
 		if len(*body.MediaPathMappings) > 0 && !instMgmtIsArrType(serviceType) {
 			writeErr(w, http.StatusBadRequest,
-				"media path mappings are supported only for Radarr, Sonarr, and Chaptarr")
+				"media path mappings are supported only for Radarr, Sonarr, Chaptarr, and Lidarr")
 			return
 		}
 		newMappings, newDownloads = instMgmtMappingsDerive(*body.MediaPathMappings)
@@ -480,7 +480,7 @@ func instMgmtHandleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	isDefault := body.IsDefault
-	if serviceType == serviceChaptarr || isMediaServerType(serviceType) {
+	if serviceType == serviceChaptarr || serviceType == serviceLidarr || isMediaServerType(serviceType) {
 		isDefault = false
 	}
 	if isDefault {
@@ -850,7 +850,7 @@ func instMgmtHandleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !instMgmtIsArrType(inst.ServiceType) {
-		writeErr(w, http.StatusBadRequest, "webhooks are supported only for radarr, sonarr, and chaptarr")
+		writeErr(w, http.StatusBadRequest, "webhooks are supported only for radarr, sonarr, chaptarr, and lidarr")
 		return
 	}
 	instMgmtMu.Lock()
@@ -942,10 +942,12 @@ func instMgmtHandleProxy(w http.ResponseWriter, r *http.Request) {
 		handleSonarrProxy(w, r, inst, isAdmin, rest)
 	case serviceChaptarr:
 		handleChaptarrProxy(w, r, inst, isAdmin, rest)
+	case serviceLidarr:
+		handleLidarrProxy(w, r, inst, isAdmin, rest)
 	default:
-		// Download clients, tautulli, and the media servers have no fake
-		// upstream behind the raw proxy: the app talks to /api/downloads,
-		// /api/tautulli, and /api/media-servers instead.
+		// Download clients, the watch-history providers, and the media servers
+		// have no fake upstream behind the raw proxy: the app talks to
+		// /api/downloads, /api/watch-history, and /api/media-servers instead.
 		writeErr(w, http.StatusBadGateway, "could not reach server: connection refused")
 	}
 }
@@ -964,7 +966,7 @@ func instMgmtProxyAllowed(serviceType, rest string) bool {
 		}
 	}
 	version := "v3"
-	if serviceType == serviceChaptarr {
+	if serviceType == serviceChaptarr || serviceType == serviceLidarr {
 		version = "v1"
 	}
 	if len(segs) < 3 || segs[0] != "api" || segs[1] != version {
@@ -1027,6 +1029,29 @@ func instMgmtProxyAllowed(serviceType, rest string) bool {
 				return true
 			}
 			if (tail[0] == "book" || tail[0] == "author") && tail[1] == "lookup" {
+				return true
+			}
+			if tail[0] == "wanted" && (tail[1] == "missing" || tail[1] == "cutoff") {
+				return true
+			}
+		}
+	case serviceLidarr:
+		// Mirrors auth/arr_proxy.go: artwork only under the lowercase API-prefixed
+		// mediacover path (the Lidarr root MediaCover/Albums form is rejected).
+		if tail[0] == "mediacover" {
+			return len(tail) >= 4 && (tail[1] == "artist" || tail[1] == "album") && isID(tail[2])
+		}
+		switch len(tail) {
+		case 1:
+			switch tail[0] {
+			case "artist", "album", "track", "trackfile", "calendar", "queue", "history":
+				return true
+			}
+		case 2:
+			if (tail[0] == "artist" || tail[0] == "album" || tail[0] == "track" || tail[0] == "trackfile") && isID(tail[1]) {
+				return true
+			}
+			if (tail[0] == "artist" || tail[0] == "album") && tail[1] == "lookup" {
 				return true
 			}
 			if tail[0] == "wanted" && (tail[1] == "missing" || tail[1] == "cutoff") {

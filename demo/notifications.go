@@ -11,23 +11,30 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// notifPrefsRow is the flat 9-boolean preferences object (Go push.Prefs JSON
-// tags). Field order matches the real server's serialization. The tenth
-// category, agent_autoapproval_paused, deliberately shares the
-// agent_action_pending preference and never appears in this JSON.
+// notifPrefsRow is the flat 13-boolean preferences object (Go push.Prefs
+// JSON tags). Field order matches the real server's serialization, and PUT
+// is a full-row replace, so every key the app can toggle must be here or the
+// toggle silently reverts on reload. The agent_autoapproval_paused category
+// deliberately shares the agent_action_pending preference and never appears
+// in this JSON.
 type notifPrefsRow struct {
 	RequestDecision    bool `json:"request_decision"`
 	RequestPending     bool `json:"request_pending"`
 	NewMovie           bool `json:"new_movie"`
 	NewEpisode         bool `json:"new_episode"`
 	NewBook            bool `json:"new_book"`
+	NewMusic           bool `json:"new_music"`
 	IssueCreated       bool `json:"issue_created"`
 	AgentActionPending bool `json:"agent_action_pending"`
 	PlexAccessRequest  bool `json:"plex_access_request"`
 	PlexInviteSent     bool `json:"plex_invite_sent"`
+	IssueReportUpdate  bool `json:"issue_report_update"`
+	AgentDigest        bool `json:"agent_digest"`
+	ContentUpgraded    bool `json:"content_upgraded"`
 }
 
-// notifDefaultPrefs — request_decision off, everything else on.
+// notifDefaultPrefs — request_decision and content_upgraded off, everything
+// else on (push.defaultPrefs).
 func notifDefaultPrefs() notifPrefsRow {
 	return notifPrefsRow{
 		RequestDecision:    false,
@@ -35,10 +42,14 @@ func notifDefaultPrefs() notifPrefsRow {
 		NewMovie:           true,
 		NewEpisode:         true,
 		NewBook:            true,
+		NewMusic:           true,
 		IssueCreated:       true,
 		AgentActionPending: true,
 		PlexAccessRequest:  true,
 		PlexInviteSent:     true,
+		IssueReportUpdate:  true,
+		AgentDigest:        true,
+		ContentUpgraded:    false,
 	}
 }
 

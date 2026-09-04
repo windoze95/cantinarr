@@ -47,11 +47,20 @@ const (
 	instSab      = "sabnzbd-3f4a5b6c"
 	instTautulli = "tautulli-7d8e9f0a"
 
+	// A second download client (qBittorrent, stored in its API-key credential
+	// shape) and a second watch-history provider (Tracearr).
+	instQbittorrent = "qbittorrent-4b5c6d7e"
+	instTracearr    = "tracearr-8e9f0a1b"
+
 	// Sibling arr libraries. They exist so the multi-instance surfaces have
 	// something to show: a requester granted two Radarrs gets the Library
 	// chooser, per-library status chips, and additive grants.
 	instRadarr4K    = "radarr-2b3c4d5e"
 	instSonarrAnime = "sonarr-6f7a8b9c"
+
+	// Music. Like Chaptarr: never a global default, the per-user pin IS the
+	// grant.
+	instLidarr = "lidarr-4d5e6f7a"
 
 	// Media servers. Granted per user, never a global default.
 	instJellyfin = "jellyfin-1f2e3d4c"
@@ -161,7 +170,7 @@ var (
 	stateMu sync.Mutex
 
 	demoUsers      = map[int]*DemoUser{}
-	demoNextUserID = 4
+	demoNextUserID = 5
 
 	demoDevices      = map[string]*DemoDevice{}
 	revokedDeviceIDs = map[string]bool{}
@@ -208,7 +217,7 @@ func seedCoreState() {
 		CreatedAt:       time.Date(2026, 5, 2, 10, 30, 0, 0, time.UTC),
 		PasswordEnabled: true, PasskeyEnabled: false, HasPassword: true,
 		AISharedEnabled:  true,
-		DefaultInstances: map[string]string{serviceChaptarr: instChaptarr},
+		DefaultInstances: map[string]string{serviceChaptarr: instChaptarr, serviceLidarr: instLidarr},
 		// Additive grants: the second Radarr and the second Sonarr sit
 		// ALONGSIDE the global defaults, which is what puts the Library
 		// chooser and the sibling status chips on screen.
@@ -227,6 +236,19 @@ func seedCoreState() {
 		PlexEmail:        "riley@example.net", // shared, never invited — drives the Plex badge demo
 		DefaultInstances: map[string]string{},
 		InstanceGrants:   map[string][]string{servicePlex: {instPlex}},
+	}
+	// The kids account: a per-user content policy (contentpolicy.go) makes it
+	// a child. No grants, so it sees only the global Radarr and Sonarr; the
+	// app pre-sets require-approval when it turns a kids account on.
+	kidRequireApproval := true
+	demoUsers[4] = &DemoUser{
+		ID: 4, Username: "kid", Role: roleUser, Password: "demo",
+		CreatedAt:       time.Date(2026, 8, 12, 16, 20, 0, 0, time.UTC),
+		PasswordEnabled: true, PasskeyEnabled: false, HasPassword: true,
+		AISharedEnabled:  true,
+		DefaultInstances: map[string]string{},
+		InstanceGrants:   map[string][]string{},
+		RequireApproval:  &kidRequireApproval,
 	}
 
 	// One device per real user, with a stable refresh token each.
@@ -278,9 +300,23 @@ func seedCoreState() {
 			URL: "http://sabnzbd:8080", IsDefault: true, MediaDownloads: false,
 			MediaPathMappings: []map[string]string{},
 		},
+		// A second download client, stored in qBittorrent's API-key credential
+		// shape (instances.go instMgmtQbitKeyed) so the editor opens in key mode.
+		{
+			ID: instQbittorrent, ServiceType: serviceQbittorrent, Name: "qBittorrent",
+			URL: "http://qbittorrent:8081", IsDefault: true, MediaDownloads: false,
+			MediaPathMappings: []map[string]string{},
+		},
 		{
 			ID: instTautulli, ServiceType: serviceTautulli, Name: "Tautulli",
 			URL: "http://tautulli:8181", IsDefault: true, MediaDownloads: false,
+			MediaPathMappings: []map[string]string{},
+		},
+		// A second watch-history provider. Tracearr covers Plex, Jellyfin, and
+		// Emby; the Monitoring module serves both under one handler.
+		{
+			ID: instTracearr, ServiceType: serviceTracearr, Name: "Tracearr",
+			URL: "http://tracearr:3000", IsDefault: true, MediaDownloads: false,
 			MediaPathMappings: []map[string]string{},
 		},
 		// Sibling arr libraries. Neither carries the global default flag —
@@ -295,6 +331,13 @@ func seedCoreState() {
 			ID: instSonarrAnime, ServiceType: serviceSonarr, Name: "Sonarr Anime",
 			URL: "http://sonarr-anime:8989", IsDefault: false, MediaDownloads: true,
 			MediaPathMappings: []map[string]string{{"arr_path": "/anime", "cantinarr_path": "/media/anime"}},
+		},
+		// Music. Never a global default: the per-user pin is the grant, exactly
+		// like Chaptarr.
+		{
+			ID: instLidarr, ServiceType: serviceLidarr, Name: "Lidarr",
+			URL: "http://lidarr:8686", IsDefault: false, MediaDownloads: true, // lidarr is NEVER default
+			MediaPathMappings: []map[string]string{{"arr_path": "/music", "cantinarr_path": "/media/music"}},
 		},
 		// Media servers. Never a global default — access is the grant.
 		{
@@ -515,6 +558,7 @@ func userSummaryJSON(u *DemoUser) map[string]any {
 		"has_pending_invite": u.HasPendingInvite,
 		"plex_email":         u.PlexEmail,
 	}
+	cpDecorateUserJSON(out, u, false)
 	if at := userPlexInvitedAt(u); at != nil {
 		out["plex_invited_at"] = *at
 	}
@@ -549,6 +593,7 @@ func userAuthJSON(u *DemoUser) map[string]any {
 		"plex_email":       u.PlexEmail,
 		"created_at":       u.CreatedAt,
 	}
+	cpDecorateUserJSON(out, u, false)
 	if at := userPlexInvitedAt(u); at != nil {
 		out["plex_invited_at"] = *at
 	}
@@ -916,7 +961,7 @@ func visibleInstances(u *DemoUser) []*DemoInstance {
 // grantableServiceTypes are the types an admin can grant per user. Mirrors
 // the server's instance.grantableServiceTypes.
 func grantableServiceTypes() []string {
-	return append([]string{serviceRadarr, serviceSonarr, serviceChaptarr}, mediaServerTypes()...)
+	return append([]string{serviceRadarr, serviceSonarr, serviceChaptarr, serviceLidarr}, mediaServerTypes()...)
 }
 
 // effectiveInstanceFor resolves the user's effective instance for a service
@@ -946,10 +991,10 @@ func lockedEffectiveInstanceID(u *DemoUser, serviceType string) string {
 			}
 		}
 	}
-	// Chaptarr and the media servers have NO global fallback — access is the
-	// grant. The first grant stands in as the default so a client that reads
-	// one instance per type still picks a real one.
-	if serviceType == serviceChaptarr || isMediaServerType(serviceType) {
+	// Chaptarr, Lidarr, and the media servers have NO global fallback — access
+	// is the grant. The first grant stands in as the default so a client that
+	// reads one instance per type still picks a real one.
+	if serviceType == serviceChaptarr || serviceType == serviceLidarr || isMediaServerType(serviceType) {
 		if u != nil {
 			for _, id := range u.InstanceGrants[serviceType] {
 				if inst := lockedInstanceByID(id); inst != nil && inst.ServiceType == serviceType {

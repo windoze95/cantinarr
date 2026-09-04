@@ -24,6 +24,7 @@ const (
 	mediaTypeMovie = "movie"
 	mediaTypeTV    = "tv"
 	mediaTypeBook  = "book"
+	mediaTypeMusic = "music"
 )
 
 // ─── Service types (radarr/sonarr/… describe services) ──
@@ -32,11 +33,13 @@ const (
 	serviceRadarr       = "radarr"
 	serviceSonarr       = "sonarr"
 	serviceChaptarr     = "chaptarr"
+	serviceLidarr       = "lidarr"
 	serviceSabnzbd      = "sabnzbd"
 	serviceNzbget       = "nzbget"
 	serviceQbittorrent  = "qbittorrent"
 	serviceTransmission = "transmission"
 	serviceTautulli     = "tautulli"
+	serviceTracearr     = "tracearr"
 
 	// Media servers. Cantinarr manages user ACCESS on these, never library
 	// routing: they follow the Chaptarr rule (never a global default, granted
@@ -57,6 +60,22 @@ func mediaServerTypes() []string {
 func isMediaServerType(serviceType string) bool {
 	switch serviceType {
 	case serviceJellyfin, serviceEmby, servicePlex:
+		return true
+	}
+	return false
+}
+
+// watchHistoryTypes are the service types that provide watch history
+// (activity, history, stats). Admin-only, never granted per user. Mirrors
+// the server's watchhistory service types.
+func watchHistoryTypes() []string {
+	return []string{serviceTautulli, serviceTracearr}
+}
+
+// isWatchHistoryType reports whether serviceType is a watch-history provider.
+func isWatchHistoryType(serviceType string) bool {
+	switch serviceType {
+	case serviceTautulli, serviceTracearr:
 		return true
 	}
 	return false

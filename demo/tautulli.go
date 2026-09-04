@@ -177,8 +177,8 @@ func tauResolve(w http.ResponseWriter, r *http.Request) *DemoInstance {
 	return inst
 }
 
-// registerTautulli mounts /api/tautulli/{instanceID}/* (admin only).
-func registerTautulli(r chi.Router) {
+// registerWatchHistory mounts /api/tautulli/{instanceID}/* (admin only).
+func registerWatchHistory(r chi.Router) {
 	r.Route("/tautulli/{instanceID}", func(sr chi.Router) {
 		sr.Use(requireAdmin)
 		sr.Get("/activity", tauHandleActivity)

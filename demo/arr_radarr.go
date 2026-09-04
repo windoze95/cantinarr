@@ -97,6 +97,21 @@ func arrMovieReleaseDates(tmdbID int) (inCinemas, digital string) {
 	return arrCalendarDate(m.InCinemas), arrCalendarDate(m.Digital)
 }
 
+// arrMovieReleaseMilestones is the cross-domain read of every release
+// milestone the Radarr fixture holds for a title (theatrical, digital,
+// physical) as plain YYYY-MM-DD dates, "" when absent. The title page's
+// release-dates section reads these so it agrees with the Radarr calendar.
+func arrMovieReleaseMilestones(tmdbID int) (inCinemas, digital, physical string) {
+	arrEnsureSeeded()
+	arrMu.Lock()
+	defer arrMu.Unlock()
+	m := arrRMovieByTmdb[tmdbID]
+	if m == nil {
+		return "", "", ""
+	}
+	return arrCalendarDate(m.InCinemas), arrCalendarDate(m.Digital), arrCalendarDate(m.Physical)
+}
+
 // arrCalendarDate trims an RFC3339 instant to its YYYY-MM-DD date. A release
 // date has no time of day; serialising one as an instant invites a client to
 // localise it and land a day early or late.

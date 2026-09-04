@@ -75,6 +75,7 @@ func cfgHandleConfig(w http.ResponseWriter, r *http.Request) {
 		"radarr":          false,
 		"sonarr":          false,
 		"chaptarr":        false,
+		"lidarr":          false,
 		"media_downloads": false,
 		// ai is per-user: the demo always has a shared credential configured,
 		// so the shared-AI grant alone decides it.
@@ -93,6 +94,8 @@ func cfgHandleConfig(w http.ResponseWriter, r *http.Request) {
 			services["sonarr"] = true
 		case serviceChaptarr:
 			services["chaptarr"] = true
+		case serviceLidarr:
+			services["lidarr"] = true
 		}
 		if inst.MediaDownloads {
 			services["media_downloads"] = true

@@ -94,11 +94,14 @@ func reqAdminPendingRowJSON(e reqAdminPendingEntry) map[string]any {
 		"tvdb_id":            tvdbID,
 		"media_type":         row.MediaType,
 		"title":              row.Title,
-		"book_format":        reqNormalizeBookFormat(row.BookFormat),
 		"requester_count":    1 + e.waiterCount,
 		"season_scope":       row.SeasonScope,
 		"quality_profile_id": row.QualityProfileID,
 		"requested_at":       row.RequestedAt,
+	}
+	// book_format rides only on book rows (the app reads it as "" elsewhere).
+	if row.MediaType == mediaTypeBook {
+		m["book_format"] = reqNormalizeBookFormat(row.BookFormat)
 	}
 	if row.ForeignID != "" {
 		m["foreign_id"] = row.ForeignID
@@ -202,6 +205,10 @@ func reqAdminApproveHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if snapshot.Status != statusPending {
 		writeErr(w, http.StatusBadRequest, "request is not pending")
+		return
+	}
+	if snapshot.MediaType == mediaTypeMusic {
+		reqAdminApproveMusic(w, target, &snapshot)
 		return
 	}
 	if snapshot.MediaType == mediaTypeBook {
@@ -506,9 +513,13 @@ func reqAdminDenyHandler(w http.ResponseWriter, r *http.Request) {
 			"reason":     body.Reason,
 			"status":     statusDenied,
 		}
-		if snapshot.MediaType == mediaTypeBook {
+		switch snapshot.MediaType {
+		case mediaTypeBook:
 			data["foreign_id"] = snapshot.ForeignID
 			data["book_format"] = slice
+			data["instance_id"] = snapshot.InstanceID
+		case mediaTypeMusic:
+			data["foreign_id"] = snapshot.ForeignID
 			data["instance_id"] = snapshot.InstanceID
 		}
 		wsToUser(uid, evtRequestDecision, data)

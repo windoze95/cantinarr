@@ -94,7 +94,7 @@ var (
 	reqMu sync.Mutex
 
 	reqLog    []*reqLogRow
-	reqNextID int64 = 8
+	reqNextID int64 = 15
 
 	// reqTitleStates is keyed "movie:<tmdb>" / "tv:<tmdb>".
 	reqTitleStates = map[string]*reqTitleState{}
@@ -315,6 +315,62 @@ func init() {
 			SearchTerm:       "clockwork ferryman thistlewood",
 			AddFailureReason: reqAddFailureImportFailed,
 			RequestedAt:      time.Now().UTC().Add(-49 * time.Hour).Truncate(time.Second),
+			Waiters:          map[int]string{},
+		},
+		// The kids account (user 4): one finished request and one pending one —
+		// requests from a kids account start out needing approval, so the admin
+		// queue carries a row from "kid" next to user 2's.
+		&reqLogRow{
+			ID: 8, UserID: 4, TmdbID: 961, MediaType: mediaTypeMovie,
+			Title: "The General", Status: statusAvailable,
+			RequestedAt: time.Date(2026, 8, 20, 17, 2, 0, 0, time.UTC),
+			Waiters:     map[int]string{},
+		},
+		&reqLogRow{
+			ID: 9, UserID: 4, TmdbID: 4808, MediaType: mediaTypeMovie,
+			Title: "Charade", Status: statusPending,
+			RequestedAt: time.Date(2026, 9, 1, 19, 48, 0, 0, time.UTC),
+			Waiters:     map[int]string{},
+		},
+		// Music rows (Lidarr, foreign ids are release-group ids from data_music.go):
+		// a finished admin request, user 2's requested / mid-download / denied
+		// albums, and one park whose album Lidarr could not match.
+		&reqLogRow{
+			ID: 10, UserID: 1, ForeignID: "b0000000-d3a0-4000-8000-000000000008",
+			InstanceID: instLidarr, MediaType: mediaTypeMusic,
+			Title: "Downhearted Blues: The 1923 Sessions", Status: statusAvailable,
+			RequestedAt: time.Date(2026, 8, 30, 11, 15, 0, 0, time.UTC),
+			Waiters:     map[int]string{},
+		},
+		&reqLogRow{
+			ID: 11, UserID: 2, ForeignID: "b0000000-d3a0-4000-8000-000000000005",
+			InstanceID: instLidarr, MediaType: mediaTypeMusic,
+			Title: "Ragtime Classics", Status: statusRequested,
+			RequestedAt: time.Date(2026, 8, 27, 8, 40, 0, 0, time.UTC),
+			Waiters:     map[int]string{},
+		},
+		&reqLogRow{
+			ID: 12, UserID: 2, ForeignID: "b0000000-d3a0-4000-8000-000000000006",
+			InstanceID: instLidarr, MediaType: mediaTypeMusic,
+			Title: "Livery Stable Blues: The 1917 Sessions", Status: statusRequested,
+			RequestedAt: time.Now().UTC().Add(-40 * time.Minute).Truncate(time.Second),
+			Waiters:     map[int]string{},
+		},
+		&reqLogRow{
+			ID: 13, UserID: 2, ForeignID: "b0000000-d3a0-4000-8000-000000000012",
+			InstanceID: instLidarr, MediaType: mediaTypeMusic,
+			Title: "Stars and Stripes Forever: Rare Sides", Status: statusDenied,
+			DenyReason:  "The Marches set already covers these — ask again if you need the rare sides.",
+			RequestedAt: time.Date(2026, 8, 20, 13, 5, 0, 0, time.UTC),
+			Waiters:     map[int]string{},
+		},
+		&reqLogRow{
+			ID: 14, UserID: 2, ForeignID: "b0000000-d3a0-4000-8000-000000000099",
+			InstanceID: instLidarr, MediaType: mediaTypeMusic,
+			Title: "The Lantern Sessions", Status: statusPending,
+			SearchTerm:       "lantern sessions harbor street",
+			AddFailureReason: reqAddFailureMetadataUnresolved,
+			RequestedAt:      time.Now().UTC().Add(-5 * time.Hour).Truncate(time.Second),
 			Waiters:          map[int]string{},
 		},
 	)
