@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import '../../discover/data/discover_api_service.dart';
 import '../../discover/data/tmdb_models.dart';
@@ -7,6 +8,10 @@ import 'title_facts.dart';
 class MediaDetailState {
   final bool isLoading;
   final String? error;
+
+  /// The server answered that this title is not available to this account
+  /// (a kids account outside its limits): an answer, not a failure.
+  final bool titleUnavailable;
 
   // Movie fields
   final MovieDetail? movieDetail;
@@ -21,6 +26,7 @@ class MediaDetailState {
   const MediaDetailState({
     this.isLoading = false,
     this.error,
+    this.titleUnavailable = false,
     this.movieDetail,
     this.tvDetail,
     this.recommendations = const [],
@@ -77,6 +83,7 @@ class MediaDetailState {
   MediaDetailState copyWith({
     bool? isLoading,
     String? error,
+    bool titleUnavailable = false,
     MovieDetail? movieDetail,
     TVDetail? tvDetail,
     List<MediaItem>? recommendations,
@@ -85,6 +92,7 @@ class MediaDetailState {
       MediaDetailState(
         isLoading: isLoading ?? this.isLoading,
         error: error,
+        titleUnavailable: titleUnavailable,
         movieDetail: movieDetail ?? this.movieDetail,
         tvDetail: tvDetail ?? this.tvDetail,
         recommendations: recommendations ?? this.recommendations,
@@ -138,6 +146,10 @@ class MediaDetailNotifier extends ChangeNotifier {
         );
       }
     } catch (e) {
+      if (e is DioException && e.response?.statusCode == 404) {
+        state = state.copyWith(isLoading: false, titleUnavailable: true);
+        return;
+      }
       state = state.copyWith(
         isLoading: false,
         error: 'Failed to load details: $e',
