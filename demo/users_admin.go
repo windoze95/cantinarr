@@ -181,6 +181,13 @@ func uaUserRoleHandler(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "cannot demote the last admin")
 		return
 	}
+	// A kids account is never promoted in place: the policy route refuses a
+	// row for an admin, and this closes the other direction, so no account
+	// is ever both.
+	if req.Role == roleAdmin && u.Role != roleAdmin && cpIsChild(id) {
+		writeErr(w, http.StatusConflict, "turn off the kids account first")
+		return
+	}
 	withUser(id, func(u *DemoUser) { u.Role = req.Role })
 	writeJSON(w, http.StatusOK, userSummaryJSON(u))
 }
@@ -200,6 +207,8 @@ func uaUserDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	switch err := deleteUser(id); err {
 	case nil:
+		// The content policy row cascades with the user in the real schema.
+		cpForgetUser(id)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 	case errUserNotFound:
 		writeErr(w, http.StatusNotFound, "user not found")

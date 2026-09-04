@@ -19,10 +19,24 @@ import (
 const (
 	aiRespWelcome    = "I'd love to help you discover some classic films! Our collection features iconic public domain movies spanning from the early 1900s to the 1960s. What genre are you in the mood for? We have horror classics like Nosferatu and Night of the Living Dead, sci-fi gems like Metropolis, and witty comedies like His Girl Friday."
 	aiRespNosferatu  = "Great choice! Nosferatu (1922) is a masterpiece of German Expressionism directed by F.W. Murnau. It's an unauthorized adaptation of Bram Stoker's Dracula, and despite the studio being ordered to destroy all copies, it survived and became one of the most influential horror films ever made. Max Schreck's portrayal of Count Orlok is truly unforgettable."
-	aiRespThriller   = "If you're looking for something thrilling, I'd recommend Charade (1963) starring Cary Grant and Audrey Hepburn. It's often called 'the best Hitchcock movie that Hitchcock never made.' The film combines romance, comedy, and suspense in a Parisian setting. Speaking of Hitchcock, we also have The 39 Steps (1935), one of his early British thrillers!"
+	aiRespThriller   = "If you're looking for something thrilling, I'd recommend Charade (1963) starring Cary Grant and Audrey Hepburn. It's often called 'the best Hitchcock movie that Hitchcock never made.' The film combines romance, comedy, and suspense in a Parisian setting."
 	aiRespMetropolis = "For science fiction fans, Metropolis (1927) by Fritz Lang is an absolute must-watch. It's set in a futuristic city divided between wealthy industrialists and underground workers. The visual effects were groundbreaking for its time, and the film's themes about class division remain relevant today. The iconic robot design has influenced everything from C-3PO to modern art."
 	aiRespZombie     = "Night of the Living Dead (1968) by George A. Romero essentially invented the modern zombie genre. Shot on a shoestring budget in rural Pennsylvania, it became a massive cultural phenomenon. The film entered the public domain because the distributor accidentally failed to include a copyright notice on the prints. That happy accident means we can share this masterpiece freely!"
 	aiRespKeaton     = "The General (1926) starring Buster Keaton is widely considered one of the greatest comedies ever made. It features an incredible train chase sequence that Keaton performed himself — no stunt doubles! The physical comedy and timing are simply unmatched. If you enjoy silent film comedy, this is the perfect starting point."
+
+	// aiRespThrillerSteps is the second half of the ported thriller answer,
+	// split off so it drops when The 39 Steps is outside the caller's limits.
+	aiRespThrillerSteps = "Speaking of Hitchcock, we also have The 39 Steps (1935), one of his early British thrillers!"
+
+	// aiRespWelcomeKids opens a kids account's chat. The titles it names are
+	// appended from whatever the account's limits allow (aiWelcomeKidsTurn),
+	// so a tightened cap never leaves a hidden title in the greeting.
+	aiRespWelcomeKids = "I'd love to help you discover some classic films! Our collection features iconic public domain movies spanning from the early 1900s to the 1960s. What are you in the mood for?"
+
+	// aiTitleNotAvailable is the tool server's verbatim answer for a title a
+	// kids account may not see (mcp titleNotAvailableText): the model relays
+	// it and never describes the title, not even from memory.
+	aiTitleNotAvailable = "That title is not available for this account."
 )
 
 // ─── Keyword routing ────────────────────────────────────
@@ -77,7 +91,21 @@ func aiRunCannedTurn(s *aiStream, question string) {
 			return
 		}
 	}
+	// The generic welcome names two horror titles; a kids account gets a
+	// greeting built from the titles its limits allow.
+	if aiIsKid(s.user) {
+		aiWelcomeKidsTurn(s)
+		return
+	}
 	aiFilmTurn(aiRespWelcome, 653, 10331, 19, 3085)(s)
+}
+
+// aiIsKid reports whether the caller is a kids account. Every canned turn
+// that can name a title consults the policy through the contentpolicy
+// hooks, the demo's stand-in for the real dynamicContext instruction
+// ("never name or describe a title outside the limits, even from memory").
+func aiIsKid(u *DemoUser) bool {
+	return cpPolicyFor(u) != nil
 }
 
 // aiCannedTurns is evaluated in order; specific subjects come before the
@@ -109,7 +137,7 @@ var aiCannedTurns = []aiCannedTurn{
 	},
 	{
 		match: aiKeywordMatch("charade", "hitchcock", "thriller", "thrilling", "suspense", "39 steps"),
-		run:   aiFilmTurn(aiRespThriller, 4808, 260),
+		run:   aiThrillerTurn,
 	},
 	{
 		match: aiKeywordMatch("book", "books", "read", "reading", "novel", "audiobook", "author"),
@@ -212,19 +240,92 @@ func aiDisplayMedia(s *aiStream, items []map[string]any) {
 	s.toolEnd("display_media", true)
 }
 
+// aiMovieItems builds the carousel items for the catalog movies the caller's
+// content limits allow, in the given order (the real tools filter
+// display_media the same way).
+func aiMovieItems(u *DemoUser, movieIDs ...int) []map[string]any {
+	items := []map[string]any{}
+	for _, id := range movieIDs {
+		if !cpAllowsTmdb(u, mediaTypeMovie, id) {
+			continue
+		}
+		if item, ok := aiMovieItem(id); ok {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
 // aiFilmTurn streams one of the ported film-history responses, then shows
-// the mentioned titles in the carousel.
+// the mentioned titles in the carousel. The passage's subject is the first
+// id: a caller whose content limits hide it gets the tool server's fixed
+// refusal instead of the passage, so a kids account asking about Nosferatu
+// or Night of the Living Dead never hears them described.
 func aiFilmTurn(text string, movieIDs ...int) func(*aiStream) {
 	return func(s *aiStream) {
-		s.text(text)
-		items := []map[string]any{}
-		for _, id := range movieIDs {
-			if item, ok := aiMovieItem(id); ok {
-				items = append(items, item)
-			}
+		if len(movieIDs) > 0 && !cpAllowsTmdb(s.user, mediaTypeMovie, movieIDs[0]) {
+			aiNotAvailableTurn(s)
+			return
 		}
-		aiDisplayMedia(s, items)
+		s.text(text)
+		aiDisplayMedia(s, aiMovieItems(s.user, movieIDs...))
 	}
+}
+
+// aiNotAvailableTurn is the answer for a hidden title: the search tool
+// runs, reports the title as not available, and the model relays that one
+// line. No carousel.
+func aiNotAvailableTurn(s *aiStream) {
+	s.toolStart("search_media", "Searching titles")
+	s.pause(500 * time.Millisecond)
+	s.toolEnd("search_media", true)
+	s.text(aiTitleNotAvailable)
+}
+
+// aiThrillerTurn: the ported Charade answer, with the 39 Steps aside kept
+// only while that title is inside the caller's limits.
+func aiThrillerTurn(s *aiStream) {
+	if !cpAllowsTmdb(s.user, mediaTypeMovie, 4808) {
+		aiNotAvailableTurn(s)
+		return
+	}
+	text := aiRespThriller
+	if cpAllowsTmdb(s.user, mediaTypeMovie, 260) {
+		text += " " + aiRespThrillerSteps
+	}
+	s.text(text)
+	aiDisplayMedia(s, aiMovieItems(s.user, 4808, 260))
+}
+
+// aiWelcomeKidsTurn greets a kids account with family classics from the
+// catalog, naming only the ones the account's limits allow.
+func aiWelcomeKidsTurn(s *aiStream) {
+	items := aiMovieItems(s.user, 961, 775, 3085, 4808)
+	text := aiRespWelcomeKids
+	if len(items) == 0 {
+		text += " Name a title or a genre and I'll check what's available for this account."
+	} else {
+		names := make([]string, 0, len(items))
+		for _, item := range items {
+			names = append(names, item["title"].(string))
+		}
+		text += " Family favorites in the library include " + aiJoinNames(names) + "."
+	}
+	s.text(text)
+	aiDisplayMedia(s, items)
+}
+
+// aiJoinNames renders a list as prose: "A", "A and B", "A, B, and C".
+func aiJoinNames(names []string) string {
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	case 2:
+		return names[0] + " and " + names[1]
+	}
+	return strings.Join(names[:len(names)-1], ", ") + ", and " + names[len(names)-1]
 }
 
 // ─── Scripted turns ─────────────────────────────────────
@@ -236,19 +337,42 @@ func aiRecommendTurn(s *aiStream) {
 	s.pause(700 * time.Millisecond)
 	s.toolEnd("get_trending", true)
 
-	text := "Happy to help! Based on what's popular with members right now, here are my picks. " +
-		"Metropolis (1927) is Fritz Lang's towering science-fiction epic about a city divided between workers and planners. " +
-		"The General (1926) is Buster Keaton at his very best — the locomotive chase is still breathtaking a century later. " +
-		"And Charade (1963) pairs Cary Grant with Audrey Hepburn in the best Hitchcock film Hitchcock never made."
+	// One sentence per pick; a pick outside the caller's content limits
+	// drops with its sentence, so the text never names a hidden title.
+	picks := []struct {
+		id       int
+		sentence string
+	}{
+		{19, "Metropolis (1927) is Fritz Lang's towering science-fiction epic about a city divided between workers and planners."},
+		{961, "The General (1926) is Buster Keaton at his very best — the locomotive chase is still breathtaking a century later."},
+		{4808, "Charade (1963) pairs Cary Grant with Audrey Hepburn in the best Hitchcock film Hitchcock never made."},
+	}
+	var sentences []string
 	items := []map[string]any{}
-	for _, id := range []int{19, 961, 4808} {
-		if item, ok := aiMovieItem(id); ok {
+	for _, pick := range picks {
+		if !cpAllowsTmdb(s.user, mediaTypeMovie, pick.id) {
+			continue
+		}
+		if item, ok := aiMovieItem(pick.id); ok {
+			sentences = append(sentences, pick.sentence)
 			items = append(items, item)
 		}
 	}
-	if show, ok := aiShowItem(90001); ok {
-		text += " If a series sounds better tonight, " + show["title"].(string) + " is a great binge."
-		items = append(items, show)
+	if n := len(sentences); n > 1 {
+		sentences[n-1] = "And " + sentences[n-1]
+	}
+	text := "Happy to help! Based on what's popular with members right now, here are my picks."
+	for _, sentence := range sentences {
+		text += " " + sentence
+	}
+	if cpAllowsTmdb(s.user, mediaTypeTV, 90001) {
+		if show, ok := aiShowItem(90001); ok {
+			text += " If a series sounds better tonight, " + show["title"].(string) + " is a great binge."
+			items = append(items, show)
+		}
+	}
+	if len(items) == 0 {
+		text = "Nothing that's popular right now fits this account's content limits. Name a title and I'll check whether it's available."
 	}
 	s.text(text)
 	aiDisplayMedia(s, items)
@@ -317,23 +441,43 @@ func aiFriendlyStatus(status string, progress float64) string {
 func aiStatusTurn(s *aiStream) {
 	s.toolStart("list_my_requests", "Fetching your requests")
 	s.pause(600 * time.Millisecond)
-	nightStatus, nightProg := requestStatusForTmdb(10331, mediaTypeMovie)
-	nosfStatus, nosfProg := requestStatusForTmdb(653, mediaTypeMovie)
+	// The titles the answer reports on: the two horror requests for a
+	// regular account, two family classics for a kids account. Either list
+	// runs through the content limits before anything is named.
+	ids := []int{10331, 653}
+	if aiIsKid(s.user) {
+		ids = []int{961, 775}
+	}
+	var lines []string
+	items := []map[string]any{}
+	for _, id := range ids {
+		if !cpAllowsTmdb(s.user, mediaTypeMovie, id) {
+			continue
+		}
+		item, ok := aiMovieItem(id)
+		if !ok {
+			continue
+		}
+		status, progress := requestStatusForTmdb(id, mediaTypeMovie)
+		lines = append(lines, item["title"].(string)+" is "+aiFriendlyStatus(status, progress))
+		items = append(items, item)
+	}
 	s.toolEnd("list_my_requests", true)
 
-	text := fmt.Sprintf(
-		"Here's the latest from the library: Night of the Living Dead is %s, and Nosferatu is %s. "+
-			"You can follow live progress on the Requests tab, and I'll be happy to request anything else you're missing — just name a title.",
-		aiFriendlyStatus(nightStatus, nightProg),
-		aiFriendlyStatus(nosfStatus, nosfProg),
-	)
-	s.text(text)
-	items := []map[string]any{}
-	for _, id := range []int{10331, 653} {
-		if item, ok := aiMovieItem(id); ok {
-			items = append(items, item)
-		}
+	if len(lines) == 0 {
+		s.text("I couldn't find a title within this account's content limits to report on. Name one and I'll check it for you.")
+		return
 	}
+	text := "Here's the latest from the library: " + lines[0]
+	if len(lines) > 1 {
+		text += ", and " + lines[1]
+	}
+	text += ". "
+	if aiIsKid(s.user) && reqEffectivePolicy(s.user).RequireApproval {
+		text += "Anything you request from this account waits for an admin's approval first. "
+	}
+	text += "You can follow live progress on the Requests tab, and I'll be happy to request anything else you're missing — just name a title."
+	s.text(text)
 	aiDisplayMedia(s, items)
 }
 
