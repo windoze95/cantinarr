@@ -154,6 +154,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     ('qbittorrent', 'qBittorrent'),
     ('nzbget', 'NZBGet'),
     ('transmission', 'Transmission'),
+    ('deluge', 'Deluge'),
     ('tautulli', 'Tautulli'),
     ('tracearr', 'Tracearr'),
     ('jellyfin', 'Jellyfin'),
@@ -162,10 +163,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   ];
 
   /// Types that authenticate with username/password instead of an API key.
-  /// qBittorrent can do either, chosen by the toggle above its fields.
+  /// qBittorrent can do either, chosen by the toggle above its fields;
+  /// Deluge rides the same payload shape with an empty username.
   bool get _usesUserPass =>
       _serviceType == 'nzbget' ||
       _serviceType == 'transmission' ||
+      _serviceType == 'deluge' ||
       (_serviceType == 'qbittorrent' && _qbitAuth == _QbitAuth.password);
 
   /// Editing a qBittorrent instance onto its other credential shape: the
@@ -179,11 +182,16 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   /// Transmission auth is optional (only when the daemon requires it).
   bool get _credentialsOptional => _serviceType == 'transmission';
 
+  /// Deluge's web UI has a password and no username, so the form shows one
+  /// field.
+  bool get _passwordOnly => _serviceType == 'deluge';
+
   bool get _isDownloadClient =>
       _serviceType == 'sabnzbd' ||
       _serviceType == 'qbittorrent' ||
       _serviceType == 'nzbget' ||
-      _serviceType == 'transmission';
+      _serviceType == 'transmission' ||
+      _serviceType == 'deluge';
 
   bool get _supportsWebhook =>
       _serviceType == 'radarr' ||
@@ -932,7 +940,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     if ((widget.isEditing && !_qbitSwitchingShape) || _isPlex) return null;
     if (_usesUserPass) {
       if (_credentialsOptional) return null;
-      if (_usernameController.text.trim().isEmpty ||
+      if (_passwordOnly) {
+        if (_passwordController.text.isEmpty) return 'Password is required';
+      } else if (_usernameController.text.trim().isEmpty ||
           _passwordController.text.isEmpty) {
         return 'Username and password are required';
       }
@@ -1408,6 +1418,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'http://nzbget:6789';
       case 'transmission':
         return 'http://transmission:9091';
+      case 'deluge':
+        return 'http://deluge:8112';
       case 'tautulli':
         return 'http://tautulli:8181';
       case 'tracearr':
@@ -2396,6 +2408,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 setState(() {
                   _serviceType = value;
                   _testResult = null;
+                  // A username typed under another type has no field on
+                  // a password-only type, so it must not ride into the
+                  // save the way the qBittorrent toggle drops hidden
+                  // fields.
+                  if (_passwordOnly) _usernameController.clear();
                   // The selection and pins belong to the previous type.
                   _pins = const {};
                   _assignedUserIds = <int>{};
@@ -2457,10 +2474,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           // nothing here until one is picked.
           //
           // NZBGet and Transmission authenticate with username/password;
-          // qBittorrent with either that or, on 5.2 and newer, an API key,
-          // chosen by the toggle; Plex links a plex.tv account with a PIN;
-          // everything else uses an API key. Credentials are write-only:
-          // when editing, blank keeps the existing value.
+          // Deluge with only its web UI password; qBittorrent with either
+          // username/password or, on 5.2 and newer, an API key, chosen by
+          // the toggle; Plex links a plex.tv account with a PIN; everything
+          // else uses an API key. Credentials are write-only: when editing,
+          // blank keeps the existing value.
           if (_serviceType == 'qbittorrent') ...[
             _buildQbitAuthToggle(),
             const SizedBox(height: 16),
@@ -2470,28 +2488,35 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           else if (_isPlex)
             _buildPlexAccountSection()
           else if (_usesUserPass) ...[
-            TextField(
-              controller: _usernameController,
-              decoration: InputDecoration(
-                labelText:
-                    _credentialsOptional ? 'Username (optional)' : 'Username',
-                hintText: _credentialsOptional
-                    ? 'Only if authentication is enabled'
-                    : 'Web UI username',
+            if (!_passwordOnly) ...[
+              TextField(
+                controller: _usernameController,
+                decoration: InputDecoration(
+                  labelText:
+                      _credentialsOptional ? 'Username (optional)' : 'Username',
+                  hintText: _credentialsOptional
+                      ? 'Only if authentication is enabled'
+                      : 'Web UI username',
+                ),
+                autocorrect: false,
               ),
-              autocorrect: false,
-            ),
-            const SizedBox(height: 16),
+              const SizedBox(height: 16),
+            ],
             TextField(
               controller: _passwordController,
               decoration: InputDecoration(
-                labelText:
-                    _credentialsOptional ? 'Password (optional)' : 'Password',
+                labelText: _passwordOnly
+                    ? 'Web UI password'
+                    : (_credentialsOptional
+                        ? 'Password (optional)'
+                        : 'Password'),
                 hintText: widget.isEditing && !_qbitSwitchingShape
                     ? 'Leave blank to keep existing'
-                    : (_credentialsOptional
-                        ? 'Only if authentication is enabled'
-                        : 'Web UI password'),
+                    : (_passwordOnly
+                        ? "The password Deluge's web UI asks for"
+                        : _credentialsOptional
+                            ? 'Only if authentication is enabled'
+                            : 'Web UI password'),
               ),
               obscureText: true,
             ),

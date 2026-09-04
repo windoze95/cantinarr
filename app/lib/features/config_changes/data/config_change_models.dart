@@ -170,6 +170,7 @@ class ConfigChange {
         'qbittorrent' => 'qBittorrent',
         'nzbget' => 'NZBGet',
         'transmission' => 'Transmission',
+        'deluge' => 'Deluge',
         'tautulli' => 'Tautulli',
         'tracearr' => 'Tracearr',
         'jellyfin' => 'Jellyfin',

@@ -137,12 +137,12 @@ class BackendConnection {
       instances.where((i) => i.serviceType == 'lidarr').toList();
 
   /// Get all download client instances, usenet clients (SABnzbd, NZBGet)
-  /// before torrent clients (qBittorrent, Transmission); the server's order
-  /// is preserved within each group. Every download-client menu and the
-  /// aggregate "All" view list clients in this order.
+  /// before torrent clients (qBittorrent, Transmission, Deluge); the
+  /// server's order is preserved within each group. Every download-client
+  /// menu and the aggregate "All" view list clients in this order.
   List<ServiceInstance> get downloadInstances {
     const usenet = {'sabnzbd', 'nzbget'};
-    const torrent = {'qbittorrent', 'transmission'};
+    const torrent = {'qbittorrent', 'transmission', 'deluge'};
     return [
       ...instances.where((i) => usenet.contains(i.serviceType)),
       ...instances.where((i) => torrent.contains(i.serviceType)),

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/deluge"
 	"github.com/windoze95/cantinarr-server/internal/httpx"
 	"github.com/windoze95/cantinarr-server/internal/mediapath"
 	"github.com/windoze95/cantinarr-server/internal/nzbget"
@@ -31,6 +32,7 @@ var allowedServiceTypes = map[string]bool{
 	"qbittorrent":  true,
 	"nzbget":       true,
 	"transmission": true,
+	"deluge":       true,
 	"tautulli":     true,
 	"tracearr":     true,
 	"jellyfin":     true,
@@ -38,7 +40,7 @@ var allowedServiceTypes = map[string]bool{
 	"plex":         true,
 }
 
-const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'lidarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli', 'tracearr', 'jellyfin', 'emby', 'plex'"}`
+const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'lidarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'deluge', 'tautulli', 'tracearr', 'jellyfin', 'emby', 'plex'"}`
 
 // grantableServiceTypes is the subset a user can hold access-grant rows for.
 // Download clients and watch-history providers (Tautulli, Tracearr) are admin
@@ -804,6 +806,11 @@ func validateRequiredFields(inst *Instance) error {
 		}
 	case "transmission":
 		// Username/password are optional: Transmission RPC may run without auth.
+	case "deluge":
+		// Deluge's web UI has a password and no username.
+		if inst.Password == "" {
+			return fmt.Errorf("password is required for deluge")
+		}
 	case "plex":
 		if inst.APIKey == "" {
 			return fmt.Errorf("link a Plex account first")
@@ -862,6 +869,9 @@ func validateConnection(inst *Instance) error {
 		return err
 	case "transmission":
 		_, err := transmission.NewClient(inst.URL, inst.Username, inst.Password).SessionGet()
+		return err
+	case "deluge":
+		_, err := deluge.NewClient(inst.URL, inst.Password).Version()
 		return err
 	case "tautulli", "tracearr":
 		return validateWatchHistoryConnection(inst)

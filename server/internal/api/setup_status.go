@@ -7,6 +7,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/ai"
 	"github.com/windoze95/cantinarr-server/internal/config"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
@@ -142,7 +143,7 @@ func buildSetupItems(f setupFacts) []setupItem {
 		{
 			Key:         "download_client",
 			Title:       "Download activity",
-			Description: "See and manage the live download queue (SABnzbd, qBittorrent, NZBGet, or Transmission).",
+			Description: "See and manage the live download queue (SABnzbd, qBittorrent, NZBGet, Transmission, or Deluge).",
 			Configured:  f.HasDownloadClient,
 			Optional:    true,
 		},
@@ -214,10 +215,10 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 					facts.HasLidarr = true
 				case "tautulli", "tracearr":
 					facts.HasWatchHistory = true
-				case "sabnzbd", "qbittorrent", "nzbget", "transmission":
-					facts.HasDownloadClient = true
 				default:
-					if instance.IsMediaServerType(inst.ServiceType) {
+					if downloads.IsDownloadClientType(inst.ServiceType) {
+						facts.HasDownloadClient = true
+					} else if instance.IsMediaServerType(inst.ServiceType) {
 						facts.HasMediaServer = true
 					}
 				}

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -573,6 +574,7 @@ func TestValidateConnectionDoesNotFollowServiceRedirects(t *testing.T) {
 		"qbittorrent",
 		"nzbget",
 		"transmission",
+		"deluge",
 		"tautulli",
 		"tracearr",
 		"jellyfin",
@@ -751,5 +753,117 @@ func TestQbittorrentCredentialShapes(t *testing.T) {
 	}
 	if inst := stored(created.ID); inst.APIKey != rotated || inst.Name != "Renamed" {
 		t.Fatalf("stored after credential-less update = %+v, want the key kept and the name changed", inst)
+	}
+}
+
+// TestDelugeCredentialShape pins Deluge's single credential: the web UI
+// password is required and a username plays no part. The connection test
+// drives the web UI's login, daemon connection, and version call, and a
+// rejected password is named without being echoed.
+func TestDelugeCredentialShape(t *testing.T) {
+	const password = "deluge-web-secret"
+	var methods []string
+	var mu sync.Mutex
+	deluge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json" {
+			http.NotFound(w, r)
+			return
+		}
+		var call struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&call)
+		mu.Lock()
+		methods = append(methods, call.Method)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch call.Method {
+		case "auth.login":
+			var pw string
+			if len(call.Params) > 0 {
+				_ = json.Unmarshal(call.Params[0], &pw)
+			}
+			if pw != password {
+				_, _ = w.Write([]byte(`{"result":false,"error":null,"id":1}`))
+				return
+			}
+			http.SetCookie(w, &http.Cookie{Name: "_session_id", Value: "sess", Path: "/"})
+			_, _ = w.Write([]byte(`{"result":true,"error":null,"id":1}`))
+		case "web.connected":
+			_, _ = w.Write([]byte(`{"result":true,"error":null,"id":2}`))
+		case "daemon.get_version":
+			_, _ = w.Write([]byte(`{"result":"2.1.1","error":null,"id":3}`))
+		default:
+			_, _ = w.Write([]byte(`{"result":null,"error":{"message":"Unknown method","code":2},"id":4}`))
+		}
+	}))
+	t.Cleanup(deluge.Close)
+
+	for _, tc := range []struct {
+		name    string
+		inst    Instance
+		wantErr bool
+	}{
+		{"password only", Instance{Password: password}, false},
+		{"username and password", Instance{Username: "ignored", Password: password}, false},
+		{"nothing", Instance{}, true},
+		{"username without password", Instance{Username: "admin"}, true},
+		{"api key instead", Instance{APIKey: "not-how-deluge-works"}, true},
+	} {
+		inst := tc.inst
+		inst.ServiceType, inst.Name, inst.URL = "deluge", "Torrents", deluge.URL
+		err := validateRequiredFields(&inst)
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("validateRequiredFields(%s) = %v, wantErr %t", tc.name, err, tc.wantErr)
+		}
+		if err != nil && !strings.Contains(err.Error(), "password is required for deluge") {
+			t.Fatalf("validateRequiredFields(%s) = %v, want the password named", tc.name, err)
+		}
+	}
+
+	store := newTestStore(t)
+	h := NewHandler(store, NewRegistry(store))
+	router := chi.NewRouter()
+	router.Post("/instances", h.Create)
+	router.Post("/instances/test", h.TestConnection)
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return rec
+	}
+
+	rec := do(http.MethodPost, "/instances", `{"service_type":"deluge","name":"Torrents","url":"`+deluge.URL+`/","password":"`+password+`"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), password) {
+		t.Fatalf("create response reveals the password: %s", rec.Body.String())
+	}
+	var created instanceResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	inst, err := store.Get(created.ID)
+	if err != nil || inst == nil || inst.Password != password || inst.Username != "" || inst.URL != deluge.URL {
+		t.Fatalf("stored = %+v, %v; want the password alone and the URL without its trailing slash", inst, err)
+	}
+	mu.Lock()
+	got := strings.Join(methods, ",")
+	mu.Unlock()
+	if got != "auth.login,web.connected,daemon.get_version" {
+		t.Fatalf("connection test called %s, want auth.login,web.connected,daemon.get_version", got)
+	}
+
+	rec = do(http.MethodPost, "/instances/test", `{"service_type":"deluge","name":"Torrents","url":"`+deluge.URL+`","password":"wrong-secret"}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid password") {
+		t.Fatalf("test with wrong password = %d %s, want 400 naming the password", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "wrong-secret") {
+		t.Fatalf("test response echoes the password: %s", rec.Body.String())
+	}
+	if rec := do(http.MethodPost, "/instances/test", `{"service_type":"deluge","name":"Torrents","url":"`+deluge.URL+`"}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "password is required") {
+		t.Fatalf("test without password = %d %s, want 400", rec.Code, rec.Body.String())
 	}
 }
