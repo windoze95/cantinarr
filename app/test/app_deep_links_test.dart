@@ -146,6 +146,39 @@ void main() {
   });
 
   group('deep link handling', () {
+    testWidgets('web OIDC return survives asynchronous session restoration',
+        (tester) async {
+      const location = '/oidc/return?code=handoff&flow=browser-flow';
+      tester.binding.platformDispatcher.defaultRouteNameTestValue = location;
+      addTearDown(
+          tester.binding.platformDispatcher.clearDefaultRouteNameTestValue);
+      SharedPreferences.setMockInitialValues({});
+      final restore = Completer<AuthState>();
+      final auth = _FakeAuthNotifier(_authedState, restore: restore.future);
+      final links = _FakeDeepLinks();
+      final container = ProviderContainer(overrides: [
+        authProvider.overrideWith(() => auth),
+        deepLinkSourceProvider.overrideWithValue(links),
+        realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
+        backendClientProvider.overrideWithValue(_fakeDio()),
+      ]);
+      addTearDown(container.dispose);
+      addTearDown(links.controller.close);
+
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: const CantinarrApp(),
+      ));
+      // The web engine consumes its initial route on the first app frame.
+      // A temporary Navigator must not replace it before GoRouter starts.
+      tester.binding.platformDispatcher.defaultRouteNameTestValue = '/';
+      restore.complete(_authedState);
+      await tester.pumpAndSettle();
+
+      expect(auth.oidcReturns.map((uri) => uri.toString()), [location]);
+      expect(container.read(authProvider).value!.isAuthenticated, isTrue);
+    });
+
     testWidgets('an initial connect link is forwarded to the auth flow',
         (tester) async {
       final link =
@@ -442,9 +475,10 @@ class _FakeDeepLinks implements DeepLinkSource {
 /// [AuthNotifier] fake: fixed state, records connect links, and answers
 /// checkServer without the network (PasskeyCreateScreen probes it on open).
 class _FakeAuthNotifier extends AuthNotifier {
-  _FakeAuthNotifier(this._initial);
+  _FakeAuthNotifier(this._initial, {this.restore});
 
   final AuthState _initial;
+  final Future<AuthState>? restore;
   final List<String> connectLinks = [];
   final List<Uri> oidcReturns = [];
   @override
@@ -457,7 +491,7 @@ class _FakeAuthNotifier extends AuthNotifier {
   bool switchResult = true;
 
   @override
-  Future<AuthState> build() async => _initial;
+  Future<AuthState> build() async => restore == null ? _initial : await restore!;
 
   @override
   Future<void> connectWithLink(String link) async {

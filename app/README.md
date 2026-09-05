@@ -157,7 +157,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **Session resilience** -- the session survives transport failures and VPN flaps; only a genuine 401 clears it. Settings > Sign out revokes this device; administrators can also revoke devices server-side.
 - **Separate OAuth directions** -- ChatGPT and xAI device authorizations are explicit outbound sign-ins that let Cantinarr use a personal or admin-shared subscription allowance. Cantinarr's MCP OAuth is a different inbound login that lets an external client access Cantinarr.
 
-OIDC routes: `/oidc/start`, `/oidc/return`, `/settings/oidc` (admin), `/settings/sso-account`, and `/settings/users/:userId/sso` (admin). The `crypto` package creates the S256 challenge; `web` provides temporary browser tab storage.
+OIDC routes: `/oidc/start`, `/oidc/return`, `/settings/oidc` (admin), `/settings/sso-account`, and `/settings/users/:userId/sso` (admin). The router retains the browser callback while a saved session is restored, including account linking and Test sign-in returns. The `crypto` package creates the S256 challenge; `web` provides temporary browser tab storage.
 
 ## Getting Started
 

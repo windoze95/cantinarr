@@ -425,19 +425,9 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
       _showAutoApprovalPausedSnack(event);
     });
 
-    // Show blank screen while restoring session to prevent login flash
-    if (authState.isLoading) {
-      return MaterialApp(
-        title: 'Cantinarr',
-        theme: AppTheme.dark,
-        debugShowCheckedModeBanner: false,
-        builder: (context, child) => AppAmbientBackground(
-          child: child ?? const SizedBox.shrink(),
-        ),
-        home: const Scaffold(),
-      );
-    }
-
+    // Install the router on the first frame so a browser OIDC return survives
+    // session restoration. A temporary MaterialApp with a home Navigator
+    // consumes the initial URL and replaces it with "/" before GoRouter starts.
     final router = ref.watch(appRouterProvider);
     return MaterialApp.router(
       title: 'Cantinarr',
@@ -446,9 +436,13 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
       scaffoldMessengerKey: _scaffoldMessengerKey,
       routerConfig: router,
       builder: (context, child) => AppAmbientBackground(
-        child: _UpdateBanner(
-          child: _ReconnectingBanner(child: child ?? const SizedBox.shrink()),
-        ),
+        // Keep the same blank restore screen without replacing the router.
+        child: authState.isLoading
+            ? const Scaffold()
+            : _UpdateBanner(
+                child: _ReconnectingBanner(
+                    child: child ?? const SizedBox.shrink()),
+              ),
       ),
     );
   }
