@@ -392,21 +392,23 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                         spacing: 6,
                                         runSpacing: 4,
                                         children: [
-                                          TextButton.icon(
-                                            onPressed: () => _showStatusSheet(
-                                              context,
-                                              state.title,
-                                              _requestNotifier.state.status,
+                                          if (_requestNotifier.state.status !=
+                                              RequestStatus.available)
+                                            TextButton.icon(
+                                              onPressed: () => _showStatusSheet(
+                                                context,
+                                                state.title,
+                                                _requestNotifier.state.status,
+                                              ),
+                                              icon: const Icon(
+                                                Icons.info_outline_rounded,
+                                                size: 17,
+                                              ),
+                                              label: Text(
+                                                _requestNotifier
+                                                    .state.status.label,
+                                              ),
                                             ),
-                                            icon: const Icon(
-                                              Icons.info_outline_rounded,
-                                              size: 17,
-                                            ),
-                                            label: Text(
-                                              _requestNotifier
-                                                  .state.status.label,
-                                            ),
-                                          ),
                                           if (_myOpenReportId != null)
                                             TextButton.icon(
                                               onPressed: () => context.push(
