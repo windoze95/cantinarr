@@ -5,7 +5,7 @@
 // GitHub update check, the push relay -- rides External, which honours the
 // admin's outbound proxy and, when none is set, Go's default transport with
 // its standard HTTP_PROXY/HTTPS_PROXY/NO_PROXY handling. Cluster-internal
-// traffic -- arr instances, download clients, Jellyfin/Emby, Tautulli/Tracearr,
+// traffic -- arr instances, download clients, Plex Media Server, Jellyfin/Emby, Tautulli/Tracearr,
 // webhook installs, the Local AI and external OIDC providers -- rides Internal, which never uses a
 // proxy: a VPN-tunnelled proxy cannot reach the LAN, and an env-var proxy with
 // an incomplete NO_PROXY used to swallow arr calls and surface as timeouts that

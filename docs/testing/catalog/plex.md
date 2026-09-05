@@ -1,6 +1,6 @@
-# Plex linking, libraries, and invitations
+# Plex linking, libraries, invitations, and watching
 
-Plex ownership, server selection, explicit and all-library scopes, current and future libraries, invites, revocation, and lifecycle truth. Every case here proves state on the plex.tv side that no fake can stand in for; email validation, settings persistence, the grant/invite/reconcile paths, the boot migration of the pre-instance Plex link, and injected-failure vectors are proven by the hermetic suites.
+Plex ownership, server selection, explicit and all-library scopes, current and future libraries, invites, revocation, and lifecycle truth. Every case here proves state at plex.tv or a real Plex Media Server that no fake can stand in for; email validation, settings persistence, the grant/invite/reconcile paths, the boot migration of the pre-instance Plex link, and injected-failure vectors are proven by the hermetic suites.
 
 Use the [run template](../run-template.md) to record executions of these cases.
 
@@ -33,6 +33,9 @@ These are real Plex end-to-end tests. "Invite sent" is not proven by Cantinarr's
 - [ ] `PLEX-094` · P0 · UI/LIVE — The plex.tv account that owns the server signs in from the guide, on an instance linked after this change and again on one linked before it (owner not yet recorded); verify no invite is sent to the owner (plex.tv would refuse it), the instance has recorded the owner afterwards, the card reads "You own {server}" with the owner's username, the admin picker lists the owner as an administrator, and removing and restoring the owner's grant touches nothing at plex.tv.
 - [ ] `PLEX-096` · P1 · UI/LIVE — Import an accepted share and a pending invite from Users; verify a Cantinarr user named after each share's Plex username appears with the share's email recorded, the share adopted as their linked account (the guide shows accepted or pending accordingly), no invite sent by the import, and a user who already shared an email of their own keeps it.
 - [ ] `PLEX-095` · P1 · CHAOS/UI — Slow plex.tv (a proxy that delays the share calls past the app's read timeout) and sign in; verify the first poll after approval times out on the app side without an error the user has to act on, the next poll returns the cached answer, exactly one invite or adoption happened at plex.tv, and the guide shows it.
+
+- [ ] `PLEX-097` · P0 · UI/LIVE — On a real claimed server, open an available movie and a partially available show as the linked owner and as an accepted share recipient. Verify **Watch on Plex** opens the matching item in hosted Plex Web from web and a native app, with no token in the URL; repeat with a custom sign-in address and confirm exact links still open the item in hosted Plex Web.
+- [ ] `PLEX-098` · P0 · UI/LIVE — Restrict an accepted recipient to one library at Plex, then open titles visible only to the owner, a title with ambiguous editions, and a title not yet scanned by Plex. Verify each offers **Open Plex**, opening the configured sign-in address without claiming the title is there. Confirm a uniquely matched title in the recipient's library still offers **Watch on Plex**, and revoking the share at Plex removes that exact link on the next detail-page read.
 
 ### Plex vector subresults
 

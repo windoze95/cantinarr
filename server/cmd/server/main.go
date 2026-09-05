@@ -192,6 +192,12 @@ func main() {
 	// service, the same find-or-create the connect-link route uses.
 	mediaAccessService.SetUserCreator(authService)
 	mediaAccessHandler := mediaaccess.NewHandler(mediaAccessService, logger)
+	mediaAccessHandler.SetWatchContentPolicy(contentPolicy, func() contentpolicy.RawGetter {
+		if client := creds.TMDB(); client != nil {
+			return client
+		}
+		return nil
+	})
 	instanceHandler.SetGrantObserver(mediaAccessService.OnGrantsChanged)
 	instanceHandler.SetSharedLibrariesObserver(mediaAccessService.OnSharedLibrariesChanged)
 	authHandler.SetUserDeleteHook(mediaAccessService.BeforeUserDelete)

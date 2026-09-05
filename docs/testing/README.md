@@ -27,12 +27,12 @@ such as **AUTO** are informational hints, not machine-enforced claims.
 | [Build, operations, usability, and release](catalog/baseline-operations-release.md) | OPS, UX, PERF, REL, EXP | 29 |
 | [Authentication, navigation, and security](catalog/auth-users-security.md) | AUTH, NAV, SEC | 14 |
 | [Instances, realtime behavior, and push](catalog/instances-realtime-push.md) | INST, RT, PUSH | 17 |
-| [Plex linking, libraries, and invitations](catalog/plex.md) | PLEX | 25 |
+| [Plex linking, libraries, invitations, and watching](catalog/plex.md) | PLEX | 27 |
 | [Media server accounts](catalog/media-servers.md) | MSRV | 21 |
 | [Discovery and requests](catalog/discovery-requests.md) | DISC, REQ | 22 |
 | [Media services and download clients](catalog/media-services.md) | RAD, SON, BOOK, MUS, FILE, DOWN, TAUT, TRR | 20 |
 | [Issues, AI, and MCP](catalog/issues-ai-mcp.md) | ISS, AI, MCP | 16 |
-| **Total** | | **164** |
+| **Total** | | **166** |
 
 Case IDs are stable and never renumbered, so deleted cases leave gaps in the
 sequences; a gap means the behavior moved into the automated suites, not that

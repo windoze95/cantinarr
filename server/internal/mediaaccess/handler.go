@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/mediaserver"
 )
 
@@ -29,7 +30,9 @@ type Handler struct {
 	// externalURL is the admin-configured external address, read per call;
 	// an import's connect links prefer it over the address the admin's own
 	// app sent, exactly as the connect-token route does.
-	externalURL func() string
+	externalURL   func() string
+	watchPolicies *contentpolicy.Service
+	watchMetadata contentpolicy.RawGetterSource
 }
 
 // SetExternalURLSource wires the external address an import's connect links
@@ -73,9 +76,10 @@ const maxWatchTitleLength = 256
 // Watch answers GET /api/media-servers/watch?media_type=movie|tv&tmdb_id=
 // &tvdb_id=&year=&title=: where the caller can watch that title on the media
 // servers they hold a linked account on, one entry per server with a state
-// (found with the item's page at the sign-in address, missing, or
-// unreachable). An empty list means no server was eligible to ask.
+// (found with the item's page, missing, unreachable, or unverified). Plex
+// also offers a generic fallback. An empty list means no server was eligible.
 func (h *Handler) Watch(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
@@ -98,9 +102,13 @@ func (h *Handler) Watch(w http.ResponseWriter, r *http.Request) {
 	if len(title) > maxWatchTitleLength {
 		title = title[:maxWatchTitleLength]
 	}
-	links, err := h.svc.WatchLinks(r.Context(), claims.UserID, mediaserver.ItemQuery{
+	query, allowed := h.authorizeWatch(w, r, mediaserver.ItemQuery{
 		MediaType: mediaType, TMDBID: tmdbID, TVDBID: tvdbID, Year: year, Title: title,
 	})
+	if !allowed {
+		return
+	}
+	links, err := h.svc.WatchLinks(r.Context(), claims.UserID, query)
 	if err != nil {
 		h.logger.Error("mediaaccess: watch links", "err", err, "user_id", claims.UserID)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "temporarily unavailable, retry shortly"})
