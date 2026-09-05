@@ -46,6 +46,11 @@ class _OIDCReturnScreenState extends ConsumerState<OIDCReturnScreen> {
       if (mounted) {
         setState(() =>
             _error = ref.read(authProvider).valueOrNull?.error ?? e.toString());
+        // Keep the router in sync with the browser URL cleanup. Otherwise an
+        // auth refresh restores the consumed handoff query on this error page.
+        if (!widget.start && widget.uri.hasQuery) {
+          context.replace('/oidc/return');
+        }
       }
     }
   }

@@ -146,6 +146,23 @@ void main() {
   });
 
   group('deep link handling', () {
+    testWidgets('failed OIDC return clears the route query and keeps the session',
+        (tester) async {
+      final app = await _pumpApp(tester, authState: _authedState);
+      app.auth.oidcFailure = 'Your provider did not supply a permitted group.';
+      final router = app.container.read(appRouterProvider);
+      router.go('/oidc/return?code=used-handoff&flow=denied-flow');
+      await tester.pumpAndSettle();
+
+      expect(router.routeInformationProvider.value.uri.toString(), '/oidc/return');
+      expect(find.text(app.auth.oidcFailure!), findsOneWidget);
+      expect(app.auth.oidcReturns, hasLength(1));
+      expect(app.container.read(authProvider).value!.isAuthenticated, isTrue);
+      await tester.tap(find.text('Back to Cantinarr'));
+      await tester.pumpAndSettle();
+      expect(router.routeInformationProvider.value.uri.path, '/settings');
+    });
+
     testWidgets('web OIDC return survives asynchronous session restoration',
         (tester) async {
       const location = '/oidc/return?code=handoff&flow=browser-flow';
@@ -481,9 +498,14 @@ class _FakeAuthNotifier extends AuthNotifier {
   final Future<AuthState>? restore;
   final List<String> connectLinks = [];
   final List<Uri> oidcReturns = [];
+  String? oidcFailure;
   @override
   Future<String> finishSSO(Uri uri) async {
     oidcReturns.add(uri);
+    if (oidcFailure != null) {
+      state = AsyncData(_initial.copyWith(error: oidcFailure));
+      throw StateError(oidcFailure!);
+    }
     return 'login';
   }
 
