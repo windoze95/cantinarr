@@ -195,12 +195,38 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
 
   void _handleLink(Uri uri) {
     if (uri.scheme != 'cantinarr') return;
+    if (uri.host == 'oidc') {
+      _openOIDCReturn(uri);
+      return;
+    }
     if (uri.host == 'connect') {
       _handleConnectLink(uri);
       return;
     }
     if (uri.host == 'passkeys') {
       _openPasskeyCreate(uri);
+    }
+  }
+
+  Future<void> _openOIDCReturn(Uri uri) async {
+    await ref.read(authProvider.future);
+    if (!mounted) return;
+    try {
+      final purpose = await ref.read(authProvider.notifier).finishSSO(uri);
+      if (!mounted || purpose.isEmpty) return;
+      final target = purpose == 'test' ? '/settings/oidc'
+          : purpose == 'link' ? '/settings/sso-account' : '/dashboard/movies';
+      ref.read(appRouterProvider).go(Uri(path: target, queryParameters: {
+        if (purpose != 'login') 'verified': uri.queryParameters['flow'] ?? '',
+      }).toString());
+      if (purpose != 'login') {
+        _scaffoldMessengerKey.currentState?.showSnackBar(SnackBar(content: Text(
+          purpose == 'test' ? 'Test sign-in succeeded. No account was created or linked.' : 'Single sign-on identity linked.')));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _scaffoldMessengerKey.currentState?.showSnackBar(SnackBar(content: Text(
+        ref.read(authProvider).valueOrNull?.error ?? 'Sign-in could not be completed. Please try again.')));
     }
   }
 
@@ -256,7 +282,7 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
 
     final switched =
         await ref.read(authProvider.notifier).switchServer(server, token);
-    if (!switched) {
+    if (switched == ServerSwitchResult.rejected) {
       _scaffoldMessengerKey.currentState?.showSnackBar(SnackBar(
         content: Text(
           'Could not connect with that link. It may have expired. '

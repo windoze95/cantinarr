@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../features/auth/ui/oidc_return_screen.dart';
+import '../features/settings/ui/oidc_settings_screen.dart';
+import '../features/settings/ui/oidc_account_screen.dart';
 import '../features/ai_assistant/ui/ai_chat_screen.dart';
 import '../features/ai_assistant/ui/ai_access_screen.dart';
 import '../features/ai_assistant/ui/codex_connection_screen.dart';
@@ -139,6 +142,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       final isAuthenticated = auth?.isAuthenticated ?? false;
       final isAuthRoute = state.matchedLocation == '/login';
       final pendingPasskey = auth?.pendingPasskeyOffer ?? false;
+      if (state.uri.path == '/oidc/return' || state.uri.path == '/oidc/start') {
+        return null;
+      }
 
       if (!isAuthenticated && !isAuthRoute) {
         if (_isInternalReturnLocation(state.uri)) {
@@ -196,6 +202,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           key: state.pageKey,
           child: const AuthScreen(),
         ),
+      ),
+
+      GoRoute(
+        path: '/oidc/return',
+        builder: (_, state) => OIDCReturnScreen(uri: state.uri),
+      ),
+      GoRoute(
+        path: '/oidc/start',
+        builder: (_, state) => OIDCReturnScreen(uri: state.uri, start: true),
       ),
 
       // Module shell (provides drawer/sidebar + search bar, no bottom nav)
@@ -743,6 +758,22 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                     highlightId: _highlightParam(state))),
           ),
           GoRoute(
+            path: '/settings/oidc',
+            builder: (_, state) => OIDCSettingsScreen(key: ValueKey(state.uri)),
+          ),
+          GoRoute(
+            path: '/settings/sso-account',
+            builder: (_, state) => OIDCAccountScreen(key: ValueKey(state.uri)),
+          ),
+          GoRoute(
+            path: '/settings/users/:userId/sso',
+            redirect: (_, state) => _positiveIntParameter(state, 'userId') == null
+                ? '/settings/users'
+                : null,
+            builder: (_, state) =>
+                OIDCAccountScreen(userId: _positiveIntParameter(state, 'userId')),
+          ),
+          GoRoute(
             path: '/settings/devices',
             builder: (_, __) =>
                 const AppAmbientBackground(child: DevicesScreen()),
@@ -875,6 +906,7 @@ bool _isAdminOnlyRoute(String path) {
     '/settings/change-history',
     '/settings/profile-approvals',
     '/settings/users',
+    '/settings/oidc',
     '/settings/ai-remediation',
     '/settings/agent-approval-rules',
     '/settings/request-settings',

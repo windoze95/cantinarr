@@ -12,6 +12,7 @@ import '../../notifications/push_service.dart';
 import '../data/auth_service.dart';
 import '../data/passkey_service.dart';
 import '../data/server_status.dart';
+import '../data/oidc_service.dart';
 
 /// The authentication state exposed to the rest of the app.
 class AuthState {
@@ -57,6 +58,8 @@ class AuthState {
         isReconnecting: isReconnecting ?? this.isReconnecting,
       );
 }
+
+enum ServerSwitchResult { switched, ssoPending, rejected }
 
 /// Manages authentication lifecycle: login, connect token, token refresh.
 class AuthNotifier extends AsyncNotifier<AuthState> {
@@ -524,6 +527,60 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     }
   }
 
+  Future<void> startSSO(String server,
+      {String purpose = 'login',
+      String? invitation,
+      String? externalOrigin}) async {
+    final current = state.valueOrNull ?? const AuthState();
+    try {
+      final normalized = _normalizeUrl(server);
+      if (purpose != 'login' &&
+          (current.connection == null ||
+              _normalizeUrl(current.connection!.serverUrl) != normalized)) {
+        throw StateError('Sign in to this server before linking or testing single sign-on.');
+      }
+      final identity = await ref.read(deviceIdentityProvider).resolve();
+      await ref.read(oidcServiceProvider).start(normalized,
+          purpose: purpose,
+          invitation: invitation,
+          externalOrigin: externalOrigin,
+          accessToken: purpose == 'login' ? null : current.connection?.accessToken,
+          deviceName: identity.displayName,
+          hardwareId: identity.hardwareId);
+      state = AsyncData(current.copyWith(isLoading: false, clearError: true));
+    } catch (e) {
+      state = AsyncData(
+          current.copyWith(isLoading: false, error: _parseOIDCError(e)));
+      rethrow;
+    }
+  }
+
+  bool _finishingSSO = false;
+  Future<String> finishSSO(Uri uri) async {
+    if (_finishingSSO) return '';
+    _finishingSSO = true;
+    final current = state.valueOrNull ?? const AuthState();
+    try {
+      final result = await ref.read(oidcServiceProvider).finish(uri);
+      if (result.purpose == 'login') {
+        final response = AuthResponse.fromJson(result.data);
+        final config =
+            await _authService.fetchConfig(result.server, response.accessToken);
+        await _endPreviousSession(current.connection);
+        await _adoptSession(result.server, response, config);
+      } else if (result.purpose == 'link') {
+        await refreshUser();
+      }
+      return result.purpose;
+    } catch (e) {
+      state = AsyncData((state.valueOrNull ?? current)
+          .copyWith(isLoading: false, error: _parseOIDCError(e)));
+      rethrow;
+    } finally {
+      _finishingSSO = false;
+    }
+  }
+
   /// Log in with server URL, username, and password (admin bootstrap).
   Future<void> login(String serverUrl, String username, String password) async {
     state = const AsyncData(AuthState(isLoading: true));
@@ -574,7 +631,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
 
   /// Connect using a connect token (from deep link or paste).
   Future<void> connectWithToken(String serverUrl, String token) async {
-    state = const AsyncData(AuthState(isLoading: true));
+    final previous = state.valueOrNull ?? const AuthState();
+    state = AsyncData(previous.copyWith(isLoading: true));
 
     try {
       final normalizedUrl = _normalizeUrl(serverUrl);
@@ -584,6 +642,13 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       final config =
           await _authService.fetchConfig(normalizedUrl, authResp.accessToken);
       await _adoptSession(normalizedUrl, authResp, config);
+    } on SSORequired {
+      state = AsyncData(previous.copyWith(isLoading: false));
+      try {
+        await startSSO(serverUrl, invitation: token);
+      } catch (_) {
+        // startSSO records the error while preserving the previous session.
+      }
     } catch (e) {
       state = AsyncData(AuthState(error: _parseConnectError(e)));
     }
@@ -593,11 +658,11 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   /// the path for a link tapped while already signed in. The new server must
   /// accept the link BEFORE the current session is touched: a passwordless
   /// user may have no way back in, so an expired or superseded link has to
-  /// leave them exactly where they were. Returns false on rejection (the
-  /// current session is untouched); the old session's teardown mirrors
-  /// [logout] and is best-effort — an unreachable old server never blocks
-  /// the switch.
-  Future<bool> switchServer(String serverUrl, String token) async {
+  /// leave them exactly where they were. An SSO continuation leaves the
+  /// current session intact until the browser sign-in succeeds. The old
+  /// session's teardown mirrors [logout] and is best-effort — an unreachable
+  /// old server never blocks the switch.
+  Future<ServerSwitchResult> switchServer(String serverUrl, String token) async {
     final oldConn = state.valueOrNull?.connection;
 
     final String normalizedUrl;
@@ -610,11 +675,25 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
           normalizedUrl, token, identity.displayName, identity.hardwareId);
       config =
           await _authService.fetchConfig(normalizedUrl, authResp.accessToken);
+    } on SSORequired {
+      try {
+        await startSSO(serverUrl, invitation: token);
+        return ServerSwitchResult.ssoPending;
+      } catch (_) {
+        return ServerSwitchResult.rejected;
+      }
     } catch (e) {
       debugPrint('Switch server: link rejected, keeping current session: $e');
-      return false;
+      return ServerSwitchResult.rejected;
     }
 
+    await _endPreviousSession(oldConn);
+
+    await _adoptSession(normalizedUrl, authResp, config);
+    return ServerSwitchResult.switched;
+  }
+
+  Future<void> _endPreviousSession(BackendConnection? oldConn) async {
     // The new server accepted us. End the old session while its access token
     // and the stored device_id are still in place (same order as logout()).
     if (oldConn != null) {
@@ -634,9 +713,6 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         debugPrint('Switch server: old-session revoke skipped: $e');
       }
     }
-
-    await _adoptSession(normalizedUrl, authResp, config);
-    return true;
   }
 
   /// The single session-adoption path: persist the redeemed tokens and the
@@ -1125,6 +1201,17 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       normalized = normalized.substring(0, normalized.length - 1);
     }
     return normalized;
+  }
+
+  String _parseOIDCError(Object e) {
+    if (e is StateError) return e.message;
+    if (e is DioException) {
+      final data = e.response?.data;
+      if (data is Map<String, dynamic> && data['error'] is String) {
+        return data['error'] as String;
+      }
+    }
+    return _parseError(e);
   }
 
   String _parseError(Object e) {

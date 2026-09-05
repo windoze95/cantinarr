@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -81,6 +82,10 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.service.Login(req.Username, req.Password, req.DeviceName, req.HardwareID)
 	if err != nil {
+		if errors.Is(err, ErrSSORequired) {
+			oidcHTTPError(w, err)
+			return
+		}
 		if errors.Is(err, ErrInvalidCredentials) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 			return
@@ -181,6 +186,8 @@ func (h *Handler) HandleRedeemConnectToken(w http.ResponseWriter, r *http.Reques
 	resp, err := h.service.RedeemConnectToken(req.Token, req.DeviceName, req.HardwareID)
 	if err != nil {
 		switch {
+		case errors.Is(err, ErrSSORequired):
+			writeJSON(w, http.StatusOK, map[string]any{"sso_required": true, "continuation": "/api/auth/oidc/begin"})
 		case errors.Is(err, ErrTokenNotFound):
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "connect token not found"})
 		case errors.Is(err, ErrTokenRedeemed):
@@ -394,6 +401,18 @@ func (h *Handler) AuthStatus(w http.ResponseWriter, r *http.Request) {
 		WebAuthnAvailable: isSecureContext(r),
 		NativePasskeys:    h.service.nativePasskeyStatusFromRequest(r),
 	}
+	c, err := h.service.oidcConfiguration()
+	if err != nil {
+		resp.SSOError = err.Error()
+	} else {
+		resp.SSOAvailable = c.Enabled
+		resp.SSOOnly = c.Enabled && c.SSOOnly
+		resp.SSOProvider = c.Label
+		if c.Enabled {
+			resp.SSOOrigin = strings.TrimSuffix(c.CallbackURL, "/api/auth/oidc/callback")
+		}
+	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -450,6 +469,7 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		"role":             user.Role,
 		"permissions":      user.Permissions,
 		"has_password":     user.PasswordHash != "",
+		"sso_linked":       user.SSOLinked,
 		"password_enabled": user.PasswordEnabled,
 		"passkey_enabled":  user.PasskeyEnabled,
 		"plex_email":       user.PlexEmail,

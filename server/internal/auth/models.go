@@ -3,6 +3,7 @@ package auth
 import "time"
 
 type User struct {
+	SSOLinked    bool         `json:"sso_linked"`
 	ID           int64        `json:"id"`
 	Username     string       `json:"username"`
 	PasswordHash string       `json:"-"`
@@ -43,6 +44,7 @@ type ContentLimits struct {
 // It augments the base account with device and invite state so admins can tell
 // active accounts apart from pending invites at a glance.
 type UserSummary struct {
+	SSOLinked        bool         `json:"sso_linked"`
 	ID               int64        `json:"id"`
 	Username         string       `json:"username"`
 	Role             string       `json:"role"`
@@ -173,6 +175,11 @@ type SetPlexEmailRequest struct {
 }
 
 type AuthStatusResponse struct {
+	SSOAvailable      bool                        `json:"sso_available,omitempty"`
+	SSOProvider       string                      `json:"sso_provider,omitempty"`
+	SSOOnly           bool                        `json:"sso_only,omitempty"`
+	SSOOrigin         string                      `json:"sso_origin,omitempty"`
+	SSOError          string                      `json:"sso_error,omitempty"`
 	NeedsSetup        bool                        `json:"needs_setup"`
 	WebAuthnAvailable bool                        `json:"webauthn_available"`
 	NativePasskeys    NativePasskeyStatusResponse `json:"native_passkeys"`

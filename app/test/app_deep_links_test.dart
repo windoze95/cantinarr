@@ -120,10 +120,10 @@ void main() {
     });
 
     test('assumes https for scheme-less input', () {
-      expect(sameServer('media.example.com', 'https://media.example.com'),
-          isTrue);
-      expect(sameServer('media.example.com', 'http://media.example.com'),
-          isFalse,
+      expect(
+          sameServer('media.example.com', 'https://media.example.com'), isTrue);
+      expect(
+          sameServer('media.example.com', 'http://media.example.com'), isFalse,
           reason: 'a plain host must not match an http:// server');
     });
 
@@ -156,6 +156,21 @@ void main() {
       expect(app.auth.connectLinks, [link.toString()]);
     });
 
+    testWidgets('OIDC cold and warm returns reach the pending sign-in handler',
+        (tester) async {
+      final first = Uri.parse('cantinarr://oidc?code=one&flow=first');
+      final app =
+          await _pumpApp(tester, authState: _authedState, initialLink: first);
+      expect(app.auth.oidcReturns.map((uri) => uri.queryParameters['code']),
+          ['one']);
+      app.links.controller
+          .add(Uri.parse('cantinarr://oidc?code=two&flow=second'));
+      await _settleLink(tester);
+      expect(app.auth.oidcReturns.map((uri) => uri.queryParameters['code']),
+          ['one', 'two']);
+      expect(app.auth.switchCalls, isEmpty);
+    });
+
     testWidgets('a connect link arriving while running is forwarded',
         (tester) async {
       final app = await _pumpApp(tester, authState: const AuthState());
@@ -182,7 +197,8 @@ void main() {
       ];
       for (final server in variants) {
         app.links.controller.add(
-          Uri.parse('cantinarr://passkeys?server=${Uri.encodeComponent(server)}'),
+          Uri.parse(
+              'cantinarr://passkeys?server=${Uri.encodeComponent(server)}'),
         );
         await _settleLink(tester);
         expect(
@@ -196,7 +212,8 @@ void main() {
       }
     });
 
-    testWidgets('a passkeys link without a server parameter routes when '
+    testWidgets(
+        'a passkeys link without a server parameter routes when '
         'authenticated', (tester) async {
       final app = await _pumpApp(tester, authState: _authedState);
       app.links.controller.add(Uri.parse('cantinarr://passkeys'));
@@ -213,7 +230,8 @@ void main() {
       );
     });
 
-    testWidgets('a passkeys link for a different server does not open '
+    testWidgets(
+        'a passkeys link for a different server does not open '
         'passkey creation', (tester) async {
       final app = await _pumpApp(tester, authState: _authedState);
       app.links.controller.add(
@@ -250,7 +268,8 @@ void main() {
       );
     });
 
-    testWidgets('a connect link while signed in asks before switching, and '
+    testWidgets(
+        'a connect link while signed in asks before switching, and '
         'Cancel keeps everything', (tester) async {
       final app = await _pumpApp(tester, authState: _authedState);
       app.links.controller.add(Uri.parse(
@@ -324,7 +343,8 @@ void main() {
       );
     });
 
-    testWidgets('a failing initial-link lookup is swallowed and the stream '
+    testWidgets(
+        'a failing initial-link lookup is swallowed and the stream '
         'still works', (tester) async {
       final app = await _pumpApp(
         tester,
@@ -426,6 +446,13 @@ class _FakeAuthNotifier extends AuthNotifier {
 
   final AuthState _initial;
   final List<String> connectLinks = [];
+  final List<Uri> oidcReturns = [];
+  @override
+  Future<String> finishSSO(Uri uri) async {
+    oidcReturns.add(uri);
+    return 'login';
+  }
+
   final List<(String, String)> switchCalls = [];
   bool switchResult = true;
 
@@ -438,9 +465,12 @@ class _FakeAuthNotifier extends AuthNotifier {
   }
 
   @override
-  Future<bool> switchServer(String serverUrl, String token) async {
+  Future<ServerSwitchResult> switchServer(
+      String serverUrl, String token) async {
     switchCalls.add((serverUrl, token));
-    return switchResult;
+    return switchResult
+        ? ServerSwitchResult.switched
+        : ServerSwitchResult.rejected;
   }
 
   @override

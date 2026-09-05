@@ -12,7 +12,23 @@ import 'server_status.dart';
 /// Fetch transport: these calls decide whether a session lives, and the
 /// default browser adapter was observed stalling them for the full receive
 /// timeout while Fetch requests from the same page completed instantly.
+class SSORequired implements Exception {
+  const SSORequired();
+}
+
 class AuthService {
+  Future<Map<String, dynamic>> oidcRequest(String server, String path,
+      {String method = 'GET', String? accessToken, Map<String, dynamic>? data}) async {
+    final dio = _createDio(server);
+    try {
+      final response = await dio.request(path, data: data, options: Options(
+        method: method,
+        headers: {if (accessToken != null) 'Authorization': 'Bearer $accessToken'},
+      ));
+      return response.data as Map<String, dynamic>;
+    } finally { dio.close(); }
+  }
+
   Dio _createDio(String serverUrl) {
     final dio = Dio(BaseOptions(
       baseUrl: serverUrl,
@@ -95,6 +111,9 @@ class AuthService {
       'device_name': deviceName,
       if (hardwareId.isNotEmpty) 'hardware_id': hardwareId,
     });
+    if ((resp.data as Map<String, dynamic>)['sso_required'] == true) {
+      throw const SSORequired();
+    }
     return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
   }
 
@@ -475,6 +494,7 @@ class DeviceInfo {
 
 /// Enriched user account returned by the admin users endpoint.
 class UserSummary {
+  final bool ssoLinked;
   final int id;
   final String username;
   final String role;
@@ -498,6 +518,7 @@ class UserSummary {
 
   const UserSummary({
     required this.id,
+    this.ssoLinked = false,
     required this.username,
     required this.role,
     required this.permissions,
@@ -517,6 +538,7 @@ class UserSummary {
 
   factory UserSummary.fromJson(Map<String, dynamic> json) => UserSummary(
         id: json['id'] as int,
+        ssoLinked: json['sso_linked'] as bool? ?? false,
         username: json['username'] as String,
         role: json['role'] as String,
         permissions: (json['permissions'] as List<dynamic>?)

@@ -167,6 +167,15 @@ CREATE TABLE IF NOT EXISTS devices (
     revoked_at DATETIME
 );
 
+CREATE TABLE IF NOT EXISTS oidc_identities (
+    issuer TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (issuer, subject),
+    UNIQUE (user_id, issuer)
+);
+
 CREATE TABLE IF NOT EXISTS push_tokens (
     id TEXT PRIMARY KEY,
     device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
@@ -859,6 +868,10 @@ func Open(dbPath string) (*sql.DB, error) {
 		// instead of creating a duplicate. Empty for rows created before this
 		// column or by clients that can't provide one (e.g. web).
 		{alter: "ALTER TABLE devices ADD COLUMN hardware_id TEXT NOT NULL DEFAULT ''"},
+		{alter: "ALTER TABLE devices ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'local'"},
+		{alter: "ALTER TABLE devices ADD COLUMN oidc_issuer TEXT NOT NULL DEFAULT ''"},
+		{alter: "ALTER TABLE oauth_authorization_codes ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'local'"},
+		{alter: "ALTER TABLE oauth_authorization_codes ADD COLUMN oidc_issuer TEXT NOT NULL DEFAULT ''"},
 		// AI remediation: admins are notified of new issues by default (on),
 		// matching request_pending. New on existing databases.
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN issue_created INTEGER NOT NULL DEFAULT 1"},

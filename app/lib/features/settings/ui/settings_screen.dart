@@ -169,6 +169,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               title: user?.username ?? 'Unknown',
               subtitle: _accountSubtitle(user),
             ),
+            _SettingsTile(
+              icon: Icons.link,
+              title: 'Linked sign-in',
+              subtitle: user?.ssoLinked == true
+                  ? 'Single sign-on identity linked'
+                  : 'No single sign-on identity linked',
+              onTap: () => context.push('/settings/sso-account'),
+            ),
             if (user?.canUsePassword == true)
               _SettingsTile(
                 icon: Icons.lock_outline,
@@ -276,6 +284,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: 'Users',
                 subtitle: 'Manage accounts, roles, and invites',
                 onTap: () => context.push('/settings/users'),
+              ),
+              _SettingsTile(
+                icon: Icons.login,
+                title: 'Single sign-on',
+                subtitle: 'Identity provider, account creation and sign-in policy',
+                onTap: () => context.push('/settings/oidc'),
               ),
               _SettingsTile(
                 icon: Icons.public,

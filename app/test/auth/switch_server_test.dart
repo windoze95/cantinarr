@@ -5,6 +5,7 @@ import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/storage/secure_storage.dart';
 import 'package:cantinarr/features/auth/data/auth_service.dart';
+import 'package:cantinarr/features/auth/data/oidc_service.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/notifications/push_service.dart';
 import 'package:dio/dio.dart';
@@ -43,6 +44,8 @@ void main() {
       makeAuthenticatedOnServerA({
     Object? redeemError,
     Object? oldLogoutError,
+    Object? oidcStartError,
+    Object? oidcFinishError,
   }) async {
     final storage = serverAStorage();
     final calls = <String>[];
@@ -54,9 +57,16 @@ void main() {
         redeemError: redeemError,
         oldLogoutError: oldLogoutError,
       )),
-      deviceIdentityProvider.overrideWithValue(_FakeDeviceIdentityService(store)),
+      deviceIdentityProvider
+          .overrideWithValue(_FakeDeviceIdentityService(store)),
       pushServiceProvider
           .overrideWith((ref) => _RecordingPushService(ref, calls)),
+      oidcServiceProvider.overrideWithValue(_RecordingOIDCService(
+        store,
+        calls,
+        startError: oidcStartError,
+        finishError: oidcFinishError,
+      )),
     ]);
     addTearDown(container.dispose);
 
@@ -76,7 +86,7 @@ void main() {
         .read(authProvider.notifier)
         .switchServer(serverB, 'token-b');
 
-    expect(switched, isTrue);
+    expect(switched, ServerSwitchResult.switched);
     final s = container.read(authProvider).valueOrNull!;
     expect(s.isAuthenticated, isTrue);
     expect(s.connection!.serverUrl, serverB);
@@ -95,11 +105,12 @@ void main() {
         reason: 'no server-A state may linger in the restore snapshot');
   });
 
-  test('redeems first, then tears down the old session, then adopts',
-      () async {
+  test('redeems first, then tears down the old session, then adopts', () async {
     final (container, _, calls) = await makeAuthenticatedOnServerA();
 
-    await container.read(authProvider.notifier).switchServer(serverB, 'token-b');
+    await container
+        .read(authProvider.notifier)
+        .switchServer(serverB, 'token-b');
 
     final redeem = calls.indexWhere((c) => c.startsWith('redeem'));
     final unregister = calls.indexOf('push.unregister');
@@ -138,7 +149,7 @@ void main() {
         .read(authProvider.notifier)
         .switchServer(serverB, 'token-dead');
 
-    expect(switched, isFalse);
+    expect(switched, ServerSwitchResult.rejected);
     final s = container.read(authProvider).valueOrNull!;
     expect(s.isAuthenticated, isTrue,
         reason: 'a dead link must never cost the current session — a '
@@ -163,12 +174,112 @@ void main() {
         .read(authProvider.notifier)
         .switchServer(serverB, 'token-b');
 
-    expect(switched, isTrue);
-    expect(
-        container.read(authProvider).valueOrNull!.connection!.serverUrl,
+    expect(switched, ServerSwitchResult.switched);
+    expect(container.read(authProvider).valueOrNull!.connection!.serverUrl,
         serverB);
     expect(storage[StorageKeys.serverUrl], serverB);
   });
+
+  test(
+      'an SSO invitation waits for the browser and failure preserves the session',
+      () async {
+    final (container, storage, calls) = await makeAuthenticatedOnServerA(
+      redeemError: const SSORequired(),
+      oidcFinishError: StateError('Sign-in expired. Please start again.'),
+    );
+    final before = Map<String, String?>.of(storage);
+    final notifier = container.read(authProvider.notifier);
+    expect(await notifier.switchServer(serverB, 'invite-b'),
+        ServerSwitchResult.ssoPending);
+    expect(calls, ['redeem $serverB invite-b', 'oidc.start $serverB invite-b']);
+    expect(storage, before);
+    expect(container.read(authProvider).valueOrNull!.connection!.serverUrl,
+        serverA);
+
+    await expectLater(
+        notifier.finishSSO(Uri.parse('cantinarr://oidc?code=code&flow=flow')),
+        throwsStateError);
+    expect(storage, before);
+    final state = container.read(authProvider).valueOrNull!;
+    expect(state.connection!.serverUrl, serverA);
+    expect(state.error, 'Sign-in expired. Please start again.');
+    expect(calls.any((c) => c.startsWith('auth.logout')), isFalse);
+    expect(calls.contains('push.unregister'), isFalse);
+  });
+
+  test('a successful SSO return adopts the session only after exchange',
+      () async {
+    final (container, storage, calls) = await makeAuthenticatedOnServerA(
+      redeemError: const SSORequired(),
+    );
+    final notifier = container.read(authProvider.notifier);
+    expect(await notifier.switchServer(serverB, 'invite-b'),
+        ServerSwitchResult.ssoPending);
+    expect(storage[StorageKeys.serverUrl], serverA);
+    expect(
+        await notifier
+            .finishSSO(Uri.parse('cantinarr://oidc?code=code&flow=flow')),
+        'login');
+    expect(storage[StorageKeys.serverUrl], serverB);
+    expect(storage[StorageKeys.refreshToken], 'b-refresh');
+    expect(container.read(authProvider).valueOrNull!.user!.username, 'user-b');
+    expect(calls.indexOf('oidc.finish'),
+        lessThan(calls.indexOf('push.unregister')));
+    expect(calls.indexOf('auth.logout $serverA a-access'),
+        lessThan(calls.indexWhere((c) => c.startsWith('storage.write'))));
+  });
+
+  test('failure to launch the SSO browser preserves existing credentials',
+      () async {
+    final (container, storage, calls) = await makeAuthenticatedOnServerA(
+      redeemError: const SSORequired(),
+      oidcStartError:
+          StateError('Could not open the sign-in browser. Please try again.'),
+    );
+    final before = Map<String, String?>.of(storage);
+    expect(
+        await container
+            .read(authProvider.notifier)
+            .switchServer(serverB, 'invite-b'),
+        ServerSwitchResult.rejected);
+    expect(storage, before);
+    expect(container.read(authProvider).valueOrNull!.isAuthenticated, isTrue);
+    expect(calls.any((c) => c.startsWith('auth.logout')), isFalse);
+  });
+}
+
+class _RecordingOIDCService extends OIDCService {
+  _RecordingOIDCService(StorageService storage, this.calls,
+      {this.startError, this.finishError})
+      : super(AuthService(), storage);
+  final List<String> calls;
+  final Object? startError;
+  final Object? finishError;
+
+  @override
+  Future<void> start(String server,
+      {String purpose = 'login',
+      String? accessToken,
+      String? invitation,
+      String? externalOrigin,
+      String deviceName = 'Single sign-on',
+      String hardwareId = ''}) async {
+    calls.add('oidc.start $server $invitation');
+    if (purpose == 'login') expect(accessToken, isNull);
+    if (startError != null) throw startError!;
+  }
+
+  @override
+  Future<OIDCResult> finish(Uri uri) async {
+    calls.add('oidc.finish');
+    if (finishError != null) throw finishError!;
+    return const OIDCResult('https://b.example.com', 'login', {
+      'access_token': 'b-access',
+      'refresh_token': 'b-refresh',
+      'device_id': 'b-device',
+      'user': {'id': 2, 'username': 'user-b', 'role': 'user'},
+    });
+  }
 }
 
 Future<void> _pumpUntil(

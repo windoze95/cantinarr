@@ -37,6 +37,8 @@ const _routableSettingsPaths = {
   '/settings/notifications',
   '/settings/passkeys',
   '/settings/password',
+  '/settings/oidc',
+  '/settings/sso-account',
   '/settings/instance/new',
   '/setup',
   '/issues',

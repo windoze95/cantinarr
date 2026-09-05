@@ -34,6 +34,7 @@
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="cantinarr" android:host="connect"/>
                 <data android:scheme="cantinarr" android:host="passkeys"/>
+                <data android:scheme="cantinarr" android:host="oidc"/>
             </intent-filter>
         </activity>
         <!-- Push: the gateway sends data-only FCM messages; this service

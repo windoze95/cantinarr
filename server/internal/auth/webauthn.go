@@ -478,6 +478,8 @@ func (s *Service) BeginPasskeyLogin(r *http.Request) (interface{}, string, error
 }
 
 func (s *Service) FinishPasskeyLogin(sessionID string, r *http.Request) (*TokenResponse, error) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	waUser, err := s.finishPasskeyLoginUser(sessionID, r)
 	if err != nil {
 		return nil, err
@@ -533,6 +535,9 @@ func (s *Service) finishPasskeyLoginUser(sessionID string, r *http.Request) (*We
 	}
 
 	waUser := user.(*WebAuthnUser)
+	if err := s.requireLocalSignIn(waUser.user.ID); err != nil {
+		return nil, err
+	}
 	if !passkeyAllowed(waUser.user) {
 		return nil, ErrPasskeyNotAllowed
 	}

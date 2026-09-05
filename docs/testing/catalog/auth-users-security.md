@@ -13,6 +13,10 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `AUTH-022` · P0 · SEC — As a requester, directly navigate/call every admin root (`/radarr`, `/sonarr`, `/chaptarr`, `/downloads`, `/monitoring` and its `/tautulli` redirect, `/approvals`, admin issues/actions/runs, setup, privileged settings); verify UI redirects and APIs return 403.
 - [ ] `AUTH-036` · P0 · UI — Redeem equivalent valid `cantinarr://connect` links by native deep link and paste; verify identical normalized server/account/device outcome, one token consumption, and an already-authenticated app does not switch accounts silently.
 
+- [ ] `AUTH-037` · P0 · LIVE/UI — Configure real Authentik, Authelia, Keycloak, Pocket ID and Google clients using the OIDC setup guide; validate discovery, complete Test sign-in without creating/linking an account, and prove login, explicit linking, provider-specific group claims and administrator recovery through the external HTTPS origin.
+- [ ] `AUTH-038` · P0 · LIVE/UI — On a physical iPhone/iPad, complete SSO and an SSO-only invitation through the system browser; repeat with Cantinarr terminated during provider sign-in, cancel once, and verify the cold/warm `cantinarr://oidc` return, account identity and preservation of the existing session on cancellation.
+- [ ] `AUTH-039` · P0 · LIVE/UI — On a physical Android device, repeat SSO login, linking and an SSO-only invitation through the default browser with the app running and terminated; verify the OS dispatches `cantinarr://oidc`, restored verifier exchange succeeds, and browser cancellation leaves the existing session intact.
+
 ## Navigation smoke and app lifecycle
 
 - [ ] `NAV-001` · P0 · UI — On compact and wide layouts, open every drawer/sidebar destination and every bottom-tab branch; verify selected state, back behavior, and preserved per-module tab stacks.
