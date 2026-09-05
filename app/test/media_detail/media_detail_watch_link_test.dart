@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
@@ -11,6 +10,7 @@ import 'package:cantinarr/features/discover/data/tmdb_models.dart';
 import 'package:cantinarr/features/media_detail/ui/media_detail_screen.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -37,6 +37,7 @@ Map<String, dynamic> _link(
   ServiceInstance server,
   String state, {
   String url = '',
+  String fallbackUrl = '',
 }) =>
     {
       'instance_id': server.id,
@@ -44,6 +45,7 @@ Map<String, dynamic> _link(
       'name': server.name,
       'state': state,
       if (url.isNotEmpty) 'url': url,
+      if (fallbackUrl.isNotEmpty) 'fallback_url': fallbackUrl,
     };
 
 void main() {
@@ -196,19 +198,91 @@ void main() {
     expect(find.textContaining('Watch on'), findsNothing);
   });
 
-  testWidgets('nothing is asked without a Jellyfin or Emby server',
+  testWidgets('a Plex-only household gets an exact title link',
       (tester) async {
+    const url = 'https://app.plex.tv/desktop/#!/server/m1/details?key=%2Flibrary%2Fmetadata%2F123';
+    final launched = <String>[];
+    const channel = MethodChannel('plugins.flutter.io/url_launcher');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      channel,
+      (call) async {
+        if (call.method == 'launch') {
+          launched.add((call.arguments as Map)['url'] as String);
+        }
+        return true;
+      },
+    );
+    addTearDown(() => tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, null));
     final adapter = await pumpDetail(
       tester,
       status: 'available',
       mediaServers: const [_plex],
       links: [
-        _link(_plex, 'found', url: 'https://app.plex.tv/x'),
+        _link(_plex, 'found', url: url),
       ],
     );
 
+    expect(adapter.watchRequests, hasLength(1));
+    final button = find.widgetWithText(TextButton, 'Watch on Plex');
+    expect(button, findsOneWidget);
+    expect(find.text('Open Plex'), findsNothing);
+    await tester.ensureVisible(button);
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(launched, [url]);
+  });
+
+  for (final state in ['unverified', 'unreachable', 'missing']) {
+    testWidgets('Plex $state offers only the generic shortcut', (tester) async {
+      const url = 'https://watch.example.com';
+      final launched = <String>[];
+      const channel = MethodChannel('plugins.flutter.io/url_launcher');
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        (call) async {
+          if (call.method == 'launch') {
+            launched.add((call.arguments as Map)['url'] as String);
+          }
+          return true;
+        },
+      );
+      addTearDown(() => tester.binding.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null));
+      await pumpDetail(tester,
+          status: 'partial',
+          mediaType: MediaType.tv,
+          mediaServers: const [_plex],
+          links: [_link(_plex, state, fallbackUrl: url)]);
+      final button = find.widgetWithText(TextButton, 'Open Plex');
+      expect(button, findsOneWidget);
+      expect(find.textContaining('Watch on'), findsNothing);
+      expect(find.textContaining('Not on'), findsNothing);
+      await tester.ensureVisible(button);
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(launched, [url]);
+    });
+  }
+
+  testWidgets('Plex names distinguish an exact link from another server shortcut',
+      (tester) async {
+    const second = ServiceInstance(id: 'px-b', serviceType: 'plex', name: 'Cabin Plex');
+    await pumpDetail(tester,
+        status: 'available',
+        mediaServers: const [_plex, second],
+        links: [
+          _link(_plex, 'found', url: 'https://app.plex.tv/desktop/#!/server/m1/details?key=x'),
+          _link(second, 'unverified', fallbackUrl: 'https://app.plex.tv'),
+        ]);
+    expect(find.text('Watch on Cantina Plex'), findsOneWidget);
+    expect(find.text('Open Cabin Plex'), findsOneWidget);
+  });
+
+  testWidgets('no media server means no lookup', (tester) async {
+    final adapter = await pumpDetail(tester,
+        status: 'available', mediaServers: const [], links: const []);
     expect(adapter.watchRequests, isEmpty);
-    expect(find.textContaining('Watch on'), findsNothing);
   });
 
   testWidgets('a failed lookup shows nothing rather than a stale answer',

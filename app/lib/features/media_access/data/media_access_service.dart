@@ -87,18 +87,21 @@ enum MediaServerKind { account, invite }
 /// What a media server answered about one title: it holds it and the account
 /// can see it ([found]), it confirmed it has no such title the account can
 /// see ([missing]: not imported yet, or in a library not shared), or it
-/// could not answer ([unreachable]), which is never read as absence.
-enum WatchLinkState { found, missing, unreachable }
+/// could not answer ([unreachable]), or could not verify an exact match
+/// ([unverified]). Neither uncertain state is read as absence.
+enum WatchLinkState { found, missing, unreachable, unverified }
 
 /// Where one title can be watched on one media server, as the server
-/// answered just now. [url] is the title's page at the admin-typed sign-in
-/// address, set only when [state] is [WatchLinkState.found].
+/// answered just now. [url] is the title's page (hosted Plex Web or the
+/// admin-typed sign-in address), set only when [state] is [WatchLinkState.found].
+/// [fallbackUrl] is a generic sign-in shortcut, never proof of availability.
 class WatchLink {
   final String instanceId;
   final String name;
   final String serviceType;
   final WatchLinkState state;
   final String url;
+  final String fallbackUrl;
 
   const WatchLink({
     required this.instanceId,
@@ -106,6 +109,7 @@ class WatchLink {
     required this.serviceType,
     required this.state,
     this.url = '',
+    this.fallbackUrl = '',
   });
 
   factory WatchLink.fromJson(Map<String, dynamic> json) => WatchLink(
@@ -115,9 +119,11 @@ class WatchLink {
         state: switch (json['state']) {
           'found' => WatchLinkState.found,
           'missing' => WatchLinkState.missing,
+          'unverified' => WatchLinkState.unverified,
           _ => WatchLinkState.unreachable,
         },
         url: json['url'] as String? ?? '',
+        fallbackUrl: json['fallback_url'] as String? ?? '',
       );
 }
 

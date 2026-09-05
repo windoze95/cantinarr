@@ -392,21 +392,23 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                         spacing: 6,
                                         runSpacing: 4,
                                         children: [
-                                          TextButton.icon(
-                                            onPressed: () => _showStatusSheet(
-                                              context,
-                                              state.title,
-                                              _requestNotifier.state.status,
+                                          if (_requestNotifier.state.status !=
+                                              RequestStatus.available)
+                                            TextButton.icon(
+                                              onPressed: () => _showStatusSheet(
+                                                context,
+                                                state.title,
+                                                _requestNotifier.state.status,
+                                              ),
+                                              icon: const Icon(
+                                                Icons.info_outline_rounded,
+                                                size: 17,
+                                              ),
+                                              label: Text(
+                                                _requestNotifier
+                                                    .state.status.label,
+                                              ),
                                             ),
-                                            icon: const Icon(
-                                              Icons.info_outline_rounded,
-                                              size: 17,
-                                            ),
-                                            label: Text(
-                                              _requestNotifier
-                                                  .state.status.label,
-                                            ),
-                                          ),
                                           if (_myOpenReportId != null)
                                             TextButton.icon(
                                               onPressed: () => context.push(
@@ -458,6 +460,20 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                                 ),
                                                 label: Text(
                                                   'Watch on ${_watchLabel(link)}',
+                                                ),
+                                              )
+                                            else if (link.fallbackUrl.isNotEmpty)
+                                              TextButton.icon(
+                                                onPressed: () => _openWatchLink(
+                                                  link,
+                                                  fallback: true,
+                                                ),
+                                                icon: const Icon(
+                                                  Icons.open_in_new_rounded,
+                                                  size: 17,
+                                                ),
+                                                label: Text(
+                                                  'Open ${_watchLabel(link)}',
                                                 ),
                                               )
                                             else if (link.state ==
@@ -978,7 +994,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// the TMDB detail is in (the year, the title, and a show's TVDB id narrow
   /// the lookup; the match is by provider id). Best-effort like the arr
   /// link: a failed read clears the links rather than showing stale ones.
-  /// Nothing is asked when the user has no Jellyfin or Emby server at all.
+  /// Nothing is asked when the user has no media server at all.
   Future<void> _resolveWatchLinks() async {
     final generation = ++_watchGeneration;
     final status = _requestNotifier.state.status;
@@ -986,9 +1002,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     final connection = ref.read(authProvider).valueOrNull?.connection;
     final watchable = status == RequestStatus.available ||
         status == RequestStatus.partial;
-    final askable = connection?.mediaServerInstances
-            .any((i) => i.serviceType != 'plex') ??
-        false;
+    final askable = connection?.mediaServerInstances.isNotEmpty ?? false;
     final detail = _detailNotifier.state;
     if (!watchable || !askable) {
       if (_watchLinks.isNotEmpty) setState(() => _watchLinks = const []);
@@ -1024,8 +1038,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
 
   /// Opens the title's page on the media server, in the browser or the
   /// server's app when it claims the address.
-  Future<void> _openWatchLink(WatchLink link) async {
-    final uri = Uri.tryParse(link.url);
+  Future<void> _openWatchLink(WatchLink link, {bool fallback = false}) async {
+    final uri = Uri.tryParse(fallback ? link.fallbackUrl : link.url);
     var opened = false;
     if (uri != null) {
       try {

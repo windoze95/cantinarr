@@ -399,27 +399,29 @@ const (
 	WatchMissing = "missing"
 	// WatchUnreachable: no answer (blindness); never read as absence.
 	WatchUnreachable = "unreachable"
+	// WatchUnverified: no unique title match was established. This includes
+	// accounts not yet linked, pending shares, and bounded/ambiguous searches.
+	WatchUnverified = "unverified"
 )
 
 // WatchLink is where one title can be watched on one of the user's media
 // servers, as the server answered just now. URL is the item's page at the
-// admin-typed public address, set only when found.
+// admin-typed public address (Plex: hosted Plex Web), set only when found.
+// FallbackURL is a generic sign-in shortcut, never evidence of availability.
 type WatchLink struct {
 	InstanceID  string `json:"instance_id"`
 	Name        string `json:"name"`
 	ServiceType string `json:"service_type"`
 	State       string `json:"state"`
 	URL         string `json:"url,omitempty"`
+	FallbackURL string `json:"fallback_url,omitempty"`
 }
 
 // WatchLinks looks a title up on every media server the user can watch on:
-// a granted account server with a sign-in address whose client can find
-// items, where the user holds a live linked account. Each lookup runs as
-// that account, so the server applies its library access, concurrently and
-// bounded. Servers without a public address are omitted (nothing there is
-// client-reachable), invite servers are not looked up (Plex is reached only
-// through plex.tv), and every remaining server answers with a state, so an
-// absent link is never mistaken for a server that could not answer.
+// a granted server with a sign-in address. Exact lookups require a linked
+// account and apply its live library access, concurrently and bounded.
+// Plex also offers a generic shortcut when an exact lookup is unavailable.
+// Every result states whether a title was found, absent, or not verified.
 func (s *Service) WatchLinks(ctx context.Context, userID int64, q mediaserver.ItemQuery) ([]WatchLink, error) {
 	ids, err := s.grantedMediaServers(userID)
 	if err != nil {
@@ -436,22 +438,22 @@ func (s *Service) WatchLinks(ctx context.Context, userID int64, q mediaserver.It
 		if err != nil {
 			return nil, err
 		}
-		if inst == nil || !instance.IsMediaServerType(inst.ServiceType) || inst.MediaServerConfig.PublicAddress == "" {
+		if inst == nil || !instance.IsMediaServerType(inst.ServiceType) || inst.MediaServerConfigInvalid || inst.MediaServerConfig.PublicAddress == "" {
 			continue
 		}
 		provider, err := s.providers(inst)
-		if err != nil || mediaserver.KindOf(provider) != mediaserver.KindAccount {
+		if err != nil {
 			continue
 		}
 		finder, ok := provider.(mediaserver.ItemFinder)
-		if !ok {
+		if !ok && inst.ServiceType != "plex" {
 			continue
 		}
 		row, err := s.getAccount(userID, id)
 		if err != nil {
 			return nil, err
 		}
-		if row == nil || row.DisabledAt.Valid {
+		if (row == nil || row.DisabledAt.Valid) && inst.ServiceType != "plex" {
 			continue
 		}
 		targets = append(targets, target{inst: inst, row: row, finder: finder})
@@ -475,10 +477,19 @@ func (s *Service) WatchLinks(ctx context.Context, userID int64, q mediaserver.It
 // ids.
 func (s *Service) watchLink(ctx context.Context, inst *instance.Instance, row *accountRow, finder mediaserver.ItemFinder, q mediaserver.ItemQuery) WatchLink {
 	link := WatchLink{InstanceID: inst.ID, Name: inst.Name, ServiceType: inst.ServiceType}
+	if inst.ServiceType == "plex" {
+		link.FallbackURL = inst.MediaServerConfig.PublicAddress
+	}
+	if row == nil || row.DisabledAt.Valid || finder == nil {
+		link.State = WatchUnverified
+		return link
+	}
 	ctx, cancel := context.WithTimeout(ctx, watchTimeout)
 	defer cancel()
 	item, err := finder.FindItem(ctx, row.RemoteUserID, q)
 	switch {
+	case errors.Is(err, mediaserver.ErrItemUnverified):
+		link.State = WatchUnverified
 	case errors.Is(err, mediaserver.ErrItemNotFound):
 		link.State = WatchMissing
 	case err != nil:
@@ -486,7 +497,12 @@ func (s *Service) watchLink(ctx context.Context, inst *instance.Instance, row *a
 		link.State = WatchUnreachable
 	default:
 		link.State = WatchFound
-		link.URL = strings.TrimRight(inst.MediaServerConfig.PublicAddress, "/") + item.WebPath
+		base := inst.MediaServerConfig.PublicAddress
+		if inst.ServiceType == "plex" {
+			base = instance.PlexPublicAddress
+		}
+		link.URL = strings.TrimRight(base, "/") + item.WebPath
+		link.FallbackURL = ""
 	}
 	return link
 }

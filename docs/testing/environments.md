@@ -49,9 +49,10 @@ generated API key or local username/password:
 Only these need a real account, and only for live verification — never for
 the suites:
 
-- **plex.tv** — the whole Plex integration (PIN link, server/library
-  listing, invites) is plex.tv-side; it needs a real Plex account owning a
-  claimed Plex Media Server.
+- **Plex** — PIN linking, server/library listing, and invitations need a
+  real plex.tv account owning a claimed Plex Media Server. Exact watch links
+  also need a reachable direct server connection, matched movie/show metadata,
+  and an accepted recipient share to prove that recipient's library access.
 - **TMDB** — discovery/search needs a v4 read token from a free
   themoviedb.org account.
 - **Trakt** (optional) — a Trakt account plus a registered app for the

@@ -89,8 +89,11 @@ func TestWatchLinksForUser(t *testing.T) {
 	for _, l := range links {
 		byName[l.Name] = l
 	}
-	if len(links) != 3 {
-		t.Fatalf("links = %+v, want exactly the three servers that were asked", links)
+	if len(links) != 4 {
+		t.Fatalf("links = %+v, want the three lookups and Plex's generic shortcut", links)
+	}
+	if l := byName["H Plex"]; l.State != WatchUnverified || l.URL != "" || l.FallbackURL != instance.PlexPublicAddress {
+		t.Fatalf("unlinked Plex = %+v", l)
 	}
 	if l := byName["A Found"]; l.State != WatchFound || l.URL != "https://jf.example.com/web/#/details?id=i-1&serverId=s-1" || l.ServiceType != "jellyfin" || l.InstanceID != found {
 		t.Fatalf("found = %+v, want the item's page at the public address", l)
@@ -121,6 +124,60 @@ func TestWatchLinksForUser(t *testing.T) {
 	logs := e.logs.String()
 	if !strings.Contains(logs, "could not look a title up") || strings.Contains(logs, "Big Buck Bunny") || strings.Contains(logs, ".internal") {
 		t.Fatalf("logs = %q, want the unreachable server noted with ids only", logs)
+	}
+}
+
+type inviteFinderProvider struct{ *finderProvider }
+
+func (p *inviteFinderProvider) Kind() mediaserver.Kind { return mediaserver.KindInvite }
+
+func TestPlexWatchLinksRequireGrantsAndUseHostedItemLinks(t *testing.T) {
+	e := newEnv(t)
+	alice, bob := e.user("alice"), e.user("bob")
+	id := e.mediaServer("plex", "Plex", instance.MediaServerConfig{PublicAddress: "https://watch.example.com"})
+	e.grantType(alice, "plex", id)
+	_, err := e.svc.insertAccount(accountRow{UserID: alice, InstanceID: id, RemoteUserID: "alice@example.com"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &inviteFinderProvider{&finderProvider{fakeProvider: newFakeProvider()}}
+	e.providers[id] = p
+	for _, state := range []string{WatchFound, WatchUnverified, WatchUnreachable} {
+		p.find = func(remote string, q mediaserver.ItemQuery) (mediaserver.Item, error) {
+			if remote != "alice@example.com" {
+				t.Errorf("wrong identity: %s", remote)
+			}
+			switch state {
+			case WatchUnverified:
+				return mediaserver.Item{}, mediaserver.ErrItemUnverified
+			case WatchUnreachable:
+				return mediaserver.Item{}, errors.New("plex watch: server did not answer")
+			default:
+				return mediaserver.Item{ID: "1", WebPath: "/desktop/#!/server/m1/details?key=%2Flibrary%2Fmetadata%2F1"}, nil
+			}
+		}
+		links, err := e.svc.WatchLinks(context.Background(), alice, mediaserver.ItemQuery{MediaType: "movie", TMDBID: 1})
+		if err != nil || len(links) != 1 || links[0].State != state {
+			t.Fatalf("links = %v, %v", links, err)
+		}
+		if state == WatchFound {
+			if !strings.HasPrefix(links[0].URL, "https://app.plex.tv/desktop/#!/server/m1/") || links[0].FallbackURL != "" {
+				t.Fatalf("exact = %+v", links[0])
+			}
+		} else if links[0].URL != "" || links[0].FallbackURL != "https://watch.example.com" {
+			t.Fatalf("fallback = %+v", links[0])
+		}
+	}
+	before := p.calls.Load()
+	if links, err := e.svc.WatchLinks(context.Background(), bob, mediaserver.ItemQuery{MediaType: "movie", TMDBID: 1}); err != nil || len(links) != 0 || p.calls.Load() != before {
+		t.Fatal("ungranted user received Plex access")
+	}
+	if err := e.svc.setDisabledAt(alice, id, true); err != nil {
+		t.Fatal(err)
+	}
+	links, err := e.svc.WatchLinks(context.Background(), alice, mediaserver.ItemQuery{MediaType: "movie", TMDBID: 1})
+	if err != nil || len(links) != 1 || links[0].State != WatchUnverified || p.calls.Load() != before {
+		t.Fatal("disabled account queried")
 	}
 }
 
