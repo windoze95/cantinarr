@@ -721,6 +721,35 @@ class _LoginViewState extends ConsumerState<_LoginView> {
         ),
         const SizedBox(height: 24),
 
+        if (widget.serverStatus?.ssoAvailable == true) ...[
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: isLoading ? null : () async {
+                try {
+                  await ref.read(authProvider.notifier).startSSO(widget.serverUrl);
+                } catch (_) {
+                  // The auth notifier records a visible, retryable error.
+                }
+              },
+              icon: const Icon(Icons.login),
+              label: Text('Continue with ${widget.serverStatus!.ssoProvider}'),
+            ),
+          ),
+          const SizedBox(height: 16),
+          if (widget.serverStatus?.ssoOnly == true) ...[
+            const Text(
+              'Single sign-on is required. Administrators can use local sign-in below to recover access.',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+          ],
+        ],
+        if (widget.serverStatus?.ssoError case final message?) ...[
+          Text(message, textAlign: TextAlign.center),
+          const SizedBox(height: 16),
+        ],
+
         // Passkey login button (shown when server and platform both support it)
         if (_showPasskey) ...[
           SizedBox(
@@ -817,8 +846,9 @@ class _LoginViewState extends ConsumerState<_LoginView> {
 
         const SizedBox(height: 16),
 
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        Wrap(
+          alignment: WrapAlignment.center,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             TextButton(
               onPressed: widget.onBack,

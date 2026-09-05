@@ -27,6 +27,7 @@ class ContentLimits {
 
 /// Represents the currently authenticated user.
 class UserProfile {
+  final bool ssoLinked;
   final int id;
   final String username;
   final String role;
@@ -54,6 +55,7 @@ class UserProfile {
 
   const UserProfile({
     required this.id,
+    this.ssoLinked = false,
     required this.username,
     required this.role,
     this.permissions = const [],
@@ -77,6 +79,7 @@ class UserProfile {
 
   factory UserProfile.fromJson(Map<String, dynamic> json) => UserProfile(
         id: json['id'] as int,
+        ssoLinked: json['sso_linked'] as bool? ?? false,
         username: json['username'] as String,
         role: json['role'] as String? ?? 'user',
         permissions: (json['permissions'] as List<dynamic>?)
@@ -101,6 +104,7 @@ class UserProfile {
   }) =>
       UserProfile(
         id: id,
+        ssoLinked: ssoLinked,
         username: username,
         role: role,
         permissions: permissions,
@@ -115,6 +119,7 @@ class UserProfile {
 
   Map<String, dynamic> toJson() => {
         'id': id,
+        'sso_linked': ssoLinked,
         'username': username,
         'role': role,
         'permissions': permissions,

@@ -8,13 +8,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/windoze95/cantinarr-server/internal/mediaserver"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/windoze95/cantinarr-server/internal/mediaserver"
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -107,6 +109,12 @@ type Claims struct {
 }
 
 type Service struct {
+	// Serializes credential issuance and policy changes. Provider requests run
+	// outside this lock; their configuration and initiating session are checked
+	// again before any account, grant, or session is committed.
+	policyMu                sync.Mutex
+	oidcCipher              *secrets.Cipher
+	oidcFlows               *oidcFlowStore
 	db                      *sql.DB
 	jwtSecret               []byte
 	webauthnSessions        *SessionStore
@@ -135,6 +143,7 @@ func NewService(db *sql.DB, jwtSecret string, webauthnConfig ...WebAuthnConfig) 
 		)
 	}
 	return &Service{
+		oidcFlows:               newOIDCFlowStore(),
 		db:                      db,
 		jwtSecret:               []byte(jwtSecret),
 		webauthnSessions:        NewSessionStore(),
@@ -268,6 +277,8 @@ func (s *Service) MigrateSetupState() error {
 }
 
 func (s *Service) Login(username, password, deviceName, hardwareID string) (*TokenResponse, error) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	user, err := s.getUserByUsername(username)
 	if err != nil {
 		return nil, ErrInvalidCredentials
@@ -277,6 +288,10 @@ func (s *Service) Login(username, password, deviceName, hardwareID string) (*Tok
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return nil, ErrInvalidCredentials
+	}
+
+	if err := s.requireLocalSignIn(user.ID); err != nil {
+		return nil, err
 	}
 
 	deviceID, err := s.upsertDevice(user.ID, deviceName, hardwareID)
@@ -406,6 +421,8 @@ func (s *Service) plexInvitedAtByUser() (map[int64]time.Time, error) {
 // deleted). Every fault in *evaluating* the token wraps ErrAuthUnavailable so
 // the handler answers 503 and the client retries instead of logging out.
 func (s *Service) Refresh(refreshToken string) (*TokenResponse, error) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	if strings.HasPrefix(refreshToken, opaqueRefreshPrefix) {
 		return s.refreshOpaque(refreshToken)
 	}
@@ -512,25 +529,10 @@ func (s *Service) refreshLegacyJWT(tokenStr string) (*TokenResponse, error) {
 // is not revoked, then bumps last_seen_at. Missing/mismatched rows are a
 // genuine rejection; query faults are ErrAuthUnavailable.
 func (s *Service) requireActiveDevice(deviceID string, userID int64) error {
-	var (
-		ownerID   int64
-		revokedAt sql.NullTime
-	)
-	err := s.db.QueryRow(
-		"SELECT user_id, revoked_at FROM devices WHERE id = ?", deviceID,
-	).Scan(&ownerID, &revokedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrInvalidCredentials
+	if _, err := s.authoritativeSession(context.Background(), userID, deviceID); err != nil {
+		return err
 	}
-	if err != nil {
-		return fmt.Errorf("%w: look up device: %v", ErrAuthUnavailable, err)
-	}
-	if ownerID != userID {
-		return ErrInvalidCredentials
-	}
-	if revokedAt.Valid {
-		return ErrDeviceRevoked
-	}
+
 	_, _ = s.db.Exec(
 		"UPDATE devices SET last_seen_at = ? WHERE id = ?",
 		time.Now(), deviceID,
@@ -625,7 +627,7 @@ func (s *Service) upsertDevice(userID int64, deviceName, hardwareID string) (str
 		var existingID string
 		err := s.db.QueryRow(
 			`SELECT id FROM devices
-			 WHERE user_id = ? AND hardware_id = ? AND revoked_at IS NULL
+			 WHERE user_id = ? AND hardware_id = ? AND revoked_at IS NULL AND auth_method = 'local'
 			 ORDER BY last_seen_at DESC LIMIT 1`,
 			userID, hardwareID,
 		).Scan(&existingID)
@@ -653,6 +655,8 @@ func (s *Service) upsertDevice(userID int64, deviceName, hardwareID string) (str
 }
 
 func (s *Service) RedeemConnectToken(token, deviceName, hardwareID string) (*TokenResponse, error) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	var ct ConnectToken
 	err := s.db.QueryRow(
 		"SELECT token, user_id, created_by, expires_at, redeemed_at FROM connect_tokens WHERE token = ?", token,
@@ -665,6 +669,10 @@ func (s *Service) RedeemConnectToken(token, deviceName, hardwareID string) (*Tok
 	}
 	if time.Now().After(ct.ExpiresAt) {
 		return nil, ErrTokenExpired
+	}
+
+	if err := s.requireConnectSignIn(); err != nil {
+		return nil, err
 	}
 
 	// Claim the single-use token atomically. The redeemed_at IS NULL guard means
@@ -771,7 +779,8 @@ func (s *Service) ListUsers() ([]UserSummary, error) {
 				SELECT 1 FROM connect_tokens ct
 				WHERE ct.user_id = u.id AND ct.redeemed_at IS NULL AND ct.expires_at > ?
 			) AS has_pending_invite,
-			EXISTS(SELECT 1 FROM user_content_policies p WHERE p.user_id = u.id) AS child
+			EXISTS(SELECT 1 FROM user_content_policies p WHERE p.user_id = u.id) AS child,
+			EXISTS(SELECT 1 FROM oidc_identities oi WHERE oi.user_id=u.id)
 		FROM users u
 		ORDER BY u.id
 	`, time.Now())
@@ -786,7 +795,7 @@ func (s *Service) ListUsers() ([]UserSummary, error) {
 		if err := rows.Scan(
 			&u.ID, &u.Username, &u.Role, &u.CreatedAt,
 			&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.AISharedEnabled, &u.PlexEmail,
-			&u.DeviceCount, &u.HasPendingInvite, &u.Child,
+			&u.DeviceCount, &u.HasPendingInvite, &u.Child, &u.SSOLinked,
 		); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
@@ -824,6 +833,8 @@ func (s *Service) SetUserAISharedAccess(userID int64, enabled bool) (*UserSummar
 // UpdateUserRole changes a user's role. It rejects unknown roles and refuses to
 // demote the last remaining admin so an install can never be locked out.
 func (s *Service) UpdateUserRole(userID int64, role string) (*UserSummary, error) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	if role != RoleAdmin && role != RoleUser {
 		return nil, ErrInvalidRole
 	}
@@ -843,6 +854,9 @@ func (s *Service) UpdateUserRole(userID int64, role string) (*UserSummary, error
 	}
 
 	if currentRole == RoleAdmin && role != RoleAdmin {
+		if err := protectOIDCRecovery(tx, userID); err != nil {
+			return nil, err
+		}
 		var adminCount int
 		if err := tx.QueryRow("SELECT COUNT(*) FROM users WHERE role = ?", RoleAdmin).Scan(&adminCount); err != nil {
 			return nil, fmt.Errorf("count admins: %w", err)
@@ -933,6 +947,8 @@ func (s *Service) SetUserAuthMethods(userID int64, passwordEnabled, passkeyEnabl
 // tokens, passkeys). It refuses to delete the acting admin's own account or the
 // last remaining admin.
 func (s *Service) DeleteUser(actorID, userID int64) error {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	if actorID == userID {
 		return ErrCannotDeleteSelf
 	}
@@ -952,6 +968,9 @@ func (s *Service) DeleteUser(actorID, userID int64) error {
 	}
 
 	if role == RoleAdmin {
+		if err := protectOIDCRecovery(tx, userID); err != nil {
+			return err
+		}
 		var adminCount int
 		if err := tx.QueryRow("SELECT COUNT(*) FROM users WHERE role = ?", RoleAdmin).Scan(&adminCount); err != nil {
 			return fmt.Errorf("count admins: %w", err)
@@ -997,13 +1016,14 @@ func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
 				SELECT 1 FROM connect_tokens ct
 				WHERE ct.user_id = u.id AND ct.redeemed_at IS NULL AND ct.expires_at > ?
 			) AS has_pending_invite,
-			EXISTS(SELECT 1 FROM user_content_policies p WHERE p.user_id = u.id) AS child
+			EXISTS(SELECT 1 FROM user_content_policies p WHERE p.user_id = u.id) AS child,
+			EXISTS(SELECT 1 FROM oidc_identities oi WHERE oi.user_id=u.id)
 		FROM users u
 		WHERE u.id = ?
 	`, time.Now(), userID).Scan(
 		&u.ID, &u.Username, &u.Role, &u.CreatedAt,
 		&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.AISharedEnabled, &u.PlexEmail,
-		&u.DeviceCount, &u.HasPendingInvite, &u.Child,
+		&u.DeviceCount, &u.HasPendingInvite, &u.Child, &u.SSOLinked,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1067,6 +1087,11 @@ func (s *Service) authenticateClaims(claims *Claims) (*Claims, *User, error) {
 		return nil, nil, err
 	}
 
+	if claims.DeviceID == "" {
+		if err := s.requireLocalSignIn(user.ID); err != nil {
+			return nil, nil, err
+		}
+	}
 	if claims.DeviceID != "" {
 		if err := s.requireActiveDevice(claims.DeviceID, claims.UserID); err != nil {
 			return nil, nil, err
@@ -1131,13 +1156,15 @@ func (s *Service) authoritativeSession(ctx context.Context, userID int64, device
 	var (
 		snapshot  authoritativeSessionSnapshot
 		revokedAt sql.NullTime
+		permitted bool
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT u.role, u.ai_shared_enabled, d.revoked_at
+		SELECT u.role, u.ai_shared_enabled, d.revoked_at,
+			(u.role = 'admin' OR d.auth_method = 'oidc' OR COALESCE((SELECT value FROM settings WHERE key = 'oidc_sso_only'), 'false') = 'false')
 		FROM users u
 		JOIN devices d ON d.user_id = u.id
 		WHERE u.id = ? AND d.id = ?
-	`, userID, deviceID).Scan(&snapshot.role, &snapshot.sharedAIEnabled, &revokedAt)
+	`, userID, deviceID).Scan(&snapshot.role, &snapshot.sharedAIEnabled, &revokedAt, &permitted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return authoritativeSessionSnapshot{}, ErrInvalidCredentials
 	}
@@ -1148,6 +1175,9 @@ func (s *Service) authoritativeSession(ctx context.Context, userID int64, device
 		return authoritativeSessionSnapshot{}, fmt.Errorf("%w: authorize session: %v", ErrAuthUnavailable, err)
 	}
 	if revokedAt.Valid {
+		return authoritativeSessionSnapshot{}, ErrDeviceRevoked
+	}
+	if !permitted {
 		return authoritativeSessionSnapshot{}, ErrDeviceRevoked
 	}
 	return snapshot, nil
@@ -1255,17 +1285,27 @@ func userWithPermissions(user *User) User {
 // flag rides along at no extra read and the discover, proxy, and request
 // paths can branch on it without touching the database again.
 const userSelect = `SELECT u.id, u.username, u.password_hash, u.role, u.password_enabled, u.passkey_enabled, u.plex_email, u.created_at,
-		p.user_id IS NOT NULL, p.max_movie_rating, p.max_tv_rating, p.rating_region
+		p.user_id IS NOT NULL, p.max_movie_rating, p.max_tv_rating, p.rating_region,
+		EXISTS(SELECT 1 FROM oidc_identities oi WHERE oi.user_id=u.id)
 	FROM users u LEFT JOIN user_content_policies p ON p.user_id = u.id`
 
 func (s *Service) scanUser(row *sql.Row) (*User, error) {
+	user, err := scanUserRecord(row)
+	if err != nil {
+		return nil, err
+	}
+	user.PlexInvitedAt = s.plexInvitedAt(user.ID)
+	return user, nil
+}
+
+func scanUserRecord(row *sql.Row) (*User, error) {
 	var (
 		user                 User
 		child                bool
 		movieCap, tvCap, reg sql.NullString
 	)
 	err := row.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.PlexEmail, &user.CreatedAt,
-		&child, &movieCap, &tvCap, &reg)
+		&child, &movieCap, &tvCap, &reg, &user.SSOLinked)
 	if err != nil {
 		return nil, err
 	}
@@ -1273,7 +1313,6 @@ func (s *Service) scanUser(row *sql.Row) (*User, error) {
 		user.Child = true
 		user.ContentLimits = &ContentLimits{MaxMovieRating: movieCap.String, MaxTVRating: tvCap.String, RatingRegion: reg.String}
 	}
-	user.PlexInvitedAt = s.plexInvitedAt(user.ID)
 	return &user, nil
 }
 

@@ -51,6 +51,8 @@ type OAuthTokenResponse struct {
 }
 
 type oauthAuthorizationCode struct {
+	AuthMethod    string
+	OIDCIssuer    string
 	CodeHash      string
 	ClientID      string
 	UserID        int64
@@ -151,11 +153,23 @@ func (s *Service) AuthenticatePassword(username, password string) (*User, error)
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return nil, ErrInvalidCredentials
 	}
+	if err := s.requireLocalSignIn(user.ID); err != nil {
+		return nil, err
+	}
 	withPerms := userWithPermissions(user)
 	return &withPerms, nil
 }
 
 func (s *Service) CreateOAuthAuthorizationCode(client *OAuthClient, userID int64, redirectURI, codeChallenge, resource, scope string) (string, error) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+	if err := s.requireLocalSignIn(userID); err != nil {
+		return "", err
+	}
+	return s.createOAuthAuthorizationCode(client, userID, redirectURI, codeChallenge, resource, scope, "local", "")
+}
+func (s *Service) createOAuthAuthorizationCode(client *OAuthClient, userID int64, redirectURI, codeChallenge, resource, scope, method, issuer string) (string, error) {
+
 	if !clientAllowsRedirect(client, redirectURI) {
 		return "", ErrOAuthInvalidRedirectURI
 	}
@@ -173,9 +187,9 @@ func (s *Service) CreateOAuthAuthorizationCode(client *OAuthClient, userID int64
 	codeHash := hashToken(code)
 	_, err = s.db.Exec(
 		`INSERT INTO oauth_authorization_codes
-		 (code_hash, client_id, user_id, redirect_uri, code_challenge, resource, scope, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		codeHash, client.ClientID, userID, redirectURI, codeChallenge, resource, scope, time.Now().Add(oauthAuthorizationCodeTTL),
+		 (code_hash, client_id, user_id, redirect_uri, code_challenge, resource, scope, expires_at, auth_method, oidc_issuer)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		codeHash, client.ClientID, userID, redirectURI, codeChallenge, resource, scope, time.Now().Add(oauthAuthorizationCodeTTL), method, issuer,
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert auth code: %w", err)
@@ -184,6 +198,8 @@ func (s *Service) CreateOAuthAuthorizationCode(client *OAuthClient, userID int64
 }
 
 func (s *Service) ExchangeOAuthAuthorizationCode(clientID, code, redirectURI, codeVerifier, resource string) (*OAuthTokenResponse, error) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	client, err := s.GetOAuthClient(clientID)
 	if err != nil {
 		return nil, err
@@ -214,9 +230,23 @@ func (s *Service) ExchangeOAuthAuthorizationCode(clientID, code, redirectURI, co
 	if err != nil {
 		return nil, ErrInvalidCredentials
 	}
+	if stored.AuthMethod == "local" {
+		if err := s.requireLocalSignIn(user.ID); err != nil {
+			return nil, err
+		}
+	}
+	if stored.AuthMethod == "oidc" {
+		var linked bool
+		if err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM oidc_identities WHERE user_id=? AND issuer=?)", user.ID, stored.OIDCIssuer).Scan(&linked); err != nil || !linked {
+			return nil, ErrInvalidCredentials
+		}
+	}
 	deviceID, err := s.createOAuthDevice(user.ID, client.ClientName)
 	if err != nil {
 		return nil, err
+	}
+	if _, err = s.db.Exec("UPDATE devices SET auth_method=?,oidc_issuer=? WHERE id=?", stored.AuthMethod, stored.OIDCIssuer, deviceID); err != nil {
+		return nil, ErrAuthUnavailable
 	}
 	refreshToken, err := s.createOAuthRefreshToken(clientID, user.ID, deviceID, stored.Resource, stored.Scope)
 	if err != nil {
@@ -236,6 +266,8 @@ func (s *Service) ExchangeOAuthAuthorizationCode(clientID, code, redirectURI, co
 }
 
 func (s *Service) RefreshOAuthToken(clientID, refreshToken, resource string) (*OAuthTokenResponse, error) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	stored, tokenHash, err := s.loadOAuthRefreshToken(clientID, refreshToken)
 	if err != nil {
 		return nil, err
@@ -294,9 +326,9 @@ func (s *Service) consumeOAuthAuthorizationCode(code, clientID, redirectURI stri
 	err := s.db.QueryRow(
 		`DELETE FROM oauth_authorization_codes
 		 WHERE code_hash = ? AND client_id = ? AND redirect_uri = ?
-		 RETURNING code_hash, client_id, user_id, redirect_uri, code_challenge, resource, scope, expires_at`,
+		 RETURNING code_hash, client_id, user_id, redirect_uri, code_challenge, resource, scope, expires_at, auth_method, oidc_issuer`,
 		codeHash, clientID, redirectURI,
-	).Scan(&stored.CodeHash, &stored.ClientID, &stored.UserID, &stored.RedirectURI, &stored.CodeChallenge, &stored.Resource, &stored.Scope, &stored.ExpiresAt)
+	).Scan(&stored.CodeHash, &stored.ClientID, &stored.UserID, &stored.RedirectURI, &stored.CodeChallenge, &stored.Resource, &stored.Scope, &stored.ExpiresAt, &stored.AuthMethod, &stored.OIDCIssuer)
 	if err != nil {
 		return nil, ErrOAuthInvalidCode
 	}

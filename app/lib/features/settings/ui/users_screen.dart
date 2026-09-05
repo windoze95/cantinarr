@@ -912,6 +912,8 @@ class _UserTile extends StatelessWidget {
               label: user.isAdmin ? 'Admin' : 'User',
               color: user.isAdmin ? AppTheme.accent : AppTheme.textSecondary,
             ),
+            if (user.ssoLinked)
+              const _Tag(label: 'SSO linked', color: AppTheme.available),
             if (user.child) const _Tag(label: 'Child', color: AppTheme.info),
             if (user.hasPendingInvite)
               const _Tag(label: 'Invited', color: AppTheme.requested)
@@ -992,6 +994,9 @@ class _UserTile extends StatelessWidget {
           return;
         }
         switch (value) {
+          case 'sso':
+            context.push('/settings/users/${user.id}/sso');
+            break;
           case 'make_admin':
             onChangeRole('admin');
             break;
@@ -1028,6 +1033,7 @@ class _UserTile extends StatelessWidget {
         }
       },
       itemBuilder: (context) => [
+        const PopupMenuItem(value: 'sso', child: Text('Linked sign-in')),
         const PopupMenuItem(
           value: 'request_settings',
           child: ListTile(

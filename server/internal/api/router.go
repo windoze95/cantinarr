@@ -88,6 +88,7 @@ func NewRouter(
 	r.With(oauthLimiter.Middleware).Post("/oauth/passkey/login/begin", oauthHandler.BeginOAuthPasskeyLogin)
 	r.With(oauthLimiter.Middleware).Post("/oauth/passkey/login/finish", oauthHandler.FinishOAuthPasskeyLogin)
 	r.With(oauthLimiter.Middleware).Post("/oauth/token", oauthHandler.Token)
+	r.With(oauthLimiter.Middleware).Post("/api/auth/oidc/mcp/begin", oauthHandler.BeginOIDC)
 	r.Get("/passkeys/setup", oauthHandler.PasskeySetup)
 	r.Get("/passkeys/create", oauthHandler.PasskeyCreate)
 
@@ -132,6 +133,10 @@ func NewRouter(
 		// Auth routes (public)
 		r.Route("/auth", func(r chi.Router) {
 			r.Get("/status", authHandler.AuthStatus)
+			r.With(authLimiter.Middleware).Post("/oidc/begin", authHandler.OIDCBegin)
+			r.With(authLimiter.Middleware).Get("/oidc/start", authHandler.OIDCStart)
+			r.Get("/oidc/callback", authHandler.OIDCCallback)
+			r.With(authLimiter.Middleware).Post("/oidc/exchange", authHandler.OIDCExchange)
 			r.With(authLimiter.Middleware).Post("/setup", authHandler.HandleSetup)
 			r.With(authLimiter.Middleware).Post("/login", authHandler.Login)
 			r.Post("/refresh", authHandler.Refresh)
@@ -147,6 +152,9 @@ func NewRouter(
 			r.Group(func(r chi.Router) {
 				r.Use(authService.AuthMiddleware)
 				r.Get("/me", authHandler.Me)
+				r.Get("/oidc/identities", authHandler.OIDCIdentities)
+				r.Post("/oidc/link", authHandler.OIDCLinkBegin)
+				r.Delete("/oidc/identities", authHandler.OIDCUnlink)
 				r.With(authLimiter.Middleware).Post("/password", authHandler.SetPassword)
 				r.With(authLimiter.Middleware).Post("/plex-email", authHandler.SetPlexEmail)
 
@@ -172,6 +180,13 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/external-address", updateExternalAddressHandler(serverSettings))
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/devices", authHandler.HandleListDevices)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/devices/{deviceID}", authHandler.HandleRevokeDevice)
+
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/oidc", authHandler.OIDCConfig)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/oidc", authHandler.OIDCConfigSave)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/oidc/validate", authHandler.OIDCValidate)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/oidc/test", authHandler.OIDCTestBegin)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users/{userID}/oidc", authHandler.OIDCIdentities)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}/oidc", authHandler.OIDCUnlink)
 
 			// User management
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users", authHandler.HandleListUsers)

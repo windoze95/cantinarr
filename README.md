@@ -42,6 +42,8 @@ Discover and request movies, TV shows, books, and music. Get push notifications.
 └───────────────────────────────┘      └─────────────────────┘
 ```
 
+Single sign-on is available on web, iOS and Android with an external OpenID Connect provider. Configure it in **Settings > Single sign-on**; optional account creation, exact group restrictions and SSO-only policy preserve local administrator recovery. See [OIDC setup](docs/oidc-setup.md).
+
 ## Why Cantinarr?
 
 - **Zero-config requesting** -- Your users never see API keys, TVDB IDs, or quality profiles. They browse, they tap, it works.
@@ -327,7 +329,7 @@ Movies don't need bridging -- Radarr natively supports TMDB IDs. Books are keyed
 |---|---|
 | Server | Go 1.25, Chi router, SQLite (pure Go) |
 | Client | Flutter (Dart), Riverpod, GoRouter |
-| Auth | JWT (HS256), bcrypt, connect tokens, WebAuthn passkeys |
+| Auth | JWT (HS256), bcrypt, connect tokens, WebAuthn passkeys, external OIDC sign-in with PKCE |
 | AI | Personal or admin-shared Anthropic, OpenAI, Gemini, and xAI Grok API credentials, plus personal or shared OpenAI OAuth via the bundled pinned Codex app-server and xAI Grok OAuth via xAI's device flow; SSE app streaming |
 | MCP | [mcp-go](https://github.com/mark3labs/mcp-go), Streamable HTTP + inbound Cantinarr OAuth |
 | Real-time | gorilla/websocket + arr webhooks |

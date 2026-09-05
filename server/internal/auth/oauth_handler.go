@@ -113,22 +113,29 @@ func (h *OAuthHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.service.AuthenticatePassword(r.Form.Get("username"), r.Form.Get("password"))
-	if err != nil {
-		h.renderAuthorizeForm(w, r, "Invalid username or password.")
-		return
-	}
+	var code string
+	if r.Form.Get("oidc_consent") != "" {
+		code, err = h.authorizeOIDC(r, client)
+	} else {
 
-	resource := h.requestedMCPResource(r)
-	scope := normalizeOAuthScope(r.Form.Get("scope"))
-	code, err := h.service.CreateOAuthAuthorizationCode(
-		client,
-		user.ID,
-		r.Form.Get("redirect_uri"),
-		r.Form.Get("code_challenge"),
-		resource,
-		scope,
-	)
+		var user *User
+		user, err = h.service.AuthenticatePassword(r.Form.Get("username"), r.Form.Get("password"))
+		if err != nil {
+			h.renderAuthorizeForm(w, r, "Invalid username or password.")
+			return
+		}
+
+		resource := h.requestedMCPResource(r)
+		scope := normalizeOAuthScope(r.Form.Get("scope"))
+		code, err = h.service.CreateOAuthAuthorizationCode(
+			client,
+			user.ID,
+			r.Form.Get("redirect_uri"),
+			r.Form.Get("code_challenge"),
+			resource,
+			scope,
+		)
+	}
 	if err != nil {
 		h.renderAuthorizeForm(w, r, oauthErrorText(err))
 		return
@@ -341,16 +348,19 @@ func (h *OAuthHandler) validateAuthorizeRequest(r *http.Request) (*OAuthClient, 
 }
 
 func (h *OAuthHandler) renderAuthorizeForm(w http.ResponseWriter, r *http.Request, message string) {
+	oidcHeaders(w)
 	if r.Method == http.MethodGet {
 		_ = r.ParseForm()
 	}
 	if _, err := h.validateAuthorizeRequest(r); err != nil && message == "" {
 		message = oauthErrorText(err)
 	}
+	label, origin, note := h.oidcTemplateSettings()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_ = authorizeTemplate.Execute(w, map[string]string{
+		"SSOLabel": label, "SSOOrigin": origin, "SSONote": note,
 		"Message":             message,
 		"ResponseType":        r.Form.Get("response_type"),
 		"ClientID":            r.Form.Get("client_id"),
@@ -399,6 +409,9 @@ var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!doctype
       <input type="hidden" name="code_challenge" value="{{.CodeChallenge}}">
       <input type="hidden" name="code_challenge_method" value="{{.CodeChallengeMethod}}">
       <input type="hidden" name="resource" value="{{.Resource}}">
+      {{if .SSOLabel}}<button id="ssoButton" type="button">Continue with {{.SSOLabel}}</button>{{end}}
+      {{if .SSONote}}<p>{{.SSONote}}</p>{{end}}
+      <input type="hidden" name="oidc_consent" id="oidcConsent">
       <button id="passkeyButton" type="button" class="secondary">Use passkey</button>
       <a class="button secondary" href="{{.PasskeySetupURL}}">Create a passkey</a>
       <div id="passkeyStatus" class="status"></div>
@@ -462,6 +475,41 @@ var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!doctype
       params.set('session_id', sessionID);
       return params.toString();
     }
+
+    const ssoButton = document.getElementById('ssoButton');
+    const ssoOrigin = {{.SSOOrigin}};
+    const oauthFields = ['response_type','client_id','redirect_uri','scope','state','code_challenge','code_challenge_method','resource'];
+    async function ssoJSON(path, data) {
+      const response = await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+      const result = await response.json(); if(!response.ok) throw new Error(result.error || 'Sign-in failed'); return result;
+    }
+    if(ssoButton) ssoButton.addEventListener('click', async () => {
+      try {
+        const oauth = {}; const query = new URLSearchParams();
+        for(const key of oauthFields) {const value=form.elements[key].value; oauth[key]=[value];query.set(key,value);}
+        if(location.origin!==ssoOrigin) { location.assign(ssoOrigin+'/oauth/authorize?'+query.toString());return; }
+        const verifier=bufferToB64url(crypto.getRandomValues(new Uint8Array(32)));
+        const challenge=bufferToB64url(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier)));
+        const begun=await ssoJSON('/api/auth/oidc/mcp/begin',{client:'mcp',challenge,oauth});
+        sessionStorage.setItem('cantinarr_oidc_mcp_'+begun.flow,verifier);
+        location.assign(begun.start_url);
+      } catch(error) {setStatus(error.message);}
+    });
+    (async () => {
+      const q=new URLSearchParams(location.search),code=q.get('oidc_code'),flow=q.get('oidc_flow');
+      if(!code||!flow)return;
+      q.delete('oidc_code');q.delete('oidc_flow');history.replaceState(null,'',location.pathname+'?'+q.toString());
+      const key='cantinarr_oidc_mcp_'+flow,verifier=sessionStorage.getItem(key);sessionStorage.removeItem(key);
+      if(!verifier){setStatus('This sign-in started in another tab or has expired. Please start again.');return;}
+      try {
+        const result=await ssoJSON('/api/auth/oidc/exchange',{code,flow,verifier});
+        if(!result.consent)throw new Error('Please start sign-in again.');
+        document.getElementById('oidcConsent').value=result.consent;
+        for(const id of ['username','password']){const field=document.getElementById(id);field.required=false;field.disabled=true;}
+        if(ssoButton)ssoButton.disabled=true;passkeyButton.disabled=true;
+        setStatus('Signed in as '+result.username+'. Select Authorize to grant this MCP client access.');
+      } catch(error) {setStatus(error.message);}
+    })();
 
     passkeyButton.addEventListener('click', async () => {
       if (!window.PublicKeyCredential || !navigator.credentials) {

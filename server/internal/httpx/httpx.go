@@ -6,11 +6,12 @@
 // admin's outbound proxy and, when none is set, Go's default transport with
 // its standard HTTP_PROXY/HTTPS_PROXY/NO_PROXY handling. Cluster-internal
 // traffic -- arr instances, download clients, Jellyfin/Emby, Tautulli/Tracearr,
-// webhook installs, the Local AI provider -- rides Internal, which never uses a
+// webhook installs, the Local AI and external OIDC providers -- rides Internal, which never uses a
 // proxy: a VPN-tunnelled proxy cannot reach the LAN, and an env-var proxy with
 // an incomplete NO_PROXY used to swallow arr calls and surface as timeouts that
 // looked like unrelated bugs (#501).
 //
+// Admin-typed Local AI and OIDC endpoints may explicitly opt into External.
 // Every http.Client literal in the server names one of the two in its
 // Transport field; classification_test.go fails any that does not.
 package httpx

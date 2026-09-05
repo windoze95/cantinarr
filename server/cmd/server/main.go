@@ -358,6 +358,7 @@ func main() {
 	// External address sources: read per call so a settings change reaches the
 	// next link without a restart. Wired late for the same reason as the
 	// access-request hook.
+	authService.SetOIDCCipher(cipher)
 	authHandler.SetExternalURLSource(func() string { return serverSettings.Get().ExternalURL })
 	mediaAccessHandler.SetExternalURLSource(func() string { return serverSettings.Get().ExternalURL })
 
