@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:cantinarr/app.dart';
 import 'package:cantinarr/core/models/backend_connection.dart';
@@ -12,6 +11,7 @@ import 'package:cantinarr/features/auth/data/server_status.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -146,6 +146,27 @@ void main() {
   });
 
   group('deep link handling', () {
+    testWidgets('iOS linking return keeps the account screen visible',
+        (tester) async {
+      final app = await _pumpApp(tester, authState: _authedState);
+      app.auth.oidcPurpose = 'link';
+      final router = app.container.read(appRouterProvider);
+      router.go('/settings');
+      await tester.pumpAndSettle();
+      router.push('/settings/sso-account');
+      await tester.pumpAndSettle();
+      expect(find.text('Linked sign-in'), findsOneWidget);
+
+      app.links.controller
+          .add(Uri.parse('cantinarr://oidc?code=linked&flow=native-link'));
+      await _settleLink(tester);
+
+      expect(find.text('Linked sign-in'), findsOneWidget);
+      expect(router.routeInformationProvider.value.uri.path,
+          '/settings/sso-account');
+      expect(app.container.read(authProvider).value!.isAuthenticated, isTrue);
+    }, variant: const TargetPlatformVariant({TargetPlatform.iOS}));
+
     testWidgets('failed OIDC return clears the route query and keeps the session',
         (tester) async {
       final app = await _pumpApp(tester, authState: _authedState);
@@ -499,6 +520,7 @@ class _FakeAuthNotifier extends AuthNotifier {
   final List<String> connectLinks = [];
   final List<Uri> oidcReturns = [];
   String? oidcFailure;
+  String oidcPurpose = 'login';
   @override
   Future<String> finishSSO(Uri uri) async {
     oidcReturns.add(uri);
@@ -506,7 +528,7 @@ class _FakeAuthNotifier extends AuthNotifier {
       state = AsyncData(_initial.copyWith(error: oidcFailure));
       throw StateError(oidcFailure!);
     }
-    return 'login';
+    return oidcPurpose;
   }
 
   final List<(String, String)> switchCalls = [];

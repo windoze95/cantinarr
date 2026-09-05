@@ -275,7 +275,7 @@ The router guard redirects unauthenticated users to `/login`, remembers safe int
 | `cached_network_image` + `flutter_cache_manager` | Tuned shared image cache |
 | `flutter_secure_storage` / `shared_preferences` | Tokens + device id / lightweight prefs |
 | `passkeys_ios` / `passkeys_android` / `passkeys_windows` | Native WebAuthn |
-| `app_links` | `cantinarr://` connect-link deep linking |
+| `app_links` | `cantinarr://` invitations, passkeys, and OIDC browser returns; the native Flutter deep-link handler is disabled so each callback has one owner |
 | `url_launcher` | External links (ChatGPT device authorization, trailers, IMDb/TVDB/TMDB/Trakt, Goodreads/Open Library/Hardcover, GitHub/roadmap/donate) |
 | `device_info_plus` / `package_info_plus` | Device naming, version display |
 | `shimmer`, `intl`, `uuid` | Loading placeholders, formatting, ids |
