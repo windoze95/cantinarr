@@ -8,14 +8,12 @@ class BookSynopsis extends StatefulWidget {
   final String text;
   final bool loading;
   final bool failed;
-  final bool unavailable;
   final VoidCallback onRetry;
   const BookSynopsis(
       {super.key,
       required this.text,
       required this.loading,
       required this.failed,
-      this.unavailable = false,
       required this.onRetry});
 
   @override
@@ -28,10 +26,7 @@ class _BookSynopsisState extends State<BookSynopsis> {
   @override
   Widget build(BuildContext context) {
     final text = widget.text;
-    if (text.isEmpty &&
-        !widget.loading &&
-        !widget.failed &&
-        !widget.unavailable) {
+    if (text.isEmpty && !widget.loading && !widget.failed) {
       return const SizedBox.shrink();
     }
     final style = Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -96,14 +91,6 @@ class _BookSynopsisState extends State<BookSynopsis> {
                           child: const Text('Retry')),
                     ],
                   ),
-                if (!widget.loading &&
-                    !widget.failed &&
-                    (widget.unavailable || abbreviated))
-                  Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Text(widget.unavailable
-                          ? 'The book source didn’t return matching details.'
-                          : 'The book source only provided this preview.')),
               ]);
         }),
       ]),

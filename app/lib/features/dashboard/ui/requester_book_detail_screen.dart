@@ -81,7 +81,6 @@ class _RequesterBookDetailScreenState
   Map<int, List<ChaptarrBookFile>> _filesByBook = const {};
   bool _metadataLoading = false;
   bool _metadataFailed = false;
-  bool _metadataUnavailable = false;
   String? _metadataScope;
   int _loadGeneration = 0;
   int _recordsLoadGeneration = 0;
@@ -141,7 +140,6 @@ class _RequesterBookDetailScreenState
     _canonicalForeignId = null;
     _metadataLoading = true;
     _metadataFailed = false;
-    _metadataUnavailable = false;
     // A warm search result can paint its details on the very first frame.
     // Even with an initial record, a missing/stale entry fetches in the
     // background; the search snippet never suppresses the detailed lookup.
@@ -155,7 +153,6 @@ class _RequesterBookDetailScreenState
         if (match != null) _metadata = enrichBookMetadata(_metadata, match);
         _metadataLoading = false;
         _metadataFailed = cached.failed;
-        _metadataUnavailable = !cached.failed && match == null;
       }
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -209,7 +206,6 @@ class _RequesterBookDetailScreenState
       if (match != null) _metadata = enrichBookMetadata(initial, match);
       _metadataLoading = false;
       _metadataFailed = failed;
-      _metadataUnavailable = !failed && match == null;
     });
   }
 
@@ -217,7 +213,6 @@ class _RequesterBookDetailScreenState
     setState(() {
       _metadataLoading = true;
       _metadataFailed = false;
-      _metadataUnavailable = false;
     });
     _resolveMetadata(_loadGeneration, retry: true);
   }
@@ -512,9 +507,6 @@ class _RequesterBookDetailScreenState
     final publication = publicationBook == null
         ? BookPublication(year: owned?.year ?? 0)
         : BookPublication.fromBook(publicationBook);
-    final publicationSource = _metadata != null && _metadata!.id <= 0
-        ? 'Catalog details'
-        : 'Library edition';
     final overview = _firstText([
       _metadata?.displayOverview,
       live?.displayOverview,
@@ -654,15 +646,9 @@ class _RequesterBookDetailScreenState
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
-          if (publication.summary.isNotEmpty ||
-              publication.editionLabel.isNotEmpty) ...[
+          if (publication.editionLabel.isNotEmpty) ...[
             const SizedBox(height: 4),
-            Text(
-                [
-                  publicationSource,
-                  if (publication.editionLabel.isNotEmpty)
-                    publication.editionLabel,
-                ].join(' · '),
+            Text(publication.editionLabel,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall),
           ],
@@ -753,7 +739,6 @@ class _RequesterBookDetailScreenState
             text: overview,
             loading: _metadataLoading,
             failed: _metadataFailed,
-            unavailable: _metadataUnavailable,
             onRetry: _retryMetadata,
           ),
           // Outbound, and marked as such. Shown with or without an overview:

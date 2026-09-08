@@ -85,4 +85,4 @@ Saved history is preserved. Old Open Library requests with verified native bindi
 
 **Waiting for library** means Chaptarr accepted an author import and owns its retry loop. Cantinarr observes its pending-import API and managed webhook without repeatedly adding it. An import that lands resumes the remaining formats; a failed, cancelled, or ambiguous import needs attention. Older Chaptarr versions without that API retain their supported add-probe fallback.
 
-Publication details name their catalog or library source and show edition publisher/format when available. Different editions may have different page counts. Dates more than five years ahead appear as **Date unconfirmed (year)** and move to the undated end of an author's bibliography; Cantinarr keeps the source value rather than inventing a correction.
+Publication details show edition publisher/format when available. Different editions may have different page counts. Dates more than five years ahead appear as **Date unconfirmed (year)** and move to the undated end of an author's bibliography; Cantinarr keeps the source value rather than inventing a correction.

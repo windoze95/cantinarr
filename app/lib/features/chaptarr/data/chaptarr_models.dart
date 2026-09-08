@@ -1,4 +1,4 @@
-import '../../../core/utils/plain_text_metadata.dart';
+import 'book_description.dart';
 
 /// The medium a book file is stored in. Mirrors the Go `FormatOf` helper:
 /// ebook formats (EPUB/MOBI/…) vs audiobook formats (MP3/M4B/…).
@@ -604,10 +604,10 @@ class ChaptarrBook {
   /// Best available synopsis, falling back to edition metadata when the book
   /// lookup itself leaves `overview` empty.
   String? get displayOverview {
-    final value = metadataPlainText(overview);
+    final value = bookDescriptionText(overview);
     if (value.isNotEmpty) return value;
     for (final edition in editions) {
-      final editionOverview = metadataPlainText(edition.overview);
+      final editionOverview = bookDescriptionText(edition.overview);
       if (editionOverview.isNotEmpty) return editionOverview;
     }
     return null;

@@ -130,7 +130,7 @@ void main() {
 
   for (final warm in [false, true]) {
     testWidgets(
-        'successful conflicting metadata preserves the selection and reports no match, warm: $warm',
+        'successful conflicting metadata quietly preserves the selection, warm: $warm',
         (tester) async {
       // Real Chaptarr can answer an exact Goodreads work lookup with two
       // Hardcover format projections, a different Goodreads work ID, and no
@@ -164,16 +164,19 @@ void main() {
               foreignBookId: 'gr:101',
               foreignEditionId: 'gr:501',
               pageCount: 400,
-              overview: 'A former Jedi searches for a new path…'));
+              overview:
+                  'An alternative cover for this ASIN can be found here\n\n'
+                  'A former Jedi searches for a new path…'));
       await tester.pumpAndSettle();
       expect(adapter.lookupTerms, ['gr:101']);
       expect(find.text('Ahsoka (Star Wars)'), findsOneWidget);
       expect(
           find.text('A former Jedi searches for a new path…'), findsOneWidget);
       expect(find.textContaining('400 pages'), findsOneWidget);
-      await tester.scrollUntilVisible(
-          find.text('The book source didn’t return matching details.'), 150,
-          scrollable: _detailScrollable());
+      expect(find.textContaining('alternative cover'), findsNothing);
+      expect(find.textContaining('Catalog details'), findsNothing);
+      expect(find.textContaining('Library edition'), findsNothing);
+      expect(find.textContaining('The book source'), findsNothing);
       expect(find.text('Couldn’t load more details'), findsNothing);
       expect(find.text('Retry'), findsNothing);
       expect(find.text('Read more'), findsNothing);
@@ -232,7 +235,9 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.text('Ahsoka (Star Wars)'), findsOneWidget);
       expect(find.text('2016 · 400 pages'), findsOneWidget);
-      expect(find.textContaining('Catalog details'), findsOneWidget);
+      expect(find.text('Disney Lucasfilm Press · Paperback'), findsOneWidget);
+      expect(find.textContaining('Catalog details'), findsNothing);
+      expect(find.textContaining('Library edition'), findsNothing);
       expect(find.textContaining('223 pages'), findsNothing);
       expect(find.byKey(const ValueKey('book-author-link')), findsOneWidget);
       expect(find.byKey(const ValueKey('book-series-link')), findsOneWidget);
