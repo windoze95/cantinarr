@@ -68,15 +68,15 @@ class _DeferredStatusAdapter implements HttpClientAdapter {
   }
 
   void complete(String foreignId, Map<String, dynamic> body) {
-    responses[foreignId]!.complete(
-      ResponseBody.fromString(
-        jsonEncode(body),
-        200,
-        headers: {
-          'content-type': ['application/json'],
-        },
-      ),
-    );
+    responses.remove(foreignId)!.complete(
+          ResponseBody.fromString(
+            jsonEncode(body),
+            200,
+            headers: {
+              'content-type': ['application/json'],
+            },
+          ),
+        );
   }
 
   @override
@@ -523,6 +523,110 @@ void main() {
     expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNotNull);
   });
 
+  for (final status in ['available', 'unavailable']) {
+    testWidgets(
+        'a delayed $status check never shows a failure or shifts the synopsis',
+        (tester) async {
+      final adapter = _DeferredStatusAdapter(delivery: []);
+      final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+        ..httpClientAdapter = adapter;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              BookFormatPanel(
+                foreignId: 'fb',
+                title: 'Harry Potter',
+                service: RequestService(backendDio: dio),
+              ),
+              const Text('About this book'),
+            ],
+          ),
+        ),
+      ));
+      expect(find.text('Couldn’t check · Retry'), findsNothing);
+      final synopsisPosition = tester.getTopLeft(find.text('About this book'));
+
+      await _waitForRequest(tester, adapter, 'fb');
+      await tester.pump(const Duration(seconds: 5));
+      expect(find.text('Checking…'), findsNWidgets(2));
+      expect(find.text('Couldn’t check · Retry'), findsNothing);
+      expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
+      expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNull);
+      expect(tester.getTopLeft(find.text('About this book')), synopsisPosition);
+
+      adapter.complete('fb', {
+        'status': status,
+        'book_formats': {'ebook': status, 'audiobook': status},
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('Checking…'), findsNothing);
+      expect(find.text('Couldn’t check · Retry'), findsNothing);
+      expect(find.text(status == 'available' ? 'Available' : 'Request'),
+          findsNWidgets(2));
+      expect(tester.getTopLeft(find.text('About this book')), synopsisPosition);
+    });
+  }
+
+  testWidgets('a failed availability check offers a working retry',
+      (tester) async {
+    final adapter = _DeferredStatusAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(_panel(RequestService(backendDio: dio)));
+    await _waitForRequest(tester, adapter, 'fb');
+    expect(find.text('Couldn’t check · Retry'), findsNothing);
+
+    adapter.complete('fb', {
+      'status': 'unavailable',
+      'status_known': false,
+      'status_unknown_reason': 'library_unavailable',
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('Couldn’t check · Retry'), findsOneWidget);
+    expect(find.text('Request'), findsNothing);
+
+    await tester.tap(find.text('Couldn’t check · Retry'));
+    await _waitForRequest(tester, adapter, 'fb');
+    expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
+    expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNull);
+
+    adapter.complete('fb', {'status': 'unavailable'});
+    await tester.pumpAndSettle();
+    expect(find.text('Couldn’t check · Retry'), findsNothing);
+    expect(find.text('Request'), findsNWidgets(2));
+    expect(tester.widget<InkWell>(_row('ebook')).onTap, isNotNull);
+    expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNotNull);
+  });
+
+  testWidgets('a reused panel does not show the previous book’s check failure',
+      (tester) async {
+    final adapter = _DeferredStatusAdapter(delivery: []);
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    final service = RequestService(backendDio: dio);
+    await tester.pumpWidget(_panel(service));
+    await _waitForRequest(tester, adapter, 'fb');
+    adapter.complete('fb', {
+      'status': 'unavailable',
+      'status_known': false,
+      'status_unknown_reason': 'library_unavailable',
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('Couldn’t check · Retry'), findsOneWidget);
+
+    await tester.pumpWidget(_panel(service, foreignId: 'new-book'));
+    await _waitForRequest(tester, adapter, 'new-book');
+    await tester.pumpAndSettle();
+    expect(find.text('Checking…'), findsNWidgets(2));
+    expect(find.text('Couldn’t check · Retry'), findsNothing);
+
+    adapter.complete('new-book', {'status': 'unavailable'});
+    await tester.pumpAndSettle();
+    expect(find.text('Couldn’t check · Retry'), findsNothing);
+    expect(find.text('Request'), findsNWidgets(2));
+  });
+
   for (final savedApproval in [false, true]) {
     testWidgets(
         'saved delivery does not enable requests before live availability '
@@ -544,6 +648,7 @@ void main() {
 
       expect(find.text('Request'), findsNothing);
       expect(find.text('Checking…'), findsNWidgets(savedApproval ? 1 : 2));
+      expect(find.text('Couldn’t check · Retry'), findsNothing);
       expect(find.text('Pending Approval'),
           savedApproval ? findsOneWidget : findsNothing);
       expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
@@ -556,6 +661,7 @@ void main() {
       });
       await tester.pumpAndSettle();
       expect(find.text('Checking…'), findsNothing);
+      expect(find.text('Couldn’t check · Retry'), findsOneWidget);
       expect(find.text('Request'), findsNothing);
       expect(find.text('Pending Approval'),
           savedApproval ? findsOneWidget : findsNothing);
@@ -1174,11 +1280,12 @@ void main() {
 Widget _panel(
   RequestService service, {
   bool ownershipStatusKnown = true,
+  String foreignId = 'fb',
 }) =>
     MaterialApp(
       home: Scaffold(
         body: BookFormatPanel(
-          foreignId: 'fb',
+          foreignId: foreignId,
           title: 'Flock',
           service: service,
           ownershipStatusKnown: ownershipStatusKnown,

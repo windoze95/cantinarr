@@ -618,8 +618,11 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
               ],
             ),
           )
-        else if (_refreshFailed ||
-            detail.effectiveUnknownReason == BookStatusUnknownReason.transient)
+        // The initial unknown status is still being checked, not a failure.
+        else if (!_loading &&
+            (_refreshFailed ||
+                detail.effectiveUnknownReason ==
+                    BookStatusUnknownReason.transient))
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
