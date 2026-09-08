@@ -81,6 +81,7 @@ class _RequesterBookDetailScreenState
   Map<int, List<ChaptarrBookFile>> _filesByBook = const {};
   bool _metadataLoading = false;
   bool _metadataFailed = false;
+  bool _metadataUnavailable = false;
   String? _metadataScope;
   int _loadGeneration = 0;
   int _recordsLoadGeneration = 0;
@@ -140,6 +141,7 @@ class _RequesterBookDetailScreenState
     _canonicalForeignId = null;
     _metadataLoading = true;
     _metadataFailed = false;
+    _metadataUnavailable = false;
     // A warm search result can paint its details on the very first frame.
     // Even with an initial record, a missing/stale entry fetches in the
     // background; the search snippet never suppresses the detailed lookup.
@@ -153,6 +155,7 @@ class _RequesterBookDetailScreenState
         if (match != null) _metadata = enrichBookMetadata(_metadata, match);
         _metadataLoading = false;
         _metadataFailed = cached.failed;
+        _metadataUnavailable = !cached.failed && match == null;
       }
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -190,12 +193,13 @@ class _RequesterBookDetailScreenState
         .load((instanceId: instanceId, foreignId: foreignId), retry: retry);
     if (!mounted || generation != _loadGeneration || result.cancelled) return;
     var match = selectBookMetadata(foreignId, result.books, initial: initial);
-    var failed = result.failed || (match == null && result.books.isNotEmpty);
+    var failed = result.failed;
     final term = widget.titleHint?.trim() ?? '';
     if (initial == null && match == null && term.isNotEmpty) {
       try {
         final results = await service.lookupBook(term);
         match = selectBookMetadata(foreignId, results);
+        if (match != null) failed = false;
       } catch (_) {
         failed = true;
       }
@@ -205,6 +209,7 @@ class _RequesterBookDetailScreenState
       if (match != null) _metadata = enrichBookMetadata(initial, match);
       _metadataLoading = false;
       _metadataFailed = failed;
+      _metadataUnavailable = !failed && match == null;
     });
   }
 
@@ -212,6 +217,7 @@ class _RequesterBookDetailScreenState
     setState(() {
       _metadataLoading = true;
       _metadataFailed = false;
+      _metadataUnavailable = false;
     });
     _resolveMetadata(_loadGeneration, retry: true);
   }
@@ -747,6 +753,7 @@ class _RequesterBookDetailScreenState
             text: overview,
             loading: _metadataLoading,
             failed: _metadataFailed,
+            unavailable: _metadataUnavailable,
             onRetry: _retryMetadata,
           ),
           // Outbound, and marked as such. Shown with or without an overview:

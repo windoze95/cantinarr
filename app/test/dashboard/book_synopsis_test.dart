@@ -11,6 +11,7 @@ Future<void> pumpSynopsis(WidgetTester tester,
         {String text = 'Joan has always loved the stars…',
         bool loading = true,
         bool failed = false,
+        bool unavailable = false,
         VoidCallback? retry,
         double width = 320,
         double scale = 1}) =>
@@ -27,6 +28,7 @@ Future<void> pumpSynopsis(WidgetTester tester,
                     text: text,
                     loading: loading,
                     failed: failed,
+                    unavailable: unavailable,
                     onRetry: retry ?? () {}))),
       )),
     ));
@@ -93,6 +95,33 @@ void main() {
     expect(retries, 1);
   });
 
+  testWidgets('failed loading retires a toggle that cannot reveal more text',
+      (tester) async {
+    await pumpSynopsis(tester);
+    await tester.tap(find.text('Read more'));
+    await tester.pump();
+    await pumpSynopsis(tester, loading: false, failed: true);
+    expect(find.text('Read less'), findsNothing);
+    expect(find.text('Read more'), findsNothing);
+    expect(find.text('Retry'), findsOneWidget);
+    // Text that really overflows still supports expanding and collapsing.
+    await pumpSynopsis(tester, text: full, loading: false, failed: true);
+    expect(find.text('Read less'), findsOneWidget);
+  });
+
+  testWidgets('unmatched metadata is distinguished from a failed fetch',
+      (tester) async {
+    await pumpSynopsis(tester, loading: false, unavailable: true);
+    expect(find.text('Joan has always loved the stars…'), findsOneWidget);
+    expect(find.text('The book source didn’t return matching details.'),
+        findsOneWidget);
+    expect(find.text('Couldn’t load more details'), findsNothing);
+    expect(find.byType(TextButton), findsNothing);
+    await pumpSynopsis(tester, text: '', loading: false, unavailable: true);
+    expect(find.text('The book source didn’t return matching details.'),
+        findsOneWidget);
+  });
+
   testWidgets(
       'an unchanged source snippet retires an ineffective expansion control',
       (tester) async {
@@ -102,9 +131,16 @@ void main() {
     await pumpSynopsis(tester, loading: false);
     expect(find.text('Read more'), findsNothing);
     expect(find.text('Read less'), findsNothing);
-    expect(
-        find.text('No longer description is available from the book source.'),
+    expect(find.text('The book source only provided this preview.'),
         findsOneWidget);
+  });
+
+  testWidgets('a warm source snippet explains its limit without a toggle',
+      (tester) async {
+    await pumpSynopsis(tester, loading: false);
+    expect(find.text('The book source only provided this preview.'),
+        findsOneWidget);
+    expect(find.byType(TextButton), findsNothing);
   });
 
   testWidgets(

@@ -128,6 +128,83 @@ void main() {
     expect(find.text('Couldn’t load more details'), findsNothing);
   });
 
+  for (final warm in [false, true]) {
+    testWidgets(
+        'successful conflicting metadata preserves the selection and reports no match, warm: $warm',
+        (tester) async {
+      // Real Chaptarr can answer an exact Goodreads work lookup with two
+      // Hardcover format projections, a different Goodreads work ID, and no
+      // descriptions. A successful HTTP response does not establish identity.
+      final adapter = _BooksAdapter(
+          lookupOverride: (_) async => [
+                for (final format in ['ebook', 'audiobook'])
+                  {
+                    'foreignBookId': 'hc:902',
+                    'goodreadsWorkId': 'gr:999',
+                    'hardcoverBookId': 'hc:902',
+                    'mediaType': format,
+                    'title': 'Ahsoka',
+                    'overview': '',
+                    'editions': [
+                      {'foreignEditionId': 'gr:777', 'overview': ''}
+                    ],
+                  }
+              ]);
+      final (:router, :container) = await _pumpRouter(tester, adapter: adapter);
+      if (warm) {
+        container.read(bookMetadataLoaderProvider).prefetch(Object(), [
+          (instanceId: 'books', foreignId: 'gr:101'),
+        ]);
+        await tester.pumpAndSettle();
+      }
+      router.go('/detail/book/gr:101?instance_id=books&q=ahso',
+          extra: const ChaptarrBook(
+              id: 0,
+              title: 'Ahsoka (Star Wars)',
+              foreignBookId: 'gr:101',
+              foreignEditionId: 'gr:501',
+              pageCount: 400,
+              overview: 'A former Jedi searches for a new path…'));
+      await tester.pumpAndSettle();
+      expect(adapter.lookupTerms, ['gr:101']);
+      expect(find.text('Ahsoka (Star Wars)'), findsOneWidget);
+      expect(
+          find.text('A former Jedi searches for a new path…'), findsOneWidget);
+      expect(find.textContaining('400 pages'), findsOneWidget);
+      await tester.scrollUntilVisible(
+          find.text('The book source didn’t return matching details.'), 150,
+          scrollable: _detailScrollable());
+      expect(find.text('Couldn’t load more details'), findsNothing);
+      expect(find.text('Retry'), findsNothing);
+      expect(find.text('Read more'), findsNothing);
+      expect(find.text('Read less'), findsNothing);
+      final panel =
+          tester.widget<BookFormatPanel>(find.byType(BookFormatPanel));
+      expect(panel.foreignId, 'gr:101');
+    });
+  }
+
+  testWidgets('a successful cold title fallback clears an exact-lookup error',
+      (tester) async {
+    final adapter = _BooksAdapter(lookupOverride: (term) async {
+      if (term == '555') throw StateError('lookup unavailable');
+      return [
+        {
+          'foreignBookId': '555',
+          'title': 'Dune Messiah',
+          'overview': 'The complete description.'
+        }
+      ];
+    });
+    final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
+    router.go('/detail/book/555?instance_id=books&title=Dune%20Messiah');
+    await tester.pumpAndSettle();
+    expect(adapter.lookupTerms, ['555', 'Dune Messiah']);
+    expect(find.text('The complete description.'), findsOneWidget);
+    expect(find.text('Couldn’t load more details'), findsNothing);
+    expect(find.text('Retry'), findsNothing);
+  });
+
   for (final size in [const Size(390, 844), const Size(1280, 900)]) {
     testWidgets(
         'verified catalog edition keeps metadata and library actions at ${size.width}',

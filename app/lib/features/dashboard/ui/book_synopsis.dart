@@ -8,12 +8,14 @@ class BookSynopsis extends StatefulWidget {
   final String text;
   final bool loading;
   final bool failed;
+  final bool unavailable;
   final VoidCallback onRetry;
   const BookSynopsis(
       {super.key,
       required this.text,
       required this.loading,
       required this.failed,
+      this.unavailable = false,
       required this.onRetry});
 
   @override
@@ -22,12 +24,14 @@ class BookSynopsis extends StatefulWidget {
 
 class _BookSynopsisState extends State<BookSynopsis> {
   bool _expanded = false;
-  bool _askedForMore = false;
 
   @override
   Widget build(BuildContext context) {
     final text = widget.text;
-    if (text.isEmpty && !widget.loading && !widget.failed) {
+    if (text.isEmpty &&
+        !widget.loading &&
+        !widget.failed &&
+        !widget.unavailable) {
       return const SizedBox.shrink();
     }
     final style = Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -49,8 +53,7 @@ class _BookSynopsisState extends State<BookSynopsis> {
           final overflows = painter.didExceedMaxLines;
           painter.dispose();
           final abbreviated = RegExp(r'(\.\.\.|…)\s*$').hasMatch(text);
-          final canExpand =
-              overflows || (abbreviated && (widget.loading || widget.failed));
+          final canExpand = overflows || (abbreviated && widget.loading);
           return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -68,7 +71,6 @@ class _BookSynopsisState extends State<BookSynopsis> {
                   TextButton(
                     onPressed: () => setState(() {
                       _expanded = !_expanded;
-                      _askedForMore = true;
                     }),
                     child: Text(_expanded ? 'Read less' : 'Read more'),
                   ),
@@ -94,14 +96,14 @@ class _BookSynopsisState extends State<BookSynopsis> {
                           child: const Text('Retry')),
                     ],
                   ),
-                if (_askedForMore &&
-                    !widget.loading &&
+                if (!widget.loading &&
                     !widget.failed &&
-                    abbreviated)
-                  const Padding(
-                      padding: EdgeInsets.only(top: 8),
-                      child: Text(
-                          'No longer description is available from the book source.')),
+                    (widget.unavailable || abbreviated))
+                  Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(widget.unavailable
+                          ? 'The book source didn’t return matching details.'
+                          : 'The book source only provided this preview.')),
               ]);
         }),
       ]),
