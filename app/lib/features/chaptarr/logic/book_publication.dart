@@ -19,7 +19,7 @@ class BookPublication {
   const BookPublication(
       {this.year = 0, this.pages = 0, this.publisher = '', this.format = ''});
 
-  factory BookPublication.fromBook(ChaptarrBook book) {
+  factory BookPublication.fromBook(ChaptarrBook book, {int fallbackYear = 0}) {
     final editions = [...book.editions]..sort((a, b) {
         if (a.monitored != b.monitored) return a.monitored ? -1 : 1;
         if (a.manualAdd != b.manualAdd) return a.manualAdd ? -1 : 1;
@@ -32,7 +32,8 @@ class BookPublication {
             .firstOrNull ??
         editions.firstOrNull;
     return BookPublication(
-      year: book.releaseDate?.year ?? edition?.releaseDate?.year ?? 0,
+      year:
+          book.releaseDate?.year ?? edition?.releaseDate?.year ?? fallbackYear,
       pages: book.pageCount > 0 ? book.pageCount : edition?.pageCount ?? 0,
       publisher: edition?.publisher?.trim() ?? '',
       format: edition?.format?.trim() ?? '',

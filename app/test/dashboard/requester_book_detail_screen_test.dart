@@ -31,6 +31,144 @@ import 'package:go_router/go_router.dart';
 /// payload's title names an unresolvable book, and a dead id degrades to a
 /// graceful not-found state that points back to the Books tab.
 void main() {
+  testWidgets('a route refresh without its search payload keeps loaded details',
+      (tester) async {
+    final adapter = _BooksAdapter(
+        lookupOverride: (_) async => [
+              {
+                'foreignBookId': '555',
+                'title': 'Dune Messiah',
+                'overview': 'The desert planet has a new emperor.',
+              },
+            ]);
+    final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
+    const location = '/detail/book/555?instance_id=books';
+    router.go(location,
+        extra: ChaptarrBook(
+          id: 0,
+          title: 'Dune Messiah',
+          foreignBookId: '555',
+          foreignEditionId: 'gr:501',
+          releaseDate: DateTime(1969),
+          pageCount: 336,
+        ));
+    await tester.pumpAndSettle();
+    expect(find.text('1969 · 336 pages'), findsOneWidget);
+    final panel = find.byType(BookFormatPanel);
+    final panelState = tester.state(panel);
+    final panelTop = tester.getTopLeft(panel);
+    final checks = adapter.statusForeignIds.length;
+    router.go(location);
+    await tester.pumpAndSettle();
+    expect(find.text('1969 · 336 pages'), findsOneWidget);
+    expect(tester.state(panel), same(panelState));
+    expect(tester.getTopLeft(panel), panelTop);
+    expect(adapter.lookupTerms, ['555']);
+    expect(adapter.statusForeignIds, hasLength(checks));
+  });
+
+  for (final width in [320.0, 390.0, 1280.0]) {
+    testWidgets(
+        'late download actions keep formats and synopsis in place at $width',
+        (tester) async {
+      final files = Completer<void>();
+      final adapter = _BooksAdapter(
+          verifiedIdentity: true, bookFiles: true, filesReady: files.future);
+      final (:router, container: _) = await _pumpRouter(tester,
+          adapter: adapter,
+          size: Size(width, 844),
+          authState: _adminDownloadBooksState);
+      router.go('/detail/book/29749107?instance_id=books&title=Ahsoka');
+      await tester.pumpAndSettle();
+      final ebook = find.byKey(const ValueKey('book-format-row:ebook'));
+      final before = tester.getRect(ebook);
+      final synopsisBefore = tester.getTopLeft(find.text('About this book'));
+      files.complete();
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Download eBook'), findsOneWidget);
+      expect(tester.getRect(ebook), before);
+      expect(tester.getTopLeft(find.text('About this book')), synopsisBefore);
+    });
+  }
+
+  testWidgets(
+      'Ahsoka keeps its library year through a sparse metadata response',
+      (tester) async {
+    final reply = Completer<List<Map<String, dynamic>>>();
+    final adapter = _BooksAdapter(lookupOverride: (_) => reply.future);
+    final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
+    router.go('/detail/book/29749107?instance_id=books&title=Ahsoka');
+    // Finish navigation while the metadata response is deliberately pending.
+    await tester.pumpAndSettle();
+    expect(find.text('2016'), findsOneWidget);
+    final panel = find.byType(BookFormatPanel);
+    final panelState = tester.state(panel);
+    final panelTop = tester.getTopLeft(panel);
+    reply.complete([
+      for (final format in ['ebook', 'audiobook'])
+        {
+          'foreignBookId': '29749107',
+          'title': 'Ahsoka',
+          'mediaType': format,
+          'overview': '',
+        },
+    ]);
+    await tester.pumpAndSettle();
+    expect(find.text('2016'), findsOneWidget);
+    expect(tester.getTopLeft(panel), panelTop);
+    expect(tester.state(panel), same(panelState));
+  });
+
+  testWidgets('metadata completes without moving the synopsis or its controls',
+      (tester) async {
+    final reply = Completer<List<Map<String, dynamic>>>();
+    final adapter = _BooksAdapter(lookupOverride: (_) => reply.future);
+    final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
+    router.go('/detail/book/555?instance_id=books',
+        extra: ChaptarrBook(
+          id: 0,
+          title: 'Dune Messiah',
+          foreignBookId: '555',
+          foreignEditionId: 'gr:501',
+          goodreadsBookId: 'gr:501',
+          releaseDate: DateTime(1969),
+          pageCount: 336,
+          overview: 'The desert planet has a new emperor…',
+        ));
+    await tester.pumpAndSettle();
+    final panel = find.byType(BookFormatPanel);
+    final panelState = tester.state(panel);
+    await tester.scrollUntilVisible(find.text('Read more'), 150,
+        scrollable: _detailScrollable());
+    final synopsisTop = tester.getTopLeft(find.text('About this book'));
+    final readMoreTop = tester.getTopLeft(find.text('Read more'));
+    final position =
+        tester.state<ScrollableState>(_detailScrollable()).position;
+    final offset = position.pixels;
+    final full = List.generate(80,
+            (i) => 'Paragraph $i follows the next part of this long adventure.')
+        .join('\n\n');
+    reply.complete([
+      {
+        'foreignBookId': '555',
+        'title': 'Dune Messiah',
+        'overview': full,
+        'genres': List.generate(12, (i) => 'Genre $i'),
+      },
+    ]);
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(find.text('About this book')), synopsisTop);
+    expect(tester.getTopLeft(find.text('Read more')), readMoreTop);
+    expect(position.pixels, offset);
+    await tester.tap(find.text('Read more'));
+    await tester.pumpAndSettle();
+    final checks = adapter.statusForeignIds.length;
+    await tester.scrollUntilVisible(find.text('Links'), 600,
+        scrollable: _detailScrollable());
+    expect(tester.state(panel), same(panelState));
+    expect(adapter.statusForeignIds, hasLength(checks));
+  });
+
   testWidgets(
       'detail joins search warmup and expands fresh prose without resetting requests',
       (tester) async {
@@ -124,6 +262,8 @@ void main() {
     await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
     expect(adapter.lookupTerms, ['555', '555']);
+    await tester.tap(find.text('Read more'));
+    await tester.pump();
     expect(find.text('The complete description.'), findsOneWidget);
     expect(find.text('Couldn’t load more details'), findsNothing);
   });
@@ -999,6 +1139,7 @@ Dio _fakeDio({String ownedCover = '', _BooksAdapter? adapter}) {
 /// resolves before showing the internal module link.
 class _BooksAdapter implements HttpClientAdapter {
   final Future<List<Map<String, dynamic>>> Function(String)? lookupOverride;
+  final Future<void>? filesReady;
   final bool verifiedIdentity;
   final String ownedCover;
   final bool divergentLibraries;
@@ -1033,6 +1174,7 @@ class _BooksAdapter implements HttpClientAdapter {
 
   _BooksAdapter({
     this.lookupOverride,
+    this.filesReady,
     this.verifiedIdentity = false,
     this.ownedCover = '',
     this.divergentLibraries = false,
@@ -1201,6 +1343,7 @@ class _BooksAdapter implements HttpClientAdapter {
         _liveBook(id: 43, mediaType: 'audiobook'),
       ];
     } else if (options.path.endsWith('/api/v1/bookfile')) {
+      await filesReady;
       final bookId = options.queryParameters['bookId'] as int?;
       body = bookFiles && (bookId == 42 || bookId == 43)
           ? [

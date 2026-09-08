@@ -119,7 +119,10 @@ class _RequesterBookDetailScreenState
   void didUpdateWidget(covariant RequesterBookDetailScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.foreignId != widget.foreignId ||
-        oldWidget.initialBook != widget.initialBook ||
+        // A route refresh can drop its navigation-only search payload. The
+        // same book keeps its loaded metadata; a newly selected record resets.
+        (widget.initialBook != null &&
+            oldWidget.initialBook != widget.initialBook) ||
         oldWidget.titleHint != widget.titleHint ||
         oldWidget.instanceId != widget.instanceId ||
         oldWidget.discovery != widget.discovery ||
@@ -503,10 +506,13 @@ class _RequesterBookDetailScreenState
       live?.seriesTitle,
       _metadata?.seriesTitle,
     ]);
-    final publicationBook = _metadata ?? live;
-    final publication = publicationBook == null
+    final libraryPublication = live == null
         ? BookPublication(year: owned?.year ?? 0)
-        : BookPublication.fromBook(publicationBook);
+        : BookPublication.fromBook(live, fallbackYear: owned?.year ?? 0);
+    final publication = _metadata == null
+        ? libraryPublication
+        : BookPublication.fromBook(_metadata!,
+            fallbackYear: libraryPublication.year);
     final overview = _firstText([
       _metadata?.displayOverview,
       live?.displayOverview,
@@ -553,12 +559,12 @@ class _RequesterBookDetailScreenState
     }
 
     return CenteredContent(
-      child: ListView(
-        // Build the format panel even when large accessibility text pushes it
-        // just below the viewport; it owns this book's live request state.
-        cacheExtent: MediaQuery.sizeOf(context).height * 2,
+      // A book is one document. Keep its sections and request state mounted
+      // while reading a long synopsis, without lazy-list offset estimates.
+      child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
-        children: [
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Center(
             child: ClipRRect(
               borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
@@ -688,6 +694,16 @@ class _RequesterBookDetailScreenState
                     ),
               onRequestCompleted: _onRequestCompleted,
             ),
+          // Late genres and optional library actions belong after the prose,
+          // so they cannot push the synopsis away while somebody reads it.
+          BookSynopsis(
+            key: ValueKey(
+                'book-synopsis:$_metadataScope:$_instanceId:${widget.foreignId}'),
+            text: overview,
+            loading: _metadataLoading,
+            failed: _metadataFailed,
+            onRetry: _retryMetadata,
+          ),
           if (_canReportBook(owned)) ...[
             const SizedBox(height: 18),
             // Mirrors the shared ReportProblemButton, but routes through the
@@ -733,14 +749,6 @@ class _RequesterBookDetailScreenState
                   .toList(),
             ),
           ],
-          BookSynopsis(
-            key: ValueKey(
-                'book-synopsis:$_metadataScope:$_instanceId:${widget.foreignId}'),
-            text: overview,
-            loading: _metadataLoading,
-            failed: _metadataFailed,
-            onRetry: _retryMetadata,
-          ),
           // Outbound, and marked as such. Shown with or without an overview:
           // the page is the reader's route to the book's own page elsewhere.
           if (links.isNotEmpty) ...[
@@ -749,7 +757,7 @@ class _RequesterBookDetailScreenState
             const SizedBox(height: 8),
             Center(child: BookLinkChips(links)),
           ],
-        ],
+        ]),
       ),
     );
   }

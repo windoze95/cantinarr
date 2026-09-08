@@ -1,5 +1,6 @@
 import 'package:cantinarr/features/chaptarr/data/chaptarr_models.dart';
 import 'package:cantinarr/features/chaptarr/logic/book_metadata_selection.dart';
+import 'package:cantinarr/features/chaptarr/logic/book_publication.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 ChaptarrBook metadata(
@@ -23,6 +24,94 @@ ChaptarrBook metadata(
     );
 
 void main() {
+  test('format projections retain only an agreed publication year', () {
+    ChaptarrBook projection(String format, DateTime date) => ChaptarrBook(
+          id: 0,
+          title: 'Ahsoka',
+          foreignBookId: 'gr:1',
+          mediaType: format,
+          overview: 'The same synopsis.',
+          releaseDate: date,
+          pageCount: 400,
+        );
+    final ebook = projection('ebook', DateTime(2016, 10, 11));
+    final sameYear = selectBookMetadata('gr:1', [
+      ebook,
+      projection('audiobook', DateTime(2016, 11, 1)),
+    ])!;
+    expect(BookPublication.fromBook(sameYear).year, 2016);
+    expect(sameYear.pageCount, 0);
+    expect(sameYear.editions, isEmpty);
+    final differentYear = selectBookMetadata('gr:1', [
+      ebook,
+      projection('audiobook', DateTime(2017, 1, 1)),
+    ])!;
+    expect(differentYear.releaseDate, isNull);
+  });
+
+  test('a missing selected edition cannot borrow another publication', () {
+    const seed = ChaptarrBook(
+      id: 0,
+      title: 'Ahsoka',
+      foreignBookId: 'gr:1',
+      foreignEditionId: 'gr:50',
+    );
+    const fresh = ChaptarrBook(
+      id: 0,
+      title: 'Ahsoka',
+      foreignBookId: 'gr:1',
+      foreignEditionId: 'gr:50',
+      editions: [
+        ChaptarrEdition(
+          id: 89,
+          foreignEditionId: 'gr:99',
+          pageCount: 900,
+          publisher: 'Another edition',
+        ),
+      ],
+    );
+    final publication =
+        BookPublication.fromBook(enrichBookMetadata(seed, fresh));
+    expect(publication.pages, 0);
+    expect(publication.publisher, isEmpty);
+  });
+
+  test('sparse matching editions cannot erase an existing publication', () {
+    final seed = ChaptarrBook(
+      id: 0,
+      title: 'Ahsoka',
+      foreignBookId: 'gr:1',
+      foreignEditionId: 'gr:50',
+      editions: [
+        ChaptarrEdition(
+          id: 0,
+          foreignEditionId: 'gr:50',
+          releaseDate: DateTime(2016, 10, 11),
+          pageCount: 400,
+          publisher: 'The original publisher',
+          format: 'Paperback',
+        ),
+      ],
+    );
+    const fresh = ChaptarrBook(
+      id: 0,
+      title: 'Ahsoka',
+      foreignBookId: 'gr:1',
+      foreignEditionId: 'gr:50',
+      editions: [
+        ChaptarrEdition(id: 88, foreignEditionId: 'gr:50'),
+        ChaptarrEdition(id: 89, foreignEditionId: 'gr:99', pageCount: 900),
+      ],
+    );
+    final enriched = enrichBookMetadata(seed, fresh);
+    final publication = BookPublication.fromBook(enriched);
+    expect(publication.year, 2016);
+    expect(publication.pages, 400);
+    expect(publication.publisher, 'The original publisher');
+    expect(publication.format, 'Paperback');
+    expect(enriched.foreignEditionId, 'gr:50');
+  });
+
   test('verified work aliases enrich the original identity and same edition',
       () {
     final seed = metadata(edition: 'gr:50', overview: 'Short...', pages: 300);

@@ -220,9 +220,8 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       if (detail.isKnown ||
           detail.effectiveUnknownReason ==
               BookStatusUnknownReason.identityNeedsAttention) {
-        final nextId = !detail.isKnown || canonical.isEmpty
-            ? widget.foreignId
-            : canonical;
+        final nextId =
+            !detail.isKnown || canonical.isEmpty ? widget.foreignId : canonical;
         if (nextId != (_reportedCanonicalId ?? widget.foreignId)) {
           _reportedCanonicalId = nextId;
           widget.onCanonicalForeignId?.call(nextId);
@@ -739,21 +738,26 @@ class _FormatRow extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          if (pill != null || download != null)
-                            Row(
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(minHeight: 48),
+                            child: Row(
                               children: [
                                 // Bounded so a long state wraps instead of
                                 // running off a narrow or scaled-up row.
-                                if (pill != null) Flexible(child: pill),
-                                if (download != null) ...[
-                                  const SizedBox(width: 4),
-                                  download!,
-                                ],
+                                if (pill != null)
+                                  Flexible(child: pill)
+                                else if (action != null)
+                                  Flexible(child: action!),
+                                // Reserve width too: otherwise a late button
+                                // can wrap the status onto a new line.
+                                const SizedBox(width: 4),
+                                SizedBox(
+                                    width: 48, height: 48, child: download),
                               ],
                             ),
-                          if (action != null) ...[
-                            if (pill != null || download != null)
-                              const SizedBox(height: 8),
+                          ),
+                          if (pill != null && action != null) ...[
+                            const SizedBox(height: 8),
                             action!,
                           ],
                         ],
@@ -761,8 +765,11 @@ class _FormatRow extends StatelessWidget {
                     ),
                   ],
                 )
-              : Row(
-                  children: [
+              : ConstrainedBox(
+                  // Reserve the download button's touch target before its
+                  // file lookup finishes, keeping both format rows steady.
+                  constraints: const BoxConstraints(minHeight: 48),
+                  child: Row(children: [
                     Expanded(child: heading),
                     if (pill != null) pill,
                     if (action != null) ...[
@@ -773,7 +780,7 @@ class _FormatRow extends StatelessWidget {
                       const SizedBox(width: 4),
                       download!,
                     ],
-                  ],
+                  ]),
                 ),
         ),
       ),
@@ -802,12 +809,14 @@ class _RequestAction extends StatelessWidget {
         children: [
           const Icon(Icons.add_rounded, size: 15, color: AppTheme.accent),
           const SizedBox(width: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              color: AppTheme.accent,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
+          Flexible(
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: AppTheme.accent,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],
@@ -831,12 +840,14 @@ class _SubmittingIndicator extends StatelessWidget {
               CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accent),
         ),
         SizedBox(width: 8),
-        Text(
-          'Requesting…',
-          style: TextStyle(
-            color: AppTheme.accent,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
+        Flexible(
+          child: Text(
+            'Requesting…',
+            style: TextStyle(
+              color: AppTheme.accent,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
       ],

@@ -49,6 +49,60 @@ Set<String> _editionKeys(ChaptarrBook book) {
 bool _sameEdition(ChaptarrBook a, ChaptarrBook b) =>
     _editionKeys(a).intersection(_editionKeys(b)).isNotEmpty;
 
+Set<String> _editionRecordKeys(ChaptarrEdition edition) =>
+    bookIdentityKeys(ChaptarrBook(id: 0, title: '', editions: [edition]));
+
+List<ChaptarrEdition> _enrichEditions(
+    ChaptarrBook initial, ChaptarrBook fresh) {
+  if (initial.editions.isEmpty) {
+    final selected = _editionKeys(initial);
+    return fresh.editions
+        .where((edition) =>
+            selected.intersection(_editionRecordKeys(edition)).isNotEmpty)
+        .toList();
+  }
+  // This is a presentation copy of the selected publication. Do not replace
+  // its editions wholesale: sparse responses can erase the date, and adding
+  // unrelated editions can change which publication sorts first.
+  return initial.editions.map((edition) {
+    final keys = _editionRecordKeys(edition);
+    final matches = fresh.editions
+        .where(
+            (other) => keys.intersection(_editionRecordKeys(other)).isNotEmpty)
+        .toList();
+    if (matches.length != 1) return edition;
+    final fields = edition.toJson();
+    final update = matches.single.toJson();
+    for (final field in [
+      'releaseDate',
+      'title',
+      'format',
+      'overview',
+      'publisher',
+    ]) {
+      final value = update[field];
+      if (value is String && value.trim().isNotEmpty) fields[field] = value;
+    }
+    if (matches.single.pageCount > 0) {
+      fields['pageCount'] = matches.single.pageCount;
+    }
+    if (matches.single.images.isNotEmpty) fields['images'] = update['images'];
+    for (final field in [
+      'asin',
+      'isbn13',
+      'isbn10',
+      'goodreadsEditionId',
+      'openLibraryEditionId',
+      'hardcoverEditionId',
+    ]) {
+      if (fields[field] == null || fields[field] == '') {
+        fields[field] = update[field];
+      }
+    }
+    return ChaptarrEdition.fromJson(fields);
+  }).toList();
+}
+
 /// An ID lookup may return a canonical provider alias and separate ebook /
 /// audiobook projections. Only explicit work IDs prove an alias. Neither
 /// title similarity, result order, nor description length proves identity.
@@ -85,6 +139,7 @@ ChaptarrBook? selectBookMetadata(String foreignId, List<ChaptarrBook> results,
   // A title page represents both formats, but publication details must not
   // come from an arbitrary format. Use only descriptive values they agree on.
   final first = matches.first;
+  final years = matches.map((book) => book.releaseDate?.year).toSet();
   final overviews = matches.map((book) => book.displayOverview ?? '').toSet();
   if (overviews.length != 1 ||
       matches.any((book) => book.title != first.title)) {
@@ -94,6 +149,11 @@ ChaptarrBook? selectBookMetadata(String foreignId, List<ChaptarrBook> results,
     id: 0,
     title: first.title,
     foreignBookId: foreignId,
+    // A shared year is a work-level fact even when print and audio editions
+    // have different publication days. Conflicting years remain unspecified.
+    releaseDate: years.length == 1 && years.single != null
+        ? DateTime(years.single!)
+        : null,
     overview: overviews.single,
     author: matches.every(
             (book) => book.author?.authorName == first.author?.authorName)
@@ -142,7 +202,7 @@ ChaptarrBook enrichBookMetadata(ChaptarrBook? initial, ChaptarrBook fresh) {
         : fresh.author,
     statistics: initial.statistics,
     editions: sameEdition && fresh.editions.isNotEmpty
-        ? fresh.editions
+        ? _enrichEditions(initial, fresh)
         : initial.editions,
     images: fresh.images.isNotEmpty &&
             (sameEdition ||

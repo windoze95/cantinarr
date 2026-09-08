@@ -4,6 +4,7 @@ import '../../../core/theme/app_theme.dart';
 
 /// A synopsis can be visually collapsed, already abbreviated by its source,
 /// or still loading. Expanding is a reader choice, independent of the fetch.
+/// Keep the collapsed preview steady until the reader asks for the fresh text.
 class BookSynopsis extends StatefulWidget {
   final String text;
   final bool loading;
@@ -22,11 +23,22 @@ class BookSynopsis extends StatefulWidget {
 
 class _BookSynopsisState extends State<BookSynopsis> {
   bool _expanded = false;
+  late String _preview = widget.text;
+
+  @override
+  void didUpdateWidget(covariant BookSynopsis oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_preview.isEmpty || widget.text.isEmpty || _expanded) {
+      _preview = widget.text;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final text = widget.text;
-    if (text.isEmpty && !widget.loading && !widget.failed) {
+    final text = _expanded ? widget.text : _preview;
+    // A missing synopsis loads quietly. Do not insert and later remove an
+    // empty About section while the rest of the book is already readable.
+    if (text.isEmpty && !widget.failed) {
       return const SizedBox.shrink();
     }
     final style = Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -48,7 +60,9 @@ class _BookSynopsisState extends State<BookSynopsis> {
           final overflows = painter.didExceedMaxLines;
           painter.dispose();
           final abbreviated = RegExp(r'(\.\.\.|…)\s*$').hasMatch(text);
-          final canExpand = overflows || (abbreviated && widget.loading);
+          final canExpand = overflows ||
+              widget.text != _preview ||
+              (abbreviated && widget.loading);
           return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -65,11 +79,12 @@ class _BookSynopsisState extends State<BookSynopsis> {
                 if (canExpand)
                   TextButton(
                     onPressed: () => setState(() {
+                      _preview = widget.text;
                       _expanded = !_expanded;
                     }),
                     child: Text(_expanded ? 'Read less' : 'Read more'),
                   ),
-                if (widget.loading && (_expanded || text.isEmpty))
+                if (widget.loading && _expanded)
                   const Padding(
                     padding: EdgeInsets.only(top: 8),
                     child: Row(children: [

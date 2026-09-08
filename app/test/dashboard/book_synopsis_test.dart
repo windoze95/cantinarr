@@ -32,6 +32,28 @@ Future<void> pumpSynopsis(WidgetTester tester,
     ));
 
 void main() {
+  testWidgets('a completed fetch leaves the collapsed preview in place',
+      (tester) async {
+    await pumpSynopsis(tester);
+    final preview = find.byKey(const ValueKey('book-synopsis-text'));
+    final before = tester.getRect(preview);
+    final buttonBefore = tester.getRect(find.text('Read more'));
+    await pumpSynopsis(tester, text: full, loading: false);
+    expect(
+        tester.widget<Text>(preview).data, 'Joan has always loved the stars…');
+    expect(tester.getRect(preview), before);
+    expect(tester.getRect(find.text('Read more')), buttonBefore);
+    await tester.tap(find.text('Read more'));
+    await tester.pump();
+    expect(tester.widget<Text>(preview).data, full);
+    expect(tester.widget<Text>(preview).maxLines, isNull);
+    await tester.ensureVisible(find.text('Read less'));
+    await tester.tap(find.text('Read less'));
+    await tester.pump();
+    expect(tester.widget<Text>(preview).data, full);
+    expect(tester.widget<Text>(preview).maxLines, 4);
+  });
+
   testWidgets(
       'Read more during loading expands the fetched version without another tap',
       (tester) async {
@@ -144,7 +166,8 @@ void main() {
         text: 'A short, complete synopsis.', loading: false);
     expect(find.byType(TextButton), findsNothing);
     await pumpSynopsis(tester, text: '');
-    expect(find.text('Loading book details…'), findsOneWidget);
+    expect(find.text('Loading book details…'), findsNothing);
+    expect(find.text('About this book'), findsNothing);
     await pumpSynopsis(tester, text: '', loading: false);
     expect(find.text('About this book'), findsNothing);
   });
