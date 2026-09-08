@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
@@ -11,6 +12,8 @@ import 'package:cantinarr/core/widgets/cached_image.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/chaptarr/ui/chaptarr_book_screen.dart';
 import 'package:cantinarr/features/chaptarr/data/chaptarr_models.dart';
+import 'package:cantinarr/features/chaptarr/logic/book_metadata_loader.dart';
+import 'package:cantinarr/features/request/ui/book_format_panel.dart';
 import 'package:cantinarr/features/chaptarr/ui/widgets/book_link_chips.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_author_detail_screen.dart';
@@ -28,6 +31,103 @@ import 'package:go_router/go_router.dart';
 /// payload's title names an unresolvable book, and a dead id degrades to a
 /// graceful not-found state that points back to the Books tab.
 void main() {
+  testWidgets(
+      'detail joins search warmup and expands fresh prose without resetting requests',
+      (tester) async {
+    final reply = Completer<List<Map<String, dynamic>>>();
+    final adapter = _BooksAdapter(
+        verifiedIdentity: true, lookupOverride: (_) => reply.future);
+    final (:router, :container) =
+        await _pumpRouter(tester, adapter: adapter, themed: true);
+    container.read(bookMetadataLoaderProvider).prefetch(Object(), [
+      (instanceId: 'books', foreignId: 'gr:101'),
+    ]);
+    await tester.pump();
+    router.go('/detail/book/gr:101?instance_id=books&q=ahso',
+        extra: const ChaptarrBook(
+            id: 0,
+            title: 'Ahsoka (Star Wars)',
+            foreignBookId: 'gr:101',
+            foreignEditionId: 'gr:501',
+            pageCount: 400,
+            overview: 'A former Jedi searches for a new path…'));
+    await tester.pumpAndSettle();
+    expect(adapter.lookupTerms, ['gr:101']);
+    expect(find.text('Ahsoka (Star Wars)'), findsOneWidget);
+    final panel = tester.state(find.byType(BookFormatPanel));
+    await tester.scrollUntilVisible(find.text('Read more'), 150,
+        scrollable: _detailScrollable());
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Read more'));
+    await tester.tap(find.text('Read more'));
+    await tester.pump();
+    final full = List.filled(
+            12, 'A former Jedi searches for a new path across the galaxy.')
+        .join('\n\n');
+    reply.complete([
+      {
+        'foreignBookId': 'hc:902',
+        'goodreadsWorkId': 'gr:101',
+        'foreignEditionId': 'gr:777',
+        'pageCount': 223,
+        'title': 'A different edition title',
+        'overview': full,
+      }
+    ]);
+    await tester.pumpAndSettle();
+    expect(adapter.lookupTerms, ['gr:101']);
+    expect(find.text('Ahsoka (Star Wars)'), findsOneWidget);
+    expect(find.textContaining('223 pages'), findsNothing);
+    expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey('book-synopsis-text')))
+            .maxLines,
+        isNull);
+    expect(find.text(full), findsOneWidget);
+    expect(tester.state(find.byType(BookFormatPanel)), same(panel));
+    final audio = find.byKey(const ValueKey('book-format-row:audiobook'));
+    await tester.scrollUntilVisible(audio, -200,
+        scrollable: _detailScrollable());
+    await tester.tap(audio);
+    await tester.pumpAndSettle();
+    expect(adapter.requestBodies.single['foreign_id'], 'gr:101');
+    expect(adapter.requestBodies.single['title'], 'Ahsoka (Star Wars)');
+    expect(adapter.requestBodies.single['search_term'], 'ahso');
+  });
+
+  testWidgets(
+      'an initial search record still fetches details and can retry failure',
+      (tester) async {
+    var attempts = 0;
+    final adapter = _BooksAdapter(lookupOverride: (_) async {
+      if (++attempts == 1) throw StateError('offline');
+      return [
+        {
+          'foreignBookId': '555',
+          'title': 'Dune Messiah',
+          'overview': 'The complete description.'
+        }
+      ];
+    });
+    final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
+    router.go('/detail/book/555?instance_id=books',
+        extra: const ChaptarrBook(
+            id: 0,
+            title: 'Dune Messiah',
+            foreignBookId: '555',
+            overview: 'Preview…'));
+    await tester.pumpAndSettle();
+    expect(adapter.lookupTerms, ['555']);
+    expect(find.text('Preview…'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Retry'), 150,
+        scrollable: _detailScrollable());
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(adapter.lookupTerms, ['555', '555']);
+    expect(find.text('The complete description.'), findsOneWidget);
+    expect(find.text('Couldn’t load more details'), findsNothing);
+  });
+
   for (final size in [const Size(390, 844), const Size(1280, 900)]) {
     testWidgets(
         'verified catalog edition keeps metadata and library actions at ${size.width}',
@@ -816,6 +916,7 @@ Dio _fakeDio({String ownedCover = '', _BooksAdapter? adapter}) {
 /// Serves requester metadata/status plus the live Chaptarr records an admin
 /// resolves before showing the internal module link.
 class _BooksAdapter implements HttpClientAdapter {
+  final Future<List<Map<String, dynamic>>> Function(String)? lookupOverride;
   final bool verifiedIdentity;
   final String ownedCover;
   final bool divergentLibraries;
@@ -849,6 +950,7 @@ class _BooksAdapter implements HttpClientAdapter {
   final _requestedFormats = <String, String>{};
 
   _BooksAdapter({
+    this.lookupOverride,
     this.verifiedIdentity = false,
     this.ownedCover = '',
     this.divergentLibraries = false,
@@ -990,18 +1092,20 @@ class _BooksAdapter implements HttpClientAdapter {
     } else if (options.path.endsWith('/api/v1/book/lookup')) {
       final term = options.queryParameters['term'].toString();
       lookupTerms.add(term);
-      body = switch (term) {
-        // An id term is an exact fetch. For a book the library tracks that
-        // is the record itself, editions included; an alias id resolves to
-        // the same canonical record.
-        '29749107' || 'lookup-29749107' => [_ahsokaLookup()],
-        // The metadata work, under the id the provider currently keys it by
-        // (the mismatch variant models an older id it has since re-keyed).
-        // Its title search hits; Ahsoka's, a full title, answers nothing,
-        // as this provider routinely does.
-        '555' || 'Dune Messiah' => [_duneLookup()],
-        _ => <Object>[],
-      };
+      body = lookupOverride != null
+          ? await lookupOverride!(term)
+          : switch (term) {
+              // An id term is an exact fetch. For a book the library tracks that
+              // is the record itself, editions included; an alias id resolves to
+              // the same canonical record.
+              '29749107' || 'lookup-29749107' => [_ahsokaLookup()],
+              // The metadata work, under the id the provider currently keys it by
+              // (the mismatch variant models an older id it has since re-keyed).
+              // Its title search hits; Ahsoka's, a full title, answers nothing,
+              // as this provider routinely does.
+              '555' || 'Dune Messiah' => [_duneLookup()],
+              _ => <Object>[],
+            };
     } else if (options.path.endsWith('/api/v1/book/42')) {
       body = _liveBook(id: 42, mediaType: 'ebook');
     } else if (options.path.endsWith('/api/v1/book/43')) {

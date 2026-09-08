@@ -16,6 +16,7 @@ import '../../dashboard/logic/book_ownership_matcher.dart';
 import '../../request/data/book_ownership.dart';
 import '../../shell/logic/library_author_index.dart';
 import '../../shell/logic/shell_book_search_provider.dart';
+import 'book_metadata_prefetch.dart';
 
 /// Native catalog rows retain their identity and order. A verified identifier
 /// match adds library availability without replacing or hiding a result.
@@ -300,15 +301,32 @@ class BookSearchResultsView extends ConsumerWidget {
       }
       if (authorsLoading) addRow(const _OverlayNotice('Searching authors…'));
 
-      return ListView.separated(
-        padding: EdgeInsets.fromLTRB(hPad, 8, hPad, 8),
-        itemCount: children.length,
-        // A divider belongs between two result rows, not around a header or a
-        // notice — a rule under its own section label reads as a row.
-        separatorBuilder: (_, i) => isResult[i] && isResult[i + 1]
-            ? const Divider(height: 1, color: AppTheme.border)
-            : const SizedBox(height: 8),
-        itemBuilder: (_, i) => children[i],
+      return BookMetadataPrefetch(
+        key: ValueKey('book-metadata-prefetch:$instanceId:$query'),
+        child: ListView.separated(
+          padding: EdgeInsets.fromLTRB(hPad, 8, hPad, 8),
+          itemCount: children.length,
+          // A divider belongs between two result rows, not around a header or a
+          // notice — a rule under its own section label reads as a row.
+          separatorBuilder: (_, i) => isResult[i] && isResult[i + 1]
+              ? const Divider(height: 1, color: AppTheme.border)
+              : const SizedBox(height: 8),
+          itemBuilder: (_, i) {
+            final child = children[i];
+            if (child is _BookResultTile &&
+                instanceId != null &&
+                child.selectedForeignId.isNotEmpty) {
+              return BookMetadataCandidate(
+                metadataKey: (
+                  instanceId: instanceId,
+                  foreignId: child.selectedForeignId
+                ),
+                child: child,
+              );
+            }
+            return child;
+          },
+        ),
       );
     });
   }
@@ -668,6 +686,10 @@ class _BookResultTile extends StatelessWidget {
             : null,
         onTap: canOpen
             ? () {
+                if (instanceId != null) {
+                  BookMetadataPrefetch.openBook(
+                      context, (instanceId: instanceId!, foreignId: fid));
+                }
                 onTap?.call();
                 context.push(
                   '/detail/book/${Uri.encodeComponent(fid)}'

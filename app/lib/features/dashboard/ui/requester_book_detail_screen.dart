@@ -13,6 +13,7 @@ import '../../../core/widgets/cached_image.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/book_discovery_service.dart';
+import '../../discover/logic/discovery_access.dart';
 import '../../discover/ui/catalog_setup_button.dart';
 import '../../discover/ui/book_browse_screen.dart';
 import '../../chaptarr/data/chaptarr_api_service.dart';
@@ -21,6 +22,8 @@ import '../../chaptarr/data/chaptarr_models.dart';
 import '../../chaptarr/logic/book_links.dart';
 import '../../chaptarr/logic/book_identity.dart';
 import '../../chaptarr/logic/book_publication.dart';
+import '../../chaptarr/logic/book_metadata_loader.dart';
+import '../../chaptarr/logic/book_metadata_selection.dart';
 import '../../chaptarr/ui/chaptarr_book_screen.dart';
 import '../../chaptarr/ui/widgets/book_link_chips.dart';
 import '../../issues/ui/report_problem_sheet.dart';
@@ -31,6 +34,7 @@ import '../../request/data/book_ownership.dart';
 import '../../request/data/request_service.dart';
 import '../../request/ui/book_format_panel.dart';
 import '../data/book_library_service.dart';
+import 'book_synopsis.dart';
 
 /// Requester-facing detail for one book, addressed by its Chaptarr/Readarr
 /// foreignBookId. Search navigation supplies [initialBook] for an immediate,
@@ -76,6 +80,8 @@ class _RequesterBookDetailScreenState
   List<ChaptarrBook> _chaptarrRecords = const [];
   Map<int, List<ChaptarrBookFile>> _filesByBook = const {};
   bool _metadataLoading = false;
+  bool _metadataFailed = false;
+  String? _metadataScope;
   int _loadGeneration = 0;
   int _recordsLoadGeneration = 0;
   String? _instanceId;
@@ -122,18 +128,33 @@ class _RequesterBookDetailScreenState
     }
   }
 
-  void _startLoads() {
+  void _startLoads({bool useInitial = true}) {
     final generation = ++_loadGeneration;
     _recordsLoadGeneration++;
     _instanceId = widget.instanceId ??
         ref.read(instanceProvider).activeChaptarrInstance?.id;
-    _metadata = widget.initialBook;
+    _metadataScope = ref.read(catalogDiscoveryScopeProvider);
+    _metadata = useInitial ? widget.initialBook : null;
     _chaptarrRecords = const [];
     _filesByBook = const {};
     _canonicalForeignId = null;
-    // The id fetch runs whenever no record rode along, so the page waits on
-    // it rather than flashing "not found" at a book only that fetch can name.
-    _metadataLoading = widget.initialBook == null;
+    _metadataLoading = true;
+    _metadataFailed = false;
+    // A warm search result can paint its details on the very first frame.
+    // Even with an initial record, a missing/stale entry fetches in the
+    // background; the search snippet never suppresses the detailed lookup.
+    if (!_isDiscovery && _instanceId != null) {
+      final cached = ref
+          .read(bookMetadataLoaderProvider)
+          .peek((instanceId: _instanceId!, foreignId: widget.foreignId));
+      if (cached != null) {
+        final match = selectBookMetadata(widget.foreignId, cached.books,
+            initial: _metadata);
+        if (match != null) _metadata = enrichBookMetadata(_metadata, match);
+        _metadataLoading = false;
+        _metadataFailed = cached.failed;
+      }
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_isDiscovery) return;
       _resolveMetadata(generation);
@@ -150,48 +171,49 @@ class _RequesterBookDetailScreenState
     );
   }
 
-  /// Cold native links load metadata by ID, then title. Only the selected
-  /// native ID can supply metadata; a similar title is a different result.
-  Future<void> _resolveMetadata(int generation) async {
-    if (_metadata != null) return;
+  /// Search and detail share the exact-ID fetch. Only cold links fall back
+  /// to title search, and explicit identifiers still have to prove the match.
+  Future<void> _resolveMetadata(int generation, {bool retry = false}) async {
+    if (!mounted || generation != _loadGeneration) return;
     final service = _chaptarrService();
-    if (service == null) {
+    final instanceId = _instanceId;
+    if (service == null || instanceId == null) {
       if (mounted && generation == _loadGeneration) {
         setState(() => _metadataLoading = false);
       }
       return;
     }
-    ChaptarrBook? match;
-    if (widget.foreignId.trim().isNotEmpty) {
-      try {
-        match = _exactMatch(await service.lookupBook(widget.foreignId));
-      } catch (_) {
-        // An unreadable id fetch is not an answer; the title search below
-        // still gets its turn.
-      }
-    }
+    final initial = _metadata;
+    final foreignId = widget.foreignId;
+    final result = await ref
+        .read(bookMetadataLoaderProvider)
+        .load((instanceId: instanceId, foreignId: foreignId), retry: retry);
+    if (!mounted || generation != _loadGeneration || result.cancelled) return;
+    var match = selectBookMetadata(foreignId, result.books, initial: initial);
+    var failed = result.failed || (match == null && result.books.isNotEmpty);
     final term = widget.titleHint?.trim() ?? '';
-    if (match == null && term.isNotEmpty) {
+    if (initial == null && match == null && term.isNotEmpty) {
       try {
         final results = await service.lookupBook(term);
-        match = _exactMatch(results);
+        match = selectBookMetadata(foreignId, results);
       } catch (_) {
-        // The title hint still gives the requester a useful fallback.
+        failed = true;
       }
     }
     if (!mounted || generation != _loadGeneration) return;
     setState(() {
-      _metadata = match;
+      if (match != null) _metadata = enrichBookMetadata(initial, match);
       _metadataLoading = false;
+      _metadataFailed = failed;
     });
   }
 
-  /// The one result that is this page's own record, never a substitute.
-  ChaptarrBook? _exactMatch(List<ChaptarrBook> results) {
-    for (final book in results) {
-      if (book.foreignBookId == widget.foreignId) return book;
-    }
-    return null;
+  void _retryMetadata() {
+    setState(() {
+      _metadataLoading = true;
+      _metadataFailed = false;
+    });
+    _resolveMetadata(_loadGeneration, retry: true);
   }
 
   /// Resolve exact live Chaptarr records. Lookup records and the requester
@@ -387,6 +409,13 @@ class _RequesterBookDetailScreenState
         instanceId: _instanceId,
       );
     }
+    final scope = ref.watch(catalogDiscoveryScopeProvider);
+    ref.watch(bookMetadataLoaderProvider);
+    if (_metadataScope != scope) {
+      // Retire old-account/access data before painting, including late
+      // responses. A search seed belongs to the previous scope too.
+      _startLoads(useInitial: false);
+    }
     ref.listen(libraryChangedEventsProvider, (_, next) {
       if (next.hasValue) _refreshBookTruth();
     });
@@ -401,7 +430,7 @@ class _RequesterBookDetailScreenState
       (previous, next) {
         if (previous == next || widget.instanceId != null) return;
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) setState(_startLoads);
+          if (mounted) setState(() => _startLoads(useInitial: false));
         });
       },
     );
@@ -712,18 +741,14 @@ class _RequesterBookDetailScreenState
                   .toList(),
             ),
           ],
-          if (overview.isNotEmpty) ...[
-            const SizedBox(height: 24),
-            Text('About this book',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Text(
-              overview,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppTheme.textPrimary,
-                  ),
-            ),
-          ],
+          BookSynopsis(
+            key: ValueKey(
+                'book-synopsis:$_metadataScope:$_instanceId:${widget.foreignId}'),
+            text: overview,
+            loading: _metadataLoading,
+            failed: _metadataFailed,
+            onRetry: _retryMetadata,
+          ),
           // Outbound, and marked as such. Shown with or without an overview:
           // the page is the reader's route to the book's own page elsewhere.
           if (links.isNotEmpty) ...[

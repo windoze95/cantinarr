@@ -49,6 +49,40 @@ ChaptarrApiService _service(_FakeAdapter adapter) {
 }
 
 void main() {
+  group('detailed book lookup', () {
+    test('empty results are distinct from malformed responses', () async {
+      expect(
+          await _service(_FakeAdapter([]))
+              .lookupBook('gr:1', strictResponse: true),
+          isEmpty);
+      for (final body in [
+        null,
+        '',
+        {'error': 'metadata unavailable'}
+      ]) {
+        await expectLater(
+            _service(_FakeAdapter(body))
+                .lookupBook('gr:1', strictResponse: true),
+            throwsFormatException);
+      }
+    });
+
+    test(
+        'decodes string responses and uses the detail timeout without changing search',
+        () async {
+      final adapter = _FakeAdapter(jsonEncode([
+        {'foreignBookId': 'gr:1', 'title': 'Detailed book'}
+      ]));
+      final books = await _service(adapter).lookupBook('gr:1',
+          strictResponse: true, timeout: const Duration(seconds: 30));
+      expect(books.single.foreignBookId, 'gr:1');
+      expect(adapter.lastQuery, {'term': 'gr:1'});
+      expect(adapter.lastRequest?.receiveTimeout, const Duration(seconds: 30));
+      await _service(adapter).lookupBook('title');
+      expect(adapter.lastRequest?.receiveTimeout, const Duration(seconds: 10));
+    });
+  });
+
   group('library fetches', () {
     // Both endpoints return the whole library in one unpaginated response, so
     // serve time grows with library size; the 15s default made large

@@ -8,12 +8,13 @@ import 'chaptarr_models.dart';
 /// endpoints don't reliably send an `application/json` content-type, so Dio can
 /// hand back the raw String instead of a decoded List — decode it here rather
 /// than blindly casting (which threw "String is not a subtype of List").
-List<dynamic> _jsonList(dynamic data) {
+List<dynamic> _jsonList(dynamic data, {bool strict = false}) {
   if (data is List) return data;
   if (data is String && data.trim().isNotEmpty) {
     final decoded = jsonDecode(data);
     if (decoded is List) return decoded;
   }
+  if (strict) throw const FormatException('Invalid book metadata response');
   return const [];
 }
 
@@ -105,14 +106,14 @@ class ChaptarrApiService {
   }
 
   Future<List<ChaptarrBook>> lookupBook(String term,
-      {CancelToken? cancelToken}) async {
+      {CancelToken? cancelToken,
+      bool strictResponse = false,
+      Duration timeout = const Duration(seconds: 10)}) async {
     final resp = await _dio.get('$_basePath/book/lookup',
         queryParameters: {'term': term},
         cancelToken: cancelToken,
-        options: Options(
-            sendTimeout: const Duration(seconds: 10),
-            receiveTimeout: const Duration(seconds: 10)));
-    return _jsonList(resp.data)
+        options: Options(sendTimeout: timeout, receiveTimeout: timeout));
+    return _jsonList(resp.data, strict: strictResponse)
         .map((b) => ChaptarrBook.fromJson(b as Map<String, dynamic>))
         .toList();
   }
