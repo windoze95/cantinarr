@@ -816,6 +816,35 @@ func (c *Client) GetBookContext(ctx context.Context, id int) (*Book, error) {
 	return &book, nil
 }
 
+// GetBookEditionsContext reads editions omitted from Chaptarr's book response.
+// Re-filter by book ID because a fork may ignore the query parameter.
+func (c *Client) GetBookEditionsContext(ctx context.Context, bookID int) ([]Edition, error) {
+	path := fmt.Sprintf("/api/v1/edition?bookId=%d", bookID)
+	resp, err := c.doRequestContext(ctx, http.MethodGet, path)
+	if err != nil {
+		return nil, fmt.Errorf("chaptarr book editions: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr GET /api/v1/edition returned status %d", resp.StatusCode), resp)
+	}
+	var editions []Edition
+	if err := json.NewDecoder(resp.Body).Decode(&editions); err != nil {
+		return nil, fmt.Errorf("decode chaptarr book editions: %w", err)
+	}
+	if editions == nil {
+		return nil, fmt.Errorf("chaptarr returned an incomplete edition list")
+	}
+	matched := editions[:0]
+	for _, edition := range editions {
+		if edition.BookID == bookID {
+			matched = append(matched, edition)
+		}
+	}
+	return matched, nil
+}
+
 // GetBookFiles lists the book files on disk for one author.
 func (c *Client) GetBookFiles(authorID int) ([]BookFile, error) {
 	var files []BookFile

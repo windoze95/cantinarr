@@ -71,7 +71,14 @@ func (s *Service) ResolveListeningBook(ctx context.Context, userID int64, instan
 			continue
 		}
 		q.Available = true
-		for _, edition := range book.Editions {
+		editions := book.Editions
+		if len(editions) == 0 {
+			editions, err = client.GetBookEditionsContext(ctx, book.ID)
+			if err != nil {
+				return q, err
+			}
+		}
+		for _, edition := range editions {
 			// Explicit ebook editions must not produce an audiobook link.
 			if (edition.IsEbook != nil && *edition.IsEbook) || chaptarr.FormatOf(edition.Format) == BookFormatEbook {
 				continue
