@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -476,7 +477,7 @@ func (s *Service) WatchLinks(ctx context.Context, userID int64, q mediaserver.It
 		if err != nil {
 			return nil, err
 		}
-		if (row == nil || row.DisabledAt.Valid) && inst.ServiceType != "plex" {
+		if row == nil && inst.ServiceType != "plex" {
 			continue
 		}
 		targets = append(targets, target{inst: inst, row: row, finder: finder})
@@ -492,7 +493,41 @@ func (s *Service) WatchLinks(ctx context.Context, userID int64, q mediaserver.It
 		}(i, t)
 	}
 	wg.Wait()
-	return links, nil
+	// Remote reads may outlive grant, identity, or instance changes.
+	granted, err := s.grantedMediaServers(userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]WatchLink, 0, len(links))
+	for i, t := range targets {
+		if !contains(granted, t.inst.ID) {
+			continue
+		}
+		current, err := s.lookupTargetCurrent(userID, t.inst, t.row)
+		if err != nil {
+			return nil, err
+		}
+		if current {
+			out = append(out, links[i])
+		}
+	}
+	return out, nil
+}
+
+// lookupTargetCurrent rejects results obtained under an obsolete account or
+// connection. DisabledAt is history for reconciliation, never live authority;
+// providers establish current access when resolving an exact title link.
+func (s *Service) lookupTargetCurrent(userID int64, before *instance.Instance, account *accountRow) (bool, error) {
+	inst, err := s.store.Get(before.ID)
+	if err != nil {
+		return false, err
+	}
+	row, err := s.getAccount(userID, before.ID)
+	if err != nil {
+		return false, err
+	}
+	return inst != nil && !inst.MediaServerConfigInvalid && inst.ServiceType == before.ServiceType &&
+		inst.URL == before.URL && inst.APIKey == before.APIKey && reflect.DeepEqual(inst.MediaServerConfig, before.MediaServerConfig) && reflect.DeepEqual(row, account), nil
 }
 
 // watchLink is one server's answer for one title. A confirmed absence and an
@@ -503,7 +538,7 @@ func (s *Service) watchLink(ctx context.Context, inst *instance.Instance, row *a
 	if inst.ServiceType == "plex" {
 		link.FallbackURL = inst.MediaServerConfig.PublicAddress
 	}
-	if row == nil || row.DisabledAt.Valid || finder == nil {
+	if row == nil || finder == nil {
 		link.State = WatchUnverified
 		return link
 	}

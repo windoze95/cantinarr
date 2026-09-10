@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"time"
 
@@ -266,10 +267,15 @@ func (c *Client) FindItem(ctx context.Context, remoteUserID string, q mediaserve
 	default:
 		return mediaserver.Item{}, errors.New("jellyfin find item: no year or title to narrow by")
 	}
+	access, err := c.itemAccess(ctx, remoteUserID)
+	if err != nil {
+		return mediaserver.Item{}, err
+	}
 	var resp itemsResponse
 	if err := c.do(ctx, http.MethodGet, "/Items?"+params.Encode(), "find item", nil, &resp); err != nil {
 		return mediaserver.Item{}, err
 	}
+	var found mediaserver.Item
 	for _, item := range resp.Items {
 		if item.ID == "" || !mediaserver.ItemMatches(item.ProviderIDs, q) {
 			continue
@@ -278,9 +284,45 @@ func (c *Client) FindItem(ctx context.Context, remoteUserID string, q mediaserve
 		if err != nil {
 			return mediaserver.Item{}, err
 		}
-		return mediaserver.Item{ID: item.ID, WebPath: itemWebPath(item.ID, info.ID)}, nil
+		found = mediaserver.Item{ID: item.ID, WebPath: itemWebPath(item.ID, info.ID)}
+		break
+	}
+	liveAccess, err := c.itemAccess(ctx, remoteUserID)
+	if err != nil {
+		return mediaserver.Item{}, err
+	}
+	if !reflect.DeepEqual(access, liveAccess) {
+		return mediaserver.Item{}, mediaserver.ErrItemUnverified
+	}
+	if found.ID != "" {
+		return found, nil
 	}
 	return mediaserver.Item{}, mediaserver.ErrItemNotFound
+}
+
+// itemAccess checks the live user separately: the administrator API key can
+// read a disabled user's items. Compare decoded policies after lookup so an
+// intervening permission change cannot validate a stale match or absence.
+func (c *Client) itemAccess(ctx context.Context, remoteID string) (map[string]any, error) {
+	if remoteID == "" {
+		return nil, mediaserver.ErrItemUnverified
+	}
+	user, err := c.getUser(ctx, remoteID)
+	if errors.Is(err, mediaserver.ErrUserNotFound) {
+		return nil, mediaserver.ErrItemUnverified
+	}
+	if err != nil {
+		return nil, err
+	}
+	var policy map[string]any
+	if user.ID != remoteID || json.Unmarshal(user.Policy, &policy) != nil {
+		return nil, mediaserver.ErrItemUnverified
+	}
+	disabled, ok := policy["IsDisabled"].(bool)
+	if !ok || disabled {
+		return nil, mediaserver.ErrItemUnverified
+	}
+	return policy, nil
 }
 
 // itemWebPath is the Jellyfin web client's page for an item, under the

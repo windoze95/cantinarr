@@ -67,7 +67,7 @@ func TestWatchLinksForUser(t *testing.T) {
 	noFinderP := newFakeProvider()
 	noAddressP := finder("no address", mediaserver.Item{ID: "x", WebPath: "/x"}, nil)
 	noRowP := finder("no row", mediaserver.Item{ID: "x", WebPath: "/x"}, nil)
-	offP := finder("off", mediaserver.Item{ID: "x", WebPath: "/x"}, nil)
+	offP := finder("off", mediaserver.Item{}, mediaserver.ErrItemUnverified)
 	e.providers[found], e.providers[missing], e.providers[dead], e.providers[noFinder] = foundP, missingP, deadP, noFinderP
 	e.providers[noAddress], e.providers[noRow], e.providers[off], e.providers[plex] = noAddressP, noRowP, offP, newFakeInviteProvider()
 	remotes := map[string]string{}
@@ -89,14 +89,17 @@ func TestWatchLinksForUser(t *testing.T) {
 	for _, l := range links {
 		byName[l.Name] = l
 	}
-	if len(links) != 4 {
-		t.Fatalf("links = %+v, want the three lookups and Plex's generic shortcut", links)
+	if len(links) != 5 {
+		t.Fatalf("links = %+v, want the live lookups and Plex's generic shortcut", links)
 	}
 	if l := byName["H Plex"]; l.State != WatchUnverified || l.URL != "" || l.FallbackURL != instance.PlexPublicAddress {
 		t.Fatalf("unlinked Plex = %+v", l)
 	}
 	if l := byName["A Found"]; l.State != WatchFound || l.URL != "https://jf.example.com/web/#/details?id=i-1&serverId=s-1" || l.ServiceType != "jellyfin" || l.InstanceID != found {
 		t.Fatalf("found = %+v, want the item's page at the public address", l)
+	}
+	if l := byName["G Switched off"]; l.State != WatchUnverified || l.URL != "" {
+		t.Fatalf("live disabled account = %+v", l)
 	}
 	if l := byName["B Missing"]; l.State != WatchMissing || l.URL != "" {
 		t.Fatalf("missing = %+v, want confirmed absence without a URL", l)
@@ -106,12 +109,12 @@ func TestWatchLinksForUser(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	for name, inst := range map[string]string{"found": found, "missing": missing, "dead": dead} {
+	for name, inst := range map[string]string{"found": found, "missing": missing, "dead": dead, "off": off} {
 		if asked[name] != remotes[inst] {
 			t.Errorf("%s was asked as %q, want the linked account %q", name, asked[name], remotes[inst])
 		}
 	}
-	for name, p := range map[string]*finderProvider{"no address": noAddressP, "no row": noRowP, "off": offP} {
+	for name, p := range map[string]*finderProvider{"no address": noAddressP, "no row": noRowP} {
 		if p.calls.Load() != 0 {
 			t.Errorf("%s was asked %d times, want never", name, p.calls.Load())
 		}
@@ -172,12 +175,15 @@ func TestPlexWatchLinksRequireGrantsAndUseHostedItemLinks(t *testing.T) {
 	if links, err := e.svc.WatchLinks(context.Background(), bob, mediaserver.ItemQuery{MediaType: "movie", TMDBID: 1}); err != nil || len(links) != 0 || p.calls.Load() != before {
 		t.Fatal("ungranted user received Plex access")
 	}
+	p.find = func(string, mediaserver.ItemQuery) (mediaserver.Item, error) {
+		return mediaserver.Item{ID: "restored", WebPath: "/desktop/#!/server/m1/details?key=restored"}, nil
+	}
 	if err := e.svc.setDisabledAt(alice, id, true); err != nil {
 		t.Fatal(err)
 	}
 	links, err := e.svc.WatchLinks(context.Background(), alice, mediaserver.ItemQuery{MediaType: "movie", TMDBID: 1})
-	if err != nil || len(links) != 1 || links[0].State != WatchUnverified || p.calls.Load() != before {
-		t.Fatal("disabled account queried")
+	if err != nil || len(links) != 1 || links[0].State != WatchFound || p.calls.Load() != before+1 {
+		t.Fatal("historical disable stamp blocked a live accepted share")
 	}
 }
 

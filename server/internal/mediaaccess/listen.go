@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -136,7 +135,7 @@ func (s *Service) ListenLinks(ctx context.Context, userID int64, q mediaserver.B
 			link := ListenLink{InstanceID: t.inst.ID, Name: t.inst.Name, ServiceType: t.inst.ServiceType, State: WatchUnverified, Items: []ListenItem{}, FallbackURL: t.inst.MediaServerConfig.PublicAddress}
 			defer func() { results[i] = link }()
 			finder, ok := t.provider.(mediaserver.BookFinder)
-			if !ok || t.row == nil || t.row.DisabledAt.Valid {
+			if !ok || t.row == nil {
 				return
 			}
 			lookup, cancel := context.WithTimeout(ctx, watchTimeout)
@@ -168,15 +167,11 @@ func (s *Service) ListenLinks(ctx context.Context, userID int64, q mediaserver.B
 		if !contains(granted, t.inst.ID) {
 			continue
 		}
-		inst, err := s.store.Get(t.inst.ID)
+		current, err := s.lookupTargetCurrent(userID, t.inst, t.row)
 		if err != nil {
 			return nil, err
 		}
-		row, err := s.getAccount(userID, t.inst.ID)
-		if err != nil {
-			return nil, err
-		}
-		if inst == nil || inst.MediaServerConfigInvalid || inst.ServiceType != t.inst.ServiceType || inst.URL != t.inst.URL || inst.APIKey != t.inst.APIKey || !reflect.DeepEqual(inst.MediaServerConfig, t.inst.MediaServerConfig) || !reflect.DeepEqual(row, t.row) {
+		if !current {
 			continue
 		}
 		out = append(out, results[i])

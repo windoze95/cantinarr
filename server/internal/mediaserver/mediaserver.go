@@ -87,7 +87,9 @@ var ErrItemUnverified = errors.New("media server item could not be verified")
 // ItemFinder is implemented by media servers that can look a title up by
 // its provider ids. The lookup runs as the linked account, so the server
 // applies that account's library access, and a match is by provider id,
-// never by name alone.
+// never by name alone. Implementations also verify the account is currently
+// enabled (or its share accepted): an administrator-key item query alone
+// does not prove that the linked person can access the server.
 type ItemFinder interface {
 	FindItem(ctx context.Context, remoteUserID string, q ItemQuery) (Item, error)
 }
