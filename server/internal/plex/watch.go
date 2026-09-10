@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,22 +40,29 @@ type watchConnection struct {
 	Relay bool   `json:"relay"`
 }
 
-// watchToken reads the current share, never falling back to the owner's
-// token for another person. No sign-in credential is retained or minted.
-func (p *Provider) watchToken(ctx context.Context, identity string) (string, error) {
+type watchGrant struct {
+	token    string
+	owner    bool
+	sections map[string]bool
+}
+
+// watchAccess reads the current share, never falling back to the owner's
+// token for another person. Its sections also bound the lookup when PMS
+// has not applied a share update yet. No credential is retained or minted.
+func (p *Provider) watchAccess(ctx context.Context, identity string) (watchGrant, error) {
 	identity = mediaserver.CanonicalEmail(identity)
 	if identity == "" {
-		return "", mediaserver.ErrItemUnverified
+		return watchGrant{}, mediaserver.ErrItemUnverified
 	}
 	if identity == mediaserver.CanonicalEmail(p.owner.Email) {
 		owner, err := p.client.GetUser(ctx, p.clientID, p.token)
 		if err != nil {
-			return "", errors.New("plex watch: could not verify the server owner")
+			return watchGrant{}, errors.New("plex watch: could not verify the server owner")
 		}
 		if mediaserver.CanonicalEmail(owner.Email) != identity {
-			return "", mediaserver.ErrItemUnverified
+			return watchGrant{}, mediaserver.ErrItemUnverified
 		}
-		return p.token, nil
+		return watchGrant{token: p.token, owner: true}, nil
 	}
 	var result struct {
 		XMLName xml.Name `xml:"MediaContainer"`
@@ -63,10 +71,14 @@ func (p *Provider) watchToken(ctx context.Context, identity string) (string, err
 			Accepted   string `xml:"accepted,attr"`
 			AcceptedAt string `xml:"acceptedAt,attr"`
 			Token      string `xml:"accessToken,attr"`
+			Sections   []struct {
+				Key    string `xml:"key,attr"`
+				Shared string `xml:"shared,attr"`
+			} `xml:"Section"`
 		} `xml:"SharedServer"`
 	}
 	if err := p.client.doXML(ctx, http.MethodGet, "/api/servers/"+url.PathEscape(p.machineID)+"/shared_servers", p.clientID, p.token, &result); err != nil {
-		return "", errors.New("plex watch: could not read the current share")
+		return watchGrant{}, errors.New("plex watch: could not read the current share")
 	}
 	for _, share := range result.Shares {
 		if mediaserver.CanonicalEmail(share.Email) != identity {
@@ -75,10 +87,24 @@ func (p *Provider) watchToken(ctx context.Context, identity string) (string, err
 		accepted := share.Accepted == "1" || share.Accepted == "true" ||
 			(share.Accepted == "" && share.AcceptedAt != "" && share.AcceptedAt != "0")
 		if accepted && share.Token != "" {
-			return share.Token, nil
+			access := watchGrant{token: share.Token, sections: make(map[string]bool)}
+			for _, section := range share.Sections {
+				if section.Shared != "" && section.Shared != "1" && section.Shared != "true" {
+					continue
+				}
+				key, err := strconv.ParseUint(section.Key, 10, 64)
+				if err != nil || key == 0 {
+					return watchGrant{}, mediaserver.ErrItemUnverified
+				}
+				access.sections[section.Key] = true
+			}
+			if len(access.sections) == 0 {
+				return watchGrant{}, mediaserver.ErrItemUnverified
+			}
+			return access, nil
 		}
 	}
-	return "", mediaserver.ErrItemUnverified
+	return watchGrant{}, mediaserver.ErrItemUnverified
 }
 
 type watchClient struct {
@@ -236,11 +262,11 @@ func (p *Provider) FindItem(ctx context.Context, identity string, q mediaserver.
 		((q.Year <= 0 || q.Year > 9999) && strings.TrimSpace(q.Title) == "") {
 		return mediaserver.Item{}, mediaserver.ErrItemUnverified
 	}
-	token, err := p.watchToken(ctx, identity)
+	access, err := p.watchAccess(ctx, identity)
 	if err != nil {
 		return mediaserver.Item{}, err
 	}
-	client, err := p.connectForWatch(ctx, token)
+	client, err := p.connectForWatch(ctx, access.token)
 	if err != nil {
 		return mediaserver.Item{}, err
 	}
@@ -257,7 +283,7 @@ func (p *Provider) FindItem(ctx context.Context, identity string, q mediaserver.
 	var match string
 	seen := 0
 	for _, section := range sections.Directories {
-		if section.Type != itemType {
+		if section.Type != itemType || (!access.owner && !access.sections[section.Key]) {
 			continue
 		}
 		if _, err := strconv.ParseUint(section.Key, 10, 64); err != nil {
@@ -310,6 +336,13 @@ func (p *Provider) FindItem(ctx context.Context, identity string, q mediaserver.
 		}
 	}
 	if match == "" {
+		return mediaserver.Item{}, mediaserver.ErrItemUnverified
+	}
+	current, err := p.watchAccess(ctx, identity)
+	if err != nil {
+		return mediaserver.Item{}, err
+	}
+	if !reflect.DeepEqual(access, current) {
 		return mediaserver.Item{}, mediaserver.ErrItemUnverified
 	}
 	return mediaserver.Item{ID: match, WebPath: "/desktop/#!/server/" + url.PathEscape(p.machineID) + "/details?key=" + url.QueryEscape("/library/metadata/"+match)}, nil

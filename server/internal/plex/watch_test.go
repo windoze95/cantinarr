@@ -30,12 +30,14 @@ type watchFixture struct {
 	status        int
 	pmsCalls      atomic.Int32
 	metadataCalls atomic.Int32
+	shareReads    atomic.Int32
+	sharePage     func(int32) string
 }
 
 func newWatchFixture(t *testing.T) *watchFixture {
 	t.Helper()
 	f := &watchFixture{
-		share:      `<SharedServer email="alice@example.com" accepted="1" accessToken="share-SECRET"/>`,
+		share:      `<SharedServer email="alice@example.com" accepted="1" accessToken="share-SECRET"><Section key="1" shared="1"/><Section key="3" shared="1"/></SharedServer>`,
 		ownerEmail: "owner@example.com", expectToken: "share-SECRET", machine: "m1", owned: true,
 		sections: `<Directory key="1" type="movie"/><Directory key="3" type="show"/>`,
 		items:    `<Video type="movie" ratingKey="123"><Guid id="tmdb://10378"/></Video>`,
@@ -102,7 +104,12 @@ func newWatchFixture(t *testing.T) *watchFixture {
 		case "/api/v2/resources":
 			json.NewEncoder(w).Encode([]watchResource{{ClientIdentifier: "m1", Provides: "server", Owned: f.owned, Connections: f.connections}})
 		case "/api/servers/m1/shared_servers":
-			fmt.Fprint(w, `<MediaContainer>`+f.share+`</MediaContainer>`)
+			n := f.shareReads.Add(1)
+			share := f.share
+			if f.sharePage != nil {
+				share = f.sharePage(n)
+			}
+			fmt.Fprint(w, `<MediaContainer>`+share+`</MediaContainer>`)
 		case "/api/v2/user":
 			json.NewEncoder(w).Encode(Account{Email: f.ownerEmail})
 		default:
