@@ -139,6 +139,22 @@ Future<void> _tap(WidgetTester tester, String title) async {
 }
 
 void main() {
+  testWidgets('media server access has one personal choice and one server gate',
+      (tester) async {
+    final adapter = _Adapter();
+    await _pump(tester, adapter);
+    expect((await _switch(tester, 'Media server access')).value, isTrue);
+    await _tap(tester, 'Media server access');
+    expect(adapter.prefs['media_server_access'], isFalse);
+    expect(adapter.prefs['plex_invite_sent'], isFalse);
+    expect(adapter.allowed['media_server_access'], isTrue);
+    await _tap(tester, 'Server settings');
+    await _tap(tester, 'Media server access');
+    expect(adapter.allowed['media_server_access'], isFalse);
+    expect(adapter.prefs['media_server_access'], isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
       'personal master preserves categories and automatic alerts require opting in',
       (tester) async {

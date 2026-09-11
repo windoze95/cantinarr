@@ -179,9 +179,9 @@ func main() {
 	ctx := context.Background()
 	logger := slog.Default()
 
-	// Media-server accounts (Jellyfin, Emby): a granted user creates their own
-	// account from the app; grant changes and user deletion switch accounts
-	// off and on through the two hooks below.
+	// Media-server access (Plex, Jellyfin, Emby, Audiobookshelf): new access
+	// alerts guide users through account setup or invitation acceptance;
+	// grant changes and user deletion reconcile managed remote accounts.
 	// The pre-instance Plex integration (a linked account in the settings
 	// table) becomes a Plex instance on first boot, with everyone it had
 	// invited granted; idempotent, marker-guarded.
@@ -201,6 +201,7 @@ func main() {
 		return nil
 	})
 	instanceHandler.SetGrantObserver(mediaAccessService.OnGrantsChanged)
+	instanceStore.SetGrantAddedObserver(mediaAccessService.OnGrantAdded)
 	instanceHandler.SetSharedLibrariesObserver(mediaAccessService.OnSharedLibrariesChanged)
 	authHandler.SetUserDeleteHook(mediaAccessService.BeforeUserDelete)
 

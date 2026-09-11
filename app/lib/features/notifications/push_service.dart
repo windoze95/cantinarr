@@ -179,8 +179,9 @@ class PushService {
         // A user shared their Plex email — the Users screen shows it with the
         // invite actions.
         router.push('/settings/users');
-      case 'plex_invite_sent':
-        // The user's invite went out; the access guide says what to do.
+      case 'media_server_access':
+      case 'plex_invite_sent': // Notifications delivered before the rename.
+        // The guide reads current access and the next steps for each service.
         router.push('/media-servers');
       case 'remediation_autodispatch_disabled':
         // The circuit breaker turned auto-dispatch off — open the settings the

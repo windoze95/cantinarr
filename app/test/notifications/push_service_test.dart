@@ -152,6 +152,7 @@ void main() {
       // not this particular proposal is still pending on arrival.
       'profile_change_pending': '/settings/profile-approvals',
       'plex_access_request': '/settings/users',
+      'media_server_access': '/media-servers',
       'plex_invite_sent': '/media-servers',
       'remediation_autodispatch_disabled': '/settings/ai-remediation',
     };

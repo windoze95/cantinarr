@@ -256,8 +256,8 @@ func TestRequestInviteSendsInviteAndRecordsPendingRow(t *testing.T) {
 	if e.email(alice) != "alice@example.com" {
 		t.Fatalf("remembered email = %q, want canonical", e.email(alice))
 	}
-	if pushes.userEvents(alice, eventInviteSent) != 1 {
-		t.Fatalf("invite push count = %d, want 1", pushes.userEvents(alice, eventInviteSent))
+	if pushes.userEvents(alice, eventMediaServerAccess) != 1 {
+		t.Fatalf("invite push count = %d, want 1", pushes.userEvents(alice, eventMediaServerAccess))
 	}
 
 	servers, err := e.svc.ListForUser(context.Background(), alice)
@@ -328,7 +328,7 @@ func TestRequestInviteAdoptsAShareMadeByHand(t *testing.T) {
 	if row := e.row(alice, plex); row == nil || row.CreatedByCantinarr {
 		t.Fatalf("row = %+v, want a linked (not created) row", row)
 	}
-	if pushes.userEvents(alice, eventInviteSent) != 0 {
+	if pushes.userEvents(alice, eventMediaServerAccess) != 0 {
 		t.Fatal("adopting a share pushed 'check your email'")
 	}
 }
@@ -461,8 +461,8 @@ func TestReconcileRemovesShareOnRevokeAndReinvitesOnRegrant(t *testing.T) {
 	if !reflect.DeepEqual(fake.lastLibraryIDs, []string{"11"}) {
 		t.Fatalf("re-invite libraries = %v", fake.lastLibraryIDs)
 	}
-	if pushes.userEvents(alice, eventInviteSent) != 2 {
-		t.Fatalf("invite pushes = %d, want 2 (first invite + re-invite)", pushes.userEvents(alice, eventInviteSent))
+	if pushes.userEvents(alice, eventMediaServerAccess) != 2 {
+		t.Fatalf("invite pushes = %d, want 2 (first invite + re-invite)", pushes.userEvents(alice, eventMediaServerAccess))
 	}
 }
 
@@ -660,8 +660,8 @@ func TestNoCheckYourEmailPushWhenPlexAcceptsAtOnce(t *testing.T) {
 	if err != nil || created.Pending {
 		t.Fatalf("created = %+v, %v", created, err)
 	}
-	if pushes.userEvents(alice, eventInviteSent) != 0 {
-		t.Fatal("an accepted-at-once share pushed 'check your email'")
+	if pushes.userEvents(alice, eventMediaServerAccess) != 1 || pushes.user[0].data["access_state"] != "ready" {
+		t.Fatal("an accepted-at-once share must announce ready access without an invitation")
 	}
 
 	e.grant(alice)
@@ -671,7 +671,7 @@ func TestNoCheckYourEmailPushWhenPlexAcceptsAtOnce(t *testing.T) {
 	if !fake.has("alice@example.com") || e.row(alice, plex).DisabledAt.Valid {
 		t.Fatal("re-grant did not re-share")
 	}
-	if pushes.userEvents(alice, eventInviteSent) != 0 {
-		t.Fatal("a re-share plex.tv accepted at once pushed 'check your email'")
+	if pushes.userEvents(alice, eventMediaServerAccess) != 2 || pushes.user[1].data["access_state"] != "ready" {
+		t.Fatal("an accepted-at-once re-share must announce ready access without an invitation")
 	}
 }

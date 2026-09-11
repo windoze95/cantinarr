@@ -282,6 +282,7 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
     agent_action_pending INTEGER NOT NULL DEFAULT 1,
     plex_access_request INTEGER NOT NULL DEFAULT 1,
     plex_invite_sent INTEGER NOT NULL DEFAULT 1,
+    media_server_access INTEGER NOT NULL DEFAULT 1,
     issue_report_update INTEGER NOT NULL DEFAULT 1,
     agent_digest INTEGER NOT NULL DEFAULT 1,
     content_upgraded INTEGER NOT NULL DEFAULT 0
@@ -1102,6 +1103,12 @@ func Open(dbPath string) (*sql.DB, error) {
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN new_music INTEGER NOT NULL DEFAULT 1"},
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN push_enabled INTEGER NOT NULL DEFAULT 1"},
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN request_auto_approved INTEGER NOT NULL DEFAULT 0"},
+		// Broaden the former Plex-invite preference without opting anyone back
+		// in. Retain the old column for upgrades; the new one owns future saves.
+		{
+			alter:    "ALTER TABLE notification_prefs ADD COLUMN media_server_access INTEGER NOT NULL DEFAULT 1",
+			backfill: []string{"UPDATE notification_prefs SET media_server_access = plex_invite_sent"},
+		},
 		// Hardcover: an admin-supplied Hardcover API token held per Chaptarr
 		// instance, encrypted at rest and write-only through the API. Empty =
 		// not connected, which is the only thing the API ever reports about it.

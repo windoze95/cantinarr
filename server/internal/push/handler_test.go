@@ -37,7 +37,7 @@ func TestGetPreferencesDefaults(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	want := Prefs{PushEnabled: true, RequestDecision: false, RequestPending: true, NewMovie: true, NewEpisode: true, NewBook: true, NewMusic: true, IssueCreated: true, AgentActionPending: true, PlexAccessRequest: true, PlexInviteSent: true, IssueReportUpdate: true, AgentDigest: true}
+	want := Prefs{PushEnabled: true, RequestDecision: false, RequestPending: true, NewMovie: true, NewEpisode: true, NewBook: true, NewMusic: true, IssueCreated: true, AgentActionPending: true, PlexAccessRequest: true, MediaServerAccess: true, IssueReportUpdate: true, AgentDigest: true}
 	if got != want {
 		t.Errorf("prefs = %+v, want %+v", got, want)
 	}
@@ -80,7 +80,7 @@ func TestUpdatePreferencesRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	want := Prefs{PushEnabled: true, RequestDecision: true, RequestPending: false, NewMovie: false, NewEpisode: true}
+	want := Prefs{PushEnabled: true, MediaServerAccess: true, RequestDecision: true, RequestPending: false, NewMovie: false, NewEpisode: true}
 	if got != want {
 		t.Errorf("echoed prefs = %+v, want %+v", got, want)
 	}

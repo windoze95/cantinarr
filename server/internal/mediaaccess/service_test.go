@@ -250,6 +250,7 @@ func newEnv(t *testing.T) *env {
 	// Invite passes run off the request in production; here they run inline
 	// so a test can assert right after the call that triggered them.
 	e.svc.background = func(fn func()) { fn() }
+	e.store.SetGrantAddedObserver(e.svc.OnGrantAdded)
 	return e
 }
 

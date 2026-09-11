@@ -1,6 +1,6 @@
 // Package mediaaccess provisions and tracks user access on media servers
-// (Jellyfin, Emby, Plex). Eligibility is the instance grant: a granted user
-// creates their own account — or, on an invite server, asks for their share
+// (Jellyfin, Emby, Plex, Audiobookshelf). Eligibility is the instance grant:
+// a granted user creates their own account — or, on an invite server, asks for their share
 // — a revoked grant switches the access off, and a returning grant switches
 // it back on. Cantinarr never stores the password it hands an account server
 // and never deletes an account it did not just create.
@@ -36,9 +36,9 @@ type Notifier interface {
 }
 
 const (
-	// eventInviteSent tells a user their invite went out (push category
-	// plex_invite_sent: "check your email").
-	eventInviteSent = "plex_invite_sent"
+	// eventMediaServerAccess tells the recipient how to start using a newly
+	// granted account server or a Plex share Cantinarr just sent.
+	eventMediaServerAccess = "media_server_access"
 	// eventAccessRequest tells admins a user shared a Plex email (push
 	// category plex_access_request); invite_state says whether anything is
 	// left for them to do.
@@ -150,7 +150,7 @@ func NewService(db *sql.DB, store *instance.Store, providers ProviderFactory, lo
 	}
 }
 
-// SetNotifier installs the push/WS fan-out; nil keeps invites silent. Wired
+// SetNotifier installs the push/WS fan-out; nil keeps access alerts silent. Wired
 // late by main because the composite needs the WebSocket hub.
 func (s *Service) SetNotifier(n Notifier) {
 	s.notifier = n
@@ -798,10 +798,8 @@ func (s *Service) requestInvite(ctx context.Context, userID int64, instanceID, e
 		}
 		return CreatedAccount{}, ErrNotAvailable
 	}
-	// "Check your email" only when there is an email to check: plex.tv
-	// accepts a share at once for an account still connected to the owner.
-	if created && remote.Pending {
-		s.notifyUser(userID, eventInviteSent)
+	if created {
+		s.notifyShare(userID, inst, remote.Pending)
 	}
 	return CreatedAccount{ManageAccess: created && !remote.IsAdministrator, Username: name, PublicAddress: inst.MediaServerConfig.PublicAddress, Pending: remote.Pending}, nil
 }
@@ -898,11 +896,34 @@ func (s *Service) rollbackCreate(ctx context.Context, provider mediaserver.Provi
 	}
 }
 
-func (s *Service) notifyUser(userID int64, eventType string) {
+// OnGrantAdded runs after a new grant commits, including an admin account link.
+// Account servers require the user to create/link an account in the guide.
+// Plex notifies only after a successful share, so a grant and its automatic
+// invite cannot send duplicate alerts or claim an invitation that failed.
+func (s *Service) OnGrantAdded(userID int64, instanceID string) {
+	inst, provider, err := s.eligibleProvider(userID, instanceID)
+	if err != nil || mediaserver.KindOf(provider) != mediaserver.KindAccount {
+		return
+	}
+	s.notifyAccess(userID, inst, "granted")
+}
+
+func (s *Service) notifyShare(userID int64, inst *instance.Instance, pending bool) {
+	state := "ready"
+	if pending {
+		state = "invite_pending"
+	}
+	s.notifyAccess(userID, inst, state)
+}
+
+func (s *Service) notifyAccess(userID int64, inst *instance.Instance, state string) {
 	if s.notifier == nil {
 		return
 	}
-	s.notifier.NotifyUser(userID, eventType, map[string]interface{}{})
+	s.notifier.NotifyUser(userID, eventMediaServerAccess, map[string]interface{}{
+		"instance_id": inst.ID, "server_name": inst.Name,
+		"service_type": inst.ServiceType, "access_state": state,
+	})
 }
 
 // ListAccounts returns every linked account for the admin Users screen.
@@ -1575,12 +1596,9 @@ func (s *Service) reconcileMissingShare(ctx context.Context, provider mediaserve
 	}
 	if err := s.setDisabledAt(row.UserID, row.InstanceID, false); err != nil {
 		s.logger.Error("mediaaccess: reconcile: stamp", "err", err, "user_id", row.UserID, "instance_id", row.InstanceID)
+		return
 	}
-	// An account plex.tv still knows gets the share back accepted at once;
-	// only a real invite is worth a "check your email".
-	if remote.Pending {
-		s.notifyUser(row.UserID, eventInviteSent)
-	}
+	s.notifyShare(row.UserID, inst, remote.Pending)
 }
 
 // BeforeUserDelete is the auth handler's delete hook. Called before the

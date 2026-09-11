@@ -36,7 +36,7 @@ class NotificationPrefs {
   final bool issueCreated;
   final bool agentActionPending;
   final bool plexAccessRequest;
-  final bool plexInviteSent;
+  final bool mediaServerAccess;
   final bool issueReportUpdate;
   final bool agentDigest;
   final bool contentUpgraded;
@@ -54,7 +54,7 @@ class NotificationPrefs {
     this.issueCreated = true,
     this.agentActionPending = true,
     this.plexAccessRequest = true,
-    this.plexInviteSent = true,
+    this.mediaServerAccess = true,
     this.issueReportUpdate = true,
     this.agentDigest = true,
     this.contentUpgraded = false,
@@ -79,7 +79,9 @@ class NotificationPrefs {
         issueCreated: json['issue_created'] as bool? ?? true,
         agentActionPending: json['agent_action_pending'] as bool? ?? true,
         plexAccessRequest: json['plex_access_request'] as bool? ?? true,
-        plexInviteSent: json['plex_invite_sent'] as bool? ?? true,
+        mediaServerAccess: json['media_server_access'] as bool? ??
+            json['plex_invite_sent'] as bool? ??
+            true,
         issueReportUpdate: json['issue_report_update'] as bool? ?? true,
         agentDigest: json['agent_digest'] as bool? ?? true,
         // Unlike the admin categories above, quality-upgrade alerts default
@@ -101,7 +103,9 @@ class NotificationPrefs {
         'issue_created': issueCreated,
         'agent_action_pending': agentActionPending,
         'plex_access_request': plexAccessRequest,
-        'plex_invite_sent': plexInviteSent,
+        'media_server_access': mediaServerAccess,
+        // Older servers still call this preference Plex invite sent.
+        'plex_invite_sent': mediaServerAccess,
         'issue_report_update': issueReportUpdate,
         'agent_digest': agentDigest,
         'content_upgraded': contentUpgraded,
@@ -126,7 +130,7 @@ class NotificationPrefs {
     bool? issueCreated,
     bool? agentActionPending,
     bool? plexAccessRequest,
-    bool? plexInviteSent,
+    bool? mediaServerAccess,
     bool? issueReportUpdate,
     bool? agentDigest,
     bool? contentUpgraded,
@@ -144,7 +148,7 @@ class NotificationPrefs {
         issueCreated: issueCreated ?? this.issueCreated,
         agentActionPending: agentActionPending ?? this.agentActionPending,
         plexAccessRequest: plexAccessRequest ?? this.plexAccessRequest,
-        plexInviteSent: plexInviteSent ?? this.plexInviteSent,
+        mediaServerAccess: mediaServerAccess ?? this.mediaServerAccess,
         issueReportUpdate: issueReportUpdate ?? this.issueReportUpdate,
         agentDigest: agentDigest ?? this.agentDigest,
         contentUpgraded: contentUpgraded ?? this.contentUpgraded,

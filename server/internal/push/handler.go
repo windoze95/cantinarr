@@ -163,7 +163,7 @@ func (h *Handler) GetPreferences(w http.ResponseWriter, r *http.Request) {
 // UpdatePreferences replaces the calling user's notification preferences. The
 // body carries the preference flags returned by GetPreferences; the stored
 // preferences are echoed back. Unknown fields are ignored and missing fields
-// default to false for legacy categories. The master and auto-approved flags
+// default to false for legacy categories. The master, auto-approved, and media-access flags
 // preserve their saved values when omitted. Read-only policy metadata is ignored.
 func (h *Handler) UpdatePreferences(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
@@ -175,12 +175,17 @@ func (h *Handler) UpdatePreferences(w http.ResponseWriter, r *http.Request) {
 		Prefs
 		PushEnabled         *bool `json:"push_enabled"`
 		RequestAutoApproved *bool `json:"request_auto_approved"`
+		MediaServerAccess   *bool `json:"media_server_access"`
+		PlexInviteSent      *bool `json:"plex_invite_sent"` // old apps share the renamed preference
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	if err := h.prefs.set(claims.UserID, body.Prefs, body.PushEnabled, body.RequestAutoApproved); err != nil {
+	if body.MediaServerAccess == nil {
+		body.MediaServerAccess = body.PlexInviteSent
+	}
+	if err := h.prefs.set(claims.UserID, body.Prefs, body.PushEnabled, body.RequestAutoApproved, body.MediaServerAccess); err != nil {
 		h.logger.Error("push: set notification prefs", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save preferences"})
 		return

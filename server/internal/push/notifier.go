@@ -111,10 +111,8 @@ func (n *Notifier) client() *Client {
 func (n *Notifier) ContentReady() bool { return n.client() != nil }
 
 // NotifyUser pushes a per-user event to its recipient, gated on their opt-in
-// for the matching category. Two events produce a notification today:
-// "request_decision" (approval/denial outcome, off by default) and
-// "plex_invite_sent" ("check your email", fixed template, on by default).
-// Any other event type is a no-op here (WS-only).
+// for the matching category. Decisions, media-server access, and report updates
+// have push templates; other targeted events remain WS-only.
 func (n *Notifier) NotifyUser(userID int64, eventType string, data map[string]interface{}) {
 	client := n.client()
 	if client == nil {
@@ -130,13 +128,16 @@ func (n *Notifier) NotifyUser(userID int64, eventType string, data map[string]in
 			return
 		}
 		n.send(client, []int64{userID}, title, body, passthrough(CategoryRequestDecision, data))
-	case CategoryPlexInviteSent:
-		if !n.prefs.optedIn(userID, CategoryPlexInviteSent) {
+	case CategoryMediaServerAccess:
+		if !n.prefs.optedIn(userID, CategoryMediaServerAccess) {
 			return
 		}
-		n.send(client, []int64{userID}, "Plex invite sent",
-			"Your Plex invite is on its way — check your email",
-			map[string]any{"type": CategoryPlexInviteSent})
+		body := mediaAccessMessage(data)
+		if body == "" {
+			return
+		}
+		n.send(client, []int64{userID}, "Media server access", body,
+			map[string]any{"type": CategoryMediaServerAccess, "instance_id": data["instance_id"]})
 	case EventIssueQuestion, EventIssueFixConfirm, EventIssueClosed:
 		// Reporter-loop beats about the user's OWN report. One shared
 		// preference gates all three; the bodies are FIXED server-authored
@@ -157,6 +158,32 @@ const (
 	EventIssueFixConfirm = "issue_fix_confirm"
 	EventIssueClosed     = "issue_closed"
 )
+
+func mediaAccessMessage(data map[string]interface{}) string {
+	service, _ := data["service_type"].(string)
+	label := map[string]string{"plex": "Plex", "jellyfin": "Jellyfin", "emby": "Emby", "audiobookshelf": "Audiobookshelf"}[service]
+	name, _ := data["server_name"].(string)
+	instanceID, _ := data["instance_id"].(string)
+	if label == "" || strings.TrimSpace(name) == "" || instanceID == "" {
+		return ""
+	}
+	server := name + " (" + label + ")"
+	switch data["access_state"] {
+	case "granted":
+		if service != "plex" {
+			return "You've been given access to " + server + ". Open Media Servers to set up or view your account."
+		}
+	case "invite_pending":
+		if service == "plex" {
+			return "You've been invited to " + server + ". Accept the invitation in Plex or check your email."
+		}
+	case "ready":
+		if service == "plex" {
+			return "Your access to " + server + " is ready. Open Media Servers to get started."
+		}
+	}
+	return ""
+}
 
 func issueReportMessage(eventType string) (title, body string) {
 	switch eventType {

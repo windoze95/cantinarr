@@ -35,10 +35,10 @@ const pushCategories = [
       SettingsAnchors.notificationsNewMusic,
       service: 'lidarr'),
   PushCategory(
-      'plex_invite_sent',
-      'Plex invite sent',
-      'When you\'re invited to access a Plex server',
-      SettingsAnchors.notificationsPlexInviteSent),
+      'media_server_access',
+      'Media server access',
+      'When you get access to a Plex, Jellyfin, Emby, or Audiobookshelf server',
+      SettingsAnchors.notificationsMediaServerAccess),
   PushCategory(
       'issue_report_update',
       'My report updates',

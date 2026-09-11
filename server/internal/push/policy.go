@@ -39,12 +39,24 @@ func readPolicy(db policyReader) (Policy, error) {
 	if err != nil {
 		return Policy{}, err
 	}
-	loaded := &p
+	loaded := &Policy{Enabled: true}
 	if err := json.Unmarshal([]byte(raw), &loaded); err != nil {
 		return Policy{}, err
 	}
-	if loaded == nil || p.Categories == nil {
+	if loaded == nil || loaded.Categories == nil {
 		return Policy{}, errors.New("missing push categories")
+	}
+	// Existing server-wide Plex opt-outs follow the expanded category. The
+	// canonical key wins if an administrator has already saved the new policy.
+	if legacy, ok := loaded.Categories["plex_invite_sent"]; ok {
+		if _, exists := loaded.Categories[CategoryMediaServerAccess]; !exists {
+			loaded.Categories[CategoryMediaServerAccess] = legacy
+		}
+		delete(loaded.Categories, "plex_invite_sent")
+	}
+	p.Enabled = loaded.Enabled
+	for key, allowed := range loaded.Categories {
+		p.Categories[key] = allowed
 	}
 	return p, nil
 }
@@ -141,6 +153,9 @@ func (s *PrefsStore) filterDelivery(userIDs []int64, category string) ([]int64, 
 type preferencesResponse struct {
 	Prefs
 	ServerPolicy Policy `json:"server_policy"`
+	// Old apps read this before saving the full row. Echo the same choice so
+	// an unrelated save cannot silently re-enable a migrated opt-out.
+	PlexInviteSent bool `json:"plex_invite_sent"`
 }
 
 func (h *Handler) preferences(w http.ResponseWriter, userID int64) {
@@ -154,7 +169,7 @@ func (h *Handler) preferences(w http.ResponseWriter, userID int64) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load server notification settings"})
 		return
 	}
-	writeJSON(w, http.StatusOK, preferencesResponse{Prefs: prefs, ServerPolicy: policy})
+	writeJSON(w, http.StatusOK, preferencesResponse{Prefs: prefs, ServerPolicy: policy, PlexInviteSent: prefs.MediaServerAccess})
 }
 
 // ServerPolicy is mounted behind admin:*; personal preference writes cannot

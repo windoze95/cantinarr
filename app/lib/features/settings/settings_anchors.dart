@@ -38,7 +38,8 @@ abstract final class SettingsAnchors {
   static const notificationsNewEpisode = 'notifications.new-episode';
   static const notificationsNewBook = 'notifications.new-book';
   static const notificationsNewMusic = 'notifications.new-music';
-  static const notificationsPlexInviteSent = 'notifications.plex-invite-sent';
+  static const notificationsMediaServerAccess =
+      'notifications.media-server-access';
   static const notificationsReportUpdates = 'notifications.report-updates';
 
   // /settings/ai-remediation

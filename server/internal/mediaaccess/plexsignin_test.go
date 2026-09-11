@@ -256,7 +256,7 @@ func TestPlexSignInLinksTheVerifiedEmailAndSendsTheInvite(t *testing.T) {
 	if len(f.signedOut) != 1 || f.signedOut[0] != userToken {
 		t.Fatalf("signed out = %v, want the user's token once", f.signedOut)
 	}
-	if pushes.userEvents(rey, eventInviteSent) != 1 {
+	if pushes.userEvents(rey, eventMediaServerAccess) != 1 {
 		t.Fatal("no check-your-email push")
 	}
 	if state, ok := pushes.lastAdminState(); !ok || state != "sent" {
@@ -306,7 +306,7 @@ func TestPlexSignInAdoptsAnExistingShareAndTellsAdminsWhenUngranted(t *testing.T
 	if row := e.row(rey, plex); row == nil || row.CreatedByCantinarr {
 		t.Fatalf("row = %+v, want an adopted (linked) row", row)
 	}
-	if len(f.invited) != 0 || pushes.userEvents(rey, eventInviteSent) != 0 {
+	if len(f.invited) != 0 || pushes.userEvents(rey, eventMediaServerAccess) != 0 {
 		t.Fatal("an existing share was invited again")
 	}
 
@@ -391,7 +391,7 @@ func TestPlexSignInRecognisesTheOwner(t *testing.T) {
 	if err != nil || len(views) != 1 || views[0].Account == nil || !views[0].Account.Administrator || views[0].Account.Pending || !views[0].Account.Verified {
 		t.Fatalf("owner's guide = %+v, %v", views, err)
 	}
-	if pushes.userEvents(julian, eventInviteSent) != 0 {
+	if pushes.userEvents(julian, eventMediaServerAccess) != 0 {
 		t.Fatal("the owner was told to check their email")
 	}
 	// Revoking and restoring the grant never touches plex.tv for the owner.
