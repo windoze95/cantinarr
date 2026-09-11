@@ -28,6 +28,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	projectdb "github.com/windoze95/cantinarr-server/internal/db"
+	"github.com/windoze95/cantinarr-server/internal/discordnotify"
 	"github.com/windoze95/cantinarr-server/internal/discover"
 	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/instance"
@@ -428,6 +429,8 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 	instanceRegistry := instance.NewRegistry(store)
 	bridge := tmdb.NewBridge(registry, database)
 	requestService := requestsvc.NewService(database, instanceRegistry, bridge, nil)
+	discordNotifications := discordnotify.NewService(database, cipher, nil)
+	requestService.SetCreationObserver(discordNotifications)
 	requestHandler := requestsvc.NewHandler(requestService)
 	remediationService := remediation.NewService(database, instanceRegistry, bridge, nil)
 	remediationHandler := remediation.NewHandler(remediationService)
@@ -518,6 +521,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		update.NewChecker("dev", true),
 		serversettings.NewService(database, func() bool { return registry.Trakt() != nil }),
 		contentpolicy.NewHandler(contentPolicy),
+		discordNotifications,
 	)
 	return &rbacRouterHarness{
 		router:            router,

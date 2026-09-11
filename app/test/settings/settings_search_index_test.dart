@@ -31,6 +31,7 @@ const _routableSettingsPaths = {
   '/settings/ai-remediation',
   '/settings/agent-approval-rules',
   '/settings/request-settings',
+  '/settings/discord-notifications',
   '/settings/discovery',
   '/settings/devices',
   '/settings/plex',

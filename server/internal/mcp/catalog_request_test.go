@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/windoze95/cantinarr-server/internal/db"
+	"github.com/windoze95/cantinarr-server/internal/discordnotify"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
@@ -76,5 +77,39 @@ func TestBookToolsUseNativeIdentityAndRetirePublicRequests(t *testing.T) {
 				t.Fatalf("retirement missing: %+v", out)
 			}
 		})
+	}
+}
+
+func TestMCPRequestQueuesOneDiscordAlert(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	res, err := database.Exec(`INSERT INTO users(username,password_hash,role) VALUES('requester','','user')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid, _ := res.LastInsertId()
+	cipher, _ := secrets.NewCipher(bytes.Repeat([]byte{3}, 32))
+	service := request.NewService(database, nil, nil, nil)
+	if err = service.SetGlobalSettings(request.GlobalSettings{RequireApproval: true}); err != nil {
+		t.Fatal(err)
+	}
+	discord := discordnotify.NewService(database, cipher, nil)
+	if err = discord.Save(true, "https://discord.com/api/webhooks/123/test-token", false); err != nil {
+		t.Fatal(err)
+	}
+	service.SetCreationObserver(discord)
+	server := NewToolServer(nil, service, nil, nil)
+	for i := 0; i < 2; i++ {
+		result, err := server.requestMedia(json.RawMessage(`{"media_type":"movie","tmdb_id":550,"title":"A movie"}`), uid)
+		if err != nil || !strings.Contains(result.Text, `"success":true`) {
+			t.Fatalf("request: %+v %v", result, err)
+		}
+	}
+	var count int
+	if err = database.QueryRow(`SELECT COUNT(*) FROM discord_notifications`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("receipts: %d %v", count, err)
 	}
 }

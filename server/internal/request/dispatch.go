@@ -196,6 +196,7 @@ func (s *Service) saveDelivery(userID int64, req *CreateRequest, instanceID, for
 		}
 	}
 	inserted := len(missing) > 0
+	var createdID int64
 	if inserted {
 		format := missing[0]
 		if len(missing) == 2 {
@@ -214,6 +215,7 @@ func (s *Service) saveDelivery(userID int64, req *CreateRequest, instanceID, for
 		if e != nil {
 			return nil, false, e
 		}
+		createdID = id
 		for _, f := range missing {
 			if _, e = tx.Exec(`INSERT INTO request_dispatch(request_id,format,state) VALUES (?,?,?)`, id, f, state); e != nil {
 				return nil, false, e
@@ -240,5 +242,6 @@ func (s *Service) saveDelivery(userID int64, req *CreateRequest, instanceID, for
 	if err = tx.Commit(); err != nil {
 		return nil, false, err
 	}
+	s.notifyCreated(createdID, approval)
 	return ids, inserted, nil
 }

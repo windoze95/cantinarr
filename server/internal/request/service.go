@@ -214,13 +214,14 @@ type Notifier interface {
 }
 
 type Service struct {
-	MusicCatalog musicdiscovery.Catalog
-	dispatchMu   sync.Mutex
-	dispatchWake chan struct{}
-	db           *sql.DB
-	registry     *instance.Registry
-	bridge       *tmdb.Bridge
-	notifier     Notifier
+	MusicCatalog     musicdiscovery.Catalog
+	dispatchMu       sync.Mutex
+	dispatchWake     chan struct{}
+	db               *sql.DB
+	registry         *instance.Registry
+	bridge           *tmdb.Bridge
+	notifier         Notifier
+	creationObserver CreationObserver
 	// libraryCache holds reduced Chaptarr library digests keyed by instance id,
 	// so the owned-books digest doesn't refetch the whole library on every call.
 	libraryCache *cache.Cache
@@ -852,6 +853,8 @@ type effective struct {
 
 // resolvedRequest is a request whose options have all been resolved server-side.
 type resolvedRequest struct {
+	newSubmission        bool // public intake only; approval replays never emit creation
+	newWork              bool // a new arr record or genuinely revived monitoring
 	userID               int64
 	actorID              int64 // optional execution authority; history remains userID-owned
 	tmdbID               int
@@ -1117,14 +1120,15 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 	}
 
 	resolved := &resolvedRequest{
-		userID:     userID,
-		tmdbID:     req.TmdbID,
-		tvdbID:     req.TvdbID,
-		foreignID:  req.ForeignID,
-		searchTerm: strings.TrimSpace(req.SearchTerm),
-		instanceID: strings.TrimSpace(req.InstanceID),
-		mediaType:  req.MediaType,
-		title:      req.Title,
+		newSubmission: true,
+		userID:        userID,
+		tmdbID:        req.TmdbID,
+		tvdbID:        req.TvdbID,
+		foreignID:     req.ForeignID,
+		searchTerm:    strings.TrimSpace(req.SearchTerm),
+		instanceID:    strings.TrimSpace(req.InstanceID),
+		mediaType:     req.MediaType,
+		title:         req.Title,
 	}
 	if resolved.mediaType == "movie" || resolved.mediaType == "tv" {
 		// Resolve and authorize the target library up front so a pending row
@@ -1187,6 +1191,11 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		resolved.qualityProfileID = req.QualityProfileID
 	}
 
+	// Serialize repeated submissions to this target through the live arr read
+	// and history insert, so concurrent automatic requests share one alert.
+	creationLock := s.bookLock(fmt.Sprintf("submission:%d:%s:%s:%d", userID, resolved.instanceID, resolved.mediaType, resolved.tmdbID))
+	creationLock.Lock()
+	defer creationLock.Unlock()
 	if eff.RequiresApproval {
 		resp, err := s.createPending(resolved)
 		if err != nil {
@@ -1201,6 +1210,7 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		return nil, err
 	}
 	resolved.title = title
+	resolved.newSubmission = s.isNewSubmission(resolved)
 	s.logRequest(resolved, title, status)
 	return &CreateResponse{
 		Success:            true,
@@ -1371,6 +1381,10 @@ func (s *Service) createPendingUnlocked(r *resolvedRequest) (*CreateResponse, er
 	// Only notify admins when a new row was actually queued (not a duplicate).
 	// A server-owned park is not an admin work item — nothing pages until the
 	// sweep gives up and demotes it to a real approval row.
+	if n, _ := res.RowsAffected(); n > 0 && r.newSubmission {
+		id, _ := res.LastInsertId()
+		s.notifyCreated(id, true)
+	}
 	if n, _ := res.RowsAffected(); n > 0 && s.notifier != nil && r.parkReason == "" {
 		data := map[string]interface{}{
 			"tmdb_id":    r.tmdbID,
@@ -2186,6 +2200,7 @@ func (s *Service) addMovie(r *resolvedRequest) (string, string, error) {
 			// Best-effort: with the movie monitored again, RSS will still pick
 			// it up even if this immediate search fails.
 			_ = radarrClient.TriggerMoviesSearch([]int{existing.ID})
+			r.newWork = true
 		}
 		return StatusRequested, existing.Title, nil
 	}
@@ -2225,6 +2240,7 @@ func (s *Service) addMovie(r *resolvedRequest) (string, string, error) {
 	if err := radarrClient.AddMovie(addReq); err != nil {
 		return "", "", fmt.Errorf("add movie failed: %w", err)
 	}
+	r.newWork = true
 	return StatusRequested, lookup.Title, nil
 }
 
@@ -2267,9 +2283,14 @@ func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
 			// existing monitor set (without unmonitoring what's already there) and
 			// kick off a per-season search.
 			if len(r.seasonNumbers) > 0 {
-				if err := s.monitorAndSearchSeasons(sonarrClient, existing, r.seasonNumbers); err != nil {
+				changed, err := s.monitorSeasons(sonarrClient, existing, r.seasonNumbers)
+				if err != nil {
 					return "", "", err
 				}
+				for _, n := range r.seasonNumbers {
+					_ = sonarrClient.TriggerSeasonSearch(existing.ID, n)
+				}
+				r.newWork = len(changed) > 0
 				return StatusRequested, existing.Title, nil
 			}
 			return s.requestExistingSeries(sonarrClient, existing, r)
@@ -2350,6 +2371,7 @@ func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
 		if err := sonarrClient.AddSeries(addReq); err != nil {
 			return "", "", fmt.Errorf("add series failed: %w", err)
 		}
+		r.newWork = true
 		return StatusRequested, lookup.Title, nil
 	}
 
@@ -2359,6 +2381,7 @@ func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
 	if err := sonarrClient.AddSeries(addReq); err != nil {
 		return "", "", fmt.Errorf("add series failed: %w", err)
 	}
+	r.newWork = true
 	return StatusRequested, lookup.Title, nil
 }
 
@@ -2490,9 +2513,11 @@ func (s *Service) monitorSeasons(client *sonarr.Client, series *sonarr.Series, s
 // repeated requests don't spam the indexers.
 func (s *Service) requestExistingSeries(client *sonarr.Client, existing *sonarr.Series, r *resolvedRequest) (string, string, error) {
 	if r.seasonScope == SeasonScopePilot {
-		if err := s.monitorPilot(client, existing); err != nil {
+		changed, err := s.monitorPilot(client, existing)
+		if err != nil {
 			return "", "", err
 		}
+		r.newWork = changed
 		return StatusRequested, existing.Title, nil
 	}
 	var incomplete []int
@@ -2507,6 +2532,7 @@ func (s *Service) requestExistingSeries(client *sonarr.Client, existing *sonarr.
 			return "", "", err
 		}
 		if len(changed) > 0 {
+			r.newWork = true
 			for _, n := range changed {
 				// Best-effort, same as monitorAndSearchSeasons.
 				_ = client.TriggerSeasonSearch(existing.ID, n)
@@ -2530,7 +2556,7 @@ func (s *Service) requestExistingSeries(client *sonarr.Client, existing *sonarr.
 // The pilot scope is episode-level, so it can't be expressed as season
 // monitoring; matching Sonarr's own pilot handling, the season flag is left
 // alone (Sonarr deliberately doesn't monitor season 1 for a pilot-only add).
-func (s *Service) monitorPilot(client *sonarr.Client, series *sonarr.Series) error {
+func (s *Service) monitorPilot(client *sonarr.Client, series *sonarr.Series) (bool, error) {
 	first := 0
 	for _, ss := range series.Seasons {
 		if ss.SeasonNumber > 0 && (first == 0 || ss.SeasonNumber < first) {
@@ -2538,33 +2564,33 @@ func (s *Service) monitorPilot(client *sonarr.Client, series *sonarr.Series) err
 		}
 	}
 	if first == 0 {
-		return fmt.Errorf("series has no seasons to request")
+		return false, fmt.Errorf("series has no seasons to request")
 	}
 	episodes, err := client.GetEpisodes(series.ID, first)
 	if err != nil {
-		return fmt.Errorf("load season %d episodes: %w", first, err)
+		return false, fmt.Errorf("load season %d episodes: %w", first, err)
 	}
 	for _, e := range episodes {
 		if e.EpisodeNumber != 1 {
 			continue
 		}
 		if e.HasFile {
-			return nil
+			return false, nil
 		}
 		if !series.Monitored {
 			if err := client.UpdateSeriesMonitoring(series.ID, true, nil); err != nil {
-				return fmt.Errorf("monitor series failed: %w", err)
+				return false, fmt.Errorf("monitor series failed: %w", err)
 			}
 		}
 		if !e.Monitored {
 			if err := client.SetEpisodesMonitored([]int{e.ID}, true); err != nil {
-				return fmt.Errorf("monitor pilot episode: %w", err)
+				return false, fmt.Errorf("monitor pilot episode: %w", err)
 			}
 		}
 		_ = client.TriggerEpisodeSearch([]int{e.ID})
-		return nil
+		return !series.Monitored || !e.Monitored, nil
 	}
-	return fmt.Errorf("pilot episode not found")
+	return false, fmt.Errorf("pilot episode not found")
 }
 
 // scopeSeasonNumbers expands a coarse season scope to concrete season numbers
@@ -5104,7 +5130,10 @@ func (s *Service) logRequest(r *resolvedRequest, title, status string) {
 		}
 		return
 	}
-	_, _ = s.insertRequest(r, title, status)
+	id, err := s.insertRequest(r, title, status)
+	if err == nil && r.newSubmission {
+		s.notifyCreated(id, false)
+	}
 }
 
 // sqlNullInt / sqlNullStr map zero values to NULL for nullable columns.

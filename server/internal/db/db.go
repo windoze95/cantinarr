@@ -78,6 +78,22 @@ CREATE TABLE IF NOT EXISTS book_request_waiters (
     PRIMARY KEY (request_id, user_id)
 );
 
+-- Discord records delivery history, never current library availability.
+-- One receipt per new request survives retries and process restarts.
+CREATE TABLE IF NOT EXISTS discord_notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER NOT NULL UNIQUE REFERENCES request_log(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    detail TEXT NOT NULL DEFAULT 'Waiting to send.',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS discord_notifications_due ON discord_notifications(status, next_attempt_at);
+
 -- Durable delivery is separate from approval and from live library state.
 CREATE TABLE IF NOT EXISTS request_dispatch (
     request_id INTEGER NOT NULL REFERENCES request_log(id) ON DELETE CASCADE,

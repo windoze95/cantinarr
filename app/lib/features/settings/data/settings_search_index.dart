@@ -430,6 +430,23 @@ const List<SettingsSearchEntry> _rootEntries = [
     gate: gateAdmin,
   ),
   SettingsSearchEntry(
+    id: 'screen.discord-notifications',
+    title: 'Discord Notifications',
+    icon: Icons.notifications_active_outlined,
+    screenTitle: 'Settings',
+    section: 'Admin',
+    route: '/settings/discord-notifications',
+    keywords: [
+      'webhook',
+      'discord',
+      'notifications',
+      'new requests',
+      'delivery',
+      'test'
+    ],
+    gate: gateAdmin,
+  ),
+  SettingsSearchEntry(
     id: 'root.update-portal',
     title: 'Update Portal',
     icon: Icons.open_in_new,

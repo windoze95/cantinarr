@@ -79,6 +79,7 @@ import '../features/settings/ui/ai_tools_screen.dart';
 import '../features/settings/ui/credentials_screen.dart';
 import '../features/settings/ui/devices_screen.dart';
 import '../features/settings/ui/discovery_settings_screen.dart';
+import '../features/settings/ui/discord_notifications_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
 import '../features/settings/ui/pending_requests_screen.dart';
 import '../features/settings/ui/request_settings_screen.dart';
@@ -852,6 +853,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                     RequestSettingsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
+            path: '/settings/discord-notifications',
+            onExit: confirmSettingsExit,
+            builder: (_, __) =>
+                const AppAmbientBackground(child: DiscordNotificationsScreen()),
+          ),
+          GoRoute(
             path: '/settings/discovery',
             onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
@@ -1033,6 +1040,7 @@ bool _isAdminOnlyRoute(String path) {
     '/settings/ai-remediation',
     '/settings/agent-approval-rules',
     '/settings/request-settings',
+    '/settings/discord-notifications',
     '/settings/devices',
     '/settings/plex',
     '/settings/instance',

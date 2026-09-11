@@ -359,6 +359,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onTap: () => context.push('/settings/request-settings'),
               ),
               _SettingsTile(
+                icon: Icons.notifications_active_outlined,
+                title: 'Discord Notifications',
+                subtitle: 'Send new media requests to a Discord channel',
+                onTap: () => context.push('/settings/discord-notifications'),
+              ),
+              _SettingsTile(
                 icon: Icons.open_in_new,
                 title: 'Update Portal',
                 subtitle: (updateStatus?.managementUrl.isNotEmpty ?? false)
