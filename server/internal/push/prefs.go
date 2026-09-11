@@ -46,11 +46,11 @@ const (
 	// users assigned to the instance the import landed on — admins included.
 	// Only an admin with no music assignment at all hears every instance.
 	CategoryNewMusic = "new_music"
-	// CategoryIssueCreated notifies admins of a new AI-remediation issue
-	// (user-reported or auto-detected). Admin-scoped, on by default.
+	// CategoryIssueCreated notifies admins of a problem needing attention or
+	// a question in its investigation. Admin-scoped, on by default.
 	CategoryIssueCreated = "issue_created"
-	// CategoryAgentActionPending notifies admins that the AI agent proposed a fix
-	// awaiting their approval. Admin-scoped, on by default.
+	// CategoryAgentActionPending notifies admins of proposals awaiting their
+	// approval and applied repairs needing review. Admin-scoped, on by default.
 	CategoryAgentActionPending = "agent_action_pending"
 	// CategoryAgentAutoApprovalPaused tells admins a standing auto-approval
 	// rule disarmed itself after a failed or unverifiable outcome. It
@@ -66,11 +66,10 @@ const (
 	// media server: account setup, Plex invite acceptance, or an active share.
 	// Recipient-scoped, on by default; replaces the Plex-only invite category.
 	CategoryMediaServerAccess = "media_server_access"
-	// CategoryIssueReportUpdate covers every reporter-loop push about a user's
-	// OWN report — the agent asked them a question, a fix was applied and
-	// awaits their confirmation, or the report closed. One user-scoped
-	// preference on purpose: they are a single conversation's beats, and a
-	// reporter who wants any of them wants all of them. On by default.
+	// CategoryIssueReportUpdate tells the recipient that their own reported
+	// problem was resolved. The existing key preserves their saved choice;
+	// questions, repair attempts, and unsuccessful closes no longer page them.
+	// On by default.
 	CategoryIssueReportUpdate = "issue_report_update"
 	// CategoryAgentDigest is the weekly agent scoreboard — the one push that
 	// exists to report SUCCESS. The pipeline deliberately never pages when

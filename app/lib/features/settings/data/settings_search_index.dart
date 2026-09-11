@@ -965,11 +965,11 @@ const List<SettingsSearchEntry> _notificationEntries = [
   ),
   SettingsSearchEntry(
     id: SettingsAnchors.notificationsReportUpdates,
-    title: 'My report updates',
+    title: 'Problem resolved',
     icon: Icons.notifications_outlined,
     route: '/settings/push-notifications',
     screenTitle: 'Push Notifications',
-    keywords: ['push', 'issue', 'question', 'fix ready'],
+    keywords: ['push', 'report', 'resolved', 'ready to try again'],
     gate: gateEveryone,
     anchorId: SettingsAnchors.notificationsReportUpdates,
   ),
@@ -1005,7 +1005,7 @@ const List<SettingsSearchEntry> _notificationEntries = [
   ),
   SettingsSearchEntry(
     id: SettingsAnchors.notificationsAgentFixes,
-    title: 'Fixes awaiting approval',
+    title: 'Fixes to review',
     icon: Icons.notifications_outlined,
     route: '/settings/push-notifications',
     screenTitle: 'Push Notifications',
@@ -1134,7 +1134,7 @@ const List<SettingsSearchEntry> _notificationEntries = [
   ),
   SettingsSearchEntry(
     id: 'push-server.issue-report-update',
-    title: 'Report updates',
+    title: 'Reported problems resolved',
     icon: Icons.notifications_outlined,
     route: '/settings/push-notifications/server',
     screenTitle: 'Server Push Notifications',
@@ -1174,7 +1174,7 @@ const List<SettingsSearchEntry> _notificationEntries = [
   ),
   SettingsSearchEntry(
     id: 'push-server.agent-action-pending',
-    title: 'Fixes awaiting approval',
+    title: 'Fixes to review',
     icon: Icons.notifications_outlined,
     route: '/settings/push-notifications/server',
     screenTitle: 'Server Push Notifications',

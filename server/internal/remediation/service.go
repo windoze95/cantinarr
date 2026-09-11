@@ -12,8 +12,8 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
-	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
 
@@ -990,72 +990,6 @@ func (s *Service) SweepStaleAwaitingUser(ctx context.Context, maxWaitHours int) 
 		}
 	}
 	return closed, nil
-}
-
-// SweepAwaitingConfirmation walks the confirm-wait timeline for user reports
-// whose fix executed but whose reporter has not answered. Day 3: ONE gentle
-// re-ask (the confirm_nudged_at stamp is what makes it exactly one). Day 7:
-// the wait is handed to an admin as needs_admin — an unanswered subjective
-// verdict is never fabricated, but it may not hold an issue open forever
-// either; the admin's /resolve is the honest fallback. Returns (nudged,
-// escalated).
-func (s *Service) SweepAwaitingConfirmation(ctx context.Context) (int, int, error) {
-	nudged := 0
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id FROM issues
-		 WHERE status = ? AND closed_at IS NULL AND confirm_nudged_at IS NULL
-		   AND updated_at <= datetime('now', '-72 hours')`,
-		IssueAwaitingConfirmation,
-	)
-	if err != nil {
-		return 0, 0, fmt.Errorf("query confirm-wait nudges: %w", err)
-	}
-	var toNudge []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return 0, 0, fmt.Errorf("scan confirm-wait nudge: %w", err)
-		}
-		toNudge = append(toNudge, id)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return 0, 0, err
-	}
-	for _, id := range toNudge {
-		res, err := s.db.ExecContext(ctx,
-			`UPDATE issues SET confirm_nudged_at = CURRENT_TIMESTAMP
-			 WHERE id = ? AND status = ? AND closed_at IS NULL AND confirm_nudged_at IS NULL`,
-			id, IssueAwaitingConfirmation,
-		)
-		if err != nil {
-			continue
-		}
-		if n, _ := res.RowsAffected(); n == 1 {
-			// The stamp deliberately does not touch updated_at: the 7-day clock
-			// keeps running from the fix, not from the reminder.
-			s.notifyReporter(id, "issue_fix_confirm")
-			nudged++
-		}
-	}
-
-	escalated := 0
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE issues SET status = ?, read = 0,
-		 resolution = 'The applied fix was never confirmed by the reporter; an administrator should verify and close this.',
-		 updated_at = CURRENT_TIMESTAMP
-		 WHERE status = ? AND closed_at IS NULL
-		   AND updated_at <= datetime('now', '-168 hours')`,
-		IssueNeedsAdmin, IssueAwaitingConfirmation,
-	)
-	if err != nil {
-		return nudged, 0, fmt.Errorf("escalate unanswered confirm-waits: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n > 0 {
-		escalated = int(n)
-	}
-	return nudged, escalated, nil
 }
 
 // ListIssues returns issues for the admin queue (newest first), optionally

@@ -144,6 +144,14 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('notification tap routing', () {
+    for (final event in ['issue_closed', 'issue_question', 'issue_fix_confirm']) {
+      test('$event opens its report', () async {
+        final h = _Harness();
+        await _emitNativeCall('onNotificationTap',
+            {'type': event, 'issue_id': 17});
+        expect(h.router.pushed, ['/issues/17']);
+      });
+    }
     const directRoutes = {
       'request_pending': '/approvals',
       'agent_action_pending': '/agent-actions',

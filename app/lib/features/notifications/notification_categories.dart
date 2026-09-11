@@ -41,10 +41,10 @@ const pushCategories = [
       SettingsAnchors.notificationsMediaServerAccess),
   PushCategory(
       'issue_report_update',
-      'My report updates',
-      'When the assistant has a question about your report, a fix is ready to confirm, or your report closes',
+      'Problem resolved',
+      'When a problem you reported has been resolved',
       SettingsAnchors.notificationsReportUpdates,
-      serverTitle: 'Report updates'),
+      serverTitle: 'Reported problems resolved'),
   PushCategory(
       'request_pending',
       'New requests to review',
@@ -60,13 +60,13 @@ const pushCategories = [
   PushCategory(
       'issue_created',
       'Problem reports',
-      'When someone reports a problem with their media',
+      'When a problem needs attention or the assistant needs more information',
       SettingsAnchors.notificationsProblemReports,
       admin: true),
   PushCategory(
       'agent_action_pending',
-      'Fixes awaiting approval',
-      'When the assistant needs a decision about a fix or configuration change',
+      'Fixes to review',
+      'When the assistant needs approval or a repair needs checking',
       SettingsAnchors.notificationsAgentFixes,
       admin: true),
   PushCategory(

@@ -139,6 +139,19 @@ Future<void> _tap(WidgetTester tester, String title) async {
 }
 
 void main() {
+  testWidgets(
+      'users choose success alerts while repair review stays admin-only',
+      (tester) async {
+    final adapter = _Adapter();
+    await _pump(tester, adapter, admin: false);
+    expect((await _switch(tester, 'Problem resolved')).value, isTrue);
+    expect(find.text('My report updates'), findsNothing);
+    expect(find.text('Fixes to review'), findsNothing);
+    await _tap(tester, 'Problem resolved');
+    expect(adapter.prefs['issue_report_update'], isFalse);
+    expect(adapter.allowed['issue_report_update'], isTrue);
+  });
+
   testWidgets('media server access has one personal choice and one server gate',
       (tester) async {
     final adapter = _Adapter();

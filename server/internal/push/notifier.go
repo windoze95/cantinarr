@@ -138,21 +138,21 @@ func (n *Notifier) NotifyUser(userID int64, eventType string, data map[string]in
 		}
 		n.send(client, []int64{userID}, "Media server access", body,
 			map[string]any{"type": CategoryMediaServerAccess, "instance_id": data["instance_id"]})
-	case EventIssueQuestion, EventIssueFixConfirm, EventIssueClosed:
-		// Reporter-loop beats about the user's OWN report. One shared
-		// preference gates all three; the bodies are FIXED server-authored
-		// copy (M5) — the title, question, and resolution text live in the
-		// thread the tap opens, never in the notification.
-		if !n.prefs.optedIn(userID, CategoryIssueReportUpdate) {
+	case EventIssueClosed:
+		// A repair attempt or an unsuccessful close is not news that the media
+		// is ready. Read the committed result and ownership, never infer success
+		// from the event name or caller-supplied text.
+		if !n.prefs.optedIn(userID, CategoryIssueReportUpdate) || !n.reportResolvedFor(userID, data) {
 			return
 		}
-		title, body := issueReportMessage(eventType)
-		n.send(client, []int64{userID}, title, body, passthrough(eventType, data))
+		n.send(client, []int64{userID}, "Ready to try again",
+			"The problem you reported has been resolved. Give it another try.",
+			map[string]any{"type": EventIssueClosed, "issue_id": data["issue_id"]})
 	}
 }
 
-// Reporter-loop event types. All three ride the issue_report_update
-// preference; the client deep-links each to the report's own thread.
+// Report events deep-link to the issue. Questions and repair reviews notify
+// admins; only a successful close can notify the person who reported it.
 const (
 	EventIssueQuestion   = "issue_question"
 	EventIssueFixConfirm = "issue_fix_confirm"
@@ -185,21 +185,23 @@ func mediaAccessMessage(data map[string]interface{}) string {
 	return ""
 }
 
-func issueReportMessage(eventType string) (title, body string) {
-	switch eventType {
-	case EventIssueQuestion:
-		return "Question about your report", "The assistant needs one answer from you to keep working on it"
-	case EventIssueFixConfirm:
-		return "A fix was applied", "Open your report and tell us whether it's right now"
-	default:
-		return "Your report was closed", "Open it to see how it ended"
+func (n *Notifier) reportResolvedFor(userID int64, data map[string]interface{}) bool {
+	issueID := intField(data, "issue_id")
+	if issueID <= 0 {
+		return false
 	}
+	var resolved bool
+	err := n.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM issues
+		WHERE id=? AND reporter_id=? AND source='user' AND status='resolved'
+		AND closed_at IS NOT NULL AND COALESCE(resolution_kind,'')!='reporter_confirmed')`, issueID, userID).Scan(&resolved)
+	if err != nil {
+		n.logger.Error("push: verify reported problem resolved", "err", err)
+	}
+	return err == nil && resolved
 }
 
 // NotifyAdmins pushes an admin-scoped event to every admin opted into the
-// matching category. Two events produce a notification today: "request_pending"
-// (a new media request) and "issue_created" (a new AI-remediation issue, on by
-// default). Any other event type is a no-op here (WS-only).
+// matching category. Events outside this switch are WS-only.
 //
 // Untrusted-text invariant (M5): the alert body is a FIXED server-authored
 // template, never an interpolated title/reason; the media title travels only as
@@ -211,6 +213,24 @@ func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 		return
 	}
 	switch eventType {
+	case EventIssueQuestion, EventIssueFixConfirm:
+		category := preferenceCategory(eventType)
+		recipients, err := n.prefs.usersOptedInto(category)
+		if err != nil {
+			n.logger.Error("push: resolve report review recipients", "err", err)
+			return
+		}
+		issueID := intField(data, "issue_id")
+		if issueID <= 0 {
+			return
+		}
+		title, body := "Report needs information", "Open the report to see what information is needed."
+		if eventType == EventIssueFixConfirm {
+			title, body = "Repair needs review", "Check the repair and close the report when the problem is resolved."
+		}
+		n.sendWithOptions(client, recipients, title, body,
+			map[string]any{"type": eventType, "issue_id": issueID},
+			SendOptions{CollapseID: fmt.Sprintf("%s:%d", eventType, issueID)})
 	case CategoryRequestPending:
 		n.notifyRequestPending(client, data)
 	case CategoryIssueCreated:

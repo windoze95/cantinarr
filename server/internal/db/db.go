@@ -1123,6 +1123,15 @@ func Open(dbPath string) (*sql.DB, error) {
 			return nil, err
 		}
 	}
+	// Repairs awaiting an end-user verdict now belong to the admin queue.
+	// Reassign legacy open waits without closing them or replaying a push.
+	if _, err := db.Exec(`UPDATE issues SET status='needs_admin', read=0,
+		resolution='A repair was applied. Verify the result and close the report.',
+		updated_at=CURRENT_TIMESTAMP
+		WHERE status='awaiting_confirmation' AND closed_at IS NULL`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("assign legacy repair reviews to admins: %w", err)
+	}
 	// Monetary estimates were briefly stored on remediation runs using a
 	// hardcoded model-price table. They are not reliable audit data, so erase
 	// legacy values without dropping the column: retaining the unused column

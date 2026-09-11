@@ -213,7 +213,7 @@ func unverifiedCloseMessage(attempts []remediationAttempt) string {
 // for the one thing that actually closes it.
 func escalatedCloseMessage(issue *Issue, fixApplied bool) string {
 	if fixApplied && issue.Source == SourceUser {
-		return "I applied the approved fix. Whether it's right now is your call rather than something I can prove — have a look, and tap \"This is fixed\" if the content is what you expected. If it still isn't, reply and tell me what you see."
+		return "A repair was applied. An administrator will check the result before closing this report."
 	}
 	return "I couldn't verify a terminal resolution from live scoped state, so this needs an administrator to review it."
 }

@@ -401,22 +401,16 @@ func (s *Service) EscalateIssue(ctx context.Context, issueID int64, reason strin
 	return err
 }
 
-// GiveUpIssue atomically terminalizes the active run and moves its issue to
-// needs_admin with the human-readable message. A process loss can therefore
-// never leave an investigating issue pointing at a gave_up run.
-// ParkAwaitingConfirmation ends a user-report investigation whose fix EXECUTED
-// but whose subjective verdict remains with the reporter. Same transactional
-// shape as GiveUpIssue — run finalized, claim released, pending proposals
-// superseded, message threaded — with three deliberate differences: the issue
-// parks at awaiting_confirmation instead of needs_admin, it stays READ (this
-// state pages the reporter, never the admin queue — the 7-day sweep is what
-// escalates an unanswered wait), and no rule is paused and no breaker fed —
-// a fix awaiting its verdict is not yet a failure verdict for anything.
-func (s *Service) ParkAwaitingConfirmation(ctx context.Context, issueID, runID int64, stopReason, message string) (bool, error) {
+// ParkAppliedFixForReview ends an investigation whose repair executed but whose
+// result still needs a human check. Admins own that review; the reporter gets
+// a push only after successful closure. Finalize the run, release its claim,
+// supersede proposals, and surface the report in one transaction. Pending
+// review is not a failure: do not pause a rule or feed the circuit breaker.
+func (s *Service) ParkAppliedFixForReview(ctx context.Context, issueID, runID int64, stopReason, message string) (bool, error) {
 	message = secrets.RedactText(message)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, fmt.Errorf("begin confirm-park transition: %w", err)
+		return false, fmt.Errorf("begin repair-review transition: %w", err)
 	}
 	defer tx.Rollback()
 	if runID != 0 {
@@ -426,63 +420,53 @@ func (s *Service) ParkAwaitingConfirmation(ctx context.Context, issueID, runID i
 			runStatusGaveUp, stopReason, runID, issueID, runStatusRunning, runStatusResumePending,
 		)
 		if err != nil {
-			return false, fmt.Errorf("finalize confirm-park run: %w", err)
+			return false, fmt.Errorf("finalize repair-review run: %w", err)
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			return false, nil
 		}
 	}
 	res, err := tx.ExecContext(ctx,
-		`UPDATE issues SET status = ?, resolution = '', resolution_kind = '', read = 1,
+		`UPDATE issues SET status = ?, resolution = 'A repair was applied. Verify the result and close the report.', resolution_kind = '', read = 0,
 		 active_run_id = NULL, updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ? AND closed_at IS NULL AND active_run_id = ? AND source = ?`,
-		IssueAwaitingConfirmation, issueID, runID, SourceUser,
+		IssueNeedsAdmin, issueID, runID, SourceUser,
 	)
 	if err != nil {
-		return false, fmt.Errorf("park issue awaiting confirmation: %w", err)
+		return false, fmt.Errorf("assign issue for repair review: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return false, nil
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE agent_actions SET status = ?, decided_at = COALESCE(decided_at, CURRENT_TIMESTAMP),
-		 result_text = COALESCE(result_text, 'Superseded: the applied fix now awaits the reporter''s confirmation.')
+		 result_text = COALESCE(result_text, 'Superseded: the applied repair now awaits administrator review.')
 		 WHERE issue_id = ? AND status = ?`,
 		ActionSuperseded, issueID, ActionProposed,
 	); err != nil {
-		return false, fmt.Errorf("supersede confirm-park proposals: %w", err)
+		return false, fmt.Errorf("supersede repair-review proposals: %w", err)
 	}
 	if message != "" {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO issue_messages (issue_id, author_kind, author_id, body)
 			 VALUES (?, ?, NULL, ?)`, issueID, AuthorAgent, message,
 		); err != nil {
-			return false, fmt.Errorf("record confirm-park message: %w", err)
+			return false, fmt.Errorf("record repair-review message: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit confirm-park transition: %w", err)
+		return false, fmt.Errorf("commit repair-review transition: %w", err)
 	}
 	s.pingIssueUpdated(issueID)
-	s.notifyReporter(issueID, "issue_fix_confirm")
+	if s.notifier != nil {
+		s.notifier.NotifyAdmins("issue_fix_confirm", map[string]interface{}{"issue_id": issueID})
+	}
 	return true, nil
 }
 
-// notifyReporter fires a reporter-loop push/WS event at the issue's reporter.
-// Event names match the push notifier's reporter-loop switch; unknown names
-// simply ride the websocket. Best-effort: a lost push never blocks a
-// transition.
-func (s *Service) notifyReporter(issueID int64, eventType string) {
-	if s.notifier == nil {
-		return
-	}
-	var reporterID sql.NullInt64
-	if err := s.db.QueryRow("SELECT reporter_id FROM issues WHERE id = ?", issueID).Scan(&reporterID); err != nil || !reporterID.Valid {
-		return
-	}
-	s.notifier.NotifyUser(reporterID.Int64, eventType, map[string]interface{}{"issue_id": issueID})
-}
-
+// GiveUpIssue atomically terminalizes the active run and moves its issue to
+// needs_admin with the human-readable message. A process loss can therefore
+// never leave an investigating issue pointing at a gave_up run.
 func (s *Service) GiveUpIssue(ctx context.Context, issueID, runID int64, stopReason, message, reason string) (bool, error) {
 	message = secrets.RedactText(message)
 	reason = secrets.RedactText(reason)
@@ -795,9 +779,11 @@ func (s *Service) notifyIssueResolved(issueID int64, status string) {
 	data := map[string]interface{}{"issue_id": issueID, "status": status}
 	var reporterID sql.NullInt64
 	var resolutionKind sql.NullString
-	if err := s.db.QueryRow("SELECT reporter_id, resolution_kind FROM issues WHERE id = ?", issueID).Scan(&reporterID, &resolutionKind); err == nil && reporterID.Valid {
-		// issue_closed is the reporter's push; a close THEY made needs no page.
-		if resolutionKind.String != ResolutionReporterConfirmed {
+	var source string
+	if err := s.db.QueryRow("SELECT reporter_id, resolution_kind, source FROM issues WHERE id = ?", issueID).Scan(&reporterID, &resolutionKind, &source); err == nil && reporterID.Valid {
+		// Only successful closure of their own report earns "ready to try
+		// again". A close they made themselves needs no redundant page.
+		if status == IssueResolved && source == SourceUser && resolutionKind.String != ResolutionReporterConfirmed {
 			s.notifier.NotifyUser(reporterID.Int64, "issue_closed", data)
 		}
 		s.notifier.NotifyUser(reporterID.Int64, "issue_updated", data)

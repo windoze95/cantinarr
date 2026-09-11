@@ -107,8 +107,12 @@ func adminCategory(category string) bool {
 
 func preferenceCategory(event string) string {
 	switch event {
-	case EventIssueQuestion, EventIssueFixConfirm, EventIssueClosed:
+	case EventIssueClosed:
 		return CategoryIssueReportUpdate
+	case EventIssueQuestion:
+		return CategoryIssueCreated
+	case EventIssueFixConfirm:
+		return CategoryAgentActionPending
 	case EventAutoDispatchDisabled:
 		return CategoryAgentActionPending
 	}
