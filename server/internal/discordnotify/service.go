@@ -16,17 +16,19 @@ import (
 const settingsKey = "discord_notifications"
 
 type configuration struct {
-	Enabled   bool   `json:"enabled"`
-	Webhook   string `json:"webhook_url"`
-	Revision  int64  `json:"revision"`
-	NotBefore int64  `json:"not_before"`
+	IncludeAutoApproved bool   `json:"include_auto_approved"`
+	Enabled             bool   `json:"enabled"`
+	Webhook             string `json:"webhook_url"`
+	Revision            int64  `json:"revision"`
+	NotBefore           int64  `json:"not_before"`
 }
 
 type Settings struct {
-	Enabled    bool       `json:"enabled"`
-	HasWebhook bool       `json:"has_webhook"`
-	Recent     []Delivery `json:"recent"`
-	Error      string     `json:"error,omitempty"`
+	IncludeAutoApproved bool       `json:"include_auto_approved"`
+	Enabled             bool       `json:"enabled"`
+	HasWebhook          bool       `json:"has_webhook"`
+	Recent              []Delivery `json:"recent"`
+	Error               string     `json:"error,omitempty"`
 }
 
 // Service owns the encrypted destination and durable delivery queue. It has
@@ -93,7 +95,7 @@ func (s *Service) Get() (Settings, error) {
 	if err != nil {
 		return Settings{}, err
 	}
-	out := Settings{Enabled: c.Enabled, HasWebhook: c.Webhook != "", Recent: []Delivery{}}
+	out := Settings{Enabled: c.Enabled, IncludeAutoApproved: c.IncludeAutoApproved, HasWebhook: c.Webhook != "", Recent: []Delivery{}}
 	rows, err := s.db.Query(`SELECT request_id,status,detail,attempts,updated_at,next_attempt_at FROM discord_notifications ORDER BY id DESC LIMIT 20`)
 	if err != nil {
 		return out, err
@@ -113,7 +115,7 @@ func (s *Service) Get() (Settings, error) {
 }
 
 // Save preserves the write-only URL when omitted/blank. Remove is explicit.
-func (s *Service) Save(enabled bool, webhook string, remove bool) error {
+func (s *Service) Save(enabled bool, webhook string, remove bool, includeAutoApproved *bool) error {
 	s.deliveryMu.Lock()
 	defer s.deliveryMu.Unlock()
 	tx, err := s.db.Begin()
@@ -126,6 +128,9 @@ func (s *Service) Save(enabled bool, webhook string, remove bool) error {
 		return err
 	}
 	previous := c
+	if includeAutoApproved != nil {
+		c.IncludeAutoApproved = *includeAutoApproved
+	}
 	if remove {
 		c.Webhook = ""
 		enabled = false
@@ -145,6 +150,11 @@ func (s *Service) Save(enabled bool, webhook string, remove bool) error {
 			c.NotBefore = 0
 		}
 		if _, err = tx.Exec(`UPDATE discord_notifications SET status='cancelled',detail='Cancelled because the Discord configuration changed.',next_attempt_at=0,updated_at=? WHERE status='pending'`, s.now().Unix()); err != nil {
+			return err
+		}
+	}
+	if previous.IncludeAutoApproved && !c.IncludeAutoApproved {
+		if _, err = tx.Exec(`UPDATE discord_notifications SET status='cancelled',detail='Automatically approved request alerts were turned off.',next_attempt_at=0,updated_at=? WHERE status='pending' AND json_extract(payload,'$.requires_approval')=0`, s.now().Unix()); err != nil {
 			return err
 		}
 	}
@@ -175,7 +185,7 @@ func (s *Service) enqueue(id int64, approval bool) error {
 	if err != nil {
 		return err
 	}
-	if !c.Enabled {
+	if !c.Enabled || (!approval && !c.IncludeAutoApproved) {
 		return nil
 	}
 	a := requestAlert{RequiresApproval: approval}
@@ -253,6 +263,10 @@ func (s *Service) deliverOne(ctx context.Context) error {
 	var alert requestAlert
 	result := sendResult{Status: "failed", Detail: "The saved request alert could not be read."}
 	if json.Unmarshal([]byte(payload), &alert) == nil {
+		if !alert.RequiresApproval && !c.IncludeAutoApproved {
+			_, err := s.db.Exec(`UPDATE discord_notifications SET status='cancelled',detail='Automatically approved request alerts were turned off.',updated_at=? WHERE id=?`, now, id)
+			return err
+		}
 		external := ""
 		if s.externalURL != nil {
 			external = s.externalURL()

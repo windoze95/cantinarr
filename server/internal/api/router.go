@@ -204,6 +204,8 @@ func NewRouter(
 		// Admin routes
 		r.Route("/admin", func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
+			r.With(auth.RequirePermission(auth.PermissionAdmin)).Get("/push-notifications", pushHandler.ServerPolicy)
+			r.With(auth.RequirePermission(auth.PermissionAdmin)).Put("/push-notifications", pushHandler.ServerPolicy)
 			discordHandler := discordNotifications.Handler
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/discord-notifications", discordHandler)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Put("/discord-notifications", discordHandler)

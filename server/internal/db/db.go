@@ -265,11 +265,13 @@ CREATE TABLE IF NOT EXISTS push_tokens (
 
 -- Per-user push notification preferences. A missing row means "all defaults",
 -- so a user only gets a row once they change something. Defaults match the
--- self-service API: request_decision off, everything else (request_pending,
--- the new_movie/new_episode/new_book/new_music content alerts, ...) on. Kept
+-- self-service API: request_decision, request_auto_approved, and content_upgraded
+-- off; the master and other categories on. Kept
 -- separate from user_request_settings (admin-managed request policy).
 CREATE TABLE IF NOT EXISTS notification_prefs (
     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    push_enabled INTEGER NOT NULL DEFAULT 1,
+    request_auto_approved INTEGER NOT NULL DEFAULT 0,
     request_decision INTEGER NOT NULL DEFAULT 0,
     request_pending  INTEGER NOT NULL DEFAULT 1,
     new_movie        INTEGER NOT NULL DEFAULT 1,
@@ -1098,6 +1100,8 @@ func Open(dbPath string) (*sql.DB, error) {
 		// On by default like the other new-content categories; the audience is
 		// additionally scoped in SQL to users who can see the instance.
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN new_music INTEGER NOT NULL DEFAULT 1"},
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN push_enabled INTEGER NOT NULL DEFAULT 1"},
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN request_auto_approved INTEGER NOT NULL DEFAULT 0"},
 		// Hardcover: an admin-supplied Hardcover API token held per Chaptarr
 		// instance, encrypted at rest and write-only through the API. Empty =
 		// not connected, which is the only thing the API ever reports about it.

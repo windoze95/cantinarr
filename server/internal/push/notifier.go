@@ -991,6 +991,11 @@ func (n *Notifier) send(client *Client, userIDs []int64, title, body string, dat
 // After the gateway replies it prunes any local token the gateway reported
 // dead, so push_tokens self-cleans without a separate sweep.
 func (n *Notifier) sendWithOptions(client *Client, userIDs []int64, title, body string, data map[string]any, opts SendOptions) {
+	category := str(data["type"])
+	userIDs = n.allowedDelivery(userIDs, category)
+	if len(userIDs) == 0 {
+		return
+	}
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -999,6 +1004,10 @@ func (n *Notifier) sendWithOptions(client *Client, userIDs []int64, title, body 
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		userIDs = n.allowedDelivery(userIDs, category)
+		if len(userIDs) == 0 {
+			return
+		}
 		resp, err := client.SendWithOptions(ctx, userIDs, title, body, data, opts)
 		if err != nil {
 			n.logger.Error("push: send notification", "err", err, "title", title)
@@ -1184,4 +1193,13 @@ func intval(v interface{}) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func (n *Notifier) allowedDelivery(userIDs []int64, category string) []int64 {
+	allowed, err := n.prefs.filterDelivery(userIDs, category)
+	if err != nil {
+		n.logger.Error("push: read delivery preferences", "err", err)
+		return nil
+	}
+	return allowed
 }

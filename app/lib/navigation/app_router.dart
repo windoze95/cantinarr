@@ -68,7 +68,8 @@ import '../features/issues/ui/issues_list_screen.dart';
 import '../features/issues/ui/pending_agent_actions_screen.dart';
 import '../features/media_access/ui/media_access_guide.dart';
 import '../features/media_detail/ui/media_detail_screen.dart';
-import '../features/notifications/ui/notification_preferences_screen.dart';
+import '../features/notifications/ui/push_notifications_screen.dart';
+import '../features/notifications/ui/server_push_notifications_screen.dart';
 import '../features/radarr/ui/radarr_calendar_screen.dart';
 import '../features/radarr/ui/radarr_history_screen.dart';
 import '../features/radarr/ui/radarr_home_screen.dart';
@@ -905,10 +906,17 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 child: InstanceEditScreen(initialServiceType: 'plex')),
           ),
           GoRoute(
-            path: '/settings/notifications',
+            path: '/settings/push-notifications/server',
             onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
-                child: NotificationPreferencesScreen(
+                child: ServerPushNotificationsScreen(
+                    highlightId: _highlightParam(state))),
+          ),
+          GoRoute(
+            path: '/settings/push-notifications',
+            onExit: confirmSettingsExit,
+            builder: (_, state) => AppAmbientBackground(
+                child: PushNotificationsScreen(
                     highlightId: _highlightParam(state))),
           ),
           GoRoute(
@@ -1041,6 +1049,7 @@ bool _isAdminOnlyRoute(String path) {
     '/settings/agent-approval-rules',
     '/settings/request-settings',
     '/settings/discord-notifications',
+    '/settings/push-notifications/server',
     '/settings/devices',
     '/settings/plex',
     '/settings/instance',

@@ -215,7 +215,7 @@ func TestDiscordEnqueueFailureCannotRejectSavedRequest(t *testing.T) {
 	requireApproval(t, s)
 	cipher, _ := secrets.NewCipher(bytes.Repeat([]byte{42}, 32))
 	discord := discordnotify.NewService(s.db, cipher, nil)
-	if err := discord.Save(true, "https://discord.com/api/webhooks/123/test_token", false); err != nil {
+	if err := discord.Save(true, "https://discord.com/api/webhooks/123/test_token", false, nil); err != nil {
 		t.Fatal(err)
 	}
 	s.SetCreationObserver(discord)

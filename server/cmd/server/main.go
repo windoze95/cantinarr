@@ -268,7 +268,7 @@ func main() {
 	authHandler.SetAccessRequestHook(mediaAccessService.OnPlexEmailShared)
 	requestService := request.NewService(database, registry, bridge, notifier)
 	discordNotifications := discordnotify.NewService(database, cipher, func() string { return serverSettings.Get().ExternalURL })
-	requestService.SetCreationObserver(discordNotifications)
+	requestService.SetCreationObserver(request.CreationObservers{discordNotifications, pushNotifier})
 	discordNotifications.Start(ctx)
 	requestHandler := request.NewHandler(requestService)
 	mediaAccessHandler.SetListeningBooks(requestService)

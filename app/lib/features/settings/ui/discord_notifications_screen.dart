@@ -20,10 +20,11 @@ class _DiscordNotificationsScreenState
   DiscordNotificationSettings? _settings;
   DiscordDelivery? _testResult;
   bool _enabled = false;
+  bool _includeAutoApproved = false;
   bool _busy = false;
   String? _error;
 
-  Object get _values => [_enabled, _webhook.text];
+  Object get _values => [_enabled, _includeAutoApproved, _webhook.text];
   DiscordNotificationsService get _service =>
       DiscordNotificationsService(ref.read(backendClientProvider));
 
@@ -42,6 +43,7 @@ class _DiscordNotificationsScreenState
   void _saved(DiscordNotificationSettings settings) {
     _settings = settings;
     _enabled = settings.enabled;
+    _includeAutoApproved = settings.includeAutoApproved;
     _webhook.clear();
     _draft.markSaved(_values);
   }
@@ -88,7 +90,7 @@ class _DiscordNotificationsScreenState
     try {
       final settings = remove
           ? await _service.remove()
-          : await _service.save(_enabled, _webhook.text);
+          : await _service.save(_enabled, _webhook.text, _includeAutoApproved);
       if (!mounted) return;
       setState(() {
         _saved(settings);
@@ -151,7 +153,7 @@ class _DiscordNotificationsScreenState
                               color: Theme.of(context).colorScheme.error))),
                 if (_settings != null) ...[
                   const Text(
-                      'Send new media requests to a Discord text channel, including requests that are automatically approved.'),
+                      'Send new media requests needing approval to a Discord text channel. You can also include requests that need no review.'),
                   const SizedBox(height: 12),
                   const Text(
                       'Enabling this shares media titles, media types, requester usernames, and approval states with Discord and everyone who can read the channel. If External Address is configured, messages also include a link to Cantinarr.'),
@@ -162,6 +164,18 @@ class _DiscordNotificationsScreenState
                     onChanged: _busy
                         ? null
                         : (value) => setState(() => _enabled = value),
+                  ),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title:
+                        const Text('Include automatically approved requests'),
+                    subtitle: const Text(
+                        'Also notify the channel when no review is needed.'),
+                    value: _includeAutoApproved,
+                    onChanged: _busy || !_enabled
+                        ? null
+                        : (value) =>
+                            setState(() => _includeAutoApproved = value),
                   ),
                   const SizedBox(height: 12),
                   const Text(

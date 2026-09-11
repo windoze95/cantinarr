@@ -9,6 +9,18 @@ type CreationObserver interface {
 	RequestCreated(requestID int64, requiresApproval bool)
 }
 
+// CreationObservers keeps each delivery channel independent of the others'
+// configuration. Each observer records local work or dispatches asynchronously.
+type CreationObservers []CreationObserver
+
+func (observers CreationObservers) RequestCreated(id int64, approval bool) {
+	for _, observer := range observers {
+		if observer != nil {
+			observer.RequestCreated(id, approval)
+		}
+	}
+}
+
 func (s *Service) SetCreationObserver(observer CreationObserver) { s.creationObserver = observer }
 
 func (s *Service) notifyCreated(id int64, approval bool) {

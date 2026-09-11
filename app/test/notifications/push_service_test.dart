@@ -164,7 +164,12 @@ void main() {
       });
     }
 
-    for (final type in const ['request_decision', 'new_movie', 'new_episode']) {
+    for (final type in const [
+      'request_auto_approved',
+      'request_decision',
+      'new_movie',
+      'new_episode'
+    ]) {
       test('$type opens the media detail page', () async {
         final h = _Harness();
         await _emitNativeCall('onNotificationTap', {

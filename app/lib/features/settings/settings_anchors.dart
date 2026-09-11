@@ -9,7 +9,8 @@
 /// Never rename a value: ids travel in shareable URLs. Add, don't repurpose.
 abstract final class SettingsAnchors {
   // /settings (root)
-  static const rootRequestUpdates = 'root.request-updates';
+  static const notificationsEnabled = 'notifications.enabled';
+  static const notificationsAutoApproved = 'notifications.auto-approved';
   static const rootAttentionApprovals = 'root.attention-approvals';
   static const rootAttentionIssues = 'root.attention-issues';
   static const rootAttentionAgentFixes = 'root.attention-agent-fixes';
@@ -24,7 +25,7 @@ abstract final class SettingsAnchors {
   static const requestsQualityRadarr = 'requests.quality-radarr';
   static const requestsQualitySonarr = 'requests.quality-sonarr';
 
-  // /settings/notifications
+  // /settings/push-notifications
   static const notificationsRequestDecision = 'notifications.request-decision';
   static const notificationsRequestPending = 'notifications.request-pending';
   static const notificationsProblemReports = 'notifications.problem-reports';

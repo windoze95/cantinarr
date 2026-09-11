@@ -7,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/network/backend_client.dart';
 import '../../core/storage/secure_storage.dart';
 import '../../navigation/app_router.dart';
+import '../auth/logic/auth_provider.dart';
+import 'notification_prefs_service.dart';
 
 /// Bridges native push registration (APNs on iOS, FCM on Android) to the
 /// Cantinarr backend.
@@ -25,7 +27,7 @@ import '../../navigation/app_router.dart';
 /// best-effort and must never block or break the auth flow, so failures are
 /// logged and swallowed.
 class PushService {
-  PushService(this._ref) {
+  PushService(this._ref, {bool? supported}) : _supported = supported {
     // Listen for tokens pushed from native (initial registration and APNs
     // token rotation). Re-register whenever the token changes.
     _channel.setMethodCallHandler(_handleNativeCall);
@@ -34,12 +36,14 @@ class PushService {
   static const _channel = MethodChannel('codes.julian.cantinarr/push');
 
   final Ref _ref;
+  final bool? _supported;
 
   /// The last push token successfully sent to the backend, used to avoid
   /// redundant registration calls when the token hasn't changed.
   String? _registeredToken;
 
-  bool get _isSupported => !kIsWeb && (Platform.isIOS || Platform.isAndroid);
+  bool get _isSupported =>
+      _supported ?? (!kIsWeb && (Platform.isIOS || Platform.isAndroid));
 
   Future<dynamic> _handleNativeCall(MethodCall call) async {
     switch (call.method) {
@@ -60,6 +64,20 @@ class PushService {
   Future<void> registerForPush() async {
     if (!_isSupported) return;
     try {
+      // Let an auth restoration finish publishing its state before reading the
+      // connection. Policy lookup must never delay login or prompt a muted user.
+      await Future<void>.delayed(Duration.zero);
+      final account = _ref.read(authProvider).valueOrNull;
+      if (account?.isAuthenticated != true) return;
+      final prefs =
+          await _ref.read(notificationPrefsServiceProvider).getPreferences();
+      final current = _ref.read(authProvider).valueOrNull;
+      if (current?.user?.id != account?.user?.id ||
+          current?.connection?.serverUrl != account?.connection?.serverUrl ||
+          !prefs.pushEnabled ||
+          !prefs.serverEnabled) {
+        return;
+      }
       final granted =
           await _channel.invokeMethod<bool>('requestPermission') ?? false;
       if (!granted) {
@@ -178,6 +196,7 @@ class PushService {
           return;
         }
         router.push('/issues/$pausedIssueId');
+      case 'request_auto_approved':
       case 'request_decision':
       case 'new_movie':
       case 'new_episode':

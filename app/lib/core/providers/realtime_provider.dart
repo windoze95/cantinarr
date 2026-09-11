@@ -64,7 +64,7 @@ final libraryChangedEventsProvider = StreamProvider.autoDispose<WsEvent>((ref) {
 /// Approval decisions for the current user's own requests
 /// (`request_decision` events). The backend pushes these only to the
 /// requesting user, carrying `decision` ('approved'|'denied'), `title`,
-/// `media_type`, and an optional `reason`. Used to surface an in-app toast.
+/// `media_type`, and an optional `reason`. Used to refresh request details.
 final requestDecisionEventsProvider =
     StreamProvider.autoDispose<WsEvent>((ref) {
   final events = ref.watch(realtimeEventsProvider);

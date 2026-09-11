@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 class _Adapter implements HttpClientAdapter {
   bool enabled = false;
+  bool includeAutoApproved = false;
   bool hasWebhook = true;
   bool fail = false;
   String testStatus = 'sent';
@@ -31,6 +32,7 @@ class _Adapter implements HttpClientAdapter {
     if (options.method == 'PUT') {
       saved = body;
       enabled = body['enabled'] == true;
+      includeAutoApproved = body['include_auto_approved'] == true;
       hasWebhook = hasWebhook || body.containsKey('webhook_url');
     }
     if (options.method == 'DELETE') {
@@ -43,8 +45,12 @@ class _Adapter implements HttpClientAdapter {
       return _json(
           {'status': testStatus, 'detail': 'Test result from Discord.'});
     }
-    return _json(
-        {'enabled': enabled, 'has_webhook': hasWebhook, 'recent': recent});
+    return _json({
+      'enabled': enabled,
+      'has_webhook': hasWebhook,
+      'include_auto_approved': includeAutoApproved,
+      'recent': recent
+    });
   }
 
   ResponseBody _json(Map<String, dynamic> data) =>
@@ -68,6 +74,15 @@ Future<void> _pump(WidgetTester tester, _Adapter adapter) async {
 
 Future<void> _tap(WidgetTester tester, String title) async {
   final finder = find.text(title);
+  if (finder.evaluate().isEmpty) {
+    tester
+        .state<ScrollableState>(find.byType(Scrollable).first)
+        .position
+        .jumpTo(0);
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(finder, 180,
+        scrollable: find.byType(Scrollable).first);
+  }
   await tester.ensureVisible(finder);
   await tester.tap(finder);
   await tester.pumpAndSettle();
@@ -84,7 +99,7 @@ void main() {
     expect(field.controller!.text, isEmpty);
     await _tap(tester, 'Send new requests to Discord');
     await _tap(tester, 'Save');
-    expect(adapter.saved, {'enabled': true});
+    expect(adapter.saved, {'enabled': true, 'include_auto_approved': false});
     expect(field.controller!.text, isEmpty);
     expect(
         tester
@@ -112,6 +127,26 @@ void main() {
     await _tap(tester, 'Save');
     expect(tester.widget<TextField>(find.byType(TextField)).controller!.text,
         isEmpty);
+  });
+
+  testWidgets('automatic request alerts are optional and saved explicitly',
+      (tester) async {
+    final adapter = _Adapter()..enabled = true;
+    await _pump(tester, adapter);
+    await _tap(tester, 'Include automatically approved requests');
+    expect(adapter.includeAutoApproved, isFalse);
+    expect(
+        tester
+            .widget<UnsavedChangesGuard>(find.byType(UnsavedChangesGuard))
+            .hasChanges(),
+        isTrue);
+    await _tap(tester, 'Save');
+    expect(adapter.saved, {'enabled': true, 'include_auto_approved': true});
+    expect(adapter.includeAutoApproved, isTrue);
+    await _tap(tester, 'Include automatically approved requests');
+    await _tap(tester, 'Save');
+    expect(adapter.includeAutoApproved, isFalse);
+    expect(adapter.enabled, isTrue);
   });
 
   testWidgets('blank test uses stored URL and remove clears destination',

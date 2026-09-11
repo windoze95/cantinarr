@@ -30,12 +30,14 @@ class DiscordDelivery {
 class DiscordNotificationSettings {
   final bool enabled;
   final bool hasWebhook;
+  final bool includeAutoApproved;
   final List<DiscordDelivery> recent;
   final String? error;
 
   DiscordNotificationSettings.fromJson(Map<String, dynamic> json)
       : enabled = json['enabled'] == true,
         hasWebhook = json['has_webhook'] == true,
+        includeAutoApproved = json['include_auto_approved'] == true,
         recent = [
           for (final row in (json['recent'] as List? ?? []))
             DiscordDelivery.fromJson(Map<String, dynamic>.from(row as Map)),
@@ -53,12 +55,13 @@ class DiscordNotificationsService {
           (await _dio.get<Map<String, dynamic>>(path)).data!);
 
   Future<DiscordNotificationSettings> save(
-          bool enabled, String webhook) async =>
+          bool enabled, String webhook, bool includeAutoApproved) async =>
       DiscordNotificationSettings.fromJson(
           (await _dio.put<Map<String, dynamic>>(
         path,
         data: {
           'enabled': enabled,
+          'include_auto_approved': includeAutoApproved,
           if (webhook.trim().isNotEmpty) 'webhook_url': webhook.trim(),
         },
       ))

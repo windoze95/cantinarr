@@ -29,7 +29,7 @@ func TestDiscordAdminConfigurationAndRequesterCreation(t *testing.T) {
 			}
 		}
 	}
-	w := call("PUT", "/api/admin/discord-notifications", h.adminToken, `{"enabled":true,"webhook_url":"https://discord.com/api/webhooks/123/secret_token"}`)
+	w := call("PUT", "/api/admin/discord-notifications", h.adminToken, `{"enabled":true,"include_auto_approved":true,"webhook_url":"https://discord.com/api/webhooks/123/secret_token"}`)
 	if w.Code != 200 || strings.Contains(w.Body.String(), "secret_token") {
 		t.Fatalf("save: %d %s", w.Code, w.Body.String())
 	}

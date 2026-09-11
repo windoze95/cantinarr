@@ -22,6 +22,53 @@ import (
 
 const testWebhook = "https://discord.com/api/webhooks/123456/secret_test_token"
 
+func TestAutoApprovedChoiceKeepsActionableQueueAndDoesNotReplay(t *testing.T) {
+	s := fixture(t)
+	if err := s.Save(true, testWebhook, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	auto := seed(t, s, "movie")
+	s.RequestCreated(auto, false)
+	initial, err := s.Get()
+	if err != nil || initial.IncludeAutoApproved || len(initial.Recent) != 0 {
+		t.Fatalf("default: %+v %v", initial, err)
+	}
+	on := true
+	if err := s.Save(true, "", false, &on); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get(); len(got.Recent) != 0 {
+		t.Fatal("enabling replayed history")
+	}
+	auto2 := seed(t, s, "book")
+	pending := seed(t, s, "tv")
+	s.RequestCreated(auto2, false)
+	s.RequestCreated(pending, true)
+	// Older callers preserve a chosen option when saving the webhook.
+	if err := s.Save(true, "", false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get(); !got.IncludeAutoApproved {
+		t.Fatal("omitted choice was reset")
+	}
+	off := false
+	if err := s.Save(true, "", false, &off); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(t, s, auto2); got.Status != "cancelled" {
+		t.Fatalf("auto: %+v", got)
+	}
+	if got := status(t, s, pending); got.Status != "pending" {
+		t.Fatalf("actionable: %+v", got)
+	}
+	if err := s.Save(true, "", false, &on); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(t, s, auto2); got.Status != "cancelled" {
+		t.Fatalf("replayed: %+v", got)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
@@ -55,7 +102,8 @@ func seed(t *testing.T, s *Service, kind string) int64 {
 }
 func enable(t *testing.T, s *Service) {
 	t.Helper()
-	if err := s.Save(true, testWebhook, false); err != nil {
+	include := true
+	if err := s.Save(true, testWebhook, false, &include); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -86,7 +134,7 @@ func TestSettingsSecretAndSafeTest(t *testing.T) {
 	if err != nil || out.Enabled || out.HasWebhook {
 		t.Fatalf("fresh: %+v %v", out, err)
 	}
-	if err = s.Save(true, "", false); err == nil {
+	if err = s.Save(true, "", false, nil); err == nil {
 		t.Fatal("enabled without URL")
 	}
 	calls := 0
@@ -108,7 +156,7 @@ func TestSettingsSecretAndSafeTest(t *testing.T) {
 	if !secrets.IsEncrypted(stored) || strings.Contains(stored, "secret_test_token") {
 		t.Fatal("plaintext webhook stored")
 	}
-	if err = s.Save(false, "", false); err != nil {
+	if err = s.Save(false, "", false, nil); err != nil {
 		t.Fatal(err)
 	}
 	out, _ = s.Get()
@@ -119,7 +167,7 @@ func TestSettingsSecretAndSafeTest(t *testing.T) {
 	if _, err = s.Test(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.Save(false, "", true); err != nil {
+	if err = s.Save(false, "", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	out, _ = s.Get()
@@ -201,7 +249,7 @@ func TestDurableQueueDedupAndConfigurationChanges(t *testing.T) {
 	}
 	id2 := seed(t, s, "book")
 	s.RequestCreated(id2, false)
-	if err := s.Save(true, strings.Replace(testWebhook, "123456", "987654", 1), false); err != nil {
+	if err := s.Save(true, strings.Replace(testWebhook, "123456", "987654", 1), false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if status(t, s, id2).Status != "cancelled" {
@@ -209,11 +257,11 @@ func TestDurableQueueDedupAndConfigurationChanges(t *testing.T) {
 	}
 	id3 := seed(t, s, "music")
 	s.RequestCreated(id3, false)
-	s.Save(false, "", false)
+	s.Save(false, "", false, nil)
 	if status(t, s, id3).Status != "cancelled" {
 		t.Fatal("disabled destination backlog retained")
 	}
-	s.Save(true, "", false)
+	s.Save(true, "", false, nil)
 	if status(t, s, id3).Status != "cancelled" {
 		t.Fatal("enable replayed history")
 	}

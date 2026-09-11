@@ -25,8 +25,9 @@ func (s *Service) Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Enabled bool   `json:"enabled"`
-		Webhook string `json:"webhook_url"`
+		IncludeAutoApproved *bool  `json:"include_auto_approved"`
+		Enabled             bool   `json:"enabled"`
+		Webhook             string `json:"webhook_url"`
 	}
 	if r.Method != http.MethodDelete {
 		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
@@ -51,7 +52,7 @@ func (s *Service) Handler(w http.ResponseWriter, r *http.Request) {
 		reply(w, 200, out)
 		return
 	}
-	if err := s.Save(body.Enabled, body.Webhook, r.Method == http.MethodDelete); err != nil {
+	if err := s.Save(body.Enabled, body.Webhook, r.Method == http.MethodDelete, body.IncludeAutoApproved); err != nil {
 		reply(w, 400, map[string]string{"error": "The Discord settings could not be saved. Check the webhook URL and server storage."})
 		return
 	}

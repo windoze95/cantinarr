@@ -7,7 +7,6 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/models/user_profile.dart';
 import '../../../core/network/api_error_message.dart';
-import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/attention_menu_visibility_switch.dart';
@@ -359,12 +358,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onTap: () => context.push('/settings/request-settings'),
               ),
               _SettingsTile(
-                icon: Icons.notifications_active_outlined,
-                title: 'Discord Notifications',
-                subtitle: 'Send new media requests to a Discord channel',
-                onTap: () => context.push('/settings/discord-notifications'),
-              ),
-              _SettingsTile(
                 icon: Icons.open_in_new,
                 title: 'Update Portal',
                 subtitle: (updateStatus?.managementUrl.isNotEmpty ?? false)
@@ -420,30 +413,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             const _SectionHeader(title: 'Notifications'),
             _SettingsTile(
               icon: Icons.notifications_outlined,
-              title: 'Notification Preferences',
+              title: 'Push Notifications',
               subtitle: 'Choose which push notifications you receive',
-              onTap: () => context.push('/settings/notifications'),
+              onTap: () => context.push('/settings/push-notifications'),
             ),
-            SettingsHighlight(
-              anchorId: SettingsAnchors.rootRequestUpdates,
-              highlightId: _activeHighlight,
-              child: SwitchListTile(
-                value: ref.watch(requestNotificationsEnabledProvider),
-                onChanged: (v) =>
-                    ref.read(requestNotificationsEnabledProvider.notifier).set(v),
-                secondary: const Icon(Icons.notifications_active_outlined,
-                    color: AppTheme.textSecondary),
-                title: const Text('Request updates',
-                    style: TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontWeight: FontWeight.w500)),
-                subtitle: const Text(
-                    'Show an in-app banner when a request is approved or denied',
-                    style:
-                        TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+            if (user?.isAdmin == true)
+              _SettingsTile(
+                icon: Icons.notifications_active_outlined,
+                title: 'Discord Notifications',
+                subtitle: 'Send new media requests to a Discord channel',
+                onTap: () => context.push('/settings/discord-notifications'),
               ),
-            ),
-
             const SizedBox(height: 16),
 
             // Guides. Only while a media server is shared with this account

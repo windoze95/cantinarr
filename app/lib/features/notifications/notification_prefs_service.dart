@@ -9,6 +9,17 @@ class NotificationPrefsService {
 
   NotificationPrefsService({required Dio backendDio}) : _dio = backendDio;
 
+  Future<PushNotificationPolicy> getServerPolicy() async =>
+      PushNotificationPolicy.fromJson(
+          (await _dio.get('/api/admin/push-notifications')).data
+              as Map<String, dynamic>);
+
+  Future<PushNotificationPolicy> updateServerPolicy(
+          PushNotificationPolicy policy) async =>
+      PushNotificationPolicy.fromJson((await _dio
+              .put('/api/admin/push-notifications', data: policy.toJson()))
+          .data as Map<String, dynamic>);
+
   Future<NotificationPrefs> getPreferences() async {
     final resp = await _dio.get('/api/notifications/preferences');
     return NotificationPrefs.fromJson(resp.data as Map<String, dynamic>);
