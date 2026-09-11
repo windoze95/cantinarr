@@ -37,7 +37,7 @@ const pushCategories = [
   PushCategory(
       'plex_invite_sent',
       'Plex invite sent',
-      'When your Plex invite goes out',
+      'When you\'re invited to access a Plex server',
       SettingsAnchors.notificationsPlexInviteSent),
   PushCategory(
       'issue_report_update',
