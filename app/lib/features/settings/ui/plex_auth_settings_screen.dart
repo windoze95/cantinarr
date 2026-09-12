@@ -166,7 +166,7 @@ class _PlexAuthSettingsScreenState
                             fontSize: 20, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 8),
                     const Text(
-                        'Select the account mappings you recognize. Saving checks Plex again before enabling those identities for sign-in. Unavailable or ambiguous matches cannot be confirmed.'),
+                        'Library access and sign-in are separate. Select only accounts you recognize; confirmation checks Plex again. Unavailable or ambiguous matches cannot be confirmed. If no unique account matches, check that the recipient accepted the library invitation in their own Plex account, then load fresh accounts again.'),
                     OutlinedButton(
                         onPressed: _busy ? null : _review,
                         child: const Text('Load fresh Plex accounts')),

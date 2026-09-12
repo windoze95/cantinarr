@@ -284,8 +284,8 @@ class PlexSignInState {
 }
 
 /// Admin view of one linked account: which Cantinarr user is which account
-/// on which server. Rows are an action log; the media server stays the live
-/// truth, so [disabled] is what the backend last reconciled.
+/// on which server. [verified] distinguishes live remote state from the stored
+/// link; [pending] is unknown on older servers that omit invitation state.
 class MediaServerAccountRow {
   final String plexIdentityError;
   final int userId;
@@ -301,6 +301,8 @@ class MediaServerAccountRow {
   final bool accessSyncPending;
   final bool administrator;
   final bool verified;
+  // Null means an older server did not report invitation state.
+  final bool? pending;
   final String? createdAt;
 
   const MediaServerAccountRow({
@@ -318,6 +320,7 @@ class MediaServerAccountRow {
     this.accessSyncPending = false,
     this.administrator = false,
     this.verified = false,
+    this.pending,
     this.createdAt,
   }) : granted = granted ?? !disabled;
 
@@ -333,7 +336,11 @@ class MediaServerAccountRow {
           ? 'Server access unconfirmed'
           : disabled
               ? 'Off on server'
-              : 'Active on server';
+              : serviceType == 'plex' && pending == null
+                  ? 'Server access unconfirmed'
+                  : pending == true
+                      ? 'Awaiting Plex acceptance'
+                      : 'Active on server';
 
   factory MediaServerAccountRow.fromJson(Map<String, dynamic> json) =>
       MediaServerAccountRow(
@@ -354,6 +361,7 @@ class MediaServerAccountRow {
         accessSyncPending: json['access_sync_pending'] as bool? ?? false,
         administrator: json['administrator'] as bool? ?? false,
         verified: json['verified'] as bool? ?? false,
+        pending: json['pending'] as bool?,
       );
 }
 

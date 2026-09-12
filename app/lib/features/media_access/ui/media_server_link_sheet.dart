@@ -104,13 +104,24 @@ class _MediaServerLinkSheetState extends ConsumerState<MediaServerLinkSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Link ${widget.serviceType == 'emby' || widget.serviceType == 'audiobookshelf' ? 'an' : 'a'} $product account',
-            style: const TextStyle(
-              color: AppTheme.textPrimary,
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Link ${widget.serviceType == 'emby' || widget.serviceType == 'audiobookshelf' ? 'an' : 'a'} $product account',
+                  style: const TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              IconButton(
+                onPressed: users == null && !_failed ? null : _load,
+                icon: const Icon(Icons.refresh),
+                tooltip: 'Refresh accounts',
+              ),
+            ],
           ),
           const SizedBox(height: AppTheme.spaceSm),
           Text(
@@ -183,7 +194,11 @@ class _MediaServerLinkSheetState extends ConsumerState<MediaServerLinkSheet> {
                         ? const Text('Turned off on the server',
                             style: TextStyle(
                                 color: AppTheme.unavailable, fontSize: 12))
-                        : null,
+                        : user.pending
+                            ? const Text('Awaiting Plex acceptance',
+                                style: TextStyle(
+                                    color: AppTheme.warning, fontSize: 12))
+                            : null,
                 onTap: () => Navigator.of(context).pop(MediaServerLinkChoice(
                     user,
                     supportsManagement

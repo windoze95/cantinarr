@@ -49,8 +49,8 @@ Do not check `PLEX-070` until every applicable vector below passes. Each row is 
 
 | Parent | Vector | Expected | Result / evidence |
 |---|---|---|---|
-| PLEX-070 | Invite pending | External pending recorded; guide shows the invite as pending | |
-| PLEX-070 | Recipient accepted | External access works; guide shows the share as accepted with where to sign in | |
+| PLEX-070 | Invite pending | External pending recorded; guide and admin Users show Awaiting Plex acceptance, never Active on server; account picker marks the pending invitation and Refresh accounts reloads it | |
+| PLEX-070 | Recipient accepted | External access works; guide shows the share as accepted with where to sign in; refreshed admin Users shows Active on server with no historical invite badge and the current Plex username | |
 | PLEX-070 | Recipient declined | External decline recorded; guide shows no account and offers to share again | |
 | PLEX-070 | Invite expired | External expiry recorded; guide shows no account and offers to share again | |
 | PLEX-070 | Owner canceled pending invite | External cancel recorded; guide shows no account; a Jellyfin grant toggle sends no new invite | |
