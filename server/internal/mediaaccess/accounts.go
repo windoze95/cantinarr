@@ -197,6 +197,9 @@ func (s *Service) listDriftedAccountUsers() ([]int64, error) {
 		 LEFT JOIN user_instance_grants g
 		   ON g.user_id = a.user_id AND g.instance_id = a.instance_id
 		 WHERE a.manage_access = 1 AND (a.access_sync_pending = 1
+         OR (g.instance_id IS NOT NULL AND EXISTS(SELECT 1 FROM user_media_library_policies p
+             WHERE p.user_id=a.user_id AND p.instance_id=a.instance_id
+             AND p.remote_user_id=a.remote_user_id AND p.sync_pending=1))
 		    OR (g.instance_id IS NULL AND a.disabled_at IS NULL)
 		    OR (g.instance_id IS NOT NULL AND a.disabled_at IS NOT NULL))
 		 ORDER BY a.user_id`,
