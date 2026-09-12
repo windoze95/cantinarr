@@ -933,7 +933,9 @@ whether the runtime helper is installed. Older apps ignore the optional field,
 and newer apps hide the controls when talking to older servers.
 
 The pinned Python worker under `tools/apple_tv` discovers the TV again for each
-operation and checks its stable identity before using credentials. It connects
+operation and checks its stable identity before using credentials. Address
+queries that find no TV retry multicast discovery, restricted to that address,
+so an mDNS relay works for pairing and reconnects across subnets. It connects
 and checks Infuse, then waits on a private pipe while Go rechecks the current
 session, adult status, TV grant/revision, and canonical title access through
 `mediaaccess.AuthorizeAppleTVTitle`. Only then does Go authorize the command.

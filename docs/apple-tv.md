@@ -11,10 +11,12 @@ permission, or Apple account connection is needed.
 1. Install Infuse on the Apple TV and turn the TV on. Connect its media
    libraries in Infuse as usual.
 2. As a Cantinarr admin, open **Settings > Admin > Apple TVs > Add Apple TV**.
-3. Select **Search for TVs**. If discovery finds nothing, enter the TV's IP
-   address or hostname and search again. An empty discovery result only means
-   no TV answered that search; container networking and separate subnets can
-   prevent local discovery.
+3. Select **Search for TVs**. You can enter the TV's IP address or hostname to
+   narrow the search. If the server and TV are on different subnets, enable
+   mDNS forwarding/reflecting between those networks on your router or firewall.
+   An empty result only means no TV answered that search; container networking
+   and separate subnets can prevent discovery. Entering an address does not
+   bypass the need for mDNS.
 4. Choose the TV and enter the four-digit PIN displayed on it. Pairing expires
    after five minutes and can be cancelled.
 5. Open the saved TV and select **Check connection** to verify that the
@@ -55,8 +57,19 @@ Companion pairing only. The helper communicates privately with Cantinarr over
 stdin/stdout and opens no HTTP service. It needs ordinary outbound LAN access
 for mDNS discovery and the TV's advertised Companion TCP port. Discovery uses
 UDP 5353; the Companion port is discovered again for each operation. No new
-published container port or host networking mode is required. Direct-address
-discovery must still be able to reach the TV's discovery service.
+published container port is required; the container's network must carry this
+discovery traffic.
+
+For separate subnets/VLANs, allow the server to reach the TV's advertised
+Companion TCP port **and** enable an mDNS relay/reflector between their networks.
+A normal inter-subnet firewall allow rule alone does not forward multicast
+discovery. Apple TV also ignores direct unicast mDNS queries from other subnets.
+When an address-specific query receives no TV response, Cantinarr retries with
+multicast discovery through the relay, accepting only TVs at that address.
+Pairing and every later connection use this same fallback and still verify the
+selected TV's identity. The relay must remain enabled after pairing. The
+[pyatv discovery documentation](https://pyatv.dev/documentation/concepts/#scanning)
+describes the cross-subnet unicast limitation.
 
 An IPv4 address or hostname is supported. If a hostname cannot resolve from
 inside the server's container, use the TV's IPv4 address. A DHCP reservation

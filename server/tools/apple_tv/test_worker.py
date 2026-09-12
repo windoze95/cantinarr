@@ -8,10 +8,11 @@ from unittest.mock import AsyncMock, Mock, patch
 import cantinarr_appletv as worker
 
 
-def config(identifier="stable", operating_system=worker.OperatingSystem.TvOS):
+def config(identifier="stable", operating_system=worker.OperatingSystem.TvOS,
+           address="192.0.2.10"):
     service = SimpleNamespace(enabled=True, credentials="private-test-credential")
     return SimpleNamespace(identifier=identifier, all_identifiers=[identifier],
-        name="Living room", address="192.0.2.10", get_service=lambda _: service,
+        name="Living room", address=address, get_service=lambda _: service,
         set_credentials=Mock(), device_info=SimpleNamespace(operating_system=operating_system))
 
 
@@ -52,6 +53,54 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(worker.Failure) as caught:
                 await worker.resolve({"address": "192.0.2.10", "identifier": "old"})
             self.assertEqual(caught.exception.code, "identity_changed")
+
+    async def resolve_with_scan(self, responses, identifier="stable"):
+        loop = asyncio.get_running_loop()
+        with patch.object(loop, "getaddrinfo", AsyncMock(return_value=[
+                (2, 1, 6, "", ("192.0.2.10", 0))])), \
+                patch.object(worker.pyatv, "scan", AsyncMock(side_effect=responses)) as scan:
+            result = await worker.resolve({"address": "Living-Room.local.",
+                                           "identifier": identifier})
+        return result, scan.await_args_list
+
+    async def test_same_subnet_response_needs_no_multicast_retry(self):
+        tv = config()
+        result, calls = await self.resolve_with_scan([[tv]])
+        self.assertIs(result, tv)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].kwargs["hosts"], ["192.0.2.10"])
+
+    async def test_pairing_and_reconnect_resolve_through_mdns_relay(self):
+        tv = config()
+        # A relay may expose many TVs, including a stale identity at another IP.
+        unrelated = config("another", address="192.0.2.11")
+        wrong_address = config(address="192.0.2.12")
+        result, calls = await self.resolve_with_scan([
+            [], [unrelated, wrong_address, tv]])
+        self.assertIs(result, tv)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0].kwargs["hosts"], ["192.0.2.10"])
+        self.assertNotIn("hosts", calls[1].kwargs)
+
+    async def test_relay_never_substitutes_a_tv_at_another_address(self):
+        with self.assertRaises(worker.Failure) as caught:
+            await self.resolve_with_scan([[], [config(address="192.0.2.11")]])
+        self.assertEqual(caught.exception.code, "unreachable")
+
+    async def test_relay_cannot_bypass_the_saved_identity(self):
+        with self.assertRaises(worker.Failure) as caught:
+            await self.resolve_with_scan([[], [config("replacement")]])
+        self.assertEqual(caught.exception.code, "identity_changed")
+
+    async def test_no_response_from_either_discovery_path_is_unreachable(self):
+        with self.assertRaises(worker.Failure) as caught:
+            await self.resolve_with_scan([[], []])
+        self.assertEqual(caught.exception.code, "unreachable")
+
+    async def test_ambiguous_relay_identity_is_rejected(self):
+        with self.assertRaises(worker.Failure) as caught:
+            await self.resolve_with_scan([[], [config(), config()]])
+        self.assertEqual(caught.exception.code, "identity_changed")
 
     async def exercise(self, action="open", commit=True, infuse=True):
         atv = SimpleNamespace(apps=SimpleNamespace(

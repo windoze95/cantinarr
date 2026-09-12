@@ -33,7 +33,9 @@ Infuse title link from iOS, Android, or web. **Confirm Open** is a separate,
 one-use button for the tvOS prompt; **Done** sends no remote input. Kids and
 servers without the optional `apple_tv_remote` capability do not show the
 controls. The implementation lives in `lib/features/apple_tv/`; it adds no
-native permissions or signing capabilities. See [Apple TV setup](../docs/apple-tv.md).
+native permissions or signing capabilities. Setup explains that separate
+server/TV subnets need mDNS forwarding as well as a working firewall route.
+See [Apple TV setup](../docs/apple-tv.md).
 
 ## Design
 

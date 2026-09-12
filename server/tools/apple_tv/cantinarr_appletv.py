@@ -92,11 +92,24 @@ async def discover(address=""):
             raise Failure("invalid_request")
         addresses = await loop.getaddrinfo(address, None, family=2)
         hosts = list(dict.fromkeys(result[4][0] for result in addresses))[:4]
-    found = await pyatv.scan(loop, hosts=hosts, protocol=Protocol.Companion, timeout=6)
-    return [config for config in found if config.identifier and
-            config.device_info.operating_system == OperatingSystem.TvOS and
-            config.get_service(Protocol.Companion) is not None and
-            config.get_service(Protocol.Companion).enabled][:64]
+
+    def matching_tvs(configs):
+        return [config for config in configs if config.identifier and
+                (hosts is None or str(config.address) in hosts) and
+                config.device_info.operating_system == OperatingSystem.TvOS and
+                config.get_service(Protocol.Companion) is not None and
+                config.get_service(Protocol.Companion).enabled][:64]
+
+    found = matching_tvs(await pyatv.scan(
+        loop, hosts=hosts, protocol=Protocol.Companion, timeout=6))
+    if hosts and not found:
+        # Apple TV ignores off-subnet unicast mDNS. A gateway's mDNS relay can
+        # make multicast discovery work there, so use it for pairing and every
+        # reconnect too. Keep the address restriction and resolve's identity
+        # check; another TV visible through the relay is not a substitute.
+        found = matching_tvs(await pyatv.scan(
+            loop, protocol=Protocol.Companion, timeout=6))
+    return found
 
 
 async def resolve(request):

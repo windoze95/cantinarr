@@ -124,7 +124,8 @@ class _DiscoverySheetState extends State<_DiscoverySheet> {
       Text('Add Apple TV', style: Theme.of(context).textTheme.titleLarge),
       const SizedBox(height: 12),
       const Text('Turn on the TV and have Infuse installed. Search the server’s local '
-        'network, or enter the TV’s IP address or hostname to search directly.'),
+        'network, or enter the TV’s IP address or hostname to narrow the search. '
+        'For separate subnets, enable mDNS forwarding between the server and TV networks.'),
       const SizedBox(height: 16),
       TextField(controller: _address, enabled: !_busy, autocorrect: false,
         decoration: const InputDecoration(labelText: 'TV address (optional)',
@@ -136,9 +137,10 @@ class _DiscoverySheetState extends State<_DiscoverySheet> {
       if (_found?.isEmpty == true) Padding(padding: const EdgeInsets.only(top: 16), child: Text(
         _searchedAddress.isEmpty
           ? 'No Apple TVs answered local discovery. A container or separate network can hide '
-            'discovery results. Try the TV’s address; this does not mean no TVs are present.'
+            'discovery results; this does not mean no TVs are present. Check mDNS forwarding '
+            'if the server and TV are on different subnets.'
           : 'No Apple TV answered at that address. Check that the TV is awake and '
-            'reachable from the server.')),
+            'mDNS discovery can reach it. Entering an address does not bypass discovery.')),
       for (final tv in _found ?? <AppleTV>[]) ListTile(leading: const Icon(Icons.tv),
         title: Text(tv.name), subtitle: Text(tv.address),
         trailing: const Text('Pair'), onTap: () => _pair(tv)),
