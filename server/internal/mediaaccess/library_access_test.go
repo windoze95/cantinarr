@@ -285,3 +285,35 @@ func TestABSLibraryUnknownUserDoesNotPartiallySave(t *testing.T) {
 		t.Fatal(after)
 	}
 }
+
+func TestABSStoppingManagementCancelsLibraryIntentAtomically(t *testing.T) {
+	e, id, p := absLibraryEnv(t)
+	u := e.user("reader")
+	saveLibraries(t, e, id, []int64{u}, []string{"books"}, nil)
+	createABS(t, e, u, id)
+	p.libraryErr = errors.New("offline")
+	saveLibraries(t, e, id, []int64{u}, []string{"books"}, map[int64]LibraryPolicy{u: selectedLibraries("yana")})
+	// Fail the second write: the account must not appear unmanaged while an
+	// old library intent remains capable of reviving on later adoption.
+	if _, err := e.db.Exec(`CREATE TRIGGER fail_library_cancel BEFORE UPDATE OF sync_pending
+ ON user_media_library_policies BEGIN SELECT RAISE(FAIL, 'cancel failed'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.SetManagement(context.Background(), u, id, false); err == nil {
+		t.Fatal("failed cancellation reported success")
+	}
+	row, err := e.svc.getAccount(u, id)
+	if err != nil || !row.ManageAccess {
+		t.Fatalf("management partially saved: %+v, %v", row, err)
+	}
+	if _, err := e.db.Exec("DROP TRIGGER fail_library_cancel"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.SetManagement(context.Background(), u, id, false); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := e.svc.libraryPolicy(u, id)
+	if err != nil || policy.SyncPending || policy.remoteUserID != "" {
+		t.Fatalf("library intent not canceled: %+v, %v", policy, err)
+	}
+}
