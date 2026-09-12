@@ -217,6 +217,25 @@ GET|PUT /api/admin/users/{userID}/instance-grants    # additional per-user insta
                                                      # so one user can hold e.g. an HD and a 4K library
 ```
 
+### Apple TV / Infuse
+
+```
+GET    /api/apple-tvs                             # adult caller's paired/granted TVs + helper supported flag; non-admins get id/name only
+POST   /api/apple-tvs/discover                    # admin { address? }; local-network or direct-address discovery, with explicit search scope
+POST   /api/apple-tvs/pairings                    # admin { name, address, identifier }; starts five-minute PIN ceremony -> id/device/expires_at
+POST   /api/apple-tvs/pairings/{id}/complete       # same admin session { pin }; encrypts credentials, returns safe device fields
+DELETE /api/apple-tvs/pairings/{id}                # same admin session; cancel pending pairing
+PATCH  /api/apple-tvs/{id}                        # admin { name, address }; updates address/name and invalidates in-flight actions
+DELETE /api/apple-tvs/{id}                        # admin; forget pairing and cascade TV grants
+GET    /api/apple-tvs/{id}/grants                 # admin; { user_ids }
+PUT    /api/apple-tvs/{id}/grants                 # admin { user_ids }; replace explicit adult grants (admins always have access)
+POST   /api/apple-tvs/{id}/check                  # admin; verify authenticated connection and Infuse installation, no launch
+POST   /api/apple-tvs/{id}/open                   # adult with TV grant/admin { media_type: movie|tv, tmdb_id }; live title access required
+                                                   # -> { state: sent, confirmation_id, confirmation_expires_at }; no autoplay
+POST   /api/apple-tvs/{id}/confirm-open           # same caller session { confirmation_id }; explicit one-use Select, expires after 30 seconds
+                                                   # all routes no-store; kids denied; fixed safe error/code envelope; no raw URLs, credentials or PIN responses
+```
+
 ### Media server accounts
 ```
 GET    /api/media-servers                          # user: granted Jellyfin/Emby/Plex/Audiobookshelf instances + own account state
@@ -905,6 +924,30 @@ Music mirrors the book witness pair. The Lidarr webhook's `Download` event annou
 
 The poller's queue memory is durable (`arr_queue_witness`), so a completion that landed while the server was down is witnessed on the first poll after boot instead of being lost to a re-seed from empty. Completions no queue snapshot ever saw — content added directly in the arr, grabbed, and fully imported while Cantinarr was down (or while the arr/network was unreachable for 5+ minutes, which is gated the same way without needing a restart) — are recovered by a bounded import-history catch-up: one page of the arr's own import event log since the last successful poll (`eventType=3`, re-matched by name — `downloadFolderImported`, the Readarr-lineage `bookFileImported` vocabulary, or Lidarr's `trackFileImported`, each shared with its webhook receiver), the same events its webhook would have delivered. History may only ever add alerts: a failed read degrades to the witnessed departures, and every recovered id passes the same live re-verification before anything is announced. The resume is bounded: windows older than 6 hours are dropped whole (the user has long since found the content in the app), the merged batch — departures plus catch-up — announces at most 10 alerts per instance (above that, or when one page cannot prove it covered the window, the whole batch is dropped in favor of the app's live view), and a boot resume waits for the push gateway to enroll before announcing so recovered alerts are not dropped into an unenrolled client. Membership is persisted before anything is announced, so a crashlooping container cannot replay alerts. On a first boot there is nothing stored, so an upgrade can never produce a burst. Only set membership is ever read back — every departure is re-verified live against the arr before it is announced — and rows are dropped when an instance's URL changes or the instance is deleted.
 
+### Apple TV handoff
+
+`internal/appletv` owns live session checks, encrypted Companion credentials,
+per-TV adult grants, bounded PIN sessions, and title handoffs. `/api/config`
+advertises `apple_tv_remote` when these routes are wired; the TV list reports
+whether the runtime helper is installed. Older apps ignore the optional field,
+and newer apps hide the controls when talking to older servers.
+
+The pinned Python worker under `tools/apple_tv` discovers the TV again for each
+operation and checks its stable identity before using credentials. It connects
+and checks Infuse, then waits on a private pipe while Go rechecks the current
+session, adult status, TV grant/revision, and canonical title access through
+`mediaaccess.AuthorizeAppleTVTitle`. Only then does Go authorize the command.
+Per-TV actions reject concurrent attempts instead of queuing them. Confirm Open
+is bound to that launch, caller session, and revision, with a 30-second lifetime
+checked again before Select. Neither launch nor confirmation is retried.
+
+Credentials and PINs use private stdio, never arguments, environment variables,
+logs, or helper storage files. Pairing credentials use the existing encrypted DB
+storage; pending pairings and confirmations are memory-only. The worker opens
+no listener and all its network traffic uses direct internal LAN sockets.
+Both Dockerfiles bundle the locked helper and dependency notices. See
+[Apple TV setup](../docs/apple-tv.md) for pairing, networking, and manual installs.
+
 ### Media server accounts
 
 A Jellyfin, Emby, Plex, or Audiobookshelf instance is an ordinary encrypted `service_instances` row plus `media_server_config`. The `mediaaccess` service builds a `mediaserver.Provider` per call from the stored URL and key (the `jellyfin`, `emby`, `plex`, or `audiobookshelf` client, chosen by service type in one factory). Providers come in two kinds. Jellyfin, Emby, and Audiobookshelf are **account** servers: Cantinarr creates a local account. Plex is an **invite** server: it holds no accounts of Cantinarr's, and access is a share the linked plex.tv account extends to the email the user supplies, accepted on Plex's side. The share is the account -- the identity is the canonical (lower-cased) email, `GET` of a share that is gone is absence (never a disabled account), `SetDisabled(true)` removes the share or cancels the pending invite, and re-granting shares again: plex.tv hands an account still connected to the owner the share back accepted at once, and sends anyone else a new invite to accept (the "check your email" push goes out only in the second case). plex.tv lists accepted shares under the server's `shared_servers` and invites nobody has accepted under the account's sent-invite list, where an invite to an address with no Plex account yet is keyed by that email rather than a user id; the provider reads both and cancels through whichever holds the invite. Asking for the invite records the email on the user, refuses an address another user's row already holds, adopts a share someone made by hand instead of inviting again, and moves a share Cantinarr sent to a new address when the user changes it (an admin-linked share is the admin's to unlink first). A grant that arrives after the email was shared sends the invite off the request, and the drift sweep also sends the invites a grant still owes, so an invite that failed while plex.tv was down lands later; the reconcile branch re-invites only when Cantinarr itself removed the share (the row is stamped), so an unrelated grant write never emails anyone whose share vanished on its own. Sharing an email while holding no Plex grant tells the admins (`plex_access_request`, with the outcome) unless an instance has **auto-approve** on, in which case the user is granted and invited at once. `users.plex_invited_at` is no longer written; the API derives it from the user's live Plex account row for apps that still read it.
@@ -1017,6 +1060,7 @@ The pool holds **exactly one connection** (SQLite is single-writer), so every qu
 | Accounts & sessions | `users`, `refresh_tokens`, `connect_tokens`, `devices` (local hardware-id deduplication; `auth_method`, `oidc_issuer` and `plex_account_id` preserve session provenance), `oidc_identities` (unique issuer/subject and user/issuer pairs), `plex_identities` (unique numeric Plex account ID and one per user; email/username for display), `webauthn_credentials`, `user_content_policies` (a row makes the user a kids account: rating caps per media type in a region's scheme, hide-unrated, hidden genre ids; cascades with the user; never for an admin) |
 | Requests | `request_log` (approval + season/quality/book-format/instance capture, the fulfilled arr record id in `book_record_id` — Chaptarr book or Lidarr album — so status survives foreign-id re-keys, `catalog_provider`/`catalog_id` retaining public source identity, `match_confirmed` recording a verified user choice, `park_reason` marking server-owned delivery/import waits, and `add_failure_reason` marking an approval-queue row whose automatic add already failed), `book_request_waiters` (shared pending book subscribers + their concrete format coverage; music rows are per-user and need none), `user_request_settings`, `request_dispatch` (durable per-format state, attempts, retry schedule, lease, canonical/native record identity), `request_dispatch_locks` (per-instance worker leases) |
 | Instances | `service_instances` (encrypted keys/passwords + current/pending server-only webhook credentials + the encrypted per-Chaptarr-instance `hardcover_token` and connection-change `hardcover_revision` + per-instance media path mappings/legacy mode + the media servers' `media_server_config` document), `user_default_instances`, `user_media_library_policies` (ABS per-user library choices and pending managed updates), `user_instance_grants` (additional per-user access grants beside the default, so one person can hold e.g. an HD and a 4K library; for Jellyfin, Emby, and Plex the grant is access eligibility), `user_media_server_accounts` (one row per user × media-server instance: remote id and name -- on Plex the canonical email of the share -- whether Cantinarr created it, `manage_access`, `access_sync_pending`, `disabled_at`), `user_media_server_unlinks` (per-user/per-instance automatic relink suppression; no remote identity retained), `video_app_preferences` (personal per-service iPhone/iPad overrides of video-server app defaults; cascades on user deletion), `listening_app_preferences` (personal iOS/Android overrides of per-instance Audiobookshelf app defaults; cascades on user deletion), `arr_queue_witness` (durable per-instance queue-departure completion witness; its `observed_at` doubles as the import-history catch-up cursor; one row per instance, ignored past 6h) |
+| Apple TV | `apple_tv_devices` (stable identity, address, encrypted pairing credentials, revision), `apple_tv_grants` (per-TV adult access; cascades on user/TV deletion) |
 | Hardcover OAuth | `hardcover_connections` (encrypted access/refresh-token pair, credential revision and reconnect flag), `hardcover_instance_connections` (one selected OAuth connection per Chaptarr instance; explicit sharing and final-link credential cleanup) |
 | Push | `push_tokens` (one per device), `notification_prefs` (account master and categories), `settings.push_notification_policy` (server master and allowed categories), `content_alert_claims` (durable new-content dedupe, 10-minute window; also counted as the 12-per-window alert storm breaker, per `storm_scope` — broadcast and upgrade alerts spend separate budgets, silent upgrade claims spend none) |
 | Discord | `discord_notifications` (durable request receipts, destination revision, outgoing payload, delivery status, attempts and retry schedule); encrypted destination settings in `settings` |
@@ -1059,6 +1103,7 @@ server/
 │   ├── jellyfin/             # Jellyfin client: system info, libraries, users, account create/restrict/disable
 │   ├── mcp/                  # 41 registered tools, toggles, tool server (40 also exposed through external MCP)
 │   ├── mcpserver/            # MCP Streamable HTTP endpoint, prompts, agent guide (mcp-go)
+│   ├── appletv/              # Paired Apple TV control, live authorization, private worker protocol
 │   ├── mediaaccess/          # Media-server accounts: grants → accounts, live reconcile, admin link/unlink
 │   ├── mediafiles/           # Ticketed, instance-mapped + root-confined media streaming
 │   ├── mediapath/            # Cross-platform arr-path validation and local translation

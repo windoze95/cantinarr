@@ -98,6 +98,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       mediaServersVisible: mediaServersVisible,
       audiobookshelfVisible: audiobookshelfVisible,
       videoServersVisible: videoServersVisible,
+      appleTvRemote: connection?.appleTvRemote ?? false,
     );
     final searching = _query.trim().isNotEmpty;
 
@@ -343,6 +344,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 subtitle: 'Manage all connected devices',
                 onTap: () => context.push('/settings/devices'),
               ),
+              if (connection?.appleTvRemote == true)
+                _SettingsTile(
+                  icon: Icons.tv,
+                  title: 'Apple TVs',
+                  subtitle: 'Pair TVs and choose who can open titles in Infuse',
+                  onTap: () => context.push('/settings/apple-tvs'),
+                ),
               _SettingsTile(
                 icon: Icons.key_outlined,
                 title: 'Providers & Credentials',

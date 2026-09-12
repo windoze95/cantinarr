@@ -389,7 +389,7 @@ func NewRouter(
 		// Config route (authenticated)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
-			r.Get("/config", configHandler(cfg, instanceStore, creds, aiHandler, remediationService, serverSettings))
+			r.Get("/config", configHandler(cfg, instanceStore, creds, aiHandler, remediationService, serverSettings, func() bool { return mediaAccessHandler != nil && mediaAccessHandler.AppleTV() != nil }))
 		})
 
 		// Media-server accounts (authenticated, self-scoped): a granted user
@@ -404,6 +404,14 @@ func NewRouter(
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
 			r.Get("/media-servers", mediaAccessHandler.List)
+			if tv := mediaAccessHandler.AppleTV(); tv != nil {
+				// TV discovery and setup must not consume the household login budget.
+				tvLimiter := auth.NewRateLimiter(60, time.Minute)
+				r.Route("/apple-tvs", func(r chi.Router) {
+					r.Use(tvLimiter.Middleware)
+					tv.Register(r)
+				})
+			}
 			r.Get("/media-servers/watch", mediaAccessHandler.Watch)
 			r.Get("/media-servers/listen", mediaAccessHandler.Listen)
 			r.Get("/me/video-apps", mediaAccessHandler.VideoAppPreferences)
@@ -756,7 +764,7 @@ type configInstanceStore interface {
 	EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error)
 }
 
-func configHandler(cfg *config.Config, store configInstanceStore, creds *credentials.Registry, aiHandler *ai.Handler, remediationService *remediation.Service, settings *serversettings.Service) http.HandlerFunc {
+func configHandler(cfg *config.Config, store configInstanceStore, creds *credentials.Registry, aiHandler *ai.Handler, remediationService *remediation.Service, settings *serversettings.Service, appleTVCapability ...func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		// Build instances list
@@ -921,6 +929,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			// grant can still ask for access from the guide.
 			"plex_access_requestable":  plexRequestable,
 			"admin_catalog_browsing":   true,
+			"apple_tv_remote":          len(appleTVCapability) > 0 && appleTVCapability[0](),
 			"media_account_management": true,
 			"hidden_discover_tabs":     hiddenTabs,
 		})

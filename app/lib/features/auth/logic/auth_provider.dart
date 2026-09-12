@@ -227,6 +227,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         adminCatalogBrowsing: meta['admin_catalog_browsing'] as bool? ?? false,
         mediaAccountManagement:
             meta['media_account_management'] as bool? ?? false,
+        appleTvRemote: meta['apple_tv_remote'] as bool? ?? false,
         hiddenDiscoverTabs:
             (meta['hidden_discover_tabs'] as List?)?.cast<String>(),
       );
@@ -306,6 +307,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
           plexAccessRequestable: config.plexAccessRequestable,
           adminCatalogBrowsing: config.adminCatalogBrowsing,
           mediaAccountManagement: config.mediaAccountManagement,
+          appleTvRemote: config.appleTvRemote,
           hiddenDiscoverTabs: config.hiddenDiscoverTabs,
           configConfirmed: true,
         );
@@ -391,6 +393,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
         mediaAccountManagement: config.mediaAccountManagement,
+        appleTvRemote: config.appleTvRemote,
         hiddenDiscoverTabs: config.hiddenDiscoverTabs,
         configConfirmed: true,
       );
@@ -532,6 +535,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
         mediaAccountManagement: config.mediaAccountManagement,
+        appleTvRemote: config.appleTvRemote,
         hiddenDiscoverTabs: config.hiddenDiscoverTabs,
         configConfirmed: true,
       );
@@ -720,6 +724,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
         mediaAccountManagement: config.mediaAccountManagement,
+        appleTvRemote: config.appleTvRemote,
         hiddenDiscoverTabs: config.hiddenDiscoverTabs,
         configConfirmed: true,
       );
@@ -862,6 +867,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       plexAccessRequestable: config.plexAccessRequestable,
       adminCatalogBrowsing: config.adminCatalogBrowsing,
       mediaAccountManagement: config.mediaAccountManagement,
+      appleTvRemote: config.appleTvRemote,
       hiddenDiscoverTabs: config.hiddenDiscoverTabs,
       configConfirmed: true,
     );
@@ -944,6 +950,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
         mediaAccountManagement: config.mediaAccountManagement,
+        appleTvRemote: config.appleTvRemote,
         hiddenDiscoverTabs: config.hiddenDiscoverTabs,
         clearHiddenDiscoverTabs: config.hiddenDiscoverTabs == null,
         configConfirmed: true,
@@ -1172,6 +1179,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
         mediaAccountManagement: config.mediaAccountManagement,
+        appleTvRemote: config.appleTvRemote,
         hiddenDiscoverTabs: config.hiddenDiscoverTabs,
         configConfirmed: true,
       );
@@ -1345,6 +1353,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         'allow_reporting': conn.allowReporting,
         'admin_catalog_browsing': conn.adminCatalogBrowsing,
         'media_account_management': conn.mediaAccountManagement,
+        'apple_tv_remote': conn.appleTvRemote,
         if (conn.hiddenDiscoverTabs != null)
           'hidden_discover_tabs': conn.hiddenDiscoverTabs,
       }),

@@ -1,3 +1,4 @@
+import '../features/apple_tv/ui/apple_tvs_screen.dart';
 import '../core/providers/instance_provider.dart';
 import '../features/discover/logic/discovery_access.dart';
 import 'package:flutter/material.dart';
@@ -697,6 +698,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 child: AiAccessScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
+            path: '/settings/apple-tvs',
+            builder: (_, __) =>
+                const AppAmbientBackground(child: AppleTVsScreen()),
+          ),
+          GoRoute(
             path: '/settings/video-apps',
             builder: (context, state) =>
                 const AppAmbientBackground(child: VideoAppsScreen()),
@@ -1063,6 +1069,7 @@ bool _isAdminOnlyRoute(String path) {
     '/settings/discord-notifications',
     '/settings/push-notifications/server',
     '/settings/devices',
+    '/settings/apple-tvs',
     '/settings/plex',
     '/settings/instance',
   ];

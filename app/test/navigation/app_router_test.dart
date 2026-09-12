@@ -162,6 +162,7 @@ void main() {
       '/settings/push-notifications/server',
       '/settings/agent-approval-rules',
       '/settings/devices',
+      '/settings/apple-tvs',
       '/settings/plex',
       '/settings/instance/new',
     ]) {

@@ -80,6 +80,9 @@ class BackendConnection {
   /// Supports linking accounts independently from managing their access.
   final bool mediaAccountManagement;
 
+  /// Server supports paired Apple TV handoffs.
+  final bool appleTvRemote;
+
   /// Null means the server predates Discover visibility preferences.
   final List<String>? hiddenDiscoverTabs;
 
@@ -101,6 +104,7 @@ class BackendConnection {
     this.plexAccessRequestable = false,
     this.adminCatalogBrowsing = false,
     this.mediaAccountManagement = false,
+    this.appleTvRemote = false,
     this.hiddenDiscoverTabs,
     this.configConfirmed = false,
   });
@@ -119,6 +123,7 @@ class BackendConnection {
     bool? plexAccessRequestable,
     bool? adminCatalogBrowsing,
     bool? mediaAccountManagement,
+    bool? appleTvRemote,
     List<String>? hiddenDiscoverTabs,
     bool clearHiddenDiscoverTabs = false,
     bool? configConfirmed,
@@ -131,6 +136,7 @@ class BackendConnection {
         serverVersion: serverVersion ?? this.serverVersion,
         minAppVersion: minAppVersion ?? this.minAppVersion,
         adminCatalogBrowsing: adminCatalogBrowsing ?? this.adminCatalogBrowsing,
+        appleTvRemote: appleTvRemote ?? this.appleTvRemote,
         mediaAccountManagement:
             mediaAccountManagement ?? this.mediaAccountManagement,
         hiddenDiscoverTabs: clearHiddenDiscoverTabs

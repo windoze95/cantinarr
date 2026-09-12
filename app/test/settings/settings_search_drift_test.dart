@@ -52,6 +52,7 @@ const _adminGates = SettingsSearchGates(
   mediaServersVisible: true,
   audiobookshelfVisible: true,
   videoServersVisible: true,
+  appleTvRemote: true,
 );
 const _userGates = SettingsSearchGates(user: _user);
 
@@ -128,6 +129,7 @@ class _FakeAuthNotifier extends AuthNotifier {
         connection: BackendConnection(
           serverUrl: 'http://localhost',
           accessToken: 'access',
+          appleTvRemote: true,
           refreshToken: 'refresh',
           services: AvailableServices(chaptarr: chaptarr, lidarr: lidarr),
           instances: instances,

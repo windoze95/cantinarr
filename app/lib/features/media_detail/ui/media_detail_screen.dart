@@ -1,3 +1,4 @@
+import '../../apple_tv/ui/apple_tv_open_button.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -494,6 +495,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                               reportedPath:
                                                   _downloadMovieFile!.path,
                                             ),
+                                          if (_watchLinks.any((link) => link.state == WatchLinkState.found))
+                                            AppleTVOpenButton(mediaType: widget.mediaType, tmdbId: widget.id),
                                           for (final link in _watchLinks)
                                             if (link.state ==
                                                 WatchLinkState.found)

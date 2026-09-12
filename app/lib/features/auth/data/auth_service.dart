@@ -591,6 +591,9 @@ class ServerConfig {
   /// Supports linking accounts independently from managing their access.
   final bool mediaAccountManagement;
 
+  /// Server supports paired Apple TV handoffs.
+  final bool appleTvRemote;
+
   /// Null means the server predates Discover visibility preferences.
   final List<String>? hiddenDiscoverTabs;
 
@@ -605,6 +608,7 @@ class ServerConfig {
     this.plexAccessRequestable = false,
     this.adminCatalogBrowsing = false,
     this.mediaAccountManagement = false,
+    this.appleTvRemote = false,
     this.hiddenDiscoverTabs,
   });
 
@@ -627,6 +631,7 @@ class ServerConfig {
       adminCatalogBrowsing: json['admin_catalog_browsing'] as bool? ?? false,
       mediaAccountManagement:
           json['media_account_management'] as bool? ?? false,
+      appleTvRemote: json['apple_tv_remote'] as bool? ?? false,
       hiddenDiscoverTabs:
           (json['hidden_discover_tabs'] as List?)?.cast<String>(),
     );

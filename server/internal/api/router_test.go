@@ -527,9 +527,12 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			}
 			assertExactMapKeys(t, payload,
 				"server_name", "version", "min_app_version", "services", "instances", "issues_enabled", "allow_reporting",
-				"plex_access_requestable", "media_account_management", "admin_catalog_browsing", "hidden_discover_tabs",
+				"plex_access_requestable", "media_account_management", "admin_catalog_browsing", "hidden_discover_tabs", "apple_tv_remote",
 			)
 
+			if string(payload["apple_tv_remote"]) != "false" {
+				t.Fatal("unwired TV handler advertised support")
+			}
 			if string(payload["admin_catalog_browsing"]) != "true" {
 				t.Fatal("missing admin catalog capability")
 			}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/ai"
 	"github.com/windoze95/cantinarr-server/internal/api"
+	"github.com/windoze95/cantinarr-server/internal/appletv"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/cache"
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
@@ -194,6 +195,9 @@ func main() {
 	mediaAccessService.SetUserCreator(authService)
 	mediaAccessService.SetPlexAuth(authService)
 	mediaAccessHandler := mediaaccess.NewHandler(mediaAccessService, logger)
+	appleTVHandler := appletv.NewHandler(database, cipher, appletv.ProcessRunner{}, authService.AuthorizePermission, mediaAccessHandler.AuthorizeAppleTVTitle)
+	mediaAccessHandler.SetAppleTV(appleTVHandler)
+	defer appleTVHandler.Close()
 	mediaAccessHandler.SetWatchContentPolicy(contentPolicy, func() contentpolicy.RawGetter {
 		if client := creds.TMDB(); client != nil {
 			return client

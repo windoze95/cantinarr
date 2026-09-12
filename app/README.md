@@ -25,6 +25,16 @@ Built with Flutter; iOS, Android, and web are the shipping targets (web is embed
 └──────────────────────────────────────────────────────┘
 ```
 
+Paired Apple TVs are managed under **Settings > Admin > Apple TVs**
+(`/settings/apple-tvs`). Admins discover and pair TVs with an on-TV PIN, check
+Infuse, edit the address, and grant other adults access. On verified movie and
+series pages, **Open on [TV name]** (or a TV picker) sends a server-mediated
+Infuse title link from iOS, Android, or web. **Confirm Open** is a separate,
+one-use button for the tvOS prompt; **Done** sends no remote input. Kids and
+servers without the optional `apple_tv_remote` capability do not show the
+controls. The implementation lives in `lib/features/apple_tv/`; it adds no
+native permissions or signing capabilities. See [Apple TV setup](../docs/apple-tv.md).
+
 ## Design
 
 A single dark-first, cinematic theme designed for couch browsing and high-signal admin work. Its near-black sign face, espresso/umber layers, glowing amber-gold, and ember highlights come directly from the Cantinarr logo. A static, pointer-transparent ambient gradient sits behind translucent page scaffolds, while semantic Material 3 surfaces provide restrained depth for navigation, forms, grouped settings, and action docks. The futuristic feel comes from precision, depth, and interaction—not a cold blue cyber palette.
