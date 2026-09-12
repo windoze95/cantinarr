@@ -135,23 +135,13 @@ class _BookListenActionsState extends ConsumerState<BookListenActions>
                                 label: Text(links.length == 1
                                     ? 'Listen in Audiobookshelf'
                                     : 'Listen in Audiobookshelf · ${link.name}'))
-                          else ...[
-                            if (link.fallbackUrl.isNotEmpty)
-                              OutlinedButton.icon(
-                                  onPressed: () => _open(link.fallbackUrl),
-                                  icon: const Icon(Icons.open_in_new),
-                                  label: Text(links.length == 1
-                                      ? 'Open Audiobookshelf'
-                                      : 'Open Audiobookshelf · ${link.name}')),
-                            Text(
-                                link.state == 'unreachable'
-                                    ? "Couldn't reach Audiobookshelf."
-                                    : "Couldn't verify a matching copy in your shared libraries.",
-                                style: Theme.of(context).textTheme.bodySmall),
-                            TextButton(
-                                onPressed: _retry,
-                                child: const Text('Check again')),
-                          ],
+                          else if (link.fallbackUrl.isNotEmpty)
+                            OutlinedButton.icon(
+                                onPressed: () => _open(link.fallbackUrl),
+                                icon: const Icon(Icons.open_in_new),
+                                label: Text(links.length == 1
+                                    ? 'Open Audiobookshelf'
+                                    : 'Open Audiobookshelf · ${link.name}')),
                         ])),
             ]),
           );

@@ -194,9 +194,11 @@ Future<void> _pumpEdit(
   required _FakeAdapter adapter,
   List<UserSummary> users = const [],
   InstanceEditScreen screen = const InstanceEditScreen(),
+  Size viewport = const Size(800, 2200),
+  double textScale = 1,
 }) async {
   // Tall viewport so the whole (lazily built) form list is materialized.
-  tester.view.physicalSize = const Size(800, 2200);
+  tester.view.physicalSize = viewport;
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
 
@@ -215,7 +217,15 @@ Future<void> _pumpEdit(
         authProvider.overrideWith(() => _FakeAuthNotifier(users)),
         backendClientProvider.overrideWithValue(dio),
       ],
-      child: MaterialApp.router(routerConfig: router),
+      child: MaterialApp.router(
+        routerConfig: router,
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: TextScaler.linear(textScale),
+          ),
+          child: child!,
+        ),
+      ),
     ),
   );
   await tester.pumpAndSettle();
@@ -264,6 +274,52 @@ Iterable<({String method, String path, dynamic body})> _libraryProbes(
         r.method == 'POST' && r.path == '/api/instances/media-server/libraries');
 
 void main() {
+  for (final service in ['audiobookshelf', 'jellyfin', 'emby']) {
+    testWidgets('$service copies the user address only when asked',
+        (tester) async {
+      final adapter = _FakeAdapter();
+      await _pumpEdit(tester,
+          adapter: adapter,
+          screen: InstanceEditScreen(initialServiceType: service));
+      final address = find.widgetWithText(TextField, 'Address users open');
+      final copy = find.widgetWithText(TextButton, 'Use same URL');
+      expect(tester.widget<TextButton>(copy).onPressed, isNull);
+
+      await _fillForm(tester);
+      expect(tester.widget<TextField>(address).controller!.text, isEmpty);
+      final url = find.widgetWithText(TextField, 'URL');
+      const sharedUrl = 'https://media.example.com/base';
+      await tester.enterText(url, sharedUrl);
+      await tester.pump();
+      await tester.tap(copy);
+      await tester.pump();
+      expect(tester.widget<TextField>(address).controller!.text, sharedUrl);
+
+      // Later connection changes must not silently replace a chosen user URL.
+      await tester.enterText(url, 'http://internal-media:8096');
+      await tester.pump();
+      expect(tester.widget<TextField>(address).controller!.text, sharedUrl);
+      await _tapSave(tester, 'Add Instance');
+      final create = adapter.requests
+          .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
+      expect(create.body['url'], 'http://internal-media:8096');
+      expect(create.body['media_server_config']['public_address'], sharedUrl);
+    });
+  }
+
+  testWidgets('address guidance wraps on a narrow screen with larger text',
+      (tester) async {
+    await _pumpEdit(tester,
+        adapter: _FakeAdapter(),
+        screen: const InstanceEditScreen(initialServiceType: 'audiobookshelf'),
+        viewport: const Size(320, 2200),
+        textScale: 2);
+    expect(find.textContaining('Used for sign-in and Open / Listen links.'),
+        findsOneWidget);
+    expect(find.text('Use same URL'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
       'Jellyfin hides the default toggle, shows User Access, and never reads '
       'pins', (tester) async {
@@ -289,8 +345,8 @@ void main() {
       findsOneWidget,
     );
     expect(find.widgetWithText(CheckboxListTile, 'alice'), findsOneWidget);
-    expect(find.widgetWithText(TextField, 'Sign-in address (optional)'),
-        findsOneWidget);
+    expect(
+        find.widgetWithText(TextField, 'Address users open'), findsOneWidget);
     expect(find.text('Shared libraries'), findsOneWidget);
     expect(
       find.text('Test the connection to load the libraries this server '
@@ -325,8 +381,8 @@ void main() {
         find.widgetWithText(SwitchListTile, 'Default Instance'), findsNothing);
     expect(find.text('User Access'), findsOneWidget);
     expect(find.text('Shared libraries'), findsOneWidget);
-    expect(find.widgetWithText(TextField, 'Sign-in address (optional)'),
-        findsOneWidget);
+    expect(
+        find.widgetWithText(TextField, 'Address users open'), findsOneWidget);
     expect(find.text('http://emby:8096'), findsOneWidget);
     expect(find.text('e.g. Home Emby'), findsOneWidget);
     expect(find.text('Your Emby API key (Settings > Advanced > API Keys)'),
@@ -371,7 +427,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('1 selected'), findsOneWidget);
     await tester.enterText(
-      find.widgetWithText(TextField, 'Sign-in address (optional)'),
+      find.widgetWithText(TextField, 'Address users open'),
       'https://jf.example.com',
     );
     await tester.tap(find.widgetWithText(CheckboxListTile, 'alice'));
@@ -458,7 +514,7 @@ void main() {
     expect(probe.body['api_key'], '');
 
     final address = tester.widget<TextField>(
-        find.widgetWithText(TextField, 'Sign-in address (optional)'));
+        find.widgetWithText(TextField, 'Address users open'));
     expect(address.controller!.text, 'https://jf.example.com');
     expect(
       tester
@@ -537,18 +593,18 @@ void main() {
     });
   });
 
-  testWidgets('the sign-in address must be an http(s) URL', (tester) async {
+  testWidgets('the address users open must be an http(s) URL', (tester) async {
     final adapter = _FakeAdapter();
     await _pumpNewJellyfin(tester, adapter: adapter);
     await _fillForm(tester);
     await tester.enterText(
-      find.widgetWithText(TextField, 'Sign-in address (optional)'),
+      find.widgetWithText(TextField, 'Address users open'),
       'jf.example.com',
     );
 
     await _tapSave(tester, 'Add Instance');
 
-    expect(find.text('Sign-in address must start with http:// or https://'),
+    expect(find.text('Enter an http:// or https:// address for users.'),
         findsOneWidget);
     expect(
       adapter.requests
@@ -600,6 +656,7 @@ void main() {
     // No URL, no API key: the credential is the link.
     expect(find.widgetWithText(TextField, 'URL'), findsNothing);
     expect(find.widgetWithText(TextField, 'API Key'), findsNothing);
+    expect(find.text('Use same URL'), findsNothing);
     expect(find.text('Plex account'), findsOneWidget);
     expect(find.text('Not linked'), findsOneWidget);
     expect(

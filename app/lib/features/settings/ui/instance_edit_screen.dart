@@ -1070,7 +1070,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (address.isNotEmpty &&
           !address.startsWith('http://') &&
           !address.startsWith('https://')) {
-        return 'Sign-in address must start with http:// or https://';
+        return 'Enter an http:// or https:// address for users.';
       }
     }
     // When editing, blank credentials keep the existing ones. Plex's is
@@ -2964,23 +2964,38 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               ),
               obscureText: true,
             ),
-          // Media servers: where users are told to sign in (handed to them
-          // verbatim, so only an address the admin typed is ever shown) and
-          // which libraries a new account may see.
+          // User links use an address the admin chose explicitly, either
+          // entered here or copied from the connection URL.
           if (_isMediaServer) ...[
             const SizedBox(height: 16),
             TextField(
               controller: _publicAddressController,
               decoration: InputDecoration(
-                labelText: 'Sign-in address (optional)',
+                labelText: 'Address users open',
                 hintText: 'https://$_serviceType.example.com',
-                helperText: 'What your users open to sign in. Shown to them '
-                    'in the app. Leave blank and they will need to ask you.',
-                helperMaxLines: 3,
+                helper: Text('The address users can reach in a browser or app. '
+                    'Used for sign-in and Open / '
+                    '${_serviceType == 'audiobookshelf' ? 'Listen' : 'Watch'} '
+                    'links. Leave blank to hide those links.'),
               ),
               keyboardType: TextInputType.url,
               autocorrect: false,
             ),
+            if (!_isPlex)
+              ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _urlController,
+                builder: (context, value, _) => Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: value.text.trim().isEmpty
+                        ? null
+                        : () =>
+                            _publicAddressController.text = value.text.trim(),
+                    icon: const Icon(Icons.copy),
+                    label: const Text('Use same URL'),
+                  ),
+                ),
+              ),
             const SizedBox(height: 24),
             _buildSharedLibrariesSection(),
             if (_isPlex) ...[

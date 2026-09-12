@@ -79,12 +79,18 @@ void main() {
   });
 
   for (final state in ['unverified', 'unreachable']) {
-    testWidgets('$state has a generic shortcut and a fresh retry',
+    testWidgets('$state falls back silently and rechecks on return',
         (tester) async {
       final opened = <Uri>[];
       var calls = 0;
+      var verified = false;
       await _show(tester, (_) {
         calls++;
+        if (verified) {
+          return [
+            _found([_first])
+          ];
+        }
         return [
           ListenLink(
               instanceId: 'abs',
@@ -94,13 +100,20 @@ void main() {
         ];
       }, opened);
       expect(find.text('Listen in Audiobookshelf'), findsNothing);
+      expect(find.textContaining("Couldn't"), findsNothing);
+      expect(find.text('Check again'), findsNothing);
+      expect(find.byType(TextButton), findsNothing);
       await tester.tap(find.text('Open Audiobookshelf'));
       await tester.pump();
       expect(opened.single.toString(), 'https://books.example/base');
       final before = calls;
-      await tester.tap(find.text('Check again'));
+      verified = true;
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
       expect(calls, greaterThan(before));
+      expect(find.text('Listen in Audiobookshelf'), findsOneWidget);
+      expect(find.text('Open Audiobookshelf'), findsNothing);
     });
   }
 

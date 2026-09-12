@@ -76,7 +76,7 @@ Audiobookshelf manages listening and its own library scans. Give it access to th
 
 1. In Audiobookshelf, create an API key for an active administrator account. The integration is verified against Audiobookshelf 2.36.0; it uses API keys, not a user's legacy token.
 2. In Cantinarr, open **Settings → Add Instance → Audiobookshelf**. Enter its base URL as the Cantinarr server can reach it and the administrator API key. Test the connection, then select **Shared libraries**. Selecting none allows all libraries, including future ones.
-3. Set **Sign-in address** to the Audiobookshelf address your users' browsers can reach. This is separate from the server's connection URL; it is never guessed from a Docker hostname.
+3. Set **Address users open** to the Audiobookshelf address your users can reach in a browser or app. This enables sign-in, **Open Audiobookshelf**, and **Listen in Audiobookshelf** links; leaving it blank hides those links. If users can reach the connection URL above, **Use same URL** copies it into this field. Otherwise enter the address they use; Cantinarr never copies an internal address automatically.
 4. Under **User Access**, grant the people who should listen. They also need their own Chaptarr access to see the books in Cantinarr. Neither service grants the other, and Audiobookshelf has no global default.
 5. Users open **Audiobookshelf access** in the menu (**Media server access** when video servers are also shared) to create an account with their chosen password or link an existing local account by signing in once. Admins can instead link or import existing accounts from **Settings → Users**.
 
@@ -88,7 +88,7 @@ Accounts Cantinarr creates are ordinary users restricted to the selected librari
 
 After Chaptarr reports an audiobook as **Available**, its book page offers **Listen in Audiobookshelf** only when a live exact ASIN or ISBN match proves a playable copy is visible to the linked account. Cantinarr reads the audiobook edition identifiers, including when Chaptarr serves editions separately from the book record. If several copies match, choose the server/library/narration you want. The link opens that item's browser page. Ebook-only availability does not qualify.
 
-**Open Audiobookshelf** is a general shortcut when an exact copy cannot be verified, including before the account is linked or the new files are scanned. It does not claim the audiobook is present. An unreachable server is explained separately. Use **Check again** after scanning or correcting metadata; returning to Cantinarr also refreshes the lookup. Library, tag, and explicit-content restrictions apply to every exact link, including changes made directly in Audiobookshelf.
+**Open Audiobookshelf** is a general shortcut when an exact copy cannot be verified, including before the account is linked or the new files are scanned. It also appears when Audiobookshelf cannot be reached, without a lookup notice or **Check again** button. It does not claim the audiobook is present. Book refreshes, account changes, and returning to Cantinarr refresh the lookup automatically. Library, tag, and explicit-content restrictions apply to every exact link, including changes made directly in Audiobookshelf.
 
 ## 8. Verify
 
