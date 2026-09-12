@@ -8,6 +8,7 @@ import 'package:cantinarr/core/providers/realtime_provider.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/discover/data/tmdb_models.dart';
 import 'package:cantinarr/features/media_access/logic/media_app_launcher.dart';
+import 'package:cantinarr/features/media_access/logic/video_apps_provider.dart';
 import 'package:cantinarr/features/media_detail/ui/media_detail_screen.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -105,6 +106,76 @@ void main() {
     );
     await tester.pumpAndSettle();
     return adapter;
+  }
+
+  for (final server in [_plex, _jellyfin, _emby]) {
+    for (final type in [MediaType.movie, MediaType.tv]) {
+      testWidgets('${server.serviceType} $type opens Infuse using the verified title', (tester) async {
+        final urls = <Uri>[];
+        await pumpDetail(tester, status: 'available', mediaType: type,
+          mediaServers: [server], links: [{
+            ..._link(server, 'found', url: 'https://watch.example/title'),
+            'video_apps': {'ios': 'infuse'},
+          }], launcher: MediaAppLauncher(platform: TargetPlatform.iOS, isWeb: false,
+            launchExternal: (uri) async { urls.add(uri); return true; }));
+        final action = find.text('Open in Infuse');
+        await tester.ensureVisible(action);
+        await tester.tap(action);
+        await tester.pumpAndSettle();
+        expect(urls.single.toString(), 'infuse://${type == MediaType.movie ? 'movie' : 'series'}/$_tmdbId');
+      });
+    }
+  }
+
+  testWidgets('multiple Infuse actions retain service and instance context', (tester) async {
+    const second = ServiceInstance(id: 'px-b', serviceType: 'plex', name: 'Other Plex');
+    final servers = [_plex, second, _jellyfin, _emby];
+    await pumpDetail(tester, status: 'available', mediaServers: servers,
+      links: [for (final server in servers) {
+        ..._link(server, 'found', url: 'https://watch.example/title'),
+        'video_apps': {'ios': 'infuse'},
+      }], launcher: MediaAppLauncher(platform: TargetPlatform.iOS, isWeb: false));
+    for (final server in servers) {
+      expect(find.textContaining('Open in Infuse ·').evaluate().any((e) =>
+        (e.widget as Text).data!.contains(server.name)), isTrue);
+    }
+  });
+
+  testWidgets('generic Infuse fallback does not receive the page title id', (tester) async {
+    final urls = <Uri>[];
+    await pumpDetail(tester, status: 'available', mediaServers: [_plex], links: [{
+      ..._link(_plex, 'unverified', fallbackUrl: 'https://app.plex.tv'),
+      'video_apps': {'ios': 'infuse'},
+    }], launcher: MediaAppLauncher(platform: TargetPlatform.iOS, isWeb: false,
+      launchExternal: (uri) async { urls.add(uri); return true; }));
+    await tester.ensureVisible(find.text('Open in Infuse'));
+    await tester.tap(find.text('Open in Infuse'));
+    await tester.pumpAndSettle();
+    expect(urls.single.toString(), 'infuse://');
+  });
+
+  for (final refresh in ['save', 'config', 'resume']) {
+    testWidgets('$refresh refreshes the video choice on an open title page', (tester) async {
+      final links = [{..._link(_plex, 'found', url: 'https://app.plex.tv/desktop/#!/server/m/details?key=%2Flibrary%2Fmetadata%2F1'),
+        'video_apps': {'ios': 'service'}}];
+      final adapter = await pumpDetail(tester, status: 'available', mediaServers: [_plex], links: links,
+        launcher: MediaAppLauncher(platform: TargetPlatform.iOS, isWeb: false));
+      expect(find.text('Watch on Plex'), findsOneWidget);
+      links.single['video_apps'] = {'ios': 'infuse'};
+      if (refresh == 'save') {
+        ProviderScope.containerOf(tester.element(find.byType(MediaDetailScreen)))
+          .read(videoAppRevisionProvider.notifier).state++;
+      } else if (refresh == 'config') {
+        (ProviderScope.containerOf(tester.element(find.byType(MediaDetailScreen)))
+          .read(authProvider.notifier) as _FakeAuthNotifier).refreshConfiguration();
+      } else {
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      }
+      await tester.pumpAndSettle();
+      expect(find.text('Open in Infuse'), findsOneWidget);
+      expect(adapter.watchRequests.length, greaterThan(1));
+    });
   }
 
   testWidgets('an available movie the server holds gets a Watch button',
@@ -440,6 +511,9 @@ class _FakeAuthNotifier extends AuthNotifier {
 
   @override
   Future<AuthState> build() async => authState;
+
+  void refreshConfiguration() => state = AsyncData(authState.copyWith(
+    connection: authState.connection!.copyWith()));
 }
 
 /// Minimal backend stub: the TMDB detail, the request status, and the watch

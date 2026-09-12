@@ -51,6 +51,7 @@ const _adminGates = SettingsSearchGates(
   phoneAppsVisible: true,
   mediaServersVisible: true,
   audiobookshelfVisible: true,
+  videoServersVisible: true,
 );
 const _userGates = SettingsSearchGates(user: _user);
 

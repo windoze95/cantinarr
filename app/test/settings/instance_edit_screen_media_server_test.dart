@@ -315,6 +315,44 @@ Iterable<({String method, String path, dynamic body})> _libraryProbes(
         r.path == '/api/instances/media-server/libraries');
 
 void main() {
+  for (final type in ['plex', 'jellyfin', 'emby']) {
+    for (final editLibraries in [false, true]) {
+      testWidgets('$type app-only and combined library edits persist (libraries=$editLibraries)', (tester) async {
+        final adapter = _FakeAdapter(instances: [{
+          ..._homeJellyfin, 'id': 'video-a', 'service_type': type,
+          'media_server_config': {
+            'public_address': type == 'plex' ? 'https://app.plex.tv' : 'https://watch.example.com',
+            'library_ids': ['lib-movies'],
+            if (type == 'plex') 'machine_identifier': 'machine-1',
+            'video_apps': {'ios': 'infuse'},
+          },
+        }], grants: [{'id': 1, 'username': 'reader'}]);
+        await _pumpEdit(tester, adapter: adapter, users: [_user(1, 'reader')],
+          screen: const InstanceEditScreen(instanceId: 'video-a'));
+        expect(find.text('Infuse'), findsOneWidget);
+        if (editLibraries) {
+          final series = find.widgetWithText(CheckboxListTile, 'Series');
+          await tester.ensureVisible(series);
+          await tester.tap(series);
+          await tester.pumpAndSettle();
+        }
+        final apps = find.widgetWithText(DropdownButtonFormField<String>, 'iPhone and iPad');
+        await tester.ensureVisible(apps);
+        await tester.tap(apps);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Browser').last);
+        await tester.pumpAndSettle();
+        await _tapSave(tester, 'Save Changes');
+        final save = adapter.requests.singleWhere((r) => r.method == 'PUT' && r.path == '/api/instances/video-a');
+        expect(save.body['media_server_config']['video_apps'], {'ios': 'browser'});
+        expect(save.body['media_server_config']['library_ids'], ['lib-movies', if (editLibraries) 'lib-shows']);
+        expect(save.body['media_server_config'].containsKey('listening_apps'), isFalse);
+        expect(adapter.requests.where((r) => r.method == 'PUT' && r.path.endsWith('/grant-users')), isEmpty);
+        expect(adapter.grants.single['id'], 1);
+      });
+    }
+  }
+
   testWidgets('Audiobookshelf defaults save independently for both platforms',
       (tester) async {
     final adapter = _FakeAdapter();

@@ -406,6 +406,8 @@ func NewRouter(
 			r.Get("/media-servers", mediaAccessHandler.List)
 			r.Get("/media-servers/watch", mediaAccessHandler.Watch)
 			r.Get("/media-servers/listen", mediaAccessHandler.Listen)
+			r.Get("/me/video-apps", mediaAccessHandler.VideoAppPreferences)
+			r.Put("/me/video-apps", mediaAccessHandler.VideoAppPreferences)
 			r.Get("/me/listening-apps", mediaAccessHandler.ListeningAppPreferences)
 			r.Put("/me/listening-apps", mediaAccessHandler.ListeningAppPreferences)
 			r.With(authLimiter.Middleware).Post("/media-servers/{instanceID}/account", mediaAccessHandler.CreateAccount)

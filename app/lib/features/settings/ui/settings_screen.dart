@@ -15,6 +15,7 @@ import '../../../core/widgets/settings_highlight.dart';
 import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../media_access/data/video_apps.dart';
 import '../data/outbound_proxy_service.dart';
 import '../data/settings_search_index.dart';
 import '../data/setup_status_service.dart';
@@ -86,6 +87,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final audiobookshelfVisible = connection?.mediaServerInstances
             .any((instance) => instance.serviceType == 'audiobookshelf') ??
         false;
+    final videoServersVisible = connection?.mediaServerInstances
+        .any((instance) => VideoApps.serviceTypes.contains(instance.serviceType)) ?? false;
     final gates = SettingsSearchGates(
       user: user,
       chaptarrEnabled: connection?.services.chaptarr ?? false,
@@ -94,6 +97,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       phoneAppsVisible: phoneAppsVisible,
       mediaServersVisible: mediaServersVisible,
       audiobookshelfVisible: audiobookshelfVisible,
+      videoServersVisible: videoServersVisible,
     );
     final searching = _query.trim().isNotEmpty;
 
@@ -203,6 +207,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: 'AI Access',
                 subtitle: _aiAccessSubtitle(aiSettings),
                 onTap: () => context.push('/settings/ai'),
+              ),
+            if (videoServersVisible)
+              _SettingsTile(
+                icon: Icons.video_library_outlined,
+                title: 'Video apps',
+                subtitle: 'Choose video apps for iPhone and iPad',
+                onTap: () => context.push('/settings/video-apps'),
               ),
             if (audiobookshelfVisible)
               _SettingsTile(

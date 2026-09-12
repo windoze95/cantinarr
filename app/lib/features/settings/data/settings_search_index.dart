@@ -44,6 +44,7 @@ class SettingsSearchGates {
   /// is shared with this account, so the access guide has something to show.
   final bool mediaServersVisible;
   final bool audiobookshelfVisible;
+  final bool videoServersVisible;
 
   const SettingsSearchGates({
     required this.user,
@@ -53,6 +54,7 @@ class SettingsSearchGates {
     this.phoneAppsVisible = false,
     this.mediaServersVisible = false,
     this.audiobookshelfVisible = false,
+    this.videoServersVisible = false,
   });
 }
 
@@ -73,6 +75,7 @@ bool gateLidarr(SettingsSearchGates g) => g.lidarrEnabled;
 bool gateDonate(SettingsSearchGates g) => g.donateVisible;
 bool gatePhoneApps(SettingsSearchGates g) => g.phoneAppsVisible;
 bool gateMediaServers(SettingsSearchGates g) => g.mediaServersVisible;
+bool gateVideoServers(SettingsSearchGates g) => g.videoServersVisible;
 bool gateAudiobookshelf(SettingsSearchGates g) => g.audiobookshelfVisible;
 
 /// One searchable setting.
@@ -168,6 +171,17 @@ const List<SettingsSearchEntry> _rootEntries = [
     section: 'Account',
     keywords: ['sign-in', 'security', 'change password', 'mcp'],
     gate: gatePassword,
+  ),
+  SettingsSearchEntry(
+    id: 'screen.video-apps',
+    title: 'Video apps',
+    icon: Icons.video_library_outlined,
+    route: '/settings/video-apps',
+    screenTitle: 'Settings',
+    section: 'Account',
+    keywords: ['infuse', 'plex', 'jellyfin', 'emby', 'player', 'watch',
+      'movies', 'shows', 'default', 'iphone', 'ipad', 'browser'],
+    gate: gateVideoServers,
   ),
   SettingsSearchEntry(
     id: 'screen.listening-apps',

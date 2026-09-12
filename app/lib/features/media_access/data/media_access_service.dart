@@ -6,6 +6,7 @@ import '../../discover/data/tmdb_models.dart';
 import '../../../core/network/backend_client.dart';
 import 'listen_links.dart';
 import 'listening_apps.dart';
+import 'video_apps.dart';
 
 /// The live state of one user's account on a media server, as the server
 /// answered just now. [verified] is false when the backend could not reach
@@ -113,6 +114,7 @@ class WatchLink {
   final WatchLinkState state;
   final String url;
   final String fallbackUrl;
+  final VideoApps videoApps;
 
   const WatchLink({
     required this.instanceId,
@@ -121,6 +123,7 @@ class WatchLink {
     required this.state,
     this.url = '',
     this.fallbackUrl = '',
+    this.videoApps = const VideoApps(),
   });
 
   factory WatchLink.fromJson(Map<String, dynamic> json) => WatchLink(
@@ -135,6 +138,7 @@ class WatchLink {
         },
         url: json['url'] as String? ?? '',
         fallbackUrl: json['fallback_url'] as String? ?? '',
+        videoApps: VideoApps.fromJson(json['video_apps']),
       );
 }
 
@@ -148,6 +152,7 @@ class MediaServerAccess {
   final MediaServerKind kind;
   final String publicAddress;
   final ListeningApps listeningApps;
+  final VideoApps videoApps;
   final MediaServerAccountStatus? account;
 
   /// The server confirmed an account named like this user that nobody is
@@ -165,6 +170,7 @@ class MediaServerAccess {
     this.kind = MediaServerKind.account,
     this.publicAddress = '',
     this.listeningApps = const ListeningApps(),
+    this.videoApps = const VideoApps(),
     this.account,
     this.existingAccount = false,
     this.autoLinkSuppressed = false,
@@ -188,6 +194,7 @@ class MediaServerAccess {
           : MediaServerKind.account,
       publicAddress: json['public_address'] as String? ?? '',
       listeningApps: ListeningApps.fromJson(json['listening_apps']),
+      videoApps: VideoApps.fromJson(json['video_apps']),
       account: rawAccount is Map
           ? MediaServerAccountStatus.fromJson(
               Map<String, dynamic>.from(rawAccount),
@@ -446,6 +453,28 @@ class MediaAccessService {
   final Dio _dio;
 
   MediaAccessService({required Dio backendDio}) : _dio = backendDio;
+
+  Future<Map<String, VideoApps>> getVideoAppPreferences() async {
+    final response = await _dio.get('/api/me/video-apps');
+    return _readVideoAppPreferences(response.data);
+  }
+
+  Future<Map<String, VideoApps>> saveVideoAppPreferences(
+      Map<String, VideoApps> apps) async {
+    final response = await _dio.put('/api/me/video-apps', data: {
+      for (final entry in apps.entries) entry.key: entry.value.toJson(),
+    });
+    return _readVideoAppPreferences(response.data);
+  }
+
+  Map<String, VideoApps> _readVideoAppPreferences(dynamic data) {
+    if (data is! Map || VideoApps.serviceTypes.any((service) =>
+        data[service] is! Map || data[service]['ios'] is! String)) {
+      throw const FormatException('Invalid video app preferences');
+    }
+    return {for (final service in VideoApps.serviceTypes)
+      service: VideoApps.fromJson(data[service])};
+  }
 
   Future<ListeningApps> getListeningAppPreferences() async {
     final response = await _dio.get('/api/me/listening-apps');
