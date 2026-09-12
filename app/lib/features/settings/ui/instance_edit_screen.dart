@@ -17,6 +17,8 @@ import '../../auth/logic/auth_provider.dart';
 import '../../media_access/data/media_access_service.dart';
 import '../../discover/data/trending_books_service.dart';
 import '../data/instance_api_service.dart';
+import '../data/audiobook_library_access.dart';
+import 'audiobook_user_libraries.dart';
 import '../data/hardcover_connection.dart';
 import 'hardcover_connection_dialog.dart';
 import '../logic/arr_path_match.dart';
@@ -69,6 +71,13 @@ class InstanceEditScreen extends ConsumerStatefulWidget {
 }
 
 class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
+  bool get _isAbs => _serviceType == 'audiobookshelf';
+  Map<int, AudiobookLibraryPolicy> _absPolicies = {};
+  final Set<int> _absEditedPolicies = {};
+  List<String> _absSavedDefaultIds = [];
+  String _absSavedPublicAddress = '';
+  bool _absAccessLoaded = false;
+  bool _absSyncPending = false;
   final _detailsDraft = SettingsDraft();
   final _mediaDraft = SettingsDraft();
   final _mappingsDraft = SettingsDraft();
@@ -94,13 +103,13 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         for (final mapping in _mediaPathMappings)
           [mapping.arrPath.text, mapping.cantinarrPath.text],
       ];
-  bool get _hasUnsavedChanges =>
-      (_detailsDraft.hasChanges(_detailValues) ||
-          _defaultDraft.hasChanges(_isDefault) ||
-          _mediaDraft.hasChanges(_mediaValues) ||
-          _mappingsDraft.hasChanges(_mappingValues) ||
-          !_sameSelection(_assignedUserIds, _savedAssignedUserIds) ||
-          (_plexPinId != _savedPlexPinId && _plexAccount.isNotEmpty));
+  bool get _hasUnsavedChanges => (_absEditedPolicies.isNotEmpty ||
+      _detailsDraft.hasChanges(_detailValues) ||
+      _defaultDraft.hasChanges(_isDefault) ||
+      _mediaDraft.hasChanges(_mediaValues) ||
+      _mappingsDraft.hasChanges(_mappingValues) ||
+      !_sameSelection(_assignedUserIds, _savedAssignedUserIds) ||
+      (_plexPinId != _savedPlexPinId && _plexAccount.isNotEmpty));
 
   void _markInstanceSaved() {
     _detailsDraft.markSaved(_detailValues);
@@ -385,10 +394,17 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     }
     _isDefault = widget.initialIsDefault;
     _markInstanceSaved();
-    if (widget.isEditing) _loadDetails();
+    if (widget.isEditing) {
+      // A direct route may not include the service type. Load it before
+      // choosing the grants/library-assignment endpoint for this editor.
+      _loadDetails().then((_) {
+        if (mounted) _loadDirectory();
+      });
+    } else {
+      _loadDirectory();
+    }
     _loadMediaRoots();
     _loadArrRootFolders();
-    _loadDirectory();
     _loadWebhookStatus();
     _loadHardcoverStatus();
   }
@@ -503,8 +519,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       // await throws, leaking it as an unhandled zone error. Future.wait
       // (eagerError: false) waits for both, throws the first error, and
       // drops the rest — the single catch below stays correct.
-      final results =
-          await Future.wait<Object>([instancesFuture, usersFuture]);
+      final results = await Future.wait<Object>([instancesFuture, usersFuture]);
       final instances = results[0] as List<ServiceInstance>;
       final users = results[1] as List<UserSummary>;
       users.sort((a, b) =>
@@ -558,6 +573,28 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   /// showing it unchecked would turn the next save into a silent revocation.
   Future<void> _loadPins() async {
     if (!_supportsUserAssignment) return;
+    if (_isAbs && widget.isEditing) {
+      try {
+        final access =
+            await AudiobookLibraryAccessService(ref.read(backendClientProvider))
+                .get(widget.instanceId!);
+        if (!mounted) return;
+        setState(() {
+          _assignedUserIds = access.userIds;
+          _savedAssignedUserIds = Set.of(access.userIds);
+          _absPolicies = access.policies;
+          _absSavedDefaultIds = access.defaultLibraryIds;
+          _absAccessLoaded = true;
+          _userSelectError = null;
+        });
+      } catch (_) {
+        if (mounted) {
+          setState(() => _userSelectError =
+              'Could not load Audiobookshelf library assignments');
+        }
+      }
+      return;
+    }
     String? anchorId = widget.instanceId;
     if (anchorId == null) {
       for (final i in _instances) {
@@ -656,6 +693,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             _publicAddressController.text = config.publicAddress;
           }
           _selectedLibraryIds = config.libraryIds.toSet();
+          if (_isAbs) {
+            _absSavedDefaultIds = config.libraryIds;
+            _absSavedPublicAddress = config.publicAddress;
+          }
           if (_isPlex) {
             _plexLinkedStored = true;
             _plexMachineId = config.machineIdentifier;
@@ -865,8 +906,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       return;
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Could not reach plex.tv. Try again.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not reach plex.tv. Try again.')));
       return;
     }
     // A browser that will not open is not a failed link: the Reopen
@@ -1045,6 +1086,17 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   }
 
   String? _validate() {
+    if (_isAbs) {
+      if (widget.isEditing && !_absAccessLoaded) {
+        return 'Load the library assignments before saving.';
+      }
+      for (final id in _absEditedPolicies) {
+        final policy = _absPolicies[id]!;
+        if (policy.mode == 'selected' && policy.libraryIds.isEmpty) {
+          return 'Choose at least one library for each individual selection.';
+        }
+      }
+    }
     if (_serviceTypeUnchosen) {
       return 'Choose a service type';
     }
@@ -1229,7 +1281,40 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         const Text('No users yet.',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13))
       else
-        ...users.map(_userTile),
+        ...users.expand((user) {
+          final account = _mediaAccounts[user.id];
+          final policy =
+              _absPolicies[user.id] ?? const AudiobookLibraryPolicy();
+          final accountKnown = !widget.isEditing ||
+              (_mediaAccountsLoaded && !_mediaAccountsFailed);
+          return [
+            _userTile(user),
+            if (_isAbs && _assignedUserIds.contains(user.id))
+              AudiobookUserLibraries(
+                key: ValueKey('abs-libraries-${user.id}'),
+                username: user.username,
+                policy: policy,
+                libraries: _mediaServerLibraries ?? const [],
+                defaultLibraryIds: _selectedLibraryIds,
+                enabled: accountKnown &&
+                    (account == null ||
+                        (account.manageAccess && !account.administrator)),
+                unavailableReason: !accountKnown
+                    ? 'Load account management to change libraries.'
+                    : account?.administrator == true
+                        ? 'Administrator accounts cannot be changed here.'
+                        : null,
+                keepExisting: account != null &&
+                    !account.createdByCantinarr &&
+                    !policy.managesLibraries &&
+                    !_absEditedPolicies.contains(user.id),
+                onChanged: (value) => setState(() {
+                  _absPolicies[user.id] = value;
+                  _absEditedPolicies.add(user.id);
+                }),
+              ),
+          ];
+        }),
     ];
   }
 
@@ -1253,9 +1338,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                   ? 'Account management could not be loaded'
                   : !_mediaAccountsLoaded && widget.isEditing
                       ? 'Loading account management…'
-                  : _mediaAccounts.containsKey(user.id)
-                      ? '${_mediaAccounts[user.id]!.managementLabel} · ${_mediaAccounts[user.id]!.accessLabel}'
-                      : 'No linked account',
+                      : _mediaAccounts.containsKey(user.id)
+                          ? '${_mediaAccounts[user.id]!.managementLabel} · ${_mediaAccounts[user.id]!.accessLabel}'
+                          : 'No linked account',
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 12))
           : defaultElsewhere != null
@@ -1272,6 +1357,26 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         }
       }),
     );
+  }
+
+  Future<void> _saveAbsAccess(String instanceId) async {
+    final access =
+        await AudiobookLibraryAccessService(ref.read(backendClientProvider))
+            .save(instanceId,
+                userIds: _assignedUserIds,
+                defaultLibraryIds: _selectedLibraryIds,
+                policies: {
+          for (final id in _absEditedPolicies) id: _absPolicies[id]!
+        });
+    if (!mounted) return;
+    setState(() {
+      _absPolicies = access.policies;
+      _absEditedPolicies.clear();
+      _absSavedDefaultIds = access.defaultLibraryIds;
+      _absSavedPublicAddress = _publicAddressController.text.trim();
+      _savedAssignedUserIds = Set.of(access.userIds);
+      _absSyncPending = access.syncPending;
+    });
   }
 
   Future<void> _save() async {
@@ -1296,9 +1401,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _users != null &&
         !_sameSelection(_assignedUserIds, _savedAssignedUserIds);
     final assignedIds = _assignedUserIds.toList()..sort();
-    final mediaPathMappings = _shouldSubmitMediaPathMappings
-        ? _currentMediaPathMappings()
-        : null;
+    final mediaPathMappings =
+        _shouldSubmitMediaPathMappings ? _currentMediaPathMappings() : null;
     // Media-server settings travel whole: always on create, and on edit only
     // when the section was touched, so an unrelated edit never rewrites the
     // stored address or library choice (null = keep).
@@ -1306,7 +1410,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _isMediaServer && (!widget.isEditing || _mediaServerConfigDirty)
             ? MediaServerConfig(
                 publicAddress: _publicAddressController.text.trim(),
-                libraryIds: _selectedLibraryIds.toList(growable: false),
+                libraryIds: _isAbs && widget.isEditing
+                    ? _absSavedDefaultIds
+                    : _selectedLibraryIds.toList(growable: false),
                 machineIdentifier: _isPlex ? _plexMachineId : '',
                 autoApprove: _isPlex && _plexAutoApprove,
               )
@@ -1322,20 +1428,28 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       final service = InstanceApiService(backendDio: backendDio);
 
       if (widget.isEditing) {
-        await service.updateInstance(
-          id: widget.instanceId!,
-          name: _nameController.text.trim(),
-          url: _urlController.text.trim(),
-          apiKey: _apiKeyController.text.trim(),
-          username: _usernameController.text.trim(),
-          password: _passwordController.text,
-          isDefault: isDefault,
-          mediaPathMappings: mediaPathMappings,
-          mediaServerConfig: mediaServerConfig,
-          plexLinkPin: plexLinkPin,
-        );
+        // Library-only edits can be queued even while ABS is unreachable.
+        if (!_isAbs ||
+            _detailsDraft.hasChanges(_detailValues) ||
+            _publicAddressController.text.trim() != _absSavedPublicAddress) {
+          await service.updateInstance(
+            id: widget.instanceId!,
+            name: _nameController.text.trim(),
+            url: _urlController.text.trim(),
+            apiKey: _apiKeyController.text.trim(),
+            username: _usernameController.text.trim(),
+            password: _passwordController.text,
+            isDefault: isDefault,
+            mediaPathMappings: mediaPathMappings,
+            mediaServerConfig: mediaServerConfig,
+            plexLinkPin: plexLinkPin,
+          );
+        }
+        if (_isAbs) {
+          await _saveAbsAccess(widget.instanceId!);
+        }
         _markInstanceSaved();
-        if (applyAssignments) {
+        if (applyAssignments && !_isAbs) {
           try {
             await service.updateInstanceGrantUsers(
                 widget.instanceId!, assignedIds);
@@ -1355,9 +1469,16 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         await _refreshConfigAfterSave();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Instance updated')),
+            SnackBar(
+                content: Text(_absSyncPending
+                    ? 'Library access saved. Changes are pending; Cantinarr will retry.'
+                    : 'Instance updated')),
           );
-          _finishEditing();
+          if (_absSyncPending) {
+            setState(() => _isSaving = false);
+          } else {
+            _finishEditing();
+          }
         }
         return;
       }
@@ -1372,14 +1493,18 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         isDefault: isDefault,
         mediaPathMappings: mediaPathMappings,
         mediaServerConfig: mediaServerConfig,
-          plexLinkPin: plexLinkPin,
+        plexLinkPin: plexLinkPin,
       );
       // The instance exists now, so a failed assignment must not re-run
       // create: surface it and let the admin retry from the edit screen.
       String? assignmentError;
-      if (applyAssignments) {
+      if (applyAssignments || _isAbs) {
         try {
-          await service.updateInstanceGrantUsers(created.id, assignedIds);
+          if (_isAbs) {
+            await _saveAbsAccess(created.id);
+          } else {
+            await service.updateInstanceGrantUsers(created.id, assignedIds);
+          }
         } catch (e) {
           assignmentError = apiErrorMessage(e);
         }
@@ -1443,12 +1568,14 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       final notifier = ref.read(instanceProvider.notifier);
       final radarrId = activeBefore.activeRadarrInstanceId;
       if (radarrId != null &&
-          refreshed.radarrInstances.any((instance) => instance.id == radarrId)) {
+          refreshed.radarrInstances
+              .any((instance) => instance.id == radarrId)) {
         notifier.setActiveRadarrInstance(radarrId);
       }
       final sonarrId = activeBefore.activeSonarrInstanceId;
       if (sonarrId != null &&
-          refreshed.sonarrInstances.any((instance) => instance.id == sonarrId)) {
+          refreshed.sonarrInstances
+              .any((instance) => instance.id == sonarrId)) {
         notifier.setActiveSonarrInstance(sonarrId);
       }
       final chaptarrId = activeBefore.activeChaptarrInstanceId;
@@ -1682,8 +1809,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _hardcoverResult =
-            'Hardcover is connected to this instance, but the '
+        _hardcoverResult = 'Hardcover is connected to this instance, but the '
             'other instances could not be loaded. ${apiErrorMessage(e)}';
         _hardcoverResultColor = AppTheme.error;
       });
@@ -2045,8 +2171,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 ),
               ),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
                 decoration: BoxDecoration(
                   color: (linked ? AppTheme.available : AppTheme.textSecondary)
                       .withValues(alpha: 0.12),
@@ -2078,7 +2203,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                   child: Text(
                     'Waiting for approval. Sign in on the plex.tv page that '
                     'just opened and approve the link.',
-                    style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                    style:
+                        TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                   ),
                 ),
               ],
@@ -2219,9 +2345,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       child: Text(
         selectedCount == 0 ? 'All' : '$selectedCount selected',
         style: TextStyle(
-          color: selectedCount == 0
-              ? AppTheme.textSecondary
-              : AppTheme.accent,
+          color: selectedCount == 0 ? AppTheme.textSecondary : AppTheme.accent,
           fontSize: 11,
           fontWeight: FontWeight.w700,
         ),
@@ -2243,10 +2367,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               ),
             ),
             const SizedBox(width: 12),
-            const Expanded(
+            Expanded(
               child: Text(
-                'Shared libraries',
-                style: TextStyle(
+                _isAbs ? 'Default libraries' : 'Shared libraries',
+                style: const TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
@@ -2299,8 +2423,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         children: [
           LayoutBuilder(
             builder: (context, constraints) {
-              final largeText =
-                  MediaQuery.textScalerOf(context).scale(1) > 1.3;
+              final largeText = MediaQuery.textScalerOf(context).scale(1) > 1.3;
               if (constraints.maxWidth < 300 || largeText) {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2315,12 +2438,14 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             },
           ),
           const SizedBox(height: 10),
-          const Text(
-            'Optional. Choose which libraries these accounts can see. '
-            'Changing it updates accounts Cantinarr created here and still manages; '
-            'accounts you linked keep what they have. With nothing chosen, '
-            'every library is shared, including ones you add later.',
-            style: TextStyle(
+          Text(
+            _isAbs
+                ? 'Choose the default libraries for accounts Cantinarr creates. Select different libraries under each user below. Individual selections stay unchanged when this default changes. With nothing chosen, the default includes every library, including ones added later.'
+                : 'Optional. Choose which libraries these accounts can see. '
+                    'Changing it updates accounts Cantinarr created here and still manages; '
+                    'accounts you linked keep what they have. With nothing chosen, '
+                    'every library is shared, including ones you add later.',
+            style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 12,
               height: 1.4,
@@ -2353,8 +2478,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           else if (libraries == null)
             const _MediaMappingNotice(
               icon: Icons.wifi_tethering,
-              message:
-                  'Test the connection to load the libraries this server '
+              message: 'Test the connection to load the libraries this server '
                   'reports.',
             )
           else ...[
@@ -2402,9 +2526,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             : '$mappingCount '
                 '${mappingCount == 1 ? 'mapping' : 'mappings'}',
         style: TextStyle(
-          color: mappingCount == 0
-              ? AppTheme.textSecondary
-              : AppTheme.accent,
+          color: mappingCount == 0 ? AppTheme.textSecondary : AppTheme.accent,
           fontSize: 11,
           fontWeight: FontWeight.w700,
         ),
@@ -2451,8 +2573,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         children: [
           LayoutBuilder(
             builder: (context, constraints) {
-              final largeText =
-                  MediaQuery.textScalerOf(context).scale(1) > 1.3;
+              final largeText = MediaQuery.textScalerOf(context).scale(1) > 1.3;
               if (constraints.maxWidth < 300 || largeText) {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2841,6 +2962,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 if (value == null) return;
                 setState(() {
                   _serviceType = value;
+                  _absPolicies = {};
+                  _absEditedPolicies.clear();
+                  _absAccessLoaded = false;
                   _testResult = null;
                   // A username typed under another type has no field on
                   // a password-only type, so it must not ride into the
@@ -3214,8 +3338,7 @@ class _MediaPathMappingFields {
     String arrPath = '',
     String cantinarrPath = '',
     required VoidCallback onChanged,
-  })
-      : arrPath = TextEditingController(text: arrPath),
+  })  : arrPath = TextEditingController(text: arrPath),
         cantinarrPath = TextEditingController(text: cantinarrPath) {
     this.arrPath.addListener(onChanged);
     this.cantinarrPath.addListener(onChanged);

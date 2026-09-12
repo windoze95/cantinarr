@@ -25,6 +25,7 @@ const (
 // Handler serves the user-facing and admin media-server account routes.
 // Every error body is fixed text: nothing a media server says is echoed.
 type Handler struct {
+	configChanged  func()
 	listeningBooks ListeningBooks
 	svc            *Service
 	logger         *slog.Logger
@@ -41,6 +42,8 @@ type Handler struct {
 func (h *Handler) SetExternalURLSource(fn func() string) {
 	h.externalURL = fn
 }
+
+func (h *Handler) SetConfigChangedObserver(fn func()) { h.configChanged = fn }
 
 // NewHandler creates the handler.
 func NewHandler(svc *Service, logger *slog.Logger) *Handler {

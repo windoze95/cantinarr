@@ -85,6 +85,11 @@ func (s *Service) SetManagement(ctx context.Context, userID int64, instanceID st
 	if _, err := s.db.Exec("UPDATE user_media_server_accounts SET manage_access=?, access_sync_pending=? WHERE user_id=? AND instance_id=?", manage, manage, userID, instanceID); err != nil {
 		return Account{}, err
 	}
+	if !manage {
+		if err := s.cancelLibrarySync(userID, instanceID); err != nil {
+			return Account{}, err
+		}
+	}
 	if manage {
 		s.reconcileAccountLocked(ctx, userID, instanceID)
 	}

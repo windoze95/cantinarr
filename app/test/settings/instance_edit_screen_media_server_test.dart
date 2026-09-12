@@ -28,12 +28,21 @@ class _FakeAdapter implements HttpClientAdapter {
     ],
     this.librariesError,
     this.plexBeginStatus = 0,
+    this.mediaAccessError = false,
+    this.detailDelay = Duration.zero,
   });
 
   /// When set, the Plex link begin answers this status with a JSON error
   /// body (404: a server from before Plex instances, whose arr proxy
   /// wildcard answers; 502: the server could not reach plex.tv).
   final int plexBeginStatus;
+  final bool mediaAccessError;
+  final Duration detailDelay;
+  Map<String, dynamic> mediaAccess = {
+    'default_library_ids': ['books'],
+    'user_ids': [1, 2],
+    'policies': <String, dynamic>{}
+  };
 
   final List<Map<String, dynamic>> instances;
   final List<Map<String, dynamic>> grants;
@@ -61,7 +70,30 @@ class _FakeAdapter implements HttpClientAdapter {
     if (options.method == 'GET' && path == '/api/instances/media-roots') {
       response = ['/media'];
     } else if (options.method == 'GET' && path == '/api/instances') {
+      if (requests.where((r) => r.method == 'GET' && r.path == path).length ==
+          1) {
+        await Future<void>.delayed(detailDelay);
+      }
       response = instances;
+    } else if (path.endsWith('/media-access')) {
+      if (mediaAccessError) {
+        return ResponseBody.fromString('{"error":"unavailable"}', 503,
+            headers: {
+              'content-type': ['application/json']
+            });
+      }
+      if (options.method == 'PUT') {
+        mediaAccess = {
+          ...body as Map<String, dynamic>,
+          'policies': {
+            ...mediaAccess['policies'] as Map<String, dynamic>,
+            ...body['policies'] as Map<String, dynamic>
+          }
+        };
+      }
+      response = mediaAccess;
+    } else if (path == '/api/admin/media-servers/accounts') {
+      response = [];
     } else if (path.endsWith('/grant-users')) {
       response = grants;
     } else if (options.method == 'GET' && path.endsWith('/users')) {
@@ -79,11 +111,16 @@ class _FakeAdapter implements HttpClientAdapter {
           },
         );
       }
-      response = {'pin_id': 42, 'code': 'ABCD', 'url': 'https://app.plex.tv/auth#?code=ABCD'};
+      response = {
+        'pin_id': 42,
+        'code': 'ABCD',
+        'url': 'https://app.plex.tv/auth#?code=ABCD'
+      };
     } else if (options.method == 'POST' &&
         path == '/api/instances/plex/link/check') {
       response = {'linked': true, 'account': 'cantina-owner'};
-    } else if (options.method == 'POST' && path == '/api/instances/plex/servers') {
+    } else if (options.method == 'POST' &&
+        path == '/api/instances/plex/servers') {
       response = {
         'servers': [
           {'name': 'Cantina', 'machine_identifier': 'm1'},
@@ -141,18 +178,20 @@ class _FakeAdapter implements HttpClientAdapter {
 }
 
 class _FakeAuthNotifier extends AuthNotifier {
-  _FakeAuthNotifier(this.users);
+  _FakeAuthNotifier(this.users, this.management);
+  final bool management;
 
   final List<UserSummary> users;
 
   @override
-  Future<AuthState> build() async => const AuthState(
+  Future<AuthState> build() async => AuthState(
         connection: BackendConnection(
           serverUrl: 'http://localhost',
           accessToken: 'access',
           refreshToken: 'refresh',
+          mediaAccountManagement: management,
         ),
-        user: UserProfile(id: 1, username: 'admin', role: 'admin'),
+        user: const UserProfile(id: 1, username: 'admin', role: 'admin'),
       );
 
   // A fresh, growable copy: the screen sorts what it is handed.
@@ -194,6 +233,7 @@ Future<void> _pumpEdit(
   required _FakeAdapter adapter,
   List<UserSummary> users = const [],
   InstanceEditScreen screen = const InstanceEditScreen(),
+  bool management = false,
 }) async {
   // Tall viewport so the whole (lazily built) form list is materialized.
   tester.view.physicalSize = const Size(800, 2200);
@@ -212,7 +252,7 @@ Future<void> _pumpEdit(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
-        authProvider.overrideWith(() => _FakeAuthNotifier(users)),
+        authProvider.overrideWith(() => _FakeAuthNotifier(users, management)),
         backendClientProvider.overrideWithValue(dio),
       ],
       child: MaterialApp.router(routerConfig: router),
@@ -261,9 +301,115 @@ Future<void> _tapSave(WidgetTester tester, String label) async {
 Iterable<({String method, String path, dynamic body})> _libraryProbes(
         _FakeAdapter adapter) =>
     adapter.requests.where((r) =>
-        r.method == 'POST' && r.path == '/api/instances/media-server/libraries');
+        r.method == 'POST' &&
+        r.path == '/api/instances/media-server/libraries');
 
 void main() {
+  testWidgets(
+      'ABS direct route waits for the service type before loading grants',
+      (tester) async {
+    final adapter = _FakeAdapter(
+        detailDelay: const Duration(milliseconds: 200),
+        instances: [
+          {..._homeJellyfin, 'id': 'abs', 'service_type': 'audiobookshelf'}
+        ]);
+    await _pumpEdit(tester,
+        adapter: adapter,
+        management: true,
+        users: [_user(1, 'julian'), _user(2, 'Yana')],
+        screen: const InstanceEditScreen(instanceId: 'abs'));
+    expect(find.byKey(const ValueKey('abs-libraries-2')), findsOneWidget);
+    expect(adapter.requests.where((r) => r.path.endsWith('/media-access')),
+        hasLength(1));
+    expect(adapter.requests.where((r) => r.path.endsWith('/grant-users')),
+        isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'ABS saves separate libraries with grants and keeps defaults separate',
+      (tester) async {
+    final adapter = _FakeAdapter(instances: [
+      {
+        ..._homeJellyfin,
+        'id': 'abs',
+        'service_type': 'audiobookshelf',
+        'name': 'Books',
+        'media_server_config': {
+          'public_address': 'https://books.example.com',
+          'library_ids': ['books']
+        }
+      }
+    ], libraries: const [
+      {'id': 'books', 'name': 'audiobooks', 'collection_type': 'book'},
+      {'id': 'yana', 'name': 'audiobooks-yana', 'collection_type': 'book'}
+    ]);
+    await _pumpEdit(tester,
+        adapter: adapter,
+        management: true,
+        users: [_user(1, 'julian'), _user(2, 'Yana')],
+        screen: const InstanceEditScreen(
+            instanceId: 'abs', initialServiceType: 'audiobookshelf'));
+    expect(find.text('Default libraries'), findsOneWidget);
+    final yana = find.byKey(const ValueKey('abs-libraries-2'));
+    await tester.ensureVisible(yana);
+    await tester.tap(find.descendant(
+        of: yana, matching: find.byType(DropdownButton<String>)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Choose libraries').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Choose at least one library.'), findsOneWidget);
+    await _tapSave(tester, 'Save Changes');
+    expect(
+        adapter.requests.where(
+            (r) => r.method == 'PUT' && r.path.endsWith('/media-access')),
+        isEmpty);
+    await tester.ensureVisible(yana);
+    await tester.tap(find.descendant(
+        of: yana,
+        matching: find.widgetWithText(CheckboxListTile, 'audiobooks-yana')));
+    await tester.pumpAndSettle();
+    await _tapSave(tester, 'Save Changes');
+    final saved = adapter.requests.singleWhere(
+        (r) => r.method == 'PUT' && r.path.endsWith('/media-access'));
+    expect(saved.body, {
+      'default_library_ids': ['books'],
+      'user_ids': [1, 2],
+      'policies': {
+        '2': {
+          'mode': 'selected',
+          'library_ids': ['yana']
+        }
+      }
+    });
+    expect(
+        adapter.requests
+            .where((r) => r.method == 'PUT' && r.path == '/api/instances/abs'),
+        isEmpty);
+    expect(
+        adapter.requests
+            .where((r) => r.method == 'PUT' && r.path.endsWith('/grant-users')),
+        isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('ABS assignment load failure cannot erase grants',
+      (tester) async {
+    final adapter = _FakeAdapter(mediaAccessError: true, instances: [
+      {..._homeJellyfin, 'id': 'abs', 'service_type': 'audiobookshelf'}
+    ]);
+    await _pumpEdit(tester,
+        adapter: adapter,
+        management: true,
+        users: [_user(1, 'julian')],
+        screen: const InstanceEditScreen(
+            instanceId: 'abs', initialServiceType: 'audiobookshelf'));
+    await _tapSave(tester, 'Save Changes');
+    expect(adapter.requests.where((r) => r.method == 'PUT'), isEmpty);
+    expect(find.text('Load the library assignments before saving.'),
+        findsOneWidget);
+  });
+
   testWidgets(
       'Jellyfin hides the default toggle, shows User Access, and never reads '
       'pins', (tester) async {
@@ -345,7 +491,8 @@ void main() {
       'libraries load only after a passing test and save sends the chosen '
       'ids with is_default false', (tester) async {
     final adapter = _FakeAdapter();
-    await _pumpNewJellyfin(tester, adapter: adapter, users: [_user(1, 'alice')]);
+    await _pumpNewJellyfin(tester,
+        adapter: adapter, users: [_user(1, 'alice')]);
     await _fillForm(tester);
 
     // Typing alone never dials the server.
@@ -388,7 +535,8 @@ void main() {
       'library_ids': ['lib-movies'],
     });
     final putGrants = adapter.requests.singleWhere((r) =>
-        r.method == 'PUT' && r.path == '/api/instances/jellyfin-new/grant-users');
+        r.method == 'PUT' &&
+        r.path == '/api/instances/jellyfin-new/grant-users');
     expect(putGrants.body, {
       'user_ids': [1]
     });
@@ -524,8 +672,8 @@ void main() {
 
     await tester.tap(find.widgetWithText(CheckboxListTile, 'Unknown library'));
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(CheckboxListTile, 'Unknown library'),
-        findsNothing);
+    expect(
+        find.widgetWithText(CheckboxListTile, 'Unknown library'), findsNothing);
     expect(find.text('1 selected'), findsOneWidget);
 
     await _tapSave(tester, 'Save Changes');
@@ -557,7 +705,8 @@ void main() {
     );
   });
 
-  testWidgets('a server without Plex linking says to update it, and one that '
+  testWidgets(
+      'a server without Plex linking says to update it, and one that '
       'cannot reach plex.tv says that', (tester) async {
     for (final (status, message) in [
       (
@@ -624,12 +773,14 @@ void main() {
     await tester.ensureVisible(link);
     await tester.tap(link);
     await tester.pumpAndSettle();
-    expect(adapter.requests.any((r) => r.path == '/api/instances/plex/link/begin'),
+    expect(
+        adapter.requests.any((r) => r.path == '/api/instances/plex/link/begin'),
         isTrue);
     // The form polls every few seconds; the fake approves on the first
     // check, so the poll may already have landed. Either way the "check
     // now" button gets there.
-    final check = find.widgetWithText(OutlinedButton, "I've approved, check now");
+    final check =
+        find.widgetWithText(OutlinedButton, "I've approved, check now");
     if (check.evaluate().isNotEmpty) {
       expect(find.textContaining('Waiting for approval'), findsOneWidget);
       await tester.ensureVisible(check);
@@ -656,14 +807,15 @@ void main() {
     expect(probe.body['media_server_config'], {'machine_identifier': 'm2'});
     expect(find.text('Films'), findsOneWidget);
 
-    final auto = find.widgetWithText(SwitchListTile, 'Auto-approve access requests');
+    final auto =
+        find.widgetWithText(SwitchListTile, 'Auto-approve access requests');
     await tester.ensureVisible(auto);
     await tester.tap(auto);
     await tester.pumpAndSettle();
 
     await _tapSave(tester, 'Add Instance');
-    final create = adapter.requests.singleWhere(
-        (r) => r.method == 'POST' && r.path == '/api/instances');
+    final create = adapter.requests
+        .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
     expect(create.body['service_type'], 'plex');
     expect(create.body['plex_link_pin'], 42);
     expect(create.body['api_key'], '');
