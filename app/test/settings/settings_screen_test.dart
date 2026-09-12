@@ -8,6 +8,8 @@ import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/widgets/attention_menu_visibility_switch.dart';
 import 'package:cantinarr/features/ai_assistant/data/ai_settings_service.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:cantinarr/features/media_access/logic/media_access_guide_provider.dart';
+import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
 import 'package:cantinarr/features/settings/ui/settings_screen.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -318,6 +320,58 @@ void main() {
       find.text('Get your access and see where to sign in'),
       findsOneWidget,
     );
+  });
+
+  testWidgets(
+      'a hidden guide opens from Settings and search, and can be restored',
+      (tester) async {
+    final router = GoRouter(initialLocation: '/settings', routes: [
+      GoRoute(path: '/settings', builder: (_, __) => const SettingsScreen()),
+      GoRoute(
+          path: '/media-servers', builder: (_, __) => const MediaAccessGuide()),
+    ]);
+    addTearDown(router.dispose);
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = _SettingsAdapter();
+    await tester.pumpWidget(ProviderScope(overrides: [
+      authProvider.overrideWith(() =>
+          _FakeAuthNotifier(isAdmin: false, instances: const [_homeJellyfin])),
+      aiSettingsProvider
+          .overrideWith((_) async => _settings(source: AiAccessSource.shared)),
+      backendClientProvider.overrideWithValue(dio),
+    ], child: MaterialApp.router(routerConfig: router)));
+    await tester.pumpAndSettle();
+    final container =
+        ProviderScope.containerOf(tester.element(find.byType(SettingsScreen)));
+    await container
+        .read(mediaAccessGuideHiddenProvider.notifier)
+        .setHidden(true);
+    await _dragSettingsUntilFound(tester, find.text('Media server access'));
+    await tester.ensureVisible(find.text('Media server access'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Media server access'));
+    await tester.pumpAndSettle();
+    expect(router.state.uri.path, '/media-servers');
+    expect(tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+        isTrue);
+    router.pop();
+    await tester.pumpAndSettle();
+    tester
+        .state<ScrollableState>(find.byType(Scrollable).first)
+        .position
+        .jumpTo(0);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, 'media server access');
+    await tester.pumpAndSettle();
+    final guideResult = find.text('Settings › Guides');
+    expect(guideResult, findsOneWidget);
+    await tester.tap(guideResult);
+    await tester.pumpAndSettle();
+    expect(router.state.uri.path, '/media-servers');
+    await tester.tap(find.byType(SwitchListTile));
+    await tester.pumpAndSettle();
+    expect(container.read(mediaAccessGuideNavigationVisibleProvider), isTrue);
+    expect(find.byType(MediaAccessGuide), findsOneWidget);
   });
 
   testWidgets('the media server guide row is absent without a shared server',

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -6,6 +7,9 @@ import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/network/safe_http_log_interceptor.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
+import 'package:cantinarr/features/media_access/data/media_access_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/link.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/media_access/logic/media_app_launcher.dart';
 import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
@@ -200,6 +204,13 @@ Map<String, dynamic> _account({
 
 _FakeAuthNotifier? _lastAuth;
 
+class _PendingMediaAccess extends MediaAccessService {
+  _PendingMediaAccess() : super(backendDio: Dio());
+  final result = Completer<List<MediaServerAccess>>();
+  @override
+  Future<List<MediaServerAccess>> listMine() => result.future;
+}
+
 Future<_JsonAdapter> _pumpGuide(
   WidgetTester tester, {
   required Map<String, _Reply Function(dynamic body, int callsSoFar)> handlers,
@@ -209,8 +220,12 @@ Future<_JsonAdapter> _pumpGuide(
   bool supportsManagement = false,
   List<String>? logs,
   MediaAppLauncher? launcher,
+  MediaAccessService? service,
+  Size size = const Size(800, 1600),
+  double textScale = 1,
+  bool settle = true,
 }) async {
-  tester.view.physicalSize = const Size(800, 1600);
+  tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
 
@@ -223,6 +238,8 @@ Future<_JsonAdapter> _pumpGuide(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
+        if (service != null)
+          mediaAccessServiceProvider.overrideWithValue(service),
         if (launcher != null)
           mediaAppLauncherProvider.overrideWithValue(launcher),
         authProvider.overrideWith(() => _lastAuth = _FakeAuthNotifier(
@@ -232,10 +249,22 @@ Future<_JsonAdapter> _pumpGuide(
             supportsManagement: supportsManagement)),
         backendClientProvider.overrideWithValue(dio),
       ],
-      child: const MaterialApp(theme: null, home: MediaAccessGuide()),
+      child: MaterialApp(
+        theme: AppTheme.dark,
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: TextScaler.linear(textScale)),
+          child: child!,
+        ),
+        home: const MediaAccessGuide(),
+      ),
     ),
   );
-  await tester.pumpAndSettle();
+  if (settle) {
+    await tester.pumpAndSettle();
+  } else {
+    await tester.pump();
+  }
   return adapter;
 }
 
@@ -282,6 +311,198 @@ Map<String, _Reply Function(dynamic, int)> _createFlow(_Reply postReply) {
 }
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  for (final instances in <List<ServiceInstance>>[
+    [_plex],
+    [_jellyfin],
+    [_emby],
+    [_audiobookshelf],
+    [_plex, _jellyfin, _audiobookshelf],
+    [_plex, _jellyfin, _emby, _audiobookshelf],
+    [
+      _jellyfin,
+      const ServiceInstance(
+          id: 'jf-b', serviceType: 'jellyfin', name: 'Second server')
+    ],
+  ]) {
+    testWidgets(
+        'cards precede one instruction section per service: ${instances.map((i) => i.id).join(', ')}',
+        (tester) async {
+      await _pumpGuide(tester,
+          instances: instances,
+          size: const Size(1000, 5500),
+          handlers: {
+            'GET /api/media-servers': (_, __) => _Reply(200, [
+                  for (final instance in instances)
+                    {
+                      'instance_id': instance.id,
+                      'service_type': instance.serviceType,
+                      'name': instance.name,
+                      'account': instance.serviceType == 'plex'
+                          ? _share()
+                          : _account(),
+                    },
+                ]),
+          });
+      expect(
+          find.textContaining('Each server has its own account or invitation'),
+          findsOneWidget);
+      final types = instances.map((i) => i.serviceType).toSet();
+      expect(find.textContaining('For Plex, use'),
+          types.contains('plex') ? findsOneWidget : findsNothing);
+      for (final type in ['plex', 'jellyfin', 'emby', 'audiobookshelf']) {
+        final section = find.byKey(ValueKey('media-guide-instructions-$type'));
+        expect(section, types.contains(type) ? findsOneWidget : findsNothing);
+        if (!types.contains(type)) continue;
+        for (final instance in instances) {
+          final card = find.text(
+              '${mediaServerTypeLabel(instance.serviceType)} · ${instance.name}');
+          expect(card, findsOneWidget);
+          expect(tester.getTopLeft(card).dy,
+              lessThan(tester.getTopLeft(section).dy));
+        }
+        expect(find.descendant(of: section, matching: find.byType(Link)),
+            findsWidgets);
+      }
+      if (types.contains('plex')) {
+        expect(find.textContaining('Remote Watch Pass'), findsOneWidget);
+        expect(
+            tester
+                .widgetList<Link>(find.byType(Link))
+                .map((link) => link.uri.toString()),
+            contains(
+                'https://support.plex.tv/articles/requirements-for-remote-playback-of-personal-media/'));
+      }
+      if (types.contains('emby')) {
+        expect(
+            tester
+                .widgetList<Link>(find.byType(Link))
+                .map((link) => link.uri.toString()),
+            contains('https://emby.media/premiere.html'));
+      }
+      if (types.contains('audiobookshelf')) {
+        expect(find.textContaining('separate Chaptarr access'), findsOneWidget);
+      }
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final layout in [
+    (size: const Size(320, 800), scale: 1.0),
+    (size: const Size(320, 800), scale: 2.0),
+    (size: const Size(1200, 800), scale: 2.0),
+  ]) {
+    testWidgets(
+        'hide banner stays below the title while scrolling at ${layout.size}, text ${layout.scale}',
+        (tester) async {
+      await _pumpGuide(tester,
+          size: layout.size,
+          textScale: layout.scale,
+          instances: [
+            _plex,
+            _jellyfin,
+            _emby,
+            _audiobookshelf
+          ],
+          handlers: {
+            'GET /api/media-servers': (_, __) => _Reply(200, [
+                  _plexServer(account: _share()),
+                  _server(account: _account(verified: false)),
+                  _embyServer(),
+                  {
+                    'instance_id': 'abs-a',
+                    'service_type': 'audiobookshelf',
+                    'name': 'Home Audiobookshelf',
+                  },
+                ]),
+          });
+      final banner = find.byType(SwitchListTile);
+      final original = tester.getRect(banner);
+      expect(original.top,
+          greaterThanOrEqualTo(tester.getRect(find.byType(AppBar)).bottom));
+      expect(
+          find.text(
+              'You can always open this guide from Settings → Guides → Media server access.'),
+          findsOneWidget);
+      for (final type in ['plex', 'jellyfin', 'emby', 'audiobookshelf']) {
+        await tester.scrollUntilVisible(
+            find.byKey(ValueKey('media-guide-instructions-$type')), 250,
+            scrollable: find.byType(Scrollable).first, maxScrolls: 100);
+        expect(tester.getRect(banner), original);
+        expect(tester.takeException(), isNull);
+      }
+      await tester.scrollUntilVisible(
+          find.textContaining('Missing something after a scan?'), 250,
+          scrollable: find.byType(Scrollable).first, maxScrolls: 100);
+      await tester.tap(banner);
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(banner).value, isTrue);
+      expect(tester.getRect(banner), original);
+      expect(find.byType(MediaAccessGuide), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final state in [
+    'incomplete',
+    'pending',
+    'unconfirmed',
+    'failed',
+    'empty'
+  ]) {
+    testWidgets('can hide and restore the guide with $state setup',
+        (tester) async {
+      await _pumpGuide(tester, handlers: {
+        'GET /api/media-servers': (_, __) => state == 'failed'
+            ? const _Reply(0, {})
+            : _Reply(
+                200,
+                switch (state) {
+                  'pending' => [_plexServer(account: _share())],
+                  'unconfirmed' => [
+                      _server(account: _account(verified: false))
+                    ],
+                  'empty' => [],
+                  _ => [_server()],
+                }),
+      });
+      final banner = find.byType(SwitchListTile);
+      await tester.tap(banner);
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(banner).value, isTrue);
+      expect(find.byType(MediaAccessGuide), findsOneWidget);
+      await tester.tap(banner);
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(banner).value, isFalse);
+    });
+  }
+
+  testWidgets('can hide while the account request is still loading',
+      (tester) async {
+    final service = _PendingMediaAccess();
+    await _pumpGuide(tester, service: service, settle: false, handlers: {});
+    final banner = find.byType(SwitchListTile);
+    await tester.tap(banner);
+    await tester.pump();
+    expect(tester.widget<SwitchListTile>(banner).value, isTrue);
+    service.result.complete([]);
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(banner).value, isTrue);
+  });
+
+  testWidgets('hiding persists when the guide is reopened', (tester) async {
+    final handlers = <String, _Reply Function(dynamic, int)>{
+      'GET /api/media-servers': (_, __) => _Reply(200, [_server()]),
+    };
+    await _pumpGuide(tester, handlers: handlers);
+    await tester.tap(find.byType(SwitchListTile));
+    await tester.pumpAndSettle();
+    await _unmount(tester);
+    await _pumpGuide(tester, handlers: handlers);
+    expect(tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+        isTrue);
+  });
   testWidgets('account management and pending changes are shown independently',
       (tester) async {
     await _pumpGuide(tester, supportsManagement: true, handlers: {
@@ -341,7 +562,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Your account'), findsOneWidget);
-    expect(find.text('Install the Jellyfin app'), findsOneWidget);
+    expect(find.textContaining('Install the Jellyfin app'), findsOneWidget);
     expect(find.text('Request here, watch there'), findsOneWidget);
 
     await _openSheet(tester);
@@ -404,15 +625,28 @@ void main() {
           ));
       expect(find.text(mixed ? 'Media server access' : 'Audiobookshelf access'),
           findsOneWidget);
-      expect(find.text(mixed ? 'Watch or listen' : 'Start listening'),
-          findsOneWidget);
+      await tester.scrollUntilVisible(
+          find.byKey(const ValueKey('media-guide-instructions-audiobookshelf')),
+          300,
+          scrollable: find.byType(Scrollable).first);
+      expect(find.textContaining('separate Chaptarr access'), findsOneWidget);
       expect(
           find.textContaining('Listen in Audiobookshelf opens a verified copy'),
           findsOneWidget);
       expect(find.textContaining('Open Audiobookshelf is a general shortcut'),
           findsOneWidget);
-      expect(find.textContaining('Apple TV'), findsNothing);
-      expect(find.textContaining('App Store or Google Play'), findsNothing);
+      if (mixed) {
+        await tester.scrollUntilVisible(
+            find.byKey(const ValueKey('media-guide-instructions-jellyfin')),
+            -300,
+            scrollable: find.byType(Scrollable).first);
+        expect(find.textContaining('Install the Jellyfin app'), findsOneWidget);
+      }
+      tester
+          .state<ScrollableState>(find.byType(Scrollable).first)
+          .position
+          .jumpTo(0);
+      await tester.pumpAndSettle();
       final open = find.widgetWithText(TextButton, 'Open').first;
       await tester.ensureVisible(open);
       await tester.tap(open);
@@ -500,23 +734,16 @@ void main() {
     );
 
     expect(find.text('Watch on Emby'), findsOneWidget);
-    expect(
-      find.textContaining(
-          'Cantinarr is where you request. Emby is where you watch.'),
-      findsOneWidget,
-    );
-    expect(find.text('Install the Emby app'), findsOneWidget);
-    expect(
-      find.text('Download the Emby app from the App Store or Google Play'),
-      findsOneWidget,
-    );
+    expect(find.text('Emby · Den Emby'), findsOneWidget);
+    expect(find.textContaining('Install the Emby app'), findsOneWidget);
+    expect(find.text('Download Emby apps'), findsOneWidget);
     expect(find.textContaining('free'), findsNothing);
     expect(
       find.textContaining('one-time unlock or Emby Premiere'),
       findsOneWidget,
     );
     expect(
-      find.textContaining('shows up in Emby once it is Available'),
+      find.textContaining('it verifies a matching movie or show'),
       findsOneWidget,
     );
     expect(find.text('Sign in at https://emby.example.com'), findsOneWidget);
@@ -536,25 +763,9 @@ void main() {
     );
 
     expect(find.text('Watch on Jellyfin or Emby'), findsOneWidget);
-    expect(
-      find.textContaining('Your media server is where you watch.'),
-      findsOneWidget,
-    );
-    expect(find.text('Install the Jellyfin or Emby app'), findsOneWidget);
-    expect(
-      find.text(
-          'Download the Jellyfin or Emby app from the App Store or Google Play'),
-      findsOneWidget,
-    );
-    expect(find.textContaining('Both are also on Apple TV'), findsOneWidget);
-    expect(
-      find.textContaining('one-time unlock or Emby Premiere'),
-      findsOneWidget,
-    );
-    expect(
-      find.textContaining('shows up in your media server once it is Available'),
-      findsOneWidget,
-    );
+    expect(find.text('Jellyfin · Home Jellyfin'), findsOneWidget);
+    expect(find.text('Emby · Den Emby'), findsOneWidget);
+    expect(find.textContaining('Install the Jellyfin app'), findsOneWidget);
 
     // Only the Emby card has no account, and its sheet speaks Emby.
     await tester.tap(find.widgetWithText(ElevatedButton, 'Create my account'));
@@ -900,14 +1111,11 @@ void main() {
     );
     expect(find.widgetWithText(ElevatedButton, 'Sign in with Plex'),
         findsOneWidget);
-    expect(find.text('Install the Plex app'), findsOneWidget);
-    expect(
-      find.text('Download the free Plex app from the App Store or Google Play'),
-      findsOneWidget,
-    );
-    expect(find.text('Accept your invite and sign in'), findsOneWidget);
+    expect(find.textContaining('Install the Plex app'), findsOneWidget);
+    expect(find.text('Download Plex apps'), findsOneWidget);
+    expect(find.textContaining('Remote Watch Pass'), findsOneWidget);
     expect(find.textContaining('open it and accept'), findsOneWidget);
-    expect(find.textContaining('shows up in Plex once it is Available'),
+    expect(find.textContaining('it verifies a matching movie or show'),
         findsOneWidget);
     // Nothing about passwords or a sign-in address to type on a Plex-only set.
     expect(find.textContaining('password you chose'), findsNothing);
@@ -1009,15 +1217,13 @@ void main() {
       },
     );
     expect(find.text('Watch on Plex or Jellyfin'), findsOneWidget);
-    expect(find.text('Your account'), findsOneWidget);
-    expect(find.text('Install the Plex or Jellyfin app'), findsOneWidget);
+    expect(find.text('Your accounts'), findsOneWidget);
+    expect(find.textContaining('Install the Plex app'), findsOneWidget);
     expect(
         find.widgetWithText(TextButton, 'Share my Plex email'), findsOneWidget);
     expect(find.widgetWithText(TextButton, 'I already have an account'),
         findsNothing);
-    expect(find.text('Sign in'), findsOneWidget);
     expect(find.textContaining('open it and accept'), findsOneWidget);
-    expect(find.textContaining('password you chose'), findsOneWidget);
     expect(find.text('Sign in at https://jf.example.com'), findsOneWidget);
   });
 
