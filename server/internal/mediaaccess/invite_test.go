@@ -675,3 +675,69 @@ func TestNoCheckYourEmailPushWhenPlexAcceptsAtOnce(t *testing.T) {
 		t.Fatal("an accepted-at-once re-share must announce ready access without an invitation")
 	}
 }
+
+func TestAdminPlexInvitationStateIsLiveAndReadOnly(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	user := e.user("alice")
+	first := e.mediaServer("plex", "First", instance.MediaServerConfig{})
+	second := e.mediaServer("plex", "Second", instance.MediaServerConfig{})
+	p, q := newFakeInviteProvider(), newFakeInviteProvider()
+	e.providers[first], e.providers[second] = p, q
+	e.grantType(user, "plex", first, second)
+	for _, id := range []string{first, second} {
+		if _, err := e.svc.RequestInvite(ctx, user, id, "alice@example.com"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(id string) Account {
+		t.Helper()
+		rows, err := e.svc.ListAccounts(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range rows {
+			if row.InstanceID == id {
+				return row
+			}
+		}
+		t.Fatal("missing linked account")
+		return Account{}
+	}
+	if row := check(first); !row.Verified || !row.Pending {
+		t.Fatalf("pending = %+v", row)
+	}
+	p.accept("alice@example.com")
+	p.mu.Lock()
+	p.shares["alice@example.com"].Name = "fresh-name"
+	p.mu.Unlock()
+	if row := check(first); !row.Verified || row.Pending || row.Username != "fresh-name" {
+		t.Fatalf("accepted = %+v", row)
+	}
+	if row := check(second); !row.Verified || !row.Pending {
+		t.Fatalf("other server = %+v", row)
+	}
+	if e.row(user, first).RemoteUsername == "fresh-name" {
+		t.Fatal("read rewrote stored link")
+	}
+	e.providers[first] = unavailableInviteDirectory{p}
+	if row := check(first); row.Verified {
+		t.Fatalf("unavailable = %+v", row)
+	}
+	e.providers[first] = p
+	p.mu.Lock()
+	delete(p.shares, "alice@example.com")
+	p.mu.Unlock()
+	if row := check(first); row.Verified {
+		t.Fatalf("revoked = %+v", row)
+	}
+	if p.invites != 1 || q.invites != 1 || p.removals != 0 || q.removals != 0 {
+		t.Fatal("read changed shares")
+	}
+}
+
+type unavailableInviteDirectory struct{ *fakeInviteProvider }
+
+func (p unavailableInviteDirectory) Users(context.Context) ([]mediaserver.RemoteUser, error) {
+	return nil, errors.New("directory unavailable")
+}

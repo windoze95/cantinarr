@@ -344,6 +344,53 @@ Future<void> _openMenu(WidgetTester tester) async {
 }
 
 void _mediaServerAccountTests() {
+  testWidgets('picker refresh updates pending accounts without linking',
+      (tester) async {
+    final adapter = await _pumpWithMediaServer(tester, supportsManagement: true,
+      instances: const [ServiceInstance(
+        id: 'jf-a', serviceType: 'plex', name: 'Home Plex')]);
+    adapter.remoteUsers = [
+      {'id': 'pending@example.com', 'name': 'Pending account', 'pending': true},
+    ];
+    await _openMenu(tester);
+    await tester.tap(find.text('Link Home Plex account…'));
+    await tester.pumpAndSettle();
+    expect(find.text('Awaiting Plex acceptance'), findsOneWidget);
+    adapter.remoteUsers = [
+      {'id': 'pending@example.com', 'name': 'Accepted account', 'pending': false},
+    ];
+    await tester.tap(find.byTooltip('Refresh accounts'));
+    await tester.pumpAndSettle();
+    expect(find.text('Awaiting Plex acceptance'), findsNothing);
+    expect(find.text('Accepted account'), findsOneWidget);
+    expect(adapter.requests.where((r) => r.path.endsWith('/users')).length, 2);
+    expect(adapter.requests.where((r) => r.method != 'GET'), isEmpty);
+  });
+
+  testWidgets('Plex servers show independent acceptance without historical badge',
+      (tester) async {
+    const first = ServiceInstance(id: 'px-a', serviceType: 'plex', name: 'First');
+    const second = ServiceInstance(id: 'px-b', serviceType: 'plex', name: 'Second');
+    await _pumpWithMediaServer(tester, supportsManagement: true,
+      instances: const [first, second], grants: const ['px-a', 'px-b'],
+      accounts: [
+        for (final id in ['px-a', 'px-b']) {
+          ..._accountRow(), 'instance_id': id, 'service_type': 'plex',
+          'verified': true, 'pending': id == 'px-a', 'granted': true,
+        },
+      ],
+    );
+    expect(find.text('First: Granted · Managed by Cantinarr · Awaiting Plex acceptance'),
+        findsOneWidget);
+    expect(find.text('Second: Granted · Managed by Cantinarr · Active on server'),
+        findsOneWidget);
+    expect(find.text('Plex invite sent'), findsNothing);
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.textContaining('Awaiting Plex acceptance'), findsOneWidget);
+  });
+
   testWidgets('grant controls use grant rather than remote disabled state',
       (tester) async {
     final adapter =
@@ -817,6 +864,7 @@ class _MediaAdapter implements HttpClientAdapter {
   final bool accountsFail;
   final List<String> grants;
   final List<Map<String, dynamic>> importResults;
+  List<Map<String, dynamic>>? remoteUsers;
   final List<({String method, String path, dynamic body})> requests = [];
 
   @override
@@ -852,7 +900,7 @@ class _MediaAdapter implements HttpClientAdapter {
       }
     } else if (path == '/api/admin/media-servers/jf-a/users') {
       response = {
-        'users': [
+        'users': remoteUsers ?? [
           {'id': 'a1', 'name': 'jfadmin', 'is_administrator': true},
           {'id': 'u2', 'name': 'lr-tv'},
           {'id': 'u3', 'name': 'old-tablet', 'is_disabled': true},

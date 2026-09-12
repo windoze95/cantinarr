@@ -75,6 +75,25 @@ MediaAccessService _service(HttpClientAdapter adapter) => MediaAccessService(
     );
 
 void main() {
+  test('Plex admin labels require live acceptance evidence', () {
+    MediaServerAccountRow row(Map<String, dynamic> state) =>
+        MediaServerAccountRow.fromJson({'service_type': 'plex', ...state});
+    expect(row({'verified': true, 'pending': true}).accessLabel,
+        'Awaiting Plex acceptance');
+    expect(row({'verified': true, 'pending': false}).accessLabel,
+        'Active on server');
+    expect(row({'verified': true}).accessLabel, 'Server access unconfirmed');
+    expect(row({'verified': false, 'pending': false}).accessLabel,
+        'Server access unconfirmed');
+    expect(row({'verified': true, 'pending': true, 'disabled': true}).accessLabel,
+        'Off on server');
+    expect(row({'verified': true, 'pending': true, 'access_sync_pending': true})
+        .accessLabel, 'Access change pending');
+    expect(MediaServerAccountRow.fromJson({
+      'service_type': 'jellyfin', 'verified': true,
+    }).accessLabel, 'Active on server');
+  });
+
   test('video preferences use the self route and preserve each service', () async {
     final body = {'plex': {'ios': 'infuse'}, 'jellyfin': {'ios': ''}, 'emby': {'ios': 'browser'}};
     final adapter = _FakeAdapter({

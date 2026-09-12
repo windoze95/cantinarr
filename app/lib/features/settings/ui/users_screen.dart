@@ -828,7 +828,9 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
             const <ServiceInstance>[];
     // The notice takes the first row when the account read failed, so the
     // list still renders every user and the gap is named, not implied.
-    final noticeRows = _mediaAccountsFailed ? 1 : 0;
+    final showPlexHelp = mediaServers.any((server) => server.serviceType == 'plex');
+    final failureRows = _mediaAccountsFailed ? 1 : 0;
+    final noticeRows = failureRows + (showPlexHelp ? 1 : 0);
 
     return RefreshIndicator(
       onRefresh: _loadUsers,
@@ -838,13 +840,24 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
         separatorBuilder: (_, __) =>
             const Divider(height: 1, color: AppTheme.border),
         itemBuilder: (context, index) {
-          if (index < noticeRows) {
+          if (index < failureRows) {
             return const ListTile(
               leading: Icon(Icons.sync_problem_outlined,
                   color: AppTheme.warning),
               title: Text(
                 "Couldn't load media server accounts. Pull to refresh.",
                 style: TextStyle(color: AppTheme.warning, fontSize: 13),
+              ),
+            );
+          }
+          if (index < noticeRows) {
+            return const ListTile(
+              leading: Icon(Icons.info_outline, color: AppTheme.textSecondary),
+              title: Text('Plex library access and sign-in are separate'),
+              subtitle: Text(
+                'Sending a library invitation records the media-account link. '
+                'The recipient accepts it in their own Plex account. '
+                'Review login identities in Settings > Plex sign-in.',
               ),
             );
           }
@@ -1011,15 +1024,11 @@ class _UserTile extends StatelessWidget {
               const _Tag(label: 'AI included', color: AppTheme.signal),
             if (user.plexEmail.isNotEmpty)
               _Tag(label: user.plexEmail, color: AppTheme.textSecondary),
-            // "Invite sent" only for a share Cantinarr itself sent; a share
-            // adopted from plex.tv, or the server's owner, is said by the
-            // account tag below and nothing was sent. "Asked" is an email
-            // with no Plex share yet (the grant toggle below is the tap).
-            if (mediaServers.any((server) =>
-                server.serviceType == 'plex' &&
-                (mediaAccounts[server.id]?.createdByCantinarr ?? false)))
-              const _Tag(label: 'Plex invite sent', color: AppTheme.available)
-            else if (user.plexEmail.isNotEmpty && user.plexInvitedAt == null)
+            if (user.plexEmail.isNotEmpty &&
+                user.plexInvitedAt == null &&
+                !mediaServers.any((server) =>
+                    server.serviceType == 'plex' &&
+                    mediaAccounts.containsKey(server.id)))
               const _Tag(
                   label: 'Asked for Plex access', color: AppTheme.requested),
             // One tag per linked media-server account: the server's name
@@ -1035,7 +1044,10 @@ class _UserTile extends StatelessWidget {
                           : account.remoteUsername == user.username
                               ? server.name
                               : '${server.name}: ${account.remoteUsername}',
-                  color: account.accessSyncPending
+                  color: account.accessSyncPending ||
+                          !account.verified ||
+                          account.pending == true ||
+                          (server.serviceType == 'plex' && account.pending == null)
                       ? AppTheme.warning
                       : account.granted
                           ? AppTheme.available

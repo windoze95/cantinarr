@@ -38,3 +38,11 @@ Users inspect and unlink Plex under **Linked sign-in**; administrators use **Use
 [Require single sign-on](oidc-setup.md) continues to require OIDC for regular users. Enabling it revokes their local and Plex sessions and pending grants. Plex does not satisfy the OIDC requirement for an invitation or automatic signup. Administrators retain recovery access; the Plex button is labeled **administrator recovery** under this policy.
 
 The protocol follows Plex's [strong PIN authentication flow](https://forums.plex.tv/t/authenticating-with-plex/609370).
+
+## Library invitations and sign-in review
+
+Sending a Plex library invitation records the media-account link immediately; there is no second media-link step. **Users** reports each server independently: **Awaiting Plex acceptance** until the recipient accepts in their own Plex account, then **Active on server** after a fresh successful read. An unavailable read, or an older server without invitation-state support, is **Server access unconfirmed**. Pull to refresh Users after acceptance. Account names come from the current Plex response when available.
+
+A media-account link does not establish a Plex sign-in identity. If **Load fresh Plex accounts** cannot find a unique account, check **Plex > Manage Library Access** and have the recipient accept the existing invitation, then load fresh accounts again and explicitly confirm the recognized mapping. Email alone never authorizes sign-in. Plex sign-in must also be enabled separately. A same-named Plex Home managed profile is distinct from the recipient's own Plex account.
+
+The account-link picker marks pending invitations and offers **Refresh accounts** to reload the current directory without changing shares.

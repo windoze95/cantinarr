@@ -211,6 +211,7 @@ type CreatedAccount struct {
 // Account is an admin-facing row: which Cantinarr user is which remote
 // account on which server.
 type Account struct {
+	Pending            bool      `json:"pending"` // Live invitation state; meaningful only when Verified.
 	ManageAccess       bool      `json:"manage_access"`
 	Granted            bool      `json:"granted"`
 	AccessSyncPending  bool      `json:"access_sync_pending"`

@@ -130,6 +130,10 @@ func (s *Service) verifyAdminAccounts(ctx context.Context, accounts []Account) {
 			for _, i := range indices {
 				if user, ok := byID[accounts[i].RemoteUserID]; ok {
 					accounts[i].Verified = true
+					accounts[i].Pending = user.Pending
+					if user.Name != "" {
+						accounts[i].Username = user.Name
+					}
 					accounts[i].Disabled = user.IsDisabled
 					accounts[i].Administrator = user.IsAdministrator
 					if user.IsAdministrator {
