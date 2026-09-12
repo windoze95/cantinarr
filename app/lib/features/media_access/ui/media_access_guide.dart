@@ -314,14 +314,17 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             child: _card(
-              SwitchListTile.adaptive(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Hide from main navigation'),
-                subtitle: const Text(
-                  'You can always open this guide from Settings → Guides → Media server access.',
+              Material(
+                color: Colors.transparent,
+                child: SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Hide from main navigation'),
+                  subtitle: const Text(
+                    'You can always open this guide from Settings → Guides → Media server access.',
+                  ),
+                  value: ref.watch(mediaAccessGuideHiddenProvider),
+                  onChanged: _setHidden,
                 ),
-                value: ref.watch(mediaAccessGuideHiddenProvider),
-                onChanged: _setHidden,
               ),
             ),
           ),
