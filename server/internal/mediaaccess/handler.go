@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/appletv"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/mediaserver"
@@ -25,6 +26,7 @@ const (
 // Handler serves the user-facing and admin media-server account routes.
 // Every error body is fixed text: nothing a media server says is echoed.
 type Handler struct {
+	appleTV        *appletv.Handler
 	configChanged  func()
 	listeningBooks ListeningBooks
 	svc            *Service
@@ -36,6 +38,9 @@ type Handler struct {
 	watchPolicies *contentpolicy.Service
 	watchMetadata contentpolicy.RawGetterSource
 }
+
+func (h *Handler) SetAppleTV(handler *appletv.Handler) { h.appleTV = handler }
+func (h *Handler) AppleTV() *appletv.Handler           { return h.appleTV }
 
 // SetExternalURLSource wires the external address an import's connect links
 // are built on. Wired late by main, like the auth handler's.

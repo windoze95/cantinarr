@@ -123,9 +123,12 @@ jobs:
           cache-from: type=gha,scope=published
           cache-to: type=gha,mode=max,scope=published
 
-      - name: Verify published-image Codex runtime and notices
+      - name: Verify published-image bundled runtimes and notices
         run: |
           docker run --rm cantinarr-root-smoke:${{ github.sha }} sh -ec '
+            cantinarr-appletv-helper --self-test
+            test -s /usr/share/licenses/cantinarr-appletv/INDEX.txt
+            test -s /usr/share/licenses/cantinarr-appletv/pyatv/LICENSE.md
             test -x /usr/local/bin/codex-app-server
             test -s /usr/share/licenses/codex-app-server/LICENSE
             test -s /usr/share/licenses/codex-app-server/NOTICE
@@ -197,10 +200,13 @@ jobs:
           cache-from: type=gha,scope=published
           cache-to: type=gha,mode=max,scope=published
 
-      - name: Verify arm64 Codex runtime and notices
+      - name: Verify arm64 bundled runtimes and notices
         if: github.event_name != 'pull_request'
         run: |
           docker run --rm --platform linux/arm64 cantinarr-root-arm64-smoke:${{ github.sha }} sh -ec '
+            cantinarr-appletv-helper --self-test
+            test -s /usr/share/licenses/cantinarr-appletv/INDEX.txt
+            test -s /usr/share/licenses/cantinarr-appletv/pyatv/LICENSE.md
             test -x /usr/local/bin/codex-app-server
             test -s /usr/share/licenses/codex-app-server/LICENSE
             test -s /usr/share/licenses/codex-app-server/NOTICE
@@ -221,9 +227,12 @@ jobs:
           cache-from: type=gha,scope=server-only
           cache-to: type=gha,mode=max,scope=server-only
 
-      - name: Verify server-only Codex runtime and notices
+      - name: Verify server-only bundled runtimes and notices
         run: |
           docker run --rm cantinarr-server-smoke:${{ github.sha }} sh -ec '
+            cantinarr-appletv-helper --self-test
+            test -s /usr/share/licenses/cantinarr-appletv/INDEX.txt
+            test -s /usr/share/licenses/cantinarr-appletv/pyatv/LICENSE.md
             test -x /usr/local/bin/codex-app-server
             test -s /usr/share/licenses/codex-app-server/LICENSE
             test -s /usr/share/licenses/codex-app-server/NOTICE

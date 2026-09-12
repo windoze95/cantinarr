@@ -45,6 +45,7 @@ class SettingsSearchGates {
   final bool mediaServersVisible;
   final bool audiobookshelfVisible;
   final bool videoServersVisible;
+  final bool appleTvRemote;
 
   const SettingsSearchGates({
     required this.user,
@@ -55,6 +56,7 @@ class SettingsSearchGates {
     this.mediaServersVisible = false,
     this.audiobookshelfVisible = false,
     this.videoServersVisible = false,
+    this.appleTvRemote = false,
   });
 }
 
@@ -75,6 +77,7 @@ bool gateLidarr(SettingsSearchGates g) => g.lidarrEnabled;
 bool gateDonate(SettingsSearchGates g) => g.donateVisible;
 bool gatePhoneApps(SettingsSearchGates g) => g.phoneAppsVisible;
 bool gateMediaServers(SettingsSearchGates g) => g.mediaServersVisible;
+bool gateAppleTVs(SettingsSearchGates g) => gateAdmin(g) && g.appleTvRemote;
 bool gateVideoServers(SettingsSearchGates g) => g.videoServersVisible;
 bool gateAudiobookshelf(SettingsSearchGates g) => g.audiobookshelfVisible;
 
@@ -386,6 +389,16 @@ const List<SettingsSearchEntry> _rootEntries = [
     section: 'Admin',
     keywords: ['sessions', 'sign out', 'revoke', 'phones'],
     gate: gateAdmin,
+  ),
+  SettingsSearchEntry(
+    id: 'screen.apple-tvs',
+    title: 'Apple TVs',
+    icon: Icons.tv,
+    route: '/settings/apple-tvs',
+    screenTitle: 'Settings',
+    section: 'Admin',
+    keywords: ['infuse', 'remote', 'pair', 'television', 'TV'],
+    gate: gateAppleTVs,
   ),
   SettingsSearchEntry(
     id: 'screen.credentials',

@@ -14,6 +14,22 @@ import (
 )
 
 const initSQL = `
+-- Apple TV pairing material is encrypted with the server's secrets key.
+-- Device names/addresses are not identities; reconnects verify the paired ID.
+CREATE TABLE IF NOT EXISTS apple_tv_devices (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    address TEXT NOT NULL,
+    identifier TEXT NOT NULL UNIQUE,
+    credentials TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS apple_tv_grants (
+    tv_id TEXT NOT NULL REFERENCES apple_tv_devices(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY (tv_id, user_id)
+);
+
 -- OAuth credentials can be shared deliberately by multiple Chaptarr instances.
 -- The JSON token pair is encrypted as one unit; links contain no secrets.
 CREATE TABLE IF NOT EXISTS hardcover_connections (

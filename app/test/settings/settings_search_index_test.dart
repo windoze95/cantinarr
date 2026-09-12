@@ -25,6 +25,7 @@ const _routableSettingsPaths = {
   '/settings/ai',
   '/settings/listening-apps',
   '/settings/video-apps',
+  '/settings/apple-tvs',
   '/settings/chatgpt',
   '/settings/credentials/chatgpt',
   '/settings/credentials',
@@ -56,6 +57,13 @@ const _routableSettingsPaths = {
 };
 
 void main() {
+  test('Apple TVs require an admin and server capability', () {
+    final entry = settingsSearchIndex.singleWhere((e) => e.id == 'screen.apple-tvs');
+    expect(entry.gate(const SettingsSearchGates(user: _admin, appleTvRemote: true)), isTrue);
+    expect(entry.gate(const SettingsSearchGates(user: _admin)), isFalse);
+    expect(entry.gate(const SettingsSearchGates(user: _user, appleTvRemote: true)), isFalse);
+  });
+
   test('video app search follows the configured video-server gate', () {
     final entry = settingsSearchIndex.singleWhere((e) => e.id == 'screen.video-apps');
     expect(entry.route, '/settings/video-apps');
