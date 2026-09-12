@@ -74,10 +74,16 @@ List<SettingsSearchEntry> _controlsFor(String route) => settingsSearchIndex
     .where((e) => e.route == route && !_isRootRendered(e))
     .toList();
 
-/// Scrolls the first ListView down until [finder] builds. Entries are
-/// asserted in registry order (top to bottom), so a one-way hunt suffices.
+/// Finds a row regardless of whether the screen and search registry share
+/// the same order. Reset a missing row's search before scrolling down.
 Future<void> _hunt(WidgetTester tester, Finder finder) async {
+  if (finder.evaluate().isNotEmpty) return;
   final scrollable = find.byType(ListView).first;
+  final state = tester.state<ScrollableState>(
+    find.descendant(of: scrollable, matching: find.byType(Scrollable)).first,
+  );
+  state.position.jumpTo(state.position.minScrollExtent);
+  await tester.pumpAndSettle();
   for (var i = 0; i < 100 && finder.evaluate().isEmpty; i++) {
     await tester.drag(scrollable, const Offset(0, -60));
     await tester.pumpAndSettle();

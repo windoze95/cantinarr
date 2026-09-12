@@ -9,6 +9,7 @@
 /// Never rename a value: ids travel in shareable URLs. Add, don't repurpose.
 abstract final class SettingsAnchors {
   // /settings (root)
+  static const rootNotifications = 'root.notifications';
   static const notificationsEnabled = 'notifications.enabled';
   static const notificationsAutoApproved = 'notifications.auto-approved';
   static const rootAttentionApprovals = 'root.attention-approvals';

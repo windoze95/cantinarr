@@ -370,6 +370,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ],
 
+            const SizedBox(height: 16),
+
+            // Notifications
+            SettingsHighlight(
+              anchorId: SettingsAnchors.rootNotifications,
+              highlightId: _activeHighlight,
+              child: const _SectionHeader(title: 'Notifications'),
+            ),
+            _SettingsTile(
+              icon: Icons.notifications_outlined,
+              title: 'Push Notifications',
+              subtitle: 'Choose which push notifications you receive',
+              onTap: () => context.push('/settings/push-notifications'),
+            ),
+            if (user?.isAdmin == true)
+              _SettingsTile(
+                icon: Icons.notifications_active_outlined,
+                title: 'Discord Notifications',
+                subtitle: 'Send new media requests to a Discord channel',
+                onTap: () => context.push('/settings/discord-notifications'),
+              ),
+
             if (user?.isAdmin == true) ...[
               const SizedBox(height: 16),
               const _SectionHeader(title: 'Needs attention menu'),
@@ -407,23 +429,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ],
 
-            const SizedBox(height: 16),
-
-            // Notifications
-            const _SectionHeader(title: 'Notifications'),
-            _SettingsTile(
-              icon: Icons.notifications_outlined,
-              title: 'Push Notifications',
-              subtitle: 'Choose which push notifications you receive',
-              onTap: () => context.push('/settings/push-notifications'),
-            ),
-            if (user?.isAdmin == true)
-              _SettingsTile(
-                icon: Icons.notifications_active_outlined,
-                title: 'Discord Notifications',
-                subtitle: 'Send new media requests to a Discord channel',
-                onTap: () => context.push('/settings/discord-notifications'),
-              ),
             const SizedBox(height: 16),
 
             // Guides. Only while a media server is shared with this account

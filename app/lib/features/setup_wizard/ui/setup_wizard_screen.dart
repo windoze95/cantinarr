@@ -8,6 +8,7 @@ import '../../../core/widgets/status_pill.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../settings/data/setup_status_service.dart';
 import '../../settings/logic/setup_status_provider.dart';
+import '../../settings/settings_anchors.dart';
 
 /// Live, resumable setup checklist for admins. Known destinations deep-link
 /// to the real settings screen and progress is re-derived from
@@ -54,8 +55,10 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return '/settings/discovery';
       case 'remediation':
         return '/settings/ai-remediation';
+      case 'push':
+        return '/settings?highlight=${SettingsAnchors.rootNotifications}';
       default:
-        return null; // push = server env var; unknown keys = newer server
+        return null; // unknown keys = newer server
     }
   }
 
