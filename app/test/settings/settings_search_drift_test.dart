@@ -50,6 +50,7 @@ const _adminGates = SettingsSearchGates(
   donateVisible: true,
   phoneAppsVisible: true,
   mediaServersVisible: true,
+  audiobookshelfVisible: true,
 );
 const _userGates = SettingsSearchGates(user: _user);
 
@@ -237,6 +238,11 @@ void main() {
                       id: 'jf-a',
                       serviceType: 'jellyfin',
                       name: 'Home Jellyfin',
+                    ),
+                    ServiceInstance(
+                      id: 'abs-a',
+                      serviceType: 'audiobookshelf',
+                      name: 'Shared books',
                     ),
                   ],
                 )),

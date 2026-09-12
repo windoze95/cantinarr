@@ -12,6 +12,7 @@ const _adminGates = SettingsSearchGates(
   donateVisible: true,
   phoneAppsVisible: true,
   mediaServersVisible: true,
+  audiobookshelfVisible: true,
 );
 const _userGates = SettingsSearchGates(user: _user);
 
@@ -21,6 +22,7 @@ const _userGates = SettingsSearchGates(user: _user);
 const _routableSettingsPaths = {
   '/settings',
   '/settings/ai',
+  '/settings/listening-apps',
   '/settings/chatgpt',
   '/settings/credentials/chatgpt',
   '/settings/credentials',
@@ -88,6 +90,24 @@ void main() {
   });
 
   group('matching', () {
+    test('listening apps is searchable for either role with Audiobookshelf', () {
+      for (final user in [_admin, _user]) {
+        for (final query in ['ShelfPlayer', 'TheShelf', 'listening apps']) {
+          expect(
+            searchSettingsIndex(query, SettingsSearchGates(
+              user: user, audiobookshelfVisible: true,
+            )).map((e) => e.route),
+            contains('/settings/listening-apps'),
+          );
+          expect(
+            searchSettingsIndex(query, SettingsSearchGates(user: user))
+                .map((e) => e.route),
+            isNot(contains('/settings/listening-apps')),
+          );
+        }
+      }
+    });
+
     test('tracearr and monitoring find Add Instance for admins only', () {
       for (final query in ['tracearr', 'monitoring']) {
         expect(

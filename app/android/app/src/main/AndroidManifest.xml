@@ -66,6 +66,8 @@
         <package android:name="com.plexapp.android"/>
         <package android:name="org.jellyfin.mobile"/>
         <package android:name="com.mb.android"/>
+        <package android:name="com.audiobookshelf.app"/>
+        <package android:name="rmc.theshelf.player"/>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

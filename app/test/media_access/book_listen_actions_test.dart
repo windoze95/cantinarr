@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:cantinarr/features/media_access/data/listen_links.dart';
+import 'package:cantinarr/features/media_access/data/listening_apps.dart';
 import 'package:cantinarr/features/media_access/logic/listen_links_provider.dart';
+import 'package:cantinarr/features/media_access/logic/media_app_launcher.dart';
 import 'package:cantinarr/features/media_access/ui/book_listen_actions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,14 +27,15 @@ ListenLink _found(List<ListenItem> items) => ListenLink(
 
 Future<void> _show(WidgetTester tester,
     FutureOr<List<ListenLink>> Function(ListenRequest) load, List<Uri> opened,
-    {Widget? child}) async {
+    {Widget? child, MediaAppLauncher? launcher}) async {
   await tester.pumpWidget(ProviderScope(
       overrides: [
         listenLinksProvider.overrideWith((ref, request) => load(request)),
-        bookListenLauncherProvider.overrideWithValue((uri) async {
-          opened.add(uri);
-          return true;
-        }),
+        mediaAppLauncherProvider.overrideWithValue(launcher ??
+            MediaAppLauncher(launchExternal: (uri) async {
+              opened.add(uri);
+              return true;
+            })),
       ],
       child: MaterialApp(
           home: Scaffold(
@@ -43,6 +46,68 @@ Future<void> _show(WidgetTester tester,
 }
 
 void main() {
+  testWidgets('ShelfPlayer uses the selected verified copy title in its search',
+      (tester) async {
+    final opened = <Uri>[];
+    await _show(
+        tester,
+        (_) => [
+              const ListenLink(
+                instanceId: 'abs',
+                name: 'Shared books',
+                state: 'found',
+                listeningApps: ListeningApps(ios: 'shelfplayer'),
+                items: [_first, _second],
+              )
+            ],
+        opened,
+        launcher: MediaAppLauncher(
+          platform: TargetPlatform.iOS,
+          isWeb: false,
+          launchExternal: (uri) async {
+            opened.add(uri);
+            return true;
+          },
+        ));
+    await tester.tap(find.text('Listen in ShelfPlayer'));
+    await tester.pumpAndSettle();
+    expect(opened, isEmpty);
+    await tester.tap(find.byKey(const ValueKey('listen-item:abs:two')));
+    await tester.pumpAndSettle();
+    expect(opened.single.scheme, 'shelfplayer');
+    expect(opened.single.host, 'search');
+    expect(opened.single.queryParameters, {'q': _second.title});
+  });
+
+  testWidgets('unverified TheShelf shortcut opens the selected Android package',
+      (tester) async {
+    final launches = <(String, Uri?)>[];
+    await _show(
+        tester,
+        (_) => [
+              const ListenLink(
+                instanceId: 'abs',
+                name: 'Shared books',
+                state: 'unverified',
+                listeningApps: ListeningApps(android: 'theshelf'),
+                fallbackUrl: 'https://books.example',
+              )
+            ],
+        [],
+        launcher: MediaAppLauncher(
+          platform: TargetPlatform.android,
+          isWeb: false,
+          launchAndroid: (app, title) async {
+            launches.add((app, title));
+            return true;
+          },
+        ));
+    expect(find.textContaining("Couldn't"), findsNothing);
+    await tester.tap(find.text('Open TheShelf'));
+    await tester.pumpAndSettle();
+    expect(launches, [('theshelf', null)]);
+  });
+
   testWidgets('an exact copy opens its public web title', (tester) async {
     final opened = <Uri>[];
     await _show(tester, (request) {
@@ -79,12 +144,18 @@ void main() {
   });
 
   for (final state in ['unverified', 'unreachable']) {
-    testWidgets('$state has a generic shortcut and a fresh retry',
+    testWidgets('$state falls back silently and rechecks on return',
         (tester) async {
       final opened = <Uri>[];
       var calls = 0;
+      var verified = false;
       await _show(tester, (_) {
         calls++;
+        if (verified) {
+          return [
+            _found([_first])
+          ];
+        }
         return [
           ListenLink(
               instanceId: 'abs',
@@ -94,13 +165,20 @@ void main() {
         ];
       }, opened);
       expect(find.text('Listen in Audiobookshelf'), findsNothing);
+      expect(find.textContaining("Couldn't"), findsNothing);
+      expect(find.text('Check again'), findsNothing);
+      expect(find.byType(TextButton), findsNothing);
       await tester.tap(find.text('Open Audiobookshelf'));
       await tester.pump();
       expect(opened.single.toString(), 'https://books.example/base');
       final before = calls;
-      await tester.tap(find.text('Check again'));
+      verified = true;
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
       expect(calls, greaterThan(before));
+      expect(find.text('Listen in Audiobookshelf'), findsOneWidget);
+      expect(find.text('Open Audiobookshelf'), findsNothing);
     });
   }
 

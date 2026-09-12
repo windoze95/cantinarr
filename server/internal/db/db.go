@@ -275,6 +275,14 @@ CREATE TABLE IF NOT EXISTS push_tokens (
     UNIQUE(device_id)
 );
 
+-- Personal listening-app choices follow the user across devices. Empty values
+-- inherit each Audiobookshelf instance's default for the corresponding platform.
+CREATE TABLE IF NOT EXISTS listening_app_preferences (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    ios TEXT NOT NULL DEFAULT '',
+    android TEXT NOT NULL DEFAULT ''
+);
+
 -- Per-user push notification preferences. A missing row means "all defaults",
 -- so a user only gets a row once they change something. Defaults match the
 -- self-service API: request_decision, request_auto_approved, and content_upgraded

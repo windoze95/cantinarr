@@ -15,6 +15,8 @@ import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../media_access/data/media_access_service.dart';
+import '../../media_access/data/listening_apps.dart';
+import '../../media_access/ui/listening_app_fields.dart';
 import '../../discover/data/trending_books_service.dart';
 import '../data/instance_api_service.dart';
 import '../data/audiobook_library_access.dart';
@@ -76,6 +78,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   final Set<int> _absEditedPolicies = {};
   List<String> _absSavedDefaultIds = [];
   String _absSavedPublicAddress = '';
+  ListeningApps? _absSavedListeningApps;
   bool _absAccessLoaded = false;
   bool _absSyncPending = false;
   final _detailsDraft = SettingsDraft();
@@ -98,6 +101,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _selectedLibraryIds.toList()..sort(),
         _plexMachineId,
         _plexAutoApprove,
+        _listeningApps?.toJson(),
       ];
   Object get _mappingValues => [
         for (final mapping in _mediaPathMappings)
@@ -135,6 +139,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   late final TextEditingController _usernameController;
   late final TextEditingController _passwordController;
   late final TextEditingController _publicAddressController;
+  ListeningApps? _listeningApps;
   String _serviceType = 'radarr';
   bool _isDefault = false;
   bool _isSaving = false;
@@ -693,9 +698,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             _publicAddressController.text = config.publicAddress;
           }
           _selectedLibraryIds = config.libraryIds.toSet();
+          _listeningApps = config.listeningApps;
           if (_isAbs) {
             _absSavedDefaultIds = config.libraryIds;
             _absSavedPublicAddress = config.publicAddress;
+            _absSavedListeningApps = config.listeningApps;
           }
           if (_isPlex) {
             _plexLinkedStored = true;
@@ -710,6 +717,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             config.libraryIds.toList()..sort(),
             _isPlex ? config.machineIdentifier : '',
             _isPlex && config.autoApprove,
+            config.listeningApps?.toJson(),
           ]);
         }
         if (details.containsKey('media_path_mappings')) {
@@ -1122,7 +1130,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (address.isNotEmpty &&
           !address.startsWith('http://') &&
           !address.startsWith('https://')) {
-        return 'Sign-in address must start with http:// or https://';
+        return 'Enter an http:// or https:// address for users.';
       }
     }
     // When editing, blank credentials keep the existing ones. Plex's is
@@ -1374,6 +1382,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _absEditedPolicies.clear();
       _absSavedDefaultIds = access.defaultLibraryIds;
       _absSavedPublicAddress = _publicAddressController.text.trim();
+      _absSavedListeningApps = _listeningApps;
       _savedAssignedUserIds = Set.of(access.userIds);
       _absSyncPending = access.syncPending;
     });
@@ -1413,6 +1422,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 libraryIds: _isAbs && widget.isEditing
                     ? _absSavedDefaultIds
                     : _selectedLibraryIds.toList(growable: false),
+                listeningApps: _isAbs ? _listeningApps : null,
                 machineIdentifier: _isPlex ? _plexMachineId : '',
                 autoApprove: _isPlex && _plexAutoApprove,
               )
@@ -1431,6 +1441,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         // Library-only edits can be queued even while ABS is unreachable.
         if (!_isAbs ||
             _detailsDraft.hasChanges(_detailValues) ||
+            _listeningApps?.ios != _absSavedListeningApps?.ios ||
+            _listeningApps?.android != _absSavedListeningApps?.android ||
             _publicAddressController.text.trim() != _absSavedPublicAddress) {
           await service.updateInstance(
             id: widget.instanceId!,
@@ -3088,25 +3100,58 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               ),
               obscureText: true,
             ),
-          // Media servers: where users are told to sign in (handed to them
-          // verbatim, so only an address the admin typed is ever shown) and
-          // which libraries a new account may see.
+          // User links use an address the admin chose explicitly, either
+          // entered here or copied from the connection URL.
           if (_isMediaServer) ...[
             const SizedBox(height: 16),
             TextField(
               controller: _publicAddressController,
               decoration: InputDecoration(
-                labelText: 'Sign-in address (optional)',
+                labelText: 'Address users open',
                 hintText: 'https://$_serviceType.example.com',
-                helperText: 'What your users open to sign in. Shown to them '
-                    'in the app. Leave blank and they will need to ask you.',
-                helperMaxLines: 3,
+                helper: Text('The address users can reach in a browser or app. '
+                    'Used for sign-in and Open / '
+                    '${_serviceType == 'audiobookshelf' ? 'Listen' : 'Watch'} '
+                    'links. Leave blank to hide those links.'),
               ),
               keyboardType: TextInputType.url,
               autocorrect: false,
             ),
+            if (!_isPlex)
+              ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _urlController,
+                builder: (context, value, _) => Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: value.text.trim().isEmpty
+                        ? null
+                        : () =>
+                            _publicAddressController.text = value.text.trim(),
+                    icon: const Icon(Icons.copy),
+                    label: const Text('Use same URL'),
+                  ),
+                ),
+              ),
             const SizedBox(height: 24),
             _buildSharedLibrariesSection(),
+            if (_serviceType == 'audiobookshelf') ...[
+              const SizedBox(height: 24),
+              Text('Default listening apps',
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              const Text('Used unless a user chooses their own apps in '
+                  'Settings → Account → Listening apps. Web and desktop open Audiobookshelf '
+                  'in the browser.'),
+              const SizedBox(height: 16),
+              ListeningAppFields(
+                value: _listeningApps ?? const ListeningApps(),
+                inheritDefaults: false,
+                onChanged: (value) => setState(() {
+                  _listeningApps = value;
+                  _mediaServerConfigDirty = true;
+                }),
+              ),
+            ],
             if (_isPlex) ...[
               const SizedBox(height: 16),
               _buildPlexAutoApproveTile(),

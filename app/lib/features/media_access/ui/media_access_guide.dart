@@ -32,14 +32,27 @@ class MediaAccessGuide extends ConsumerStatefulWidget {
   ConsumerState<MediaAccessGuide> createState() => _MediaAccessGuideState();
 }
 
-class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
+class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
+    with WidgetsBindingObserver {
   List<MediaServerAccess>? _servers;
   bool _failed = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _load();
   }
 
   Future<void> _load() async {
@@ -265,7 +278,11 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
   }
 
   Future<void> _open(MediaServerAccess server) async {
-    final opened = await ref.read(mediaAppLauncherProvider).open(
+    final launcher = ref.read(mediaAppLauncherProvider);
+    final opened = server.serviceType == 'audiobookshelf'
+        ? await launcher.openAudiobook(
+            webUrl: server.publicAddress, apps: server.listeningApps)
+        : await launcher.open(
           serviceType: server.serviceType,
           webUrl: server.publicAddress,
         );
@@ -506,11 +523,17 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
                 'access, or the other way around. Ask your admin for both.',
             'Audiobookshelf needs to scan the audiobook library after a '
                 'download finishes.',
-            'On an available audiobook, Listen in Audiobookshelf opens a '
-                'verified copy in your browser. If several copies match, '
-                'choose the one you want.',
-            'Open Audiobookshelf is a general shortcut when a matching copy '
-                'cannot be verified. It does not mean the book is in the library.',
+            'Choose your listening app in Settings → Account → Listening apps, '
+                'or follow your admin’s default for this server. Install the '
+                'app and sign in there first.',
+            'On an available audiobook, Listen opens a verified copy in your '
+                'browser, a title search in ShelfPlayer, or the home screen '
+                'in TheShelf or the Audiobookshelf app. If several copies '
+                'match, choose the one you want. Playback does not start automatically.',
+            'Open is a general shortcut when a matching copy cannot be verified. '
+                'It does not mean the book is in the library. If your chosen app '
+                'cannot open, Cantinarr uses the browser. Web and desktop always '
+                'use the browser.',
           ],
       },
       links: switch (type) {
