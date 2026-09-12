@@ -14,6 +14,7 @@ import 'package:cantinarr/features/ai_assistant/data/codex_oauth_service.dart';
 import 'package:cantinarr/features/ai_assistant/logic/ai_chat_provider.dart';
 import 'package:cantinarr/features/ai_assistant/ui/ai_chat_screen.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
 import 'package:cantinarr/features/shell/ui/app_shell.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -623,6 +624,71 @@ void main() {
     expect(find.text('Watch on Jellyfin'), findsNothing);
     semantics.dispose();
   });
+
+  for (final desktop in [false, true]) {
+    testWidgets(
+        'guide switch updates navigation and keeps the page open (desktop=$desktop)',
+        (tester) async {
+      tester.view.physicalSize =
+          desktop ? const Size(1280, 900) : const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final auth = _FakeAuthNotifier(_mediaServerState());
+      final router = GoRouter(initialLocation: '/media-servers', routes: [
+        ShellRoute(
+            builder: (context, state, child) =>
+                AppShell(currentPath: state.uri.path, child: child),
+            routes: [
+              GoRoute(
+                  path: '/media-servers',
+                  builder: (_, __) => const MediaAccessGuide()),
+            ]),
+      ]);
+      addTearDown(router.dispose);
+      await tester.pumpWidget(ProviderScope(overrides: [
+        authProvider.overrideWith(() => auth),
+        backendClientProvider.overrideWithValue(_fakeDio()),
+      ], child: MaterialApp.router(routerConfig: router)));
+      await tester.pumpAndSettle();
+      Future<void> checkMenu(bool visible) async {
+        if (!desktop) {
+          await tester.tap(find.byIcon(Icons.menu));
+          await tester.pumpAndSettle();
+        }
+        expect(find.widgetWithText(ListTile, 'Watch on Jellyfin').hitTestable(),
+            visible ? findsOneWidget : findsNothing);
+        expect(find.widgetWithText(ListTile, 'Settings').hitTestable(),
+            findsOneWidget);
+        if (!desktop) {
+          await tester.tapAt(const Offset(370, 400));
+          await tester.pumpAndSettle();
+        }
+        expect(
+            router.routeInformationProvider.value.uri.path, '/media-servers');
+        expect(find.byType(MediaAccessGuide), findsOneWidget);
+      }
+
+      await checkMenu(true);
+      await tester.tap(find.byType(SwitchListTile));
+      await tester.pumpAndSettle();
+      await checkMenu(false);
+      await tester.tap(find.byType(SwitchListTile));
+      await tester.pumpAndSettle();
+      await checkMenu(true);
+      await tester.tap(find.byType(SwitchListTile));
+      await tester.pumpAndSettle();
+      auth.publish(_mediaServerState().copyWith(
+          connection: _mediaServerState().connection!.copyWith(instances: [
+        ..._mediaServerState().connection!.instances,
+        const ServiceInstance(
+            id: 'jf-b', serviceType: 'jellyfin', name: 'Second Jellyfin'),
+      ])));
+      await tester.pumpAndSettle();
+      await checkMenu(true);
+      expect(tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+          isFalse);
+    });
+  }
 
   testWidgets('the media server guide route carries its own breadcrumb',
       (tester) async {
@@ -1784,6 +1850,8 @@ class _FakeAuthNotifier extends AuthNotifier {
   final AuthState authState;
 
   _FakeAuthNotifier(this.authState);
+
+  void publish(AuthState value) => state = AsyncData(value);
 
   @override
   Future<AuthState> build() async => authState;

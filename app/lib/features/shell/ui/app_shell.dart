@@ -28,6 +28,7 @@ import '../../discover/ui/music_search_results_view.dart';
 import '../../discover/ui/search_results_view.dart';
 import '../../issues/logic/issues_provider.dart';
 import '../../media_access/data/media_access_service.dart';
+import '../../media_access/logic/media_access_guide_provider.dart';
 import '../../profile_proposals/logic/profile_proposals_provider.dart';
 import '../../radarr/data/radarr_api_service.dart';
 import '../../radarr/logic/radarr_movies_provider.dart';
@@ -1147,12 +1148,9 @@ class _AppShellState extends ConsumerState<AppShell>
     // last drawer selection for locations outside the module shells.
     final pathModule = _moduleTypeForPath(widget.currentPath);
     final discoveryAccess = ref.watch(discoveryAccessProvider);
-    // The backend lists a media server only for users an admin granted it,
-    // so its presence alone decides whether the access guide is offered —
-    // plus a Plex server the user can still ask for.
     final connection = ref.watch(authProvider).valueOrNull?.connection;
     final mediaAccessGuideVisible =
-        connection?.mediaAccessGuideVisible ?? false;
+        ref.watch(mediaAccessGuideNavigationVisibleProvider);
     final mediaAccessGuideTypes =
         connection?.mediaAccessGuideTypes ?? const <String>{};
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
