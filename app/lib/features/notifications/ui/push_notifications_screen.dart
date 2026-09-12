@@ -3,33 +3,35 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/settings_highlight.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../settings/settings_anchors.dart';
 import '../notification_prefs.dart';
+import '../notification_categories.dart';
 import '../notification_prefs_service.dart';
 import '../push_service.dart';
 
 /// Lets the current user choose which push notifications they receive. Loads
 /// the saved preferences on open and persists each toggle immediately,
 /// reverting the switch if the server rejects the change.
-class NotificationPreferencesScreen extends ConsumerStatefulWidget {
+class PushNotificationsScreen extends ConsumerStatefulWidget {
   /// Settings-search anchor to scroll to and flash on arrival.
   final String? highlightId;
 
-  const NotificationPreferencesScreen({super.key, this.highlightId});
+  const PushNotificationsScreen({super.key, this.highlightId});
 
   @override
-  ConsumerState<NotificationPreferencesScreen> createState() =>
-      _NotificationPreferencesScreenState();
+  ConsumerState<PushNotificationsScreen> createState() =>
+      _PushNotificationsScreenState();
 }
 
-class _NotificationPreferencesScreenState
-    extends ConsumerState<NotificationPreferencesScreen>
-    with WidgetsBindingObserver {
+class _PushNotificationsScreenState
+    extends ConsumerState<PushNotificationsScreen> with WidgetsBindingObserver {
   bool _isLoading = true;
+  bool _saving = false;
   String? _error;
   NotificationPrefs? _prefs;
 
@@ -62,7 +64,7 @@ class _NotificationPreferencesScreenState
     // Returning from the system Settings app (where the user may have changed
     // the permission) resumes us; re-read the status so the UI stays accurate.
     if (state == AppLifecycleState.resumed && _pushSupported) {
-      _refreshAuthStatus();
+      if (!_saving) _load();
     }
   }
 
@@ -131,25 +133,37 @@ class _NotificationPreferencesScreenState
   /// reverts to [previous] and surfaces the error.
   Future<void> _save(
       NotificationPrefs updated, NotificationPrefs previous) async {
-    setState(() => _prefs = updated);
+    if (_saving) return;
+    setState(() {
+      _prefs = updated;
+      _saving = true;
+    });
     try {
       final saved = await ref
           .read(notificationPrefsServiceProvider)
           .updatePreferences(updated);
       if (!mounted) return;
       setState(() => _prefs = saved);
+      if (!previous.pushEnabled &&
+          saved.pushEnabled &&
+          saved.serverEnabled &&
+          _pushSupported) {
+        await _enableNotifications();
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _prefs = previous);
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(_friendlyError(e))));
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Notification Preferences')),
+      appBar: AppBar(title: const Text('Push Notifications')),
       body: CenteredContent(
           child: _isLoading
               ? const Center(
@@ -191,7 +205,6 @@ class _NotificationPreferencesScreenState
       cacheExtent: SettingsHighlight.cacheExtentFor(widget.highlightId),
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
-        if (_pushSupported) ..._buildStatusSection(),
         const Padding(
           padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: Text(
@@ -199,116 +212,69 @@ class _NotificationPreferencesScreenState
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
-        _toggle(
-          title: 'Request approved or denied',
-          subtitle: 'When your request is approved or denied',
-          value: prefs.requestDecision,
-          onChanged: (v) => _save(prefs.copyWith(requestDecision: v), prefs),
-          anchor: SettingsAnchors.notificationsRequestDecision,
-        ),
+        if (_saving) const LinearProgressIndicator(),
+        SettingsHighlight(
+            anchorId: SettingsAnchors.notificationsEnabled,
+            highlightId: widget.highlightId,
+            child: SwitchListTile(
+              title: const Text('Receive push notifications'),
+              subtitle: const Text(
+                  'For this account on all devices connected to this server.'),
+              value: prefs.pushEnabled,
+              onChanged: _saving || !prefs.supportsControls
+                  ? null
+                  : (value) => _save(prefs.copyWith(pushEnabled: value), prefs),
+            )),
+        if (!prefs.supportsControls)
+          const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                  'Update your server to use the master switch and automatically approved request alerts.')),
+        if (!prefs.serverEnabled)
+          const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                  'Push notifications are turned off by the server. Your choices are saved.')),
+        if (prefs.serverEnabled && !prefs.pushEnabled)
+          const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                  'Your push notifications are off. Your category choices are saved.')),
+        if (isAdmin && prefs.supportsControls)
+          ListTile(
+            leading: const Icon(Icons.dns_outlined),
+            title: const Text('Server settings'),
+            subtitle: const Text(
+                'Choose which push notifications this server may send.'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _saving
+                ? null
+                : () async {
+                    await context.push('/settings/push-notifications/server');
+                    if (mounted) await _load();
+                  },
+          ),
+        const _SectionHeader(title: 'My notifications'),
+        for (final category in pushCategories.where((c) => !c.admin))
+          if ((category.service != 'chaptarr' || showBooks) &&
+              (category.service != 'lidarr' || showMusic))
+            _categoryToggle(category, prefs),
         if (isAdmin) ...[
-          _toggle(
-            title: 'New requests to review',
-            subtitle: 'When someone submits a request needing approval',
-            value: prefs.requestPending,
-            onChanged: (v) => _save(prefs.copyWith(requestPending: v), prefs),
-            anchor: SettingsAnchors.notificationsRequestPending,
-          ),
-          _toggle(
-            title: 'Problem reports',
-            subtitle: 'When someone reports a problem with their media',
-            value: prefs.issueCreated,
-            onChanged: (v) => _save(prefs.copyWith(issueCreated: v), prefs),
-            anchor: SettingsAnchors.notificationsProblemReports,
-          ),
-          _toggle(
-            title: 'Fixes awaiting approval',
-            subtitle: 'When the assistant proposes a fix that needs approval',
-            value: prefs.agentActionPending,
-            onChanged: (v) =>
-                _save(prefs.copyWith(agentActionPending: v), prefs),
-            anchor: SettingsAnchors.notificationsAgentFixes,
-          ),
-          _toggle(
-            title: 'Weekly agent summary',
-            subtitle:
-                'One line a week: what resolved itself, what your rules handled, what needs you',
-            value: prefs.agentDigest,
-            onChanged: (v) => _save(prefs.copyWith(agentDigest: v), prefs),
-            anchor: SettingsAnchors.notificationsAgentDigest,
-          ),
-          _toggle(
-            title: 'Plex access requests',
-            subtitle:
-                'When someone shares their Plex email and needs you to grant them Plex',
-            value: prefs.plexAccessRequest,
-            onChanged: (v) =>
-                _save(prefs.copyWith(plexAccessRequest: v), prefs),
-            anchor: SettingsAnchors.notificationsPlexAccessRequests,
-          ),
-          _toggle(
-            title: 'Quality upgrades',
-            subtitle:
-                'When an existing movie, episode, book, or album is replaced with a better version',
-            value: prefs.contentUpgraded,
-            onChanged: (v) => _save(prefs.copyWith(contentUpgraded: v), prefs),
-            anchor: SettingsAnchors.notificationsQualityUpgrades,
-          ),
+          const _SectionHeader(title: 'Administrator alerts'),
+          for (final category in pushCategories.where((c) => c.admin))
+            _categoryToggle(category, prefs),
         ],
-        _toggle(
-          title: 'New movie available',
-          subtitle: 'When a movie finishes downloading',
-          value: prefs.newMovie,
-          onChanged: (v) => _save(prefs.copyWith(newMovie: v), prefs),
-          anchor: SettingsAnchors.notificationsNewMovie,
-        ),
-        _toggle(
-          title: 'New episodes available',
-          subtitle: 'When new episodes are available',
-          value: prefs.newEpisode,
-          onChanged: (v) => _save(prefs.copyWith(newEpisode: v), prefs),
-          anchor: SettingsAnchors.notificationsNewEpisode,
-        ),
-        if (showBooks)
-          _toggle(
-            title: 'New book available',
-            subtitle: 'When a book finishes downloading',
-            value: prefs.newBook,
-            onChanged: (v) => _save(prefs.copyWith(newBook: v), prefs),
-            anchor: SettingsAnchors.notificationsNewBook,
-          ),
-        if (showMusic)
-          _toggle(
-            title: 'New music available',
-            subtitle: 'When an album finishes downloading',
-            value: prefs.newMusic,
-            onChanged: (v) => _save(prefs.copyWith(newMusic: v), prefs),
-            anchor: SettingsAnchors.notificationsNewMusic,
-          ),
-        _toggle(
-          title: 'Plex invite sent',
-          subtitle: 'When your Plex invite goes out',
-          value: prefs.plexInviteSent,
-          onChanged: (v) => _save(prefs.copyWith(plexInviteSent: v), prefs),
-          anchor: SettingsAnchors.notificationsPlexInviteSent,
-        ),
-        _toggle(
-          title: 'My report updates',
-          subtitle:
-              'When the assistant has a question about your report, a fix is ready to confirm, or your report closes',
-          value: prefs.issueReportUpdate,
-          onChanged: (v) => _save(prefs.copyWith(issueReportUpdate: v), prefs),
-          anchor: SettingsAnchors.notificationsReportUpdates,
-        ),
+        if (_pushSupported) ..._buildStatusSection(),
         const SizedBox(height: 32),
       ],
     );
   }
 
-  /// The push status block shown above the category toggles: current
+  /// The device status block below the category toggles: current
   /// permission state plus the relevant affordance (enable / open Settings)
   /// and a "Send test notification" button.
   List<Widget> _buildStatusSection() {
+    final canReceive = _prefs!.pushEnabled && _prefs!.serverEnabled;
     final authorized =
         _authStatus == 'authorized' || _authStatus == 'provisional';
     final denied = _authStatus == 'denied';
@@ -345,9 +311,9 @@ class _NotificationPreferencesScreenState
           child: Align(
             alignment: Alignment.centerLeft,
             child: ElevatedButton.icon(
-              onPressed: _enableNotifications,
+              onPressed: canReceive && !_saving ? _enableNotifications : null,
               icon: const Icon(Icons.notifications_active_outlined, size: 18),
-              label: const Text('Enable notifications'),
+              label: const Text('Allow on this device'),
             ),
           ),
         ),
@@ -356,7 +322,9 @@ class _NotificationPreferencesScreenState
         child: Align(
           alignment: Alignment.centerLeft,
           child: OutlinedButton.icon(
-            onPressed: (authorized && !_sendingTest) ? _sendTest : null,
+            onPressed: (authorized && canReceive && !_saving && !_sendingTest)
+                ? _sendTest
+                : null,
             icon: _sendingTest
                 ? const SizedBox(
                     width: 18,
@@ -404,11 +372,33 @@ class _NotificationPreferencesScreenState
     );
   }
 
+  Widget _categoryToggle(PushCategory category, NotificationPrefs prefs) {
+    final unavailable =
+        !prefs.serverEnabled || !prefs.categoryAllowed(category.key);
+    final unsupported =
+        category.key == 'request_auto_approved' && !prefs.supportsControls;
+    final reason = unsupported
+        ? 'Update your server to use this notification.'
+        : unavailable
+            ? 'Turned off by the server'
+            : !prefs.pushEnabled
+                ? 'Your push notifications are off'
+                : category.subtitle;
+    return _toggle(
+        title: category.title,
+        subtitle: reason,
+        value: prefs.toJson()[category.key] as bool,
+        onChanged: _saving || unavailable || unsupported || !prefs.pushEnabled
+            ? null
+            : (value) => _save(prefs.withCategory(category.key, value), prefs),
+        anchor: category.anchor);
+  }
+
   Widget _toggle({
     required String title,
     required String subtitle,
     required bool value,
-    required ValueChanged<bool> onChanged,
+    required ValueChanged<bool>? onChanged,
     String? anchor,
   }) {
     final tile = SwitchListTile(

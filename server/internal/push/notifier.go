@@ -111,10 +111,8 @@ func (n *Notifier) client() *Client {
 func (n *Notifier) ContentReady() bool { return n.client() != nil }
 
 // NotifyUser pushes a per-user event to its recipient, gated on their opt-in
-// for the matching category. Two events produce a notification today:
-// "request_decision" (approval/denial outcome, off by default) and
-// "plex_invite_sent" ("check your email", fixed template, on by default).
-// Any other event type is a no-op here (WS-only).
+// for the matching category. Decisions, media-server access, and report updates
+// have push templates; other targeted events remain WS-only.
 func (n *Notifier) NotifyUser(userID int64, eventType string, data map[string]interface{}) {
 	client := n.client()
 	if client == nil {
@@ -130,49 +128,80 @@ func (n *Notifier) NotifyUser(userID int64, eventType string, data map[string]in
 			return
 		}
 		n.send(client, []int64{userID}, title, body, passthrough(CategoryRequestDecision, data))
-	case CategoryPlexInviteSent:
-		if !n.prefs.optedIn(userID, CategoryPlexInviteSent) {
+	case CategoryMediaServerAccess:
+		if !n.prefs.optedIn(userID, CategoryMediaServerAccess) {
 			return
 		}
-		n.send(client, []int64{userID}, "Plex invite sent",
-			"Your Plex invite is on its way — check your email",
-			map[string]any{"type": CategoryPlexInviteSent})
-	case EventIssueQuestion, EventIssueFixConfirm, EventIssueClosed:
-		// Reporter-loop beats about the user's OWN report. One shared
-		// preference gates all three; the bodies are FIXED server-authored
-		// copy (M5) — the title, question, and resolution text live in the
-		// thread the tap opens, never in the notification.
-		if !n.prefs.optedIn(userID, CategoryIssueReportUpdate) {
+		body := mediaAccessMessage(data)
+		if body == "" {
 			return
 		}
-		title, body := issueReportMessage(eventType)
-		n.send(client, []int64{userID}, title, body, passthrough(eventType, data))
+		n.send(client, []int64{userID}, "Media server access", body,
+			map[string]any{"type": CategoryMediaServerAccess, "instance_id": data["instance_id"]})
+	case EventIssueClosed:
+		// A repair attempt or an unsuccessful close is not news that the media
+		// is ready. Read the committed result and ownership, never infer success
+		// from the event name or caller-supplied text.
+		if !n.prefs.optedIn(userID, CategoryIssueReportUpdate) || !n.reportResolvedFor(userID, data) {
+			return
+		}
+		n.send(client, []int64{userID}, "Ready to try again",
+			"The problem you reported has been resolved. Give it another try.",
+			map[string]any{"type": EventIssueClosed, "issue_id": data["issue_id"]})
 	}
 }
 
-// Reporter-loop event types. All three ride the issue_report_update
-// preference; the client deep-links each to the report's own thread.
+// Report events deep-link to the issue. Questions and repair reviews notify
+// admins; only a successful close can notify the person who reported it.
 const (
 	EventIssueQuestion   = "issue_question"
 	EventIssueFixConfirm = "issue_fix_confirm"
 	EventIssueClosed     = "issue_closed"
 )
 
-func issueReportMessage(eventType string) (title, body string) {
-	switch eventType {
-	case EventIssueQuestion:
-		return "Question about your report", "The assistant needs one answer from you to keep working on it"
-	case EventIssueFixConfirm:
-		return "A fix was applied", "Open your report and tell us whether it's right now"
-	default:
-		return "Your report was closed", "Open it to see how it ended"
+func mediaAccessMessage(data map[string]interface{}) string {
+	service, _ := data["service_type"].(string)
+	label := map[string]string{"plex": "Plex", "jellyfin": "Jellyfin", "emby": "Emby", "audiobookshelf": "Audiobookshelf"}[service]
+	name, _ := data["server_name"].(string)
+	instanceID, _ := data["instance_id"].(string)
+	if label == "" || strings.TrimSpace(name) == "" || instanceID == "" {
+		return ""
 	}
+	server := name + " (" + label + ")"
+	switch data["access_state"] {
+	case "granted":
+		if service != "plex" {
+			return "You've been given access to " + server + ". Open Media Servers to set up or view your account."
+		}
+	case "invite_pending":
+		if service == "plex" {
+			return "You've been invited to " + server + ". Accept the invitation in Plex or check your email."
+		}
+	case "ready":
+		if service == "plex" {
+			return "Your access to " + server + " is ready. Open Media Servers to get started."
+		}
+	}
+	return ""
+}
+
+func (n *Notifier) reportResolvedFor(userID int64, data map[string]interface{}) bool {
+	issueID := intField(data, "issue_id")
+	if issueID <= 0 {
+		return false
+	}
+	var resolved bool
+	err := n.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM issues
+		WHERE id=? AND reporter_id=? AND source='user' AND status='resolved'
+		AND closed_at IS NOT NULL AND COALESCE(resolution_kind,'')!='reporter_confirmed')`, issueID, userID).Scan(&resolved)
+	if err != nil {
+		n.logger.Error("push: verify reported problem resolved", "err", err)
+	}
+	return err == nil && resolved
 }
 
 // NotifyAdmins pushes an admin-scoped event to every admin opted into the
-// matching category. Two events produce a notification today: "request_pending"
-// (a new media request) and "issue_created" (a new AI-remediation issue, on by
-// default). Any other event type is a no-op here (WS-only).
+// matching category. Events outside this switch are WS-only.
 //
 // Untrusted-text invariant (M5): the alert body is a FIXED server-authored
 // template, never an interpolated title/reason; the media title travels only as
@@ -184,6 +213,24 @@ func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 		return
 	}
 	switch eventType {
+	case EventIssueQuestion, EventIssueFixConfirm:
+		category := preferenceCategory(eventType)
+		recipients, err := n.prefs.usersOptedInto(category)
+		if err != nil {
+			n.logger.Error("push: resolve report review recipients", "err", err)
+			return
+		}
+		issueID := intField(data, "issue_id")
+		if issueID <= 0 {
+			return
+		}
+		title, body := "Report needs information", "Open the report to see what information is needed."
+		if eventType == EventIssueFixConfirm {
+			title, body = "Repair needs review", "Check the repair and close the report when the problem is resolved."
+		}
+		n.sendWithOptions(client, recipients, title, body,
+			map[string]any{"type": eventType, "issue_id": issueID},
+			SendOptions{CollapseID: fmt.Sprintf("%s:%d", eventType, issueID)})
 	case CategoryRequestPending:
 		n.notifyRequestPending(client, data)
 	case CategoryIssueCreated:
@@ -991,6 +1038,11 @@ func (n *Notifier) send(client *Client, userIDs []int64, title, body string, dat
 // After the gateway replies it prunes any local token the gateway reported
 // dead, so push_tokens self-cleans without a separate sweep.
 func (n *Notifier) sendWithOptions(client *Client, userIDs []int64, title, body string, data map[string]any, opts SendOptions) {
+	category := str(data["type"])
+	userIDs = n.allowedDelivery(userIDs, category)
+	if len(userIDs) == 0 {
+		return
+	}
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -999,6 +1051,10 @@ func (n *Notifier) sendWithOptions(client *Client, userIDs []int64, title, body 
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		userIDs = n.allowedDelivery(userIDs, category)
+		if len(userIDs) == 0 {
+			return
+		}
 		resp, err := client.SendWithOptions(ctx, userIDs, title, body, data, opts)
 		if err != nil {
 			n.logger.Error("push: send notification", "err", err, "title", title)
@@ -1184,4 +1240,13 @@ func intval(v interface{}) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func (n *Notifier) allowedDelivery(userIDs []int64, category string) []int64 {
+	allowed, err := n.prefs.filterDelivery(userIDs, category)
+	if err != nil {
+		n.logger.Error("push: read delivery preferences", "err", err)
+		return nil
+	}
+	return allowed
 }

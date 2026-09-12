@@ -751,12 +751,10 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 			// escalation itself — the issue reaches a human either way.
 			fixApplied, _ := r.svc.issueHasExecutedFix(issue.ID)
 			if issue.Source == SourceUser && fixApplied {
-				// The fix executed and only the subjective verdict remains.
-				// That verdict belongs to the reporter, not an admin
-				// adjudicating content they haven't watched: park awaiting
-				// their confirmation instead of the needs_admin dead end this
-				// used to be.
-				return r.parkConfirm(ctx, issue.ID, st.runID, stopUnverifiedClose,
+				// A repair attempt cannot prove a subjective problem resolved.
+				// Hand the review to admins; successful closure later tells the
+				// reporter that their media is ready to try again.
+				return r.parkRepairReview(ctx, issue.ID, st.runID, stopUnverifiedClose,
 					escalatedCloseMessage(issue, true))
 			}
 			return r.giveUp(ctx, issue.ID, st.runID, model, stopUnverifiedClose,
@@ -1073,9 +1071,9 @@ func (r *Runner) parkWith(issueID, runID int64, runStatus, stopReason, issueStat
 		// admin decides within the hold-down needs no page at all.
 		r.svc.queueActionAlert(issueID, time.Now().UTC())
 	} else if issueStatus == IssueAwaitingUser && r.svc.notifier != nil {
-		// issue_question is the reporter's page (push + WS); issue_updated stays
-		// the silent refresh for any other open client.
-		r.svc.notifier.NotifyUser(reporterID.Int64, "issue_question", map[string]interface{}{"issue_id": issueID})
+		// Keep the question in the thread, but page admins rather than asking
+		// regular users to manage the investigation through push notifications.
+		r.svc.notifier.NotifyAdmins("issue_question", map[string]interface{}{"issue_id": issueID})
 		r.svc.notifier.NotifyUser(reporterID.Int64, "issue_updated", map[string]interface{}{"issue_id": issueID})
 	}
 	r.svc.pingIssueUpdated(issueID)
@@ -1278,7 +1276,6 @@ func isVerificationRead(name string, result *mcp.ToolResult) bool {
 		!strings.Contains(text, "disabled by the administrator") &&
 		!strings.Contains(text, "not permitted")
 }
-
 
 // injectArrRecordIDs writes the issue's generic arr record ids back under the
 // keys the read tools actually take: book_id/author_id for a book issue,
@@ -1776,17 +1773,16 @@ func giveUpResolution(stopReason string) string {
 	return plain + " (" + stopReason + ")"
 }
 
-// parkConfirm finalizes a run whose fix executed but whose subjective verdict
-// remains with the reporter. Same audit shape as giveUp; the issue parks at
-// awaiting_confirmation instead of needs_admin.
-func (r *Runner) parkConfirm(ctx context.Context, issueID, runID int64, stopReason, message string) error {
+// parkRepairReview finalizes a run whose repair executed but whose result an
+// administrator still needs to check. It does not record a failure or success.
+func (r *Runner) parkRepairReview(ctx context.Context, issueID, runID int64, stopReason, message string) error {
 	if runID != 0 {
 		var nextSeq int
 		r.db.QueryRow("SELECT COALESCE(MAX(seq),0)+1 FROM agent_steps WHERE run_id = ?", runID).Scan(&nextSeq)
-		r.persistStep(runID, issueID, nextSeq, stepGiveup, "", "", "", "awaiting reporter confirmation: "+stopReason, false)
+		r.persistStep(runID, issueID, nextSeq, stepGiveup, "", "", "", "awaiting administrator repair review: "+stopReason, false)
 	}
-	if _, err := r.svc.ParkAwaitingConfirmation(ctx, issueID, runID, stopReason, message); err != nil {
-		log.Printf("remediation: confirm park transition for issue %d: %v", issueID, err)
+	if _, err := r.svc.ParkAppliedFixForReview(ctx, issueID, runID, stopReason, message); err != nil {
+		log.Printf("remediation: repair review transition for issue %d: %v", issueID, err)
 	}
 	return nil
 }

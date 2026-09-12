@@ -419,7 +419,8 @@ func TestManagerReenrollsWhenStoredKeyRefused(t *testing.T) {
 	mgr.StartRetry(ctx)
 
 	n := NewNotifier(database, mgr, nil)
-	n.sendWithOptions(stale, []int64{1}, "hello", "body", nil, SendOptions{})
+	mustExec(t, database, "INSERT OR IGNORE INTO users(id,username,password_hash) VALUES(1,'recipient','')")
+	n.sendWithOptions(stale, []int64{1}, "hello", "body", map[string]any{"type": CategoryNewMovie}, SendOptions{})
 
 	var fresh *Client
 	waitFor(t, "the manager to re-enroll with a new key", func() bool {
@@ -476,7 +477,8 @@ func TestManagerExplicitKeyRefusedNeverReenrolls(t *testing.T) {
 	mgr.StartRetry(ctx)
 
 	n := NewNotifier(database, mgr, nil)
-	n.sendWithOptions(client, []int64{1}, "hello", "body", nil, SendOptions{})
+	mustExec(t, database, "INSERT OR IGNORE INTO users(id,username,password_hash) VALUES(1,'recipient','')")
+	n.sendWithOptions(client, []int64{1}, "hello", "body", map[string]any{"type": CategoryNewMovie}, SendOptions{})
 	waitFor(t, "the refused send to be counted", func() bool { return deliveryFailures(n) == 1 })
 	// Give the retry loop several ticks to prove it has nothing to do.
 	time.Sleep(50 * time.Millisecond)
@@ -562,7 +564,8 @@ func TestManagerReenrollBacksOff(t *testing.T) {
 	defer cancel()
 	mgr.StartRetry(ctx)
 	n := NewNotifier(database, mgr, nil)
-	n.sendWithOptions(stale, []int64{1}, "hello", "body", nil, SendOptions{})
+	mustExec(t, database, "INSERT OR IGNORE INTO users(id,username,password_hash) VALUES(1,'recipient','')")
+	n.sendWithOptions(stale, []int64{1}, "hello", "body", map[string]any{"type": CategoryNewMovie}, SendOptions{})
 
 	waitFor(t, "the first re-enrollment attempt", func() bool { return g.enrollCount() >= 1 })
 	time.Sleep(300 * time.Millisecond)

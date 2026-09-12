@@ -22,6 +22,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
+	"github.com/windoze95/cantinarr-server/internal/discordnotify"
 	"github.com/windoze95/cantinarr-server/internal/discover"
 	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/grokoauth"
@@ -178,9 +179,9 @@ func main() {
 	ctx := context.Background()
 	logger := slog.Default()
 
-	// Media-server accounts (Jellyfin, Emby): a granted user creates their own
-	// account from the app; grant changes and user deletion switch accounts
-	// off and on through the two hooks below.
+	// Media-server access (Plex, Jellyfin, Emby, Audiobookshelf): new access
+	// alerts guide users through account setup or invitation acceptance;
+	// grant changes and user deletion reconcile managed remote accounts.
 	// The pre-instance Plex integration (a linked account in the settings
 	// table) becomes a Plex instance on first boot, with everyone it had
 	// invited granted; idempotent, marker-guarded.
@@ -200,6 +201,7 @@ func main() {
 		return nil
 	})
 	instanceHandler.SetGrantObserver(mediaAccessService.OnGrantsChanged)
+	instanceStore.SetGrantAddedObserver(mediaAccessService.OnGrantAdded)
 	instanceHandler.SetSharedLibrariesObserver(mediaAccessService.OnSharedLibrariesChanged)
 	authHandler.SetUserDeleteHook(mediaAccessService.BeforeUserDelete)
 
@@ -266,6 +268,9 @@ func main() {
 	mediaAccessService.SetNotifier(notifier)
 	authHandler.SetAccessRequestHook(mediaAccessService.OnPlexEmailShared)
 	requestService := request.NewService(database, registry, bridge, notifier)
+	discordNotifications := discordnotify.NewService(database, cipher, func() string { return serverSettings.Get().ExternalURL })
+	requestService.SetCreationObserver(request.CreationObservers{discordNotifications, pushNotifier})
+	discordNotifications.Start(ctx)
 	requestHandler := request.NewHandler(requestService)
 	mediaAccessHandler.SetListeningBooks(requestService)
 
@@ -401,7 +406,7 @@ func main() {
 	updateChecker := update.NewChecker(version.Version, cfg.DisableUpdateCheck)
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, watchHistoryHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, mediaAccessHandler, updateChecker, serverSettings, contentPolicyHandler)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, watchHistoryHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, mediaAccessHandler, updateChecker, serverSettings, contentPolicyHandler, discordNotifications)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)

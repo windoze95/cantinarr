@@ -3,6 +3,24 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('NotificationPrefs', () {
+    test('media server access preserves legacy opt-outs and saves both keys',
+        () {
+      final prefs =
+          NotificationPrefs.fromJson(const {'plex_invite_sent': false});
+      expect(prefs.mediaServerAccess, isFalse);
+      expect(prefs.toJson()['media_server_access'], isFalse);
+      expect(prefs.toJson()['plex_invite_sent'], isFalse);
+      final changed = prefs.withCategory('media_server_access', true);
+      expect(changed.mediaServerAccess, isTrue);
+      expect(changed.toJson()['plex_invite_sent'], isTrue);
+      expect(prefs.copyWith(newMovie: true).mediaServerAccess, isFalse);
+      expect(
+          NotificationPrefs.fromJson(const {
+            'media_server_access': false,
+            'plex_invite_sent': true,
+          }).mediaServerAccess,
+          isFalse);
+    });
     test('toJson carries every category the server knows', () {
       // The server's PUT replaces the full preference row and treats missing
       // keys as false, so omitting any category here would silently disable
@@ -25,7 +43,7 @@ void main() {
           'issue_created',
           'agent_action_pending',
           'plex_access_request',
-          'plex_invite_sent',
+          'media_server_access',
           'content_upgraded',
         ]),
       );

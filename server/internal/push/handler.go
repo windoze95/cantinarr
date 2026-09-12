@@ -157,36 +157,40 @@ func (h *Handler) GetPreferences(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
-	prefs, err := h.prefs.Get(claims.UserID)
-	if err != nil {
-		h.logger.Error("push: get notification prefs", "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load preferences"})
-		return
-	}
-	writeJSON(w, http.StatusOK, prefs)
+	h.preferences(w, claims.UserID)
 }
 
 // UpdatePreferences replaces the calling user's notification preferences. The
-// body is the same four-boolean shape returned by GetPreferences; the stored
+// body carries the preference flags returned by GetPreferences; the stored
 // preferences are echoed back. Unknown fields are ignored and missing fields
-// default to false (a PUT replaces the full set).
+// default to false for legacy categories. The master, auto-approved, and media-access flags
+// preserve their saved values when omitted. Read-only policy metadata is ignored.
 func (h *Handler) UpdatePreferences(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
-	var prefs Prefs
-	if err := json.NewDecoder(r.Body).Decode(&prefs); err != nil {
+	var body struct {
+		Prefs
+		PushEnabled         *bool `json:"push_enabled"`
+		RequestAutoApproved *bool `json:"request_auto_approved"`
+		MediaServerAccess   *bool `json:"media_server_access"`
+		PlexInviteSent      *bool `json:"plex_invite_sent"` // old apps share the renamed preference
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	if err := h.prefs.Set(claims.UserID, prefs); err != nil {
+	if body.MediaServerAccess == nil {
+		body.MediaServerAccess = body.PlexInviteSent
+	}
+	if err := h.prefs.set(claims.UserID, body.Prefs, body.PushEnabled, body.RequestAutoApproved, body.MediaServerAccess); err != nil {
 		h.logger.Error("push: set notification prefs", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save preferences"})
 		return
 	}
-	writeJSON(w, http.StatusOK, prefs)
+	h.preferences(w, claims.UserID)
 }
 
 // TestPush sends a test notification to the calling user's own devices so the
@@ -240,6 +244,10 @@ type testPushResponse struct {
 // writes a diagnostic result: how many tokens are registered, the gateway's
 // per-device outcomes, and (as a side effect) prunes any token APNs rejected.
 func (h *Handler) runTestPush(w http.ResponseWriter, r *http.Request, userID int64) {
+	if err := h.prefs.checkMasters(userID); err != nil {
+		writeTestPolicyError(w, err)
+		return
+	}
 	tokens, err := h.countPushTokens(userID)
 	if err != nil {
 		h.logger.Error("push: count tokens", "err", err, "user_id", userID)
@@ -248,6 +256,10 @@ func (h *Handler) runTestPush(w http.ResponseWriter, r *http.Request, userID int
 	}
 
 	resp, err := h.sendTestPush(r.Context(), userID)
+	if errors.Is(err, errPushDisabledByServer) || errors.Is(err, errPushDisabledForUser) {
+		writeTestPolicyError(w, err)
+		return
+	}
 	if errors.Is(err, errPushNotConfigured) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "push not configured"})
 		return
@@ -284,6 +296,9 @@ func (h *Handler) sendTestPush(ctx context.Context, userID int64) (*SendResponse
 	client := h.mgr.Ensure(ctx)
 	if client == nil {
 		return nil, errPushNotConfigured
+	}
+	if err := h.prefs.checkMasters(userID); err != nil {
+		return nil, err
 	}
 	resp, err := client.Send(ctx, []int64{userID}, "Cantinarr", "Push notifications are working", map[string]any{"type": "test"})
 	if err != nil {

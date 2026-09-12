@@ -132,6 +132,7 @@ func stringMapValue(value map[string]any, name string) (string, bool) {
 }
 
 func redactFreeform(text string) string {
+	text = discordWebhookCredential.ReplaceAllString(text, "${1}"+RedactedValue)
 	text = urlCandidatePattern.ReplaceAllStringFunc(text, redactURLCredentials)
 	text = redactAssignments(text)
 	for _, pattern := range bareProviderCredentialPatterns {
@@ -139,6 +140,9 @@ func redactFreeform(text string) string {
 	}
 	return text
 }
+
+// Discord authenticates through a path segment, rather than a query/header.
+var discordWebhookCredential = regexp.MustCompile(`(?i)((?:https?://)?(?:discord\.com|discordapp\.com)/api/(?:v[0-9]+/)?webhooks/[0-9]+/)[^\s<>"'?/#]+`)
 
 // redactAssignments handles both headers and fragments embedded in a larger
 // error body. Valid JSON is handled structurally first, but upstream failures
@@ -226,6 +230,9 @@ func assignmentValueEnd(text string, start int, normalizedKey string) int {
 
 func isSensitiveName(name string, query bool) bool {
 	n := normalizeName(name)
+	if n == "webhookurl" || n == "discordwebhookurl" {
+		return true
+	}
 	if n == "auth" || n == "cookie" || n == "setcookie" || n == "proxyauthorization" {
 		return true
 	}

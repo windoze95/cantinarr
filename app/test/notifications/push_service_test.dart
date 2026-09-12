@@ -144,6 +144,14 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('notification tap routing', () {
+    for (final event in ['issue_closed', 'issue_question', 'issue_fix_confirm']) {
+      test('$event opens its report', () async {
+        final h = _Harness();
+        await _emitNativeCall('onNotificationTap',
+            {'type': event, 'issue_id': 17});
+        expect(h.router.pushed, ['/issues/17']);
+      });
+    }
     const directRoutes = {
       'request_pending': '/approvals',
       'agent_action_pending': '/agent-actions',
@@ -152,6 +160,7 @@ void main() {
       // not this particular proposal is still pending on arrival.
       'profile_change_pending': '/settings/profile-approvals',
       'plex_access_request': '/settings/users',
+      'media_server_access': '/media-servers',
       'plex_invite_sent': '/media-servers',
       'remediation_autodispatch_disabled': '/settings/ai-remediation',
     };
@@ -164,7 +173,12 @@ void main() {
       });
     }
 
-    for (final type in const ['request_decision', 'new_movie', 'new_episode']) {
+    for (final type in const [
+      'request_auto_approved',
+      'request_decision',
+      'new_movie',
+      'new_episode'
+    ]) {
       test('$type opens the media detail page', () async {
         final h = _Harness();
         await _emitNativeCall('onNotificationTap', {

@@ -158,6 +158,8 @@ void main() {
       '/settings/change-history/1',
       '/settings/users',
       '/settings/request-settings',
+      '/settings/discord-notifications',
+      '/settings/push-notifications/server',
       '/settings/agent-approval-rules',
       '/settings/devices',
       '/settings/plex',

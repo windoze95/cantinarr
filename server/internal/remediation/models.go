@@ -28,10 +28,8 @@ const (
 	IssueInvestigating    = "investigating"
 	IssueAwaitingUser     = "awaiting_user"
 	IssueAwaitingApproval = "awaiting_approval"
-	// IssueAwaitingConfirmation is a user report whose fix has EXECUTED and now
-	// waits on the one person whose judgment it was: the reporter. It is not an
-	// admin state (the issue closes read, without paging anyone) and not a
-	// terminal (the reporter's tap or the confirm-wait sweep ends it).
+	// IssueAwaitingConfirmation is a legacy reporter wait. Startup moves open
+	// rows to needs_admin; new repairs go straight to administrator review.
 	IssueAwaitingConfirmation = "awaiting_confirmation"
 	IssueNeedsAdmin           = "needs_admin"
 	// IssueWaiting is a system-owned wait on an external service doing its own

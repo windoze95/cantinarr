@@ -8,28 +8,31 @@ import (
 // Prefs is a user's per-category push notification preferences. Each field
 // gates one notification category; see the category constants below.
 type Prefs struct {
-	RequestDecision    bool `json:"request_decision"`
-	RequestPending     bool `json:"request_pending"`
-	NewMovie           bool `json:"new_movie"`
-	NewEpisode         bool `json:"new_episode"`
-	NewBook            bool `json:"new_book"`
-	NewMusic           bool `json:"new_music"`
-	IssueCreated       bool `json:"issue_created"`
-	AgentActionPending bool `json:"agent_action_pending"`
-	PlexAccessRequest  bool `json:"plex_access_request"`
-	PlexInviteSent     bool `json:"plex_invite_sent"`
-	IssueReportUpdate  bool `json:"issue_report_update"`
-	AgentDigest        bool `json:"agent_digest"`
-	ContentUpgraded    bool `json:"content_upgraded"`
+	PushEnabled         bool `json:"push_enabled"`
+	RequestAutoApproved bool `json:"request_auto_approved"`
+	RequestDecision     bool `json:"request_decision"`
+	RequestPending      bool `json:"request_pending"`
+	NewMovie            bool `json:"new_movie"`
+	NewEpisode          bool `json:"new_episode"`
+	NewBook             bool `json:"new_book"`
+	NewMusic            bool `json:"new_music"`
+	IssueCreated        bool `json:"issue_created"`
+	AgentActionPending  bool `json:"agent_action_pending"`
+	PlexAccessRequest   bool `json:"plex_access_request"`
+	MediaServerAccess   bool `json:"media_server_access"`
+	IssueReportUpdate   bool `json:"issue_report_update"`
+	AgentDigest         bool `json:"agent_digest"`
+	ContentUpgraded     bool `json:"content_upgraded"`
 }
 
 // Notification categories. These are the wire values used by the preferences
 // API and the column names in notification_prefs.
 const (
-	CategoryRequestDecision = "request_decision"
-	CategoryRequestPending  = "request_pending"
-	CategoryNewMovie        = "new_movie"
-	CategoryNewEpisode      = "new_episode"
+	CategoryRequestDecision     = "request_decision"
+	CategoryRequestPending      = "request_pending"
+	CategoryRequestAutoApproved = "request_auto_approved"
+	CategoryNewMovie            = "new_movie"
+	CategoryNewEpisode          = "new_episode"
 	// CategoryNewBook tells users a Chaptarr book import landed. On by
 	// default, but scoped per instance (usersOptedIntoNewBook): the audience
 	// is the users assigned to the instance the import landed on — a chaptarr
@@ -43,11 +46,11 @@ const (
 	// users assigned to the instance the import landed on — admins included.
 	// Only an admin with no music assignment at all hears every instance.
 	CategoryNewMusic = "new_music"
-	// CategoryIssueCreated notifies admins of a new AI-remediation issue
-	// (user-reported or auto-detected). Admin-scoped, on by default.
+	// CategoryIssueCreated notifies admins of a problem needing attention or
+	// a question in its investigation. Admin-scoped, on by default.
 	CategoryIssueCreated = "issue_created"
-	// CategoryAgentActionPending notifies admins that the AI agent proposed a fix
-	// awaiting their approval. Admin-scoped, on by default.
+	// CategoryAgentActionPending notifies admins of proposals awaiting their
+	// approval and applied repairs needing review. Admin-scoped, on by default.
 	CategoryAgentActionPending = "agent_action_pending"
 	// CategoryAgentAutoApprovalPaused tells admins a standing auto-approval
 	// rule disarmed itself after a failed or unverifiable outcome. It
@@ -59,14 +62,14 @@ const (
 	// CategoryPlexAccessRequest notifies admins that a user shared their Plex
 	// email and is waiting for a server invite. Admin-scoped, on by default.
 	CategoryPlexAccessRequest = "plex_access_request"
-	// CategoryPlexInviteSent tells a user their Plex invite went out (one-tap
-	// or auto) so they know to check their inbox. User-scoped, on by default.
-	CategoryPlexInviteSent = "plex_invite_sent"
-	// CategoryIssueReportUpdate covers every reporter-loop push about a user's
-	// OWN report — the agent asked them a question, a fix was applied and
-	// awaits their confirmation, or the report closed. One user-scoped
-	// preference on purpose: they are a single conversation's beats, and a
-	// reporter who wants any of them wants all of them. On by default.
+	// CategoryMediaServerAccess tells a user how to start using a newly granted
+	// media server: account setup, Plex invite acceptance, or an active share.
+	// Recipient-scoped, on by default; replaces the Plex-only invite category.
+	CategoryMediaServerAccess = "media_server_access"
+	// CategoryIssueReportUpdate tells the recipient that their own reported
+	// problem was resolved. The existing key preserves their saved choice;
+	// questions, repair attempts, and unsuccessful closes no longer page them.
+	// On by default.
 	CategoryIssueReportUpdate = "issue_report_update"
 	// CategoryAgentDigest is the weekly agent scoreboard — the one push that
 	// exists to report SUCCESS. The pipeline deliberately never pages when
@@ -95,8 +98,10 @@ const (
 
 // defaultPrefs is the preference set applied when a user has no row. It must
 // match the notification_prefs column defaults and the documented API
-// defaults: request_decision and content_upgraded off, everything else on.
+// defaults: request decisions, automatic requests, and quality upgrades off;
+// the master and other categories on.
 var defaultPrefs = Prefs{
+	PushEnabled:        true,
 	RequestDecision:    false,
 	RequestPending:     true,
 	NewMovie:           true,
@@ -106,7 +111,7 @@ var defaultPrefs = Prefs{
 	IssueCreated:       true,
 	AgentActionPending: true,
 	PlexAccessRequest:  true,
-	PlexInviteSent:     true,
+	MediaServerAccess:  true,
 	IssueReportUpdate:  true,
 	AgentDigest:        true,
 	ContentUpgraded:    false,
@@ -119,20 +124,21 @@ var categoryColumn = map[string]struct {
 	column     string
 	defaultVal bool
 }{
-	CategoryRequestDecision:    {"request_decision", defaultPrefs.RequestDecision},
-	CategoryRequestPending:     {"request_pending", defaultPrefs.RequestPending},
-	CategoryNewMovie:           {"new_movie", defaultPrefs.NewMovie},
-	CategoryNewEpisode:         {"new_episode", defaultPrefs.NewEpisode},
-	CategoryNewBook:            {"new_book", defaultPrefs.NewBook},
-	CategoryNewMusic:           {"new_music", defaultPrefs.NewMusic},
-	CategoryIssueCreated:       {"issue_created", defaultPrefs.IssueCreated},
-	CategoryAgentActionPending: {"agent_action_pending", defaultPrefs.AgentActionPending},
+	CategoryRequestDecision:     {"request_decision", defaultPrefs.RequestDecision},
+	CategoryRequestPending:      {"request_pending", defaultPrefs.RequestPending},
+	CategoryRequestAutoApproved: {"request_auto_approved", false},
+	CategoryNewMovie:            {"new_movie", defaultPrefs.NewMovie},
+	CategoryNewEpisode:          {"new_episode", defaultPrefs.NewEpisode},
+	CategoryNewBook:             {"new_book", defaultPrefs.NewBook},
+	CategoryNewMusic:            {"new_music", defaultPrefs.NewMusic},
+	CategoryIssueCreated:        {"issue_created", defaultPrefs.IssueCreated},
+	CategoryAgentActionPending:  {"agent_action_pending", defaultPrefs.AgentActionPending},
 	// Shares the agent_action_pending column by design (see the category const).
 	CategoryAgentAutoApprovalPaused: {"agent_action_pending", defaultPrefs.AgentActionPending},
 	// Shares the agent_action_pending column by design (see the category const).
 	CategoryProfileChangePending: {"agent_action_pending", defaultPrefs.AgentActionPending},
 	CategoryPlexAccessRequest:    {"plex_access_request", defaultPrefs.PlexAccessRequest},
-	CategoryPlexInviteSent:       {"plex_invite_sent", defaultPrefs.PlexInviteSent},
+	CategoryMediaServerAccess:    {"media_server_access", defaultPrefs.MediaServerAccess},
 	CategoryIssueReportUpdate:    {"issue_report_update", defaultPrefs.IssueReportUpdate},
 	CategoryAgentDigest:          {"agent_digest", defaultPrefs.AgentDigest},
 	CategoryContentUpgraded:      {"content_upgraded", defaultPrefs.ContentUpgraded},
@@ -154,10 +160,10 @@ func NewPrefsStore(db *sql.DB) *PrefsStore {
 func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 	p := defaultPrefs
 	err := s.db.QueryRow(
-		`SELECT request_decision, request_pending, new_movie, new_episode, new_book, new_music, issue_created, agent_action_pending, plex_access_request, plex_invite_sent, issue_report_update, agent_digest, content_upgraded
+		`SELECT request_decision, request_pending, new_movie, new_episode, new_book, new_music, issue_created, agent_action_pending, plex_access_request, media_server_access, issue_report_update, agent_digest, content_upgraded, push_enabled, request_auto_approved
 		 FROM notification_prefs WHERE user_id = ?`,
 		userID,
-	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.NewBook, &p.NewMusic, &p.IssueCreated, &p.AgentActionPending, &p.PlexAccessRequest, &p.PlexInviteSent, &p.IssueReportUpdate, &p.AgentDigest, &p.ContentUpgraded)
+	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.NewBook, &p.NewMusic, &p.IssueCreated, &p.AgentActionPending, &p.PlexAccessRequest, &p.MediaServerAccess, &p.IssueReportUpdate, &p.AgentDigest, &p.ContentUpgraded, &p.PushEnabled, &p.RequestAutoApproved)
 	if err == sql.ErrNoRows {
 		return defaultPrefs, nil
 	}
@@ -169,10 +175,16 @@ func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 
 // Set upserts a user's preferences.
 func (s *PrefsStore) Set(userID int64, p Prefs) error {
+	return s.set(userID, p, &p.PushEnabled, &p.RequestAutoApproved, &p.MediaServerAccess)
+}
+
+// Omitted new fields survive saves from clients that do not know them yet.
+// COALESCE in the upsert preserves them atomically, without a read/write race.
+func (s *PrefsStore) set(userID int64, p Prefs, enabled, autoApproved, mediaAccess *bool) error {
 	_, err := s.db.Exec(
 		`INSERT INTO notification_prefs
-		   (user_id, request_decision, request_pending, new_movie, new_episode, new_book, new_music, issue_created, agent_action_pending, plex_access_request, plex_invite_sent, issue_report_update, agent_digest, content_upgraded)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		   (user_id, request_decision, request_pending, new_movie, new_episode, new_book, new_music, issue_created, agent_action_pending, plex_access_request, media_server_access, issue_report_update, agent_digest, content_upgraded, push_enabled, request_auto_approved)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 1), ?, ?, ?, COALESCE(?, 1), COALESCE(?, 0))
 		 ON CONFLICT(user_id) DO UPDATE SET
 		   request_decision = excluded.request_decision,
 		   request_pending  = excluded.request_pending,
@@ -183,11 +195,14 @@ func (s *PrefsStore) Set(userID int64, p Prefs) error {
 		   issue_created    = excluded.issue_created,
 		   agent_action_pending = excluded.agent_action_pending,
 		   plex_access_request  = excluded.plex_access_request,
-		   plex_invite_sent     = excluded.plex_invite_sent,
+		   media_server_access  = COALESCE(?, notification_prefs.media_server_access),
 		   issue_report_update  = excluded.issue_report_update,
 		   agent_digest         = excluded.agent_digest,
-		   content_upgraded     = excluded.content_upgraded`,
-		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode, p.NewBook, p.NewMusic, p.IssueCreated, p.AgentActionPending, p.PlexAccessRequest, p.PlexInviteSent, p.IssueReportUpdate, p.AgentDigest, p.ContentUpgraded,
+		   content_upgraded     = excluded.content_upgraded,
+		   push_enabled         = COALESCE(?, notification_prefs.push_enabled),
+		   request_auto_approved = COALESCE(?, notification_prefs.request_auto_approved)`,
+		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode, p.NewBook, p.NewMusic, p.IssueCreated, p.AgentActionPending, p.PlexAccessRequest, mediaAccess, p.IssueReportUpdate, p.AgentDigest, p.ContentUpgraded,
+		enabled, autoApproved, mediaAccess, enabled, autoApproved,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert notification prefs: %w", err)
@@ -239,11 +254,7 @@ func (s *PrefsStore) queryOptedInto(category string) ([]int64, error) {
 	// Admin-scoped categories: only admins act on pending requests, issues,
 	// agent-action approvals, paused auto-approval rules, Plex access
 	// requests, or care that a file was replaced by a quality upgrade.
-	if category == CategoryRequestPending || category == CategoryIssueCreated ||
-		category == CategoryAgentActionPending || category == CategoryAgentAutoApprovalPaused ||
-		category == CategoryProfileChangePending ||
-		category == CategoryPlexAccessRequest || category == CategoryAgentDigest ||
-		category == CategoryContentUpgraded {
+	if adminCategory(category) {
 		query += " AND u.role = 'admin'"
 	}
 	return s.queryUserIDs(query)

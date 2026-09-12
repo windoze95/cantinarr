@@ -7,7 +7,6 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/models/user_profile.dart';
 import '../../../core/network/api_error_message.dart';
-import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/attention_menu_visibility_switch.dart';
@@ -371,6 +370,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ],
 
+            const SizedBox(height: 16),
+
+            // Notifications
+            SettingsHighlight(
+              anchorId: SettingsAnchors.rootNotifications,
+              highlightId: _activeHighlight,
+              child: const _SectionHeader(title: 'Notifications'),
+            ),
+            _SettingsTile(
+              icon: Icons.notifications_outlined,
+              title: 'Push Notifications',
+              subtitle: 'Choose which push notifications you receive',
+              onTap: () => context.push('/settings/push-notifications'),
+            ),
+            if (user?.isAdmin == true)
+              _SettingsTile(
+                icon: Icons.notifications_active_outlined,
+                title: 'Discord Notifications',
+                subtitle: 'Send new media requests to a Discord channel',
+                onTap: () => context.push('/settings/discord-notifications'),
+              ),
+
             if (user?.isAdmin == true) ...[
               const SizedBox(height: 16),
               const _SectionHeader(title: 'Needs attention menu'),
@@ -407,36 +428,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
               ),
             ],
-
-            const SizedBox(height: 16),
-
-            // Notifications
-            const _SectionHeader(title: 'Notifications'),
-            _SettingsTile(
-              icon: Icons.notifications_outlined,
-              title: 'Notification Preferences',
-              subtitle: 'Choose which push notifications you receive',
-              onTap: () => context.push('/settings/notifications'),
-            ),
-            SettingsHighlight(
-              anchorId: SettingsAnchors.rootRequestUpdates,
-              highlightId: _activeHighlight,
-              child: SwitchListTile(
-                value: ref.watch(requestNotificationsEnabledProvider),
-                onChanged: (v) =>
-                    ref.read(requestNotificationsEnabledProvider.notifier).set(v),
-                secondary: const Icon(Icons.notifications_active_outlined,
-                    color: AppTheme.textSecondary),
-                title: const Text('Request updates',
-                    style: TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontWeight: FontWeight.w500)),
-                subtitle: const Text(
-                    'Show an in-app banner when a request is approved or denied',
-                    style:
-                        TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-              ),
-            ),
 
             const SizedBox(height: 16),
 

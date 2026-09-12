@@ -9,7 +9,9 @@
 /// Never rename a value: ids travel in shareable URLs. Add, don't repurpose.
 abstract final class SettingsAnchors {
   // /settings (root)
-  static const rootRequestUpdates = 'root.request-updates';
+  static const rootNotifications = 'root.notifications';
+  static const notificationsEnabled = 'notifications.enabled';
+  static const notificationsAutoApproved = 'notifications.auto-approved';
   static const rootAttentionApprovals = 'root.attention-approvals';
   static const rootAttentionIssues = 'root.attention-issues';
   static const rootAttentionAgentFixes = 'root.attention-agent-fixes';
@@ -24,7 +26,7 @@ abstract final class SettingsAnchors {
   static const requestsQualityRadarr = 'requests.quality-radarr';
   static const requestsQualitySonarr = 'requests.quality-sonarr';
 
-  // /settings/notifications
+  // /settings/push-notifications
   static const notificationsRequestDecision = 'notifications.request-decision';
   static const notificationsRequestPending = 'notifications.request-pending';
   static const notificationsProblemReports = 'notifications.problem-reports';
@@ -37,7 +39,8 @@ abstract final class SettingsAnchors {
   static const notificationsNewEpisode = 'notifications.new-episode';
   static const notificationsNewBook = 'notifications.new-book';
   static const notificationsNewMusic = 'notifications.new-music';
-  static const notificationsPlexInviteSent = 'notifications.plex-invite-sent';
+  static const notificationsMediaServerAccess =
+      'notifications.media-server-access';
   static const notificationsReportUpdates = 'notifications.report-updates';
 
   // /settings/ai-remediation

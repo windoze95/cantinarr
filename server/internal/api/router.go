@@ -14,6 +14,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/config"
 	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/discordnotify"
 	"github.com/windoze95/cantinarr-server/internal/discover"
 	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/hardcover"
@@ -61,6 +62,7 @@ func NewRouter(
 	updateChecker *update.Checker,
 	serverSettings *serversettings.Service,
 	contentPolicyHandler *contentpolicy.Handler,
+	discordNotifications *discordnotify.Service,
 ) http.Handler {
 	configChanged := func() {
 		if wsHub != nil {
@@ -202,6 +204,14 @@ func NewRouter(
 		// Admin routes
 		r.Route("/admin", func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
+			r.With(auth.RequirePermission(auth.PermissionAdmin)).Get("/push-notifications", pushHandler.ServerPolicy)
+			r.With(auth.RequirePermission(auth.PermissionAdmin)).Put("/push-notifications", pushHandler.ServerPolicy)
+			discordHandler := discordNotifications.Handler
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/discord-notifications", discordHandler)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Put("/discord-notifications", discordHandler)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/discord-notifications", discordHandler)
+			discordTestLimiter := auth.NewRateLimiter(3, time.Minute)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage), discordTestLimiter.Middleware).Post("/discord-notifications/test", discordHandler)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/connect-token", authHandler.HandleCreateConnectToken)
 			// The origin invite/passkey links are built from. Lives beside
 			// connect-token because that is the surface it exists for.

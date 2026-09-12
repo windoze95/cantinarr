@@ -18,7 +18,7 @@ func TestPrefsGetDefaultsForMissingRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	want := Prefs{RequestDecision: false, RequestPending: true, NewMovie: true, NewEpisode: true, NewBook: true, NewMusic: true, IssueCreated: true, AgentActionPending: true, PlexAccessRequest: true, PlexInviteSent: true, IssueReportUpdate: true, AgentDigest: true, ContentUpgraded: false}
+	want := Prefs{PushEnabled: true, RequestDecision: false, RequestPending: true, NewMovie: true, NewEpisode: true, NewBook: true, NewMusic: true, IssueCreated: true, AgentActionPending: true, PlexAccessRequest: true, MediaServerAccess: true, IssueReportUpdate: true, AgentDigest: true, ContentUpgraded: false}
 	if got != want {
 		t.Errorf("default prefs = %+v, want %+v", got, want)
 	}

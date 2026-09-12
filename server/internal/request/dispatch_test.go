@@ -307,7 +307,9 @@ func TestRetryBackoffAndLimit(t *testing.T) {
 		if !ok {
 			t.Fatal("could not claim")
 		}
+		before := time.Now()
 		s.finishDelivery(out.RequestID, "ebook", token, "retry", "catalog_unavailable", nil)
+		after := time.Now()
 		s.db.Exec(`DELETE FROM request_dispatch_locks`)
 		states, _ := s.deliveryStates(out.RequestID)
 		d := states[0]
@@ -324,7 +326,9 @@ func TestRetryBackoffAndLimit(t *testing.T) {
 		if attempt == 20 {
 			want = 6 * time.Hour
 		}
-		if d.NextAttemptAt == nil || time.Until(*d.NextAttemptAt) < want-time.Second || time.Until(*d.NextAttemptAt) > want {
+		// Scheduling stores whole seconds. Bracket the scheduling call so
+		// rounding and a slow database read cannot shorten the expected delay.
+		if d.NextAttemptAt == nil || d.NextAttemptAt.Unix() < before.Add(want).Unix() || d.NextAttemptAt.Unix() > after.Add(want).Unix() {
 			t.Fatalf("attempt %d delay: %+v", attempt, d)
 		}
 	}

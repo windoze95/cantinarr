@@ -78,6 +78,22 @@ CREATE TABLE IF NOT EXISTS book_request_waiters (
     PRIMARY KEY (request_id, user_id)
 );
 
+-- Discord records delivery history, never current library availability.
+-- One receipt per new request survives retries and process restarts.
+CREATE TABLE IF NOT EXISTS discord_notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER NOT NULL UNIQUE REFERENCES request_log(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    detail TEXT NOT NULL DEFAULT 'Waiting to send.',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS discord_notifications_due ON discord_notifications(status, next_attempt_at);
+
 -- Durable delivery is separate from approval and from live library state.
 CREATE TABLE IF NOT EXISTS request_dispatch (
     request_id INTEGER NOT NULL REFERENCES request_log(id) ON DELETE CASCADE,
@@ -249,11 +265,13 @@ CREATE TABLE IF NOT EXISTS push_tokens (
 
 -- Per-user push notification preferences. A missing row means "all defaults",
 -- so a user only gets a row once they change something. Defaults match the
--- self-service API: request_decision off, everything else (request_pending,
--- the new_movie/new_episode/new_book/new_music content alerts, ...) on. Kept
+-- self-service API: request_decision, request_auto_approved, and content_upgraded
+-- off; the master and other categories on. Kept
 -- separate from user_request_settings (admin-managed request policy).
 CREATE TABLE IF NOT EXISTS notification_prefs (
     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    push_enabled INTEGER NOT NULL DEFAULT 1,
+    request_auto_approved INTEGER NOT NULL DEFAULT 0,
     request_decision INTEGER NOT NULL DEFAULT 0,
     request_pending  INTEGER NOT NULL DEFAULT 1,
     new_movie        INTEGER NOT NULL DEFAULT 1,
@@ -264,6 +282,7 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
     agent_action_pending INTEGER NOT NULL DEFAULT 1,
     plex_access_request INTEGER NOT NULL DEFAULT 1,
     plex_invite_sent INTEGER NOT NULL DEFAULT 1,
+    media_server_access INTEGER NOT NULL DEFAULT 1,
     issue_report_update INTEGER NOT NULL DEFAULT 1,
     agent_digest INTEGER NOT NULL DEFAULT 1,
     content_upgraded INTEGER NOT NULL DEFAULT 0
@@ -1082,6 +1101,14 @@ func Open(dbPath string) (*sql.DB, error) {
 		// On by default like the other new-content categories; the audience is
 		// additionally scoped in SQL to users who can see the instance.
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN new_music INTEGER NOT NULL DEFAULT 1"},
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN push_enabled INTEGER NOT NULL DEFAULT 1"},
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN request_auto_approved INTEGER NOT NULL DEFAULT 0"},
+		// Broaden the former Plex-invite preference without opting anyone back
+		// in. Retain the old column for upgrades; the new one owns future saves.
+		{
+			alter:    "ALTER TABLE notification_prefs ADD COLUMN media_server_access INTEGER NOT NULL DEFAULT 1",
+			backfill: []string{"UPDATE notification_prefs SET media_server_access = plex_invite_sent"},
+		},
 		// Hardcover: an admin-supplied Hardcover API token held per Chaptarr
 		// instance, encrypted at rest and write-only through the API. Empty =
 		// not connected, which is the only thing the API ever reports about it.
@@ -1095,6 +1122,15 @@ func Open(dbPath string) (*sql.DB, error) {
 			db.Close()
 			return nil, err
 		}
+	}
+	// Repairs awaiting an end-user verdict now belong to the admin queue.
+	// Reassign legacy open waits without closing them or replaying a push.
+	if _, err := db.Exec(`UPDATE issues SET status='needs_admin', read=0,
+		resolution='A repair was applied. Verify the result and close the report.',
+		updated_at=CURRENT_TIMESTAMP
+		WHERE status='awaiting_confirmation' AND closed_at IS NULL`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("assign legacy repair reviews to admins: %w", err)
 	}
 	// Monetary estimates were briefly stored on remediation runs using a
 	// hardcoded model-price table. They are not reliable audit data, so erase

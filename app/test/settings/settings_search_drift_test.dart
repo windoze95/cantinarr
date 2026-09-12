@@ -9,7 +9,8 @@ import 'package:cantinarr/features/ai_assistant/data/ai_settings_service.dart';
 import 'package:cantinarr/features/ai_assistant/ui/ai_access_screen.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/issues/ui/ai_remediation_settings_screen.dart';
-import 'package:cantinarr/features/notifications/ui/notification_preferences_screen.dart';
+import 'package:cantinarr/features/notifications/ui/push_notifications_screen.dart';
+import 'package:cantinarr/features/notifications/ui/server_push_notifications_screen.dart';
 import 'package:cantinarr/features/settings/data/settings_search_index.dart';
 import 'package:cantinarr/features/settings/ui/ai_tools_screen.dart';
 import 'package:cantinarr/features/settings/ui/credentials_screen.dart';
@@ -56,7 +57,8 @@ const _userGates = SettingsSearchGates(user: _user);
 /// the root pumps instead.
 const _pumpedRoutes = {
   '/settings/request-settings',
-  '/settings/notifications',
+  '/settings/push-notifications',
+  '/settings/push-notifications/server',
   '/settings/ai-remediation',
   '/settings/credentials',
   '/settings/plex',
@@ -72,10 +74,16 @@ List<SettingsSearchEntry> _controlsFor(String route) => settingsSearchIndex
     .where((e) => e.route == route && !_isRootRendered(e))
     .toList();
 
-/// Scrolls the first ListView down until [finder] builds. Entries are
-/// asserted in registry order (top to bottom), so a one-way hunt suffices.
+/// Finds a row regardless of whether the screen and search registry share
+/// the same order. Reset a missing row's search before scrolling down.
 Future<void> _hunt(WidgetTester tester, Finder finder) async {
+  if (finder.evaluate().isNotEmpty) return;
   final scrollable = find.byType(ListView).first;
+  final state = tester.state<ScrollableState>(
+    find.descendant(of: scrollable, matching: find.byType(Scrollable)).first,
+  );
+  state.position.jumpTo(state.position.minScrollExtent);
+  await tester.pumpAndSettle();
   for (var i = 0; i < 100 && finder.evaluate().isEmpty; i++) {
     await tester.drag(scrollable, const Offset(0, -60));
     await tester.pumpAndSettle();
@@ -278,16 +286,31 @@ void main() {
   testWidgets('notification preference controls', (tester) async {
     await _pumpScreen(
       tester,
-      const NotificationPreferencesScreen(),
+      const PushNotificationsScreen(),
       dio: _dioFor(const {
-        '/api/notifications/preferences': <String, dynamic>{},
+        '/api/notifications/preferences': <String, dynamic>{
+          'server_policy': {'enabled': true, 'categories': <String, bool>{}}
+        },
       }),
       authUser: _admin,
       chaptarr: true,
       lidarr: true,
     );
     await _assertTitles(
-        tester, _controlsFor('/settings/notifications'), _adminGates);
+        tester, _controlsFor('/settings/push-notifications'), _adminGates);
+  });
+
+  testWidgets('server push controls', (tester) async {
+    await _pumpScreen(tester, const ServerPushNotificationsScreen(),
+        dio: _dioFor(const {
+          '/api/admin/push-notifications': {
+            'enabled': true,
+            'categories': <String, bool>{}
+          }
+        }),
+        authUser: _admin);
+    await _assertTitles(tester,
+        _controlsFor('/settings/push-notifications/server'), _adminGates);
   });
 
   testWidgets('AI remediation controls', (tester) async {

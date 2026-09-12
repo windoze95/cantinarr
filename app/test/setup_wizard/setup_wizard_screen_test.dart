@@ -7,6 +7,7 @@ import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/widgets/status_pill.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:cantinarr/features/settings/settings_anchors.dart';
 import 'package:cantinarr/features/setup_wizard/ui/setup_wizard_screen.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -65,9 +66,8 @@ void main() {
   });
 
   // _pumpWizard mounts the wizard in a plain MaterialApp with no router, so
-  // this variant gives it one whose instance route is a recorder: the
-  // destination never matters here, only the extra each row sends along.
-  testWidgets('instance rows hand the add-instance form its extras',
+  // this variant records each row's destination and setup context.
+  testWidgets('rows open their settings destination with the right context',
       (tester) async {
     // Tall enough that every row is on screen without scrolling.
     tester.view.physicalSize = const Size(800, 1200);
@@ -90,6 +90,7 @@ void main() {
     };
 
     Object? capturedExtra;
+    Uri? capturedSettingsUri;
     final router = GoRouter(
       initialLocation: '/',
       routes: [
@@ -101,12 +102,22 @@ void main() {
             return const Scaffold(body: SizedBox());
           },
         ),
+        GoRoute(
+          path: '/settings',
+          builder: (_, state) {
+            capturedSettingsUri = state.uri;
+            return Scaffold(
+              body: Text(state.uri.queryParameters['highlight'] ?? ''),
+            );
+          },
+        ),
       ],
     );
 
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
       ..httpClientAdapter = _WizardAdapter([
         for (final key in expectedExtras.keys) (key, false, true),
+        ('push', false, true),
       ]);
     await tester.pumpWidget(
       ProviderScope(
@@ -134,6 +145,13 @@ void main() {
       router.pop();
       await tester.pumpAndSettle();
     }
+
+    await tester.ensureVisible(find.text('push'));
+    await tester.tap(find.text('push'));
+    await tester.pumpAndSettle();
+    expect(capturedSettingsUri.toString(),
+        '/settings?highlight=${SettingsAnchors.rootNotifications}');
+    expect(find.text(SettingsAnchors.rootNotifications), findsOneWidget);
   });
 
   for (final key in ['radarr', 'sonarr', 'tmdb', 'push', 'future_feature']) {
@@ -152,13 +170,13 @@ void main() {
                   find.byType(LinearProgressIndicator))
               .value,
           1);
-      if (key == 'push' || key == 'future_feature') {
-        expect(find.widgetWithText(StatusPill, 'Set up'), findsNothing);
-      }
+      expect(find.widgetWithText(StatusPill, 'Set up'), findsNothing);
       await tester.tap(find.widgetWithText(StatusPill, 'Skipped'));
       await tester.pumpAndSettle();
       expect(adapter.skipPuts.last, {'key': key, 'skipped': false});
       expect(find.text('0 of 1 features configured'), findsOneWidget);
+      expect(find.widgetWithText(StatusPill, 'Set up'),
+          key == 'future_feature' ? findsNothing : findsOneWidget);
     });
   }
 
@@ -331,13 +349,12 @@ void _rowEmphasisTests() {
     await _pumpWizard(tester, [
       ('tmdb', true, true),
       ('radarr', true, true),
-      ('push', false, true),
+      ('future_feature', false, true),
     ]);
 
-    // push is a server env var: it is unfinished, and there is no screen to
-    // send the admin to, so promising a tap would be a lie.
+    // A feature from a newer server has no known destination in this app.
     expect(find.widgetWithText(StatusPill, 'Set up'), findsNothing);
-    expect(tester.widget<Text>(_rowTitle('push')).style?.color,
+    expect(tester.widget<Text>(_rowTitle('future_feature')).style?.color,
         AppTheme.textPrimary);
   });
 

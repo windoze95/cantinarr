@@ -118,3 +118,17 @@ func toJSON(t *testing.T, value any) string {
 	}
 	return string(data)
 }
+
+func TestRedactDiscordWebhookPathAndFields(t *testing.T) {
+	for _, input := range []string{
+		`Post "https://discord.com/api/webhooks/123/secret-token?wait=true": connection reset`,
+		`{"error":"https://discordapp.com/api/v10/webhooks/123/secret-token"}`,
+		`{"webhook_url":"secret-token"}`,
+		`{"name":"discord_webhook_url","value":"secret-token"}`,
+	} {
+		out := RedactText(input)
+		if strings.Contains(out, "secret-token") || !strings.Contains(out, RedactedValue) {
+			t.Fatalf("Discord credential survived redaction: %s", out)
+		}
+	}
+}
