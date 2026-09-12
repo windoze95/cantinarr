@@ -30,6 +30,8 @@ import '../../issues/logic/issues_provider.dart';
 import '../../issues/ui/report_problem_sheet.dart';
 import '../../media_access/data/media_access_service.dart';
 import '../../media_access/logic/media_app_launcher.dart';
+import '../../media_access/data/video_apps.dart';
+import '../../media_access/logic/video_apps_provider.dart';
 import '../../media_download/data/media_download_models.dart';
 import '../../media_download/ui/media_download_button.dart';
 import '../../person/ui/person_detail_sheet.dart';
@@ -69,7 +71,8 @@ class MediaDetailScreen extends ConsumerStatefulWidget {
   ConsumerState<MediaDetailScreen> createState() => _MediaDetailScreenState();
 }
 
-class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
+class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
+    with WidgetsBindingObserver {
   /// Opens a browse grid anchored on this title or on one of its genres.
   void _browse(
     BrowseFeed feed, {
@@ -149,6 +152,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     final api = ref.read(discoverServiceProvider);
     _detailNotifier = MediaDetailNotifier(
       api: api,
@@ -178,8 +182,14 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _requestNotifier.removeListener(_onRequestStateChanged);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _resolveWatchLinks();
   }
 
   /// Re-asks the media servers when the request status moves, and only then:
@@ -259,7 +269,18 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     });
     // Resolve (or re-resolve) the admin link once auth settles — covers auth
     // landing after the initial detail load (e.g. an optimistic reconnect).
-    ref.listen(authProvider, (_, __) => _resolveArrLink());
+    ref.listen(videoAppRevisionProvider, (_, __) => _resolveWatchLinks());
+    ref.listen(authProvider, (previous, next) {
+      _resolveArrLink();
+      if (previous?.valueOrNull?.connection != null) {
+        if (previous?.valueOrNull?.user?.id != next.valueOrNull?.user?.id ||
+            previous?.valueOrNull?.connection?.serverUrl !=
+                next.valueOrNull?.connection?.serverUrl) {
+          setState(() => _watchLinks = const []);
+        }
+        _resolveWatchLinks();
+      }
+    });
     ref.listen(
       instanceProvider.select((s) => s.activeRadarrInstanceId),
       (_, __) => _resolveArrLink(),
@@ -484,7 +505,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                                   size: 17,
                                                 ),
                                                 label: Text(
-                                                  'Watch on ${_watchLabel(link)}',
+                                                  _watchActionLabel(link),
                                                 ),
                                               )
                                             else if (link.fallbackUrl.isNotEmpty)
@@ -498,7 +519,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                                   size: 17,
                                                 ),
                                                 label: Text(
-                                                  'Open ${_watchLabel(link)}',
+                                                  _watchActionLabel(link, fallback: true),
                                                 ),
                                               )
                                             else if (link.state ==
@@ -1062,11 +1083,22 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     return sameType > 1 ? link.name : mediaServerTypeLabel(link.serviceType);
   }
 
+  String _watchActionLabel(WatchLink link, {bool fallback = false}) {
+    if (ref.read(mediaAppLauncherProvider).videoAppFor(link.videoApps) == VideoApp.infuse) {
+      final context = _watchLinks.length > 1
+          ? ' · ${mediaServerTypeLabel(link.serviceType)} / ${link.name}' : '';
+      return 'Open in Infuse$context';
+    }
+    return '${fallback ? 'Open' : 'Watch on'} ${_watchLabel(link)}';
+  }
+
   /// Prefers the installed media app on mobile, retaining the server's web
   /// link when no app can open. Only a confirmed match carries a title hint.
   Future<void> _openWatchLink(WatchLink link, {bool fallback = false}) async {
     final opened = await ref.read(mediaAppLauncherProvider).open(
           serviceType: link.serviceType,
+          apps: link.videoApps,
+          tmdbId: !fallback && link.state == WatchLinkState.found ? widget.id : null,
           webUrl: fallback ? link.fallbackUrl : link.url,
           mediaType: !fallback && link.state == WatchLinkState.found
               ? widget.mediaType

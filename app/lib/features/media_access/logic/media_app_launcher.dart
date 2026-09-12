@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../discover/data/tmdb_models.dart';
 import '../data/listening_apps.dart';
+import '../data/video_apps.dart';
 
 typedef MediaExternalLauncher = Future<bool> Function(Uri uri);
 typedef MediaAndroidLauncher = Future<bool> Function(
@@ -32,6 +33,9 @@ class MediaAppLauncher {
   final MediaAndroidLauncher _launchAndroid;
 
   ListeningApp listeningAppFor(ListeningApps apps) =>
+      apps.forPlatform(_platform, isWeb: _isWeb);
+
+  VideoApp videoAppFor(VideoApps apps) =>
       apps.forPlatform(_platform, isWeb: _isWeb);
 
   /// The web URL remains the verified item page (or the generic server home).
@@ -79,6 +83,8 @@ class MediaAppLauncher {
     required String serviceType,
     required String webUrl,
     MediaType? mediaType,
+    int? tmdbId,
+    VideoApps apps = const VideoApps(),
   }) async {
     final parsed = Uri.tryParse(webUrl);
     final webUri = parsed != null &&
@@ -86,6 +92,22 @@ class MediaAppLauncher {
             parsed.host.isNotEmpty
         ? parsed
         : null;
+    final chosen = videoAppFor(apps);
+    if (VideoApps.serviceTypes.contains(serviceType) &&
+        chosen != VideoApp.service) {
+      if (webUri == null || webUri.userInfo.isNotEmpty) return false;
+      if (chosen == VideoApp.infuse) {
+        // Firecore's documented links identify a title across Infuse's own
+        // libraries, not the matching server/copy. Never append ?play.
+        // https://support.firecore.com/hc/en-us/articles/215090997-API-for-Third-Party-Apps-Services
+        final target = tmdbId != null && tmdbId > 0 &&
+                (mediaType == MediaType.movie || mediaType == MediaType.tv)
+            ? Uri.parse('infuse://${mediaType == MediaType.movie ? 'movie' : 'series'}/$tmdbId')
+            : Uri.parse('infuse://');
+        if (await _attempt(() => _launchExternal(target))) return true;
+      }
+      return _attempt(() => _launchExternal(webUri));
+    }
     final homeUri = switch (serviceType) {
       'plex' => Uri.parse('plex://'),
       'emby' => Uri.parse('emby://'),

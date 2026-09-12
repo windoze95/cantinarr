@@ -13,6 +13,7 @@ const _adminGates = SettingsSearchGates(
   phoneAppsVisible: true,
   mediaServersVisible: true,
   audiobookshelfVisible: true,
+  videoServersVisible: true,
 );
 const _userGates = SettingsSearchGates(user: _user);
 
@@ -23,6 +24,7 @@ const _routableSettingsPaths = {
   '/settings',
   '/settings/ai',
   '/settings/listening-apps',
+  '/settings/video-apps',
   '/settings/chatgpt',
   '/settings/credentials/chatgpt',
   '/settings/credentials',
@@ -54,6 +56,14 @@ const _routableSettingsPaths = {
 };
 
 void main() {
+  test('video app search follows the configured video-server gate', () {
+    final entry = settingsSearchIndex.singleWhere((e) => e.id == 'screen.video-apps');
+    expect(entry.route, '/settings/video-apps');
+    expect(entry.keywords, containsAll(['infuse', 'plex', 'jellyfin', 'emby']));
+    expect(entry.gate(const SettingsSearchGates(user: null)), isFalse);
+    expect(entry.gate(const SettingsSearchGates(user: null, videoServersVisible: true)), isTrue);
+  });
+
   group('registry invariants', () {
     test('ids are unique', () {
       final seen = <String>{};

@@ -16,6 +16,8 @@ import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../media_access/data/media_access_service.dart';
 import '../../media_access/data/listening_apps.dart';
+import '../../media_access/data/video_apps.dart';
+import '../../media_access/ui/video_app_field.dart';
 import '../../media_access/ui/listening_app_fields.dart';
 import '../../discover/data/trending_books_service.dart';
 import '../data/instance_api_service.dart';
@@ -102,6 +104,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _plexMachineId,
         _plexAutoApprove,
         _listeningApps?.toJson(),
+        _videoApps?.toJson(),
       ];
   Object get _mappingValues => [
         for (final mapping in _mediaPathMappings)
@@ -140,6 +143,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   late final TextEditingController _passwordController;
   late final TextEditingController _publicAddressController;
   ListeningApps? _listeningApps;
+  VideoApps? _videoApps;
   String _serviceType = 'radarr';
   bool _isDefault = false;
   bool _isSaving = false;
@@ -699,6 +703,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           }
           _selectedLibraryIds = config.libraryIds.toSet();
           _listeningApps = config.listeningApps;
+          _videoApps = config.videoApps;
           if (_isAbs) {
             _absSavedDefaultIds = config.libraryIds;
             _absSavedPublicAddress = config.publicAddress;
@@ -718,6 +723,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             _isPlex ? config.machineIdentifier : '',
             _isPlex && config.autoApprove,
             config.listeningApps?.toJson(),
+            config.videoApps?.toJson(),
           ]);
         }
         if (details.containsKey('media_path_mappings')) {
@@ -1423,6 +1429,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                     ? _absSavedDefaultIds
                     : _selectedLibraryIds.toList(growable: false),
                 listeningApps: _isAbs ? _listeningApps : null,
+                videoApps: VideoApps.serviceTypes.contains(_serviceType) ? _videoApps : null,
                 machineIdentifier: _isPlex ? _plexMachineId : '',
                 autoApprove: _isPlex && _plexAutoApprove,
               )
@@ -3134,6 +3141,25 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               ),
             const SizedBox(height: 24),
             _buildSharedLibrariesSection(),
+            if (VideoApps.serviceTypes.contains(_serviceType)) ...[
+              const SizedBox(height: 24),
+              Text('Default video app',
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              const Text('Used on iPhone and iPad unless a user chooses their '
+                  'own app in Settings → Account → Video apps. Android uses '
+                  'the service’s app; web and desktop use the browser.'),
+              const SizedBox(height: 16),
+              VideoAppField(
+                serviceType: _serviceType,
+                value: _videoApps ?? const VideoApps(),
+                inheritDefaults: false,
+                onChanged: (value) => setState(() {
+                  _videoApps = value;
+                  _mediaServerConfigDirty = true;
+                }),
+              ),
+            ],
             if (_serviceType == 'audiobookshelf') ...[
               const SizedBox(height: 24),
               Text('Default listening apps',

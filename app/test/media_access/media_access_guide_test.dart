@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/link.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/media_access/logic/media_app_launcher.dart';
+import 'package:cantinarr/features/media_access/logic/video_apps_provider.dart';
 import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -126,7 +127,13 @@ class _FakeAuthNotifier extends AuthNotifier {
   Future<void> refreshUser() async {}
 
   @override
-  Future<void> refreshConfig() async {}
+  Future<void> refreshConfig() async {
+    final current = state.valueOrNull;
+    if (current != null) {
+      state = AsyncData(current.copyWith(
+        connection: current.connection!.copyWith()));
+    }
+  }
 }
 
 const _alice = UserProfile(id: 2, username: 'alice', role: 'user');
@@ -596,6 +603,41 @@ void main() {
     expect(
         find.widgetWithText(ElevatedButton, 'Create my account'), findsNothing);
   });
+
+  for (final type in ['plex', 'jellyfin', 'emby']) {
+    testWidgets('$type guide opens Infuse home and refreshes changed preferences', (tester) async {
+      final urls = <Uri>[];
+      var app = 'infuse';
+      final row = type == 'plex' ? _plexServer(account: _share(pending: false))
+          : type == 'emby' ? _embyServer(account: _account()) : _server(account: _account());
+      await _pumpGuide(tester, handlers: {
+        'GET /api/media-servers': (_, __) => _Reply(200, [{...row, 'video_apps': {'ios': app}}]),
+      }, launcher: MediaAppLauncher(platform: TargetPlatform.iOS, isWeb: false,
+        launchExternal: (uri) async { urls.add(uri); return true; }));
+      await tester.ensureVisible(find.text('Open in Infuse'));
+      await tester.tap(find.text('Open in Infuse'));
+      await tester.pumpAndSettle();
+      expect(urls.single.toString(), 'infuse://');
+      app = 'browser';
+      ProviderScope.containerOf(tester.element(find.byType(MediaAccessGuide)))
+        .read(videoAppRevisionProvider.notifier).state++;
+      await tester.pumpAndSettle();
+      expect(find.text('Open in Infuse'), findsNothing);
+      await tester.ensureVisible(find.text('Open'));
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      expect(urls.last.toString(), row['public_address']);
+      app = 'infuse';
+      await _lastAuth!.refreshConfig();
+      await tester.pumpAndSettle();
+      expect(find.text('Open in Infuse'), findsOneWidget);
+      app = 'service';
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(find.text('Open in Infuse'), findsNothing);
+    });
+  }
 
   testWidgets('ABS guide refreshes the chosen listening app on resume', (tester) async {
     var iosApp = 'browser';

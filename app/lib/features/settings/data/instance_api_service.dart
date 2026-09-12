@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'hardcover_connection.dart';
 import '../../media_access/data/listening_apps.dart';
+import '../../media_access/data/video_apps.dart';
 import '../../../core/models/backend_connection.dart';
 
 /// Maps the path reported by one arr instance to the corresponding read-only
@@ -88,6 +89,7 @@ class MediaServerConfig {
   final String publicAddress;
   final List<String> libraryIds;
   final ListeningApps? listeningApps;
+  final VideoApps? videoApps;
 
   /// Plex only: the server (plex.tv machine identifier) whose shares the
   /// instance manages, and whether anyone who shares a Plex email is granted
@@ -99,6 +101,7 @@ class MediaServerConfig {
     this.publicAddress = '',
     this.libraryIds = const [],
     this.listeningApps,
+    this.videoApps,
     this.machineIdentifier = '',
     this.autoApprove = false,
   });
@@ -106,6 +109,9 @@ class MediaServerConfig {
   factory MediaServerConfig.fromJson(Map<String, dynamic> json) =>
       MediaServerConfig(
         publicAddress: json['public_address'] as String? ?? '',
+        videoApps: json['video_apps'] is Map
+            ? VideoApps.fromJson(json['video_apps'])
+            : null,
         listeningApps: json['listening_apps'] is Map
             ? ListeningApps.fromJson(json['listening_apps'])
             : null,
@@ -121,6 +127,7 @@ class MediaServerConfig {
         'public_address': publicAddress,
         'library_ids': libraryIds,
         if (listeningApps != null) 'listening_apps': listeningApps!.toJson(),
+        if (videoApps != null) 'video_apps': videoApps!.toJson(),
         if (machineIdentifier.isNotEmpty) 'machine_identifier': machineIdentifier,
         if (autoApprove) 'auto_approve': true,
       };

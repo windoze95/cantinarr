@@ -275,6 +275,14 @@ CREATE TABLE IF NOT EXISTS push_tokens (
     UNIQUE(device_id)
 );
 
+-- Personal video-app choices inherit each video instance's default by service.
+CREATE TABLE IF NOT EXISTS video_app_preferences (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    service_type TEXT NOT NULL CHECK (service_type IN ('plex', 'jellyfin', 'emby')),
+    ios TEXT NOT NULL DEFAULT '' CHECK (ios IN ('', 'service', 'infuse', 'browser')),
+    PRIMARY KEY (user_id, service_type)
+);
+
 -- Personal listening-app choices follow the user across devices. Empty values
 -- inherit each Audiobookshelf instance's default for the corresponding platform.
 CREATE TABLE IF NOT EXISTS listening_app_preferences (

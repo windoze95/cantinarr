@@ -7,6 +7,8 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/media_access_service.dart';
 import '../logic/media_app_launcher.dart';
+import '../data/video_apps.dart';
+import '../logic/video_apps_provider.dart';
 import '../logic/media_access_guide_provider.dart';
 import 'media_server_email_sheet.dart';
 import 'media_server_password_sheet.dart';
@@ -36,6 +38,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
     with WidgetsBindingObserver {
   List<MediaServerAccess>? _servers;
   bool _failed = false;
+  int _loadGeneration = 0;
 
   @override
   void initState() {
@@ -56,16 +59,17 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
   }
 
   Future<void> _load() async {
+    final generation = ++_loadGeneration;
     try {
       final servers = await ref.read(mediaAccessServiceProvider).listMine();
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
       ref.read(mediaAccessRevisionProvider.notifier).state++;
       setState(() {
         _servers = servers;
         _failed = false;
       });
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
       if (_servers == null) {
         setState(() => _failed = true);
         return;
@@ -277,6 +281,11 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
     );
   }
 
+  String _openLabel(MediaServerAccess server) =>
+      VideoApps.serviceTypes.contains(server.serviceType) &&
+          ref.read(mediaAppLauncherProvider).videoAppFor(server.videoApps) == VideoApp.infuse
+          ? 'Open in Infuse' : 'Open';
+
   Future<void> _open(MediaServerAccess server) async {
     final launcher = ref.read(mediaAppLauncherProvider);
     final opened = server.serviceType == 'audiobookshelf'
@@ -284,6 +293,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
             webUrl: server.publicAddress, apps: server.listeningApps)
         : await launcher.open(
           serviceType: server.serviceType,
+          apps: server.videoApps,
           webUrl: server.publicAddress,
         );
     if (opened || !mounted) return;
@@ -306,6 +316,15 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
   @override
   Widget build(BuildContext context) {
     final auth = ref.watch(authProvider).valueOrNull;
+    ref.listen(videoAppRevisionProvider, (_, __) => _load());
+    ref.listen(authProvider, (previous, next) {
+      if (previous?.valueOrNull?.connection == null) return;
+      if (previous?.valueOrNull?.user?.id != next.valueOrNull?.user?.id ||
+          previous?.valueOrNull?.connection?.serverUrl != next.valueOrNull?.connection?.serverUrl) {
+        setState(() { _servers = null; _failed = false; });
+      }
+      _load();
+    });
     final user = auth?.user;
     final servers = _servers;
     // A Plex server the user is not granted yet still gets a card (ask for
@@ -469,6 +488,21 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
         const SizedBox(height: 24),
         _serviceInstructions(orderedTypes[i], number: i + 2),
       ],
+      if (types.any(VideoApps.serviceTypes.contains)) ...[
+        const SizedBox(height: 24),
+        const _TipCard(
+          title: 'Choose your video app',
+          message: 'On iPhone and iPad, choose your media server’s app, Infuse, or '
+              'Browser in Settings → Account → Video apps, or follow your admin’s '
+              'default. Connect your servers inside Infuse first. Open in Infuse '
+              'finds a movie or show across its connected libraries; it cannot '
+              'select a particular server or copy. Cantinarr does not start '
+              'playback automatically. If Infuse cannot open, the original '
+              'server link opens in your browser. Android uses each service’s '
+              'app; web and desktop use the browser.',
+        ),
+        _guideLink('Get Infuse', 'https://firecore.com/infuse'),
+      ],
       const SizedBox(height: 24),
       _TipCard(
         title: 'Request here, $activity there',
@@ -479,6 +513,16 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
       ),
     ];
   }
+
+  Widget _guideLink(String label, String url) => Link(
+    uri: Uri.parse(url),
+    target: LinkTarget.blank,
+    builder: (context, followLink) => Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton.icon(onPressed: followLink,
+        icon: const Icon(Icons.open_in_new, size: 16), label: Text(label)),
+    ),
+  );
 
   Widget _serviceInstructions(String type, {required int number}) {
     final label = mediaServerTypeLabel(type);
@@ -720,7 +764,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
                 TextButton.icon(
                   onPressed: () => _open(server),
                   icon: const Icon(Icons.open_in_new, size: 16),
-                  label: const Text('Open'),
+                  label: Text(_openLabel(server)),
                 ),
               ],
             ),
@@ -1080,7 +1124,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
                 TextButton.icon(
                   onPressed: () => _open(server),
                   icon: const Icon(Icons.open_in_new, size: 16),
-                  label: const Text('Open'),
+                  label: Text(_openLabel(server)),
                 ),
               ],
             ),

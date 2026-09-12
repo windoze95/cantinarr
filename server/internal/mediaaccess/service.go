@@ -186,6 +186,7 @@ type ServerView struct {
 	PublicAddress string                  `json:"public_address"`
 	Account       *AccountView            `json:"account"`
 	ListeningApps *instance.ListeningApps `json:"listening_apps,omitempty"`
+	VideoApps     *instance.VideoApps     `json:"video_apps,omitempty"`
 	// ExistingAccount reports that the server confirmed an account named
 	// like this Cantinarr user (case-insensitively, the rule the server
 	// applies to a new name) that no Cantinarr user is linked to, while the
@@ -292,6 +293,7 @@ func (s *Service) ListForUser(ctx context.Context, userID int64) ([]ServerView, 
 	}
 	views := make([]ServerView, 0, len(ids))
 	var preferences *instance.ListeningApps
+	var videoPreferences videoAppPreferences
 	// A pending check is either the linked account to confirm (row set) or,
 	// on an account server with no linked account, the look for one already
 	// named like the user.
@@ -326,6 +328,17 @@ func (s *Service) ListForUser(ctx context.Context, userID int64) ([]ServerView, 
 			Kind:               string(kind),
 			PublicAddress:      inst.MediaServerConfig.PublicAddress,
 		})
+		if instance.IsVideoServerType(inst.ServiceType) {
+			if videoPreferences == nil {
+				var err error
+				videoPreferences, err = s.videoAppPreferences(userID)
+				if err != nil {
+					return nil, err
+				}
+			}
+			apps := videoPreferences[inst.ServiceType].WithDefaults(inst.MediaServerConfig.VideoApps)
+			views[len(views)-1].VideoApps = &apps
+		}
 		if inst.ServiceType == "audiobookshelf" {
 			if preferences == nil {
 				apps, err := s.listeningAppPreferences(userID)
@@ -446,12 +459,13 @@ const (
 // admin-typed public address (Plex: hosted Plex Web), set only when found.
 // FallbackURL is a generic sign-in shortcut, never evidence of availability.
 type WatchLink struct {
-	InstanceID  string `json:"instance_id"`
-	Name        string `json:"name"`
-	ServiceType string `json:"service_type"`
-	State       string `json:"state"`
-	URL         string `json:"url,omitempty"`
-	FallbackURL string `json:"fallback_url,omitempty"`
+	InstanceID  string             `json:"instance_id"`
+	Name        string             `json:"name"`
+	ServiceType string             `json:"service_type"`
+	State       string             `json:"state"`
+	URL         string             `json:"url,omitempty"`
+	FallbackURL string             `json:"fallback_url,omitempty"`
+	VideoApps   instance.VideoApps `json:"video_apps"`
 }
 
 // WatchLinks looks a title up on every media server the user can watch on:
@@ -496,6 +510,13 @@ func (s *Service) WatchLinks(ctx context.Context, userID int64, q mediaserver.It
 		targets = append(targets, target{inst: inst, row: row, finder: finder})
 	}
 
+	var preferences videoAppPreferences
+	if len(targets) > 0 {
+		preferences, err = s.videoAppPreferences(userID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	links := make([]WatchLink, len(targets))
 	var wg sync.WaitGroup
 	for i, t := range targets {
@@ -503,6 +524,7 @@ func (s *Service) WatchLinks(ctx context.Context, userID int64, q mediaserver.It
 		go func(i int, t target) {
 			defer wg.Done()
 			links[i] = s.watchLink(ctx, t.inst, t.row, t.finder, q)
+			links[i].VideoApps = preferences[t.inst.ServiceType].WithDefaults(t.inst.MediaServerConfig.VideoApps)
 		}(i, t)
 	}
 	wg.Wait()

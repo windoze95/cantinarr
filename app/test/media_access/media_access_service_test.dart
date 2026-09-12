@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:cantinarr/features/discover/data/tmdb_models.dart';
 import 'package:cantinarr/features/media_access/data/media_access_service.dart';
 import 'package:cantinarr/features/media_access/data/listening_apps.dart';
+import 'package:cantinarr/features/media_access/data/video_apps.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -74,6 +75,33 @@ MediaAccessService _service(HttpClientAdapter adapter) => MediaAccessService(
     );
 
 void main() {
+  test('video preferences use the self route and preserve each service', () async {
+    final body = {'plex': {'ios': 'infuse'}, 'jellyfin': {'ios': ''}, 'emby': {'ios': 'browser'}};
+    final adapter = _FakeAdapter({
+      'GET /api/me/video-apps': _Reply(200, body),
+      'PUT /api/me/video-apps': _Reply(200, body),
+    });
+    final service = _service(adapter);
+    final prefs = await service.getVideoAppPreferences();
+    expect(prefs['plex']!.ios, 'infuse');
+    await service.saveVideoAppPreferences(prefs);
+    expect(adapter.requests.last.body, body);
+    expect(adapter.requests.last.body.containsKey('user_id'), isFalse);
+    for (final invalid in [<String, dynamic>{}, <dynamic>[], {...body, 'plex': {'ios': 2}}]) {
+      adapter.replies['GET /api/me/video-apps'] = _Reply(200, invalid);
+      await expectLater(service.getVideoAppPreferences(), throwsFormatException);
+    }
+  });
+
+  test('watch and guide responses read video defaults without requiring new fields', () {
+    final link = WatchLink.fromJson({'state': 'found', 'video_apps': {'ios': 'infuse'}});
+    final view = MediaServerAccess.fromJson({'video_apps': {'ios': 'browser'}});
+    expect(link.videoApps.ios, 'infuse');
+    expect(view.videoApps.ios, 'browser');
+    expect(WatchLink.fromJson({}).videoApps.toJson(), const VideoApps().toJson());
+    expect(MediaServerAccess.fromJson({}).videoApps.ios, '');
+  });
+
   test('personal listening preferences use the self-only route and reject unreadable data', () async {
     final adapter = _FakeAdapter({
       'GET /api/me/listening-apps': const _Reply(200, {'ios': '', 'android': 'theshelf'}),
