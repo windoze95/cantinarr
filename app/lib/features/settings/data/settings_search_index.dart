@@ -43,6 +43,7 @@ class SettingsSearchGates {
   /// `connection.mediaServerInstances.isNotEmpty` — a media server (Jellyfin, Emby)
   /// is shared with this account, so the access guide has something to show.
   final bool mediaServersVisible;
+  final bool audiobookshelfVisible;
 
   const SettingsSearchGates({
     required this.user,
@@ -51,6 +52,7 @@ class SettingsSearchGates {
     this.donateVisible = false,
     this.phoneAppsVisible = false,
     this.mediaServersVisible = false,
+    this.audiobookshelfVisible = false,
   });
 }
 
@@ -71,6 +73,7 @@ bool gateLidarr(SettingsSearchGates g) => g.lidarrEnabled;
 bool gateDonate(SettingsSearchGates g) => g.donateVisible;
 bool gatePhoneApps(SettingsSearchGates g) => g.phoneAppsVisible;
 bool gateMediaServers(SettingsSearchGates g) => g.mediaServersVisible;
+bool gateAudiobookshelf(SettingsSearchGates g) => g.audiobookshelfVisible;
 
 /// One searchable setting.
 class SettingsSearchEntry {
@@ -165,6 +168,17 @@ const List<SettingsSearchEntry> _rootEntries = [
     section: 'Account',
     keywords: ['sign-in', 'security', 'change password', 'mcp'],
     gate: gatePassword,
+  ),
+  SettingsSearchEntry(
+    id: 'screen.listening-apps',
+    title: 'Listening apps',
+    icon: Icons.headphones_outlined,
+    route: '/settings/listening-apps',
+    screenTitle: 'Settings',
+    section: 'Account',
+    keywords: ['audiobookshelf', 'shelfplayer', 'theshelf', 'player', 'listen',
+      'audiobooks', 'default', 'iphone', 'ipad', 'android', 'browser'],
+    gate: gateAudiobookshelf,
   ),
   SettingsSearchEntry(
     id: 'screen.passkeys',

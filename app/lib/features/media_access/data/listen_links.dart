@@ -1,3 +1,5 @@
+import 'listening_apps.dart';
+
 class ListenItem {
   final String id, title, libraryName, url;
   final List<String> narrators;
@@ -22,12 +24,14 @@ class ListenItem {
 class ListenLink {
   final String instanceId, name, state, fallbackUrl;
   final List<ListenItem> items;
+  final ListeningApps listeningApps;
 
   const ListenLink(
       {required this.instanceId,
       required this.name,
       required this.state,
       this.fallbackUrl = '',
+      this.listeningApps = const ListeningApps(),
       this.items = const []});
 
   factory ListenLink.fromJson(Map<String, dynamic> json) => ListenLink(
@@ -35,6 +39,7 @@ class ListenLink {
         name: json['name'] as String? ?? '',
         state: json['state'] as String? ?? 'unverified',
         fallbackUrl: json['fallback_url'] as String? ?? '',
+        listeningApps: ListeningApps.fromJson(json['listening_apps']),
         items: (json['items'] as List? ?? [])
             .whereType<Map>()
             .map((item) => ListenItem.fromJson(Map<String, dynamic>.from(item)))

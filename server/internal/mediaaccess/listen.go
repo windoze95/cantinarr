@@ -30,12 +30,13 @@ type ListenItem struct {
 }
 
 type ListenLink struct {
-	InstanceID  string       `json:"instance_id"`
-	Name        string       `json:"name"`
-	ServiceType string       `json:"service_type"`
-	State       string       `json:"state"`
-	Items       []ListenItem `json:"items"`
-	FallbackURL string       `json:"fallback_url,omitempty"`
+	InstanceID    string                 `json:"instance_id"`
+	Name          string                 `json:"name"`
+	ServiceType   string                 `json:"service_type"`
+	State         string                 `json:"state"`
+	Items         []ListenItem           `json:"items"`
+	FallbackURL   string                 `json:"fallback_url,omitempty"`
+	ListeningApps instance.ListeningApps `json:"listening_apps"`
 }
 
 // Listen answers a per-title, no-store read. [] means no eligible granted
@@ -157,6 +158,10 @@ func (s *Service) ListenLinks(ctx context.Context, userID int64, q mediaserver.B
 		}(i, t)
 	}
 	wg.Wait()
+	preferences, err := s.listeningAppPreferences(userID)
+	if err != nil {
+		return nil, err
+	}
 	// Recheck all local eligibility after the slow calls. An account unlink,
 	// revoked grant, API-key rotation or repointed server invalidates its result.
 	granted, err := s.grantedMediaServers(userID)
@@ -174,6 +179,7 @@ func (s *Service) ListenLinks(ctx context.Context, userID int64, q mediaserver.B
 		if !current {
 			continue
 		}
+		results[i].ListeningApps = preferences.WithDefaults(t.inst.MediaServerConfig.ListeningApps)
 		out = append(out, results[i])
 	}
 	return out, nil

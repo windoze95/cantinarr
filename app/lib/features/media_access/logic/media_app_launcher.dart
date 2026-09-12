@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../discover/data/tmdb_models.dart';
+import '../data/listening_apps.dart';
 
 typedef MediaExternalLauncher = Future<bool> Function(Uri uri);
 typedef MediaAndroidLauncher = Future<bool> Function(
@@ -29,6 +30,48 @@ class MediaAppLauncher {
   final bool _isWeb;
   final MediaExternalLauncher _launchExternal;
   final MediaAndroidLauncher _launchAndroid;
+
+  ListeningApp listeningAppFor(ListeningApps apps) =>
+      apps.forPlatform(_platform, isWeb: _isWeb);
+
+  /// The web URL remains the verified item page (or the generic server home).
+  /// ShelfPlayer's item IDs include a private, app-local connection ID, so its
+  /// documented search action is used instead of inventing an exact deep link.
+  /// https://github.com/rasmuslos/ShelfPlayer/issues/313
+  Future<bool> openAudiobook({
+    required String webUrl,
+    required ListeningApps apps,
+    String? title,
+  }) async {
+    final uri = Uri.tryParse(webUrl);
+    if (uri == null ||
+        !{'http', 'https'}.contains(uri.scheme) ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty) {
+      return false;
+    }
+    final app = listeningAppFor(apps);
+    if (app != ListeningApp.browser) {
+      if (_platform == TargetPlatform.iOS) {
+        if (app == ListeningApp.shelfplayer && title?.trim().isNotEmpty == true) {
+          final search = Uri(
+            scheme: 'shelfplayer',
+            host: 'search',
+            // Native URLComponents treats '+' literally; encode spaces as %20.
+            query: 'q=${Uri.encodeComponent(title!.trim())}',
+          );
+          if (await _attempt(() => _launchExternal(search))) return true;
+        }
+        final home = Uri.parse('${app.id}://');
+        if (await _attempt(() => _launchExternal(home))) return true;
+      } else if (_platform == TargetPlatform.android) {
+        // These clients can always be opened through their launcher activity.
+        // Do not pass an ABS item ID to an undocumented title handler.
+        if (await _attempt(() => _launchAndroid(app.id, null))) return true;
+      }
+    }
+    return _attempt(() => _launchExternal(uri));
+  }
 
   /// Supply [mediaType] only for a confirmed title link. Generic shortcuts
   /// (including unverified Plex matches and guide addresses) open the app home.

@@ -174,17 +174,18 @@ type AccountView struct {
 }
 
 // ServerView is one media server a user is granted, with their account
-// state. It carries the admin-typed public address and nothing else about
-// the instance.
+// state, admin-typed public address, and resolved listening app choices.
+// Connection addresses and credentials stay on the server.
 type ServerView struct {
 	InstanceID  string `json:"instance_id"`
 	ServiceType string `json:"service_type"`
 	Name        string `json:"name"`
 	// Kind says how access works here: "account" (create one with a
 	// password) or "invite" (share an email, accept the invite).
-	Kind          string       `json:"kind"`
-	PublicAddress string       `json:"public_address"`
-	Account       *AccountView `json:"account"`
+	Kind          string                  `json:"kind"`
+	PublicAddress string                  `json:"public_address"`
+	Account       *AccountView            `json:"account"`
+	ListeningApps *instance.ListeningApps `json:"listening_apps,omitempty"`
 	// ExistingAccount reports that the server confirmed an account named
 	// like this Cantinarr user (case-insensitively, the rule the server
 	// applies to a new name) that no Cantinarr user is linked to, while the
@@ -290,6 +291,7 @@ func (s *Service) ListForUser(ctx context.Context, userID int64) ([]ServerView, 
 		return nil, fmt.Errorf("load user: %w", err)
 	}
 	views := make([]ServerView, 0, len(ids))
+	var preferences *instance.ListeningApps
 	// A pending check is either the linked account to confirm (row set) or,
 	// on an account server with no linked account, the look for one already
 	// named like the user.
@@ -324,6 +326,17 @@ func (s *Service) ListForUser(ctx context.Context, userID int64) ([]ServerView, 
 			Kind:               string(kind),
 			PublicAddress:      inst.MediaServerConfig.PublicAddress,
 		})
+		if inst.ServiceType == "audiobookshelf" {
+			if preferences == nil {
+				apps, err := s.listeningAppPreferences(userID)
+				if err != nil {
+					return nil, err
+				}
+				preferences = &apps
+			}
+			apps := preferences.WithDefaults(inst.MediaServerConfig.ListeningApps)
+			views[len(views)-1].ListeningApps = &apps
+		}
 		switch {
 		case row != nil:
 			checks = append(checks, pending{index: len(views) - 1, inst: inst, row: row})

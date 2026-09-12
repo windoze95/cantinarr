@@ -85,6 +85,7 @@ import '../features/settings/ui/instance_edit_screen.dart';
 import '../features/settings/ui/pending_requests_screen.dart';
 import '../features/settings/ui/request_settings_screen.dart';
 import '../features/settings/ui/settings_screen.dart';
+import '../features/settings/ui/listening_apps_screen.dart';
 import '../features/settings/ui/user_request_settings_screen.dart';
 import '../features/settings/ui/users_screen.dart';
 import '../features/setup_wizard/ui/setup_wizard_screen.dart';
@@ -693,6 +694,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
                 child: AiAccessScreen(highlightId: _highlightParam(state))),
+          ),
+          GoRoute(
+            path: '/settings/listening-apps',
+            builder: (_, __) =>
+                const AppAmbientBackground(child: ListeningAppsScreen()),
           ),
           GoRoute(
             path: '/settings/chatgpt',

@@ -83,6 +83,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final aiSettings = ref.watch(aiSettingsProvider).valueOrNull;
     final appVersion = ref.watch(appVersionProvider).valueOrNull;
     final mediaServersVisible = connection?.mediaAccessGuideVisible ?? false;
+    final audiobookshelfVisible = connection?.mediaServerInstances
+            .any((instance) => instance.serviceType == 'audiobookshelf') ??
+        false;
     final gates = SettingsSearchGates(
       user: user,
       chaptarrEnabled: connection?.services.chaptarr ?? false,
@@ -90,6 +93,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       donateVisible: _donateVisible,
       phoneAppsVisible: phoneAppsVisible,
       mediaServersVisible: mediaServersVisible,
+      audiobookshelfVisible: audiobookshelfVisible,
     );
     final searching = _query.trim().isNotEmpty;
 
@@ -199,6 +203,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: 'AI Access',
                 subtitle: _aiAccessSubtitle(aiSettings),
                 onTap: () => context.push('/settings/ai'),
+              ),
+            if (audiobookshelfVisible)
+              _SettingsTile(
+                icon: Icons.headphones_outlined,
+                title: 'Listening apps',
+                subtitle: 'Choose audiobook apps for iPhone, iPad and Android',
+                onTap: () => context.push('/settings/listening-apps'),
               ),
 
             const SizedBox(height: 16),

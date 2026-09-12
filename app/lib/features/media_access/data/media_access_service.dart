@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../../core/network/backend_client.dart';
 import 'listen_links.dart';
+import 'listening_apps.dart';
 
 /// The live state of one user's account on a media server, as the server
 /// answered just now. [verified] is false when the backend could not reach
@@ -138,14 +139,15 @@ class WatchLink {
 }
 
 /// One media server the signed-in user was granted, with their account on it
-/// (null = no account yet). Carries the admin-typed sign-in address only,
-/// never the instance URL the backend dials.
+/// (null = no account yet). Carries the admin-typed sign-in address and resolved
+/// listening app choices, never the instance URL the backend dials.
 class MediaServerAccess {
   final String instanceId;
   final String serviceType;
   final String name;
   final MediaServerKind kind;
   final String publicAddress;
+  final ListeningApps listeningApps;
   final MediaServerAccountStatus? account;
 
   /// The server confirmed an account named like this user that nobody is
@@ -162,6 +164,7 @@ class MediaServerAccess {
     required this.name,
     this.kind = MediaServerKind.account,
     this.publicAddress = '',
+    this.listeningApps = const ListeningApps(),
     this.account,
     this.existingAccount = false,
     this.autoLinkSuppressed = false,
@@ -184,6 +187,7 @@ class MediaServerAccess {
           ? MediaServerKind.invite
           : MediaServerKind.account,
       publicAddress: json['public_address'] as String? ?? '',
+      listeningApps: ListeningApps.fromJson(json['listening_apps']),
       account: rawAccount is Map
           ? MediaServerAccountStatus.fromJson(
               Map<String, dynamic>.from(rawAccount),
@@ -442,6 +446,23 @@ class MediaAccessService {
   final Dio _dio;
 
   MediaAccessService({required Dio backendDio}) : _dio = backendDio;
+
+  Future<ListeningApps> getListeningAppPreferences() async {
+    final response = await _dio.get('/api/me/listening-apps');
+    return _readListeningAppPreferences(response.data);
+  }
+
+  Future<ListeningApps> saveListeningAppPreferences(ListeningApps apps) async {
+    final response = await _dio.put('/api/me/listening-apps', data: apps.toJson());
+    return _readListeningAppPreferences(response.data);
+  }
+
+  ListeningApps _readListeningAppPreferences(dynamic data) {
+    if (data is! Map || data['ios'] is! String || data['android'] is! String) {
+      throw const FormatException('Invalid listening app preferences');
+    }
+    return ListeningApps.fromJson(data);
+  }
 
   /// The media servers the signed-in user was granted, each with their live
   /// account state. Re-read on every open: the rows behind it are an action

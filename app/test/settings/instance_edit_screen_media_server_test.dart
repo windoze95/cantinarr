@@ -274,6 +274,58 @@ Iterable<({String method, String path, dynamic body})> _libraryProbes(
         r.method == 'POST' && r.path == '/api/instances/media-server/libraries');
 
 void main() {
+  testWidgets('Audiobookshelf defaults save independently for both platforms',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester,
+        adapter: adapter,
+        screen: const InstanceEditScreen(initialServiceType: 'audiobookshelf'));
+    await _fillForm(tester);
+    for (final choice in [('iPhone and iPad', 'ShelfPlayer'), ('Android', 'TheShelf')]) {
+      final field = find.widgetWithText(DropdownButtonFormField<String>, choice.$1);
+      await tester.ensureVisible(field);
+      await tester.tap(field);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(choice.$2).last);
+      await tester.pumpAndSettle();
+    }
+    await _tapSave(tester, 'Add Instance');
+    final create = adapter.requests
+        .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
+    expect(create.body['media_server_config']['listening_apps'],
+        {'ios': 'shelfplayer', 'android': 'theshelf'});
+  });
+
+  testWidgets('editing one ABS app default retains its other saved settings',
+      (tester) async {
+    final adapter = _FakeAdapter(instances: [{
+      ..._homeJellyfin,
+      'id': 'abs-a', 'service_type': 'audiobookshelf', 'name': 'Shared books',
+      'media_server_config': {
+        'public_address': 'https://books.example.com',
+        'library_ids': ['books-a', 'books-b'],
+        'listening_apps': {'ios': 'shelfplayer', 'android': 'theshelf'},
+      },
+    }]);
+    await _pumpEdit(tester, adapter: adapter,
+        screen: const InstanceEditScreen(instanceId: 'abs-a'));
+    expect(find.text('ShelfPlayer'), findsOneWidget);
+    expect(find.text('TheShelf'), findsOneWidget);
+    await tester.enterText(find.widgetWithText(TextField, 'Name'), 'Renamed books');
+    final android = find.widgetWithText(DropdownButtonFormField<String>, 'Android');
+    await tester.ensureVisible(android);
+    await tester.tap(android);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Browser').last);
+    await tester.pumpAndSettle();
+    await _tapSave(tester, 'Save Changes');
+    final save = adapter.requests
+        .singleWhere((r) => r.method == 'PUT' && r.path == '/api/instances/abs-a');
+    expect(save.body['media_server_config']['listening_apps'],
+        {'ios': 'shelfplayer', 'android': 'browser'});
+    expect(save.body['media_server_config']['library_ids'], ['books-a', 'books-b']);
+  });
+
   for (final service in ['audiobookshelf', 'jellyfin', 'emby']) {
     testWidgets('$service copies the user address only when asked',
         (tester) async {

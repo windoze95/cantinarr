@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/widgets/app_sheet.dart';
 import '../data/listen_links.dart';
+import '../data/listening_apps.dart';
 import '../logic/listen_links_provider.dart';
-
-final bookListenLauncherProvider = Provider<Future<bool> Function(Uri)>(
-    (ref) => (uri) => launchUrl(uri, mode: LaunchMode.externalApplication));
+import '../logic/media_app_launcher.dart';
 
 /// One action per granted server, shown only beside an available audiobook.
 /// Generic shortcuts never imply a verified title. Multiple exact copies stay
@@ -54,26 +52,25 @@ class _BookListenActionsState extends ConsumerState<BookListenActions>
 
   void _retry() => ref.invalidate(listenLinksProvider(_request));
 
-  Future<void> _open(String address) async {
-    final uri = Uri.tryParse(address);
-    var opened = false;
-    if (uri != null &&
-        {'http', 'https'}.contains(uri.scheme) &&
-        uri.host.isNotEmpty &&
-        uri.userInfo.isEmpty) {
-      try {
-        opened = await ref.read(bookListenLauncherProvider)(uri);
-      } catch (_) {/* The browser may refuse a launch. */}
-    }
+  Future<void> _open(String address, ListeningApps apps,
+      {String? title}) async {
+    final launcher = ref.read(mediaAppLauncherProvider);
+    final opened = await launcher.openAudiobook(
+      webUrl: address,
+      apps: apps,
+      title: title,
+    );
     if (!opened && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Couldn't open Audiobookshelf.")));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              "Couldn't open ${launcher.listeningAppFor(apps).actionName}.")));
     }
   }
 
   Future<void> _choose(ListenLink link) async {
     if (link.items.length == 1) {
-      await _open(link.items.single.url);
+      await _open(link.items.single.url, link.listeningApps,
+          title: link.items.single.title);
       return;
     }
     final item = await showAppSheet<ListenItem>(
@@ -107,7 +104,16 @@ class _BookListenActionsState extends ConsumerState<BookListenActions>
                 ],
               ))),
     );
-    if (item != null && mounted) await _open(item.url);
+    if (item != null && mounted) {
+      await _open(item.url, link.listeningApps, title: item.title);
+    }
+  }
+
+  String _actionLabel(ListenLink link, int count, {required bool verified}) {
+    final app =
+        ref.watch(mediaAppLauncherProvider).listeningAppFor(link.listeningApps);
+    final action = verified ? 'Listen in' : 'Open';
+    return '$action ${app.actionName}${count == 1 ? '' : ' · ${link.name}'}';
   }
 
   @override
@@ -132,16 +138,15 @@ class _BookListenActionsState extends ConsumerState<BookListenActions>
                             OutlinedButton.icon(
                                 onPressed: () => _choose(link),
                                 icon: const Icon(Icons.headphones),
-                                label: Text(links.length == 1
-                                    ? 'Listen in Audiobookshelf'
-                                    : 'Listen in Audiobookshelf · ${link.name}'))
+                                label: Text(_actionLabel(link, links.length,
+                                    verified: true)))
                           else if (link.fallbackUrl.isNotEmpty)
                             OutlinedButton.icon(
-                                onPressed: () => _open(link.fallbackUrl),
+                                onPressed: () =>
+                                    _open(link.fallbackUrl, link.listeningApps),
                                 icon: const Icon(Icons.open_in_new),
-                                label: Text(links.length == 1
-                                    ? 'Open Audiobookshelf'
-                                    : 'Open Audiobookshelf · ${link.name}')),
+                                label: Text(_actionLabel(link, links.length,
+                                    verified: false))),
                         ])),
             ]),
           );

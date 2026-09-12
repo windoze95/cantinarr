@@ -597,6 +597,31 @@ void main() {
         find.widgetWithText(ElevatedButton, 'Create my account'), findsNothing);
   });
 
+  testWidgets('ABS guide refreshes the chosen listening app on resume', (tester) async {
+    var iosApp = 'browser';
+    final opened = <Uri>[];
+    await _pumpGuide(tester, instances: [_audiobookshelf], handlers: {
+      'GET /api/media-servers': (_, __) => _Reply(200, [{
+        'instance_id': 'abs-a', 'service_type': 'audiobookshelf',
+        'name': 'Shared books', 'public_address': 'https://books.example.com',
+        'account': _account(),
+        'listening_apps': {'ios': iosApp, 'android': 'browser'},
+      }]),
+    }, launcher: MediaAppLauncher(
+      platform: TargetPlatform.iOS, isWeb: false,
+      launchExternal: (uri) async { opened.add(uri); return true; },
+    ));
+    iosApp = 'shelfplayer';
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    final open = find.widgetWithText(TextButton, 'Open').first;
+    await tester.ensureVisible(open);
+    await tester.tap(open);
+    await tester.pumpAndSettle();
+    expect(opened.single.toString(), 'shelfplayer://');
+  });
+
   for (final mixed in [false, true]) {
     testWidgets(
         'Audiobookshelf guide uses listening and browser guidance (mixed=$mixed)',
@@ -631,9 +656,11 @@ void main() {
           scrollable: find.byType(Scrollable).first);
       expect(find.textContaining('separate Chaptarr access'), findsOneWidget);
       expect(
-          find.textContaining('Listen in Audiobookshelf opens a verified copy'),
+          find.textContaining('Listen opens a verified copy'),
           findsOneWidget);
-      expect(find.textContaining('Open Audiobookshelf is a general shortcut'),
+      expect(find.textContaining('Open is a general shortcut'),
+          findsOneWidget);
+      expect(find.textContaining('Settings → Account → Listening apps'),
           findsOneWidget);
       if (mixed) {
         await tester.scrollUntilVisible(

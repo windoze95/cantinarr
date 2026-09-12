@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:cantinarr/features/discover/data/tmdb_models.dart';
 import 'package:cantinarr/features/media_access/data/media_access_service.dart';
+import 'package:cantinarr/features/media_access/data/listening_apps.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -73,6 +74,23 @@ MediaAccessService _service(HttpClientAdapter adapter) => MediaAccessService(
     );
 
 void main() {
+  test('personal listening preferences use the self-only route and reject unreadable data', () async {
+    final adapter = _FakeAdapter({
+      'GET /api/me/listening-apps': const _Reply(200, {'ios': '', 'android': 'theshelf'}),
+      'PUT /api/me/listening-apps': const _Reply(200, {'ios': 'browser', 'android': ''}),
+    });
+    final service = _service(adapter);
+    expect((await service.getListeningAppPreferences()).android, 'theshelf');
+    final saved = await service.saveListeningAppPreferences(
+        const ListeningApps(ios: 'browser'));
+    expect(saved.toJson(), {'ios': 'browser', 'android': ''});
+    expect(adapter.requests.last.body, {'ios': 'browser', 'android': ''});
+    for (final invalid in [<String, dynamic>{}, <dynamic>[], {'ios': 2, 'android': ''}]) {
+      adapter.replies['GET /api/me/listening-apps'] = _Reply(200, invalid);
+      await expectLater(service.getListeningAppPreferences(), throwsFormatException);
+    }
+  });
+
   test('management intent, local grant, and remote status parse separately',
       () {
     final row = MediaServerAccountRow.fromJson({
@@ -141,6 +159,7 @@ void main() {
           'instance_id': 'abs',
           'name': 'Books',
           'state': 'found',
+          'listening_apps': {'ios': 'shelfplayer', 'android': 'theshelf'},
           'items': [
             {
               'id': 'one',
@@ -161,6 +180,8 @@ void main() {
     final links = await _service(adapter)
         .listenLinks(instanceId: 'chaptarr-a', foreignBookId: 'hc:1');
     expect(links.single.items.map((item) => item.id), ['one', 'two']);
+    expect(links.single.listeningApps.toJson(),
+        {'ios': 'shelfplayer', 'android': 'theshelf'});
     expect(adapter.uris.single.queryParameters,
         {'instance_id': 'chaptarr-a', 'foreign_book_id': 'hc:1'});
   });
