@@ -72,6 +72,9 @@ func NewRouter(
 	if instanceHandler != nil {
 		instanceHandler.SetConfigChangedObserver(configChanged)
 	}
+	if mediaAccessHandler != nil {
+		mediaAccessHandler.SetConfigChangedObserver(configChanged)
+	}
 	r := chi.NewRouter()
 	musicDiscovery := musicdiscovery.NewHandlerWithService(instanceStore, requestHandler.MusicCatalog())
 	// Hardcover trending for the Books tab, read with the token connected to
@@ -277,6 +280,8 @@ func NewRouter(
 			// link picker, link/unlink, and the import that turns picked
 			// accounts into granted, linked Cantinarr users. Access itself is
 			// the instance grant.
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/instances/{instanceID}/media-access", mediaAccessHandler.GetLibraryAccess)
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/instances/{instanceID}/media-access", mediaAccessHandler.UpdateLibraryAccess)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/media-servers/accounts", mediaAccessHandler.ListAccounts)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/media-servers/{instanceID}/users", mediaAccessHandler.RemoteUsers)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/media-servers/{instanceID}/import", mediaAccessHandler.Import)

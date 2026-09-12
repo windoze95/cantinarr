@@ -82,7 +82,20 @@ func (s *Service) SetManagement(ctx context.Context, userID int64, instanceID st
 			return Account{}, ErrProtectedAccount
 		}
 	}
-	if _, err := s.db.Exec("UPDATE user_media_server_accounts SET manage_access=?, access_sync_pending=? WHERE user_id=? AND instance_id=?", manage, manage, userID, instanceID); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Account{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("UPDATE user_media_server_accounts SET manage_access=?, access_sync_pending=? WHERE user_id=? AND instance_id=?", manage, manage, userID, instanceID); err != nil {
+		return Account{}, err
+	}
+	if !manage {
+		if _, err := tx.Exec("UPDATE user_media_library_policies SET sync_pending=0,remote_user_id='' WHERE user_id=? AND instance_id=?", userID, instanceID); err != nil {
+			return Account{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		return Account{}, err
 	}
 	if manage {

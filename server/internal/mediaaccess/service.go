@@ -650,7 +650,11 @@ func (s *Service) CreateAccount(ctx context.Context, userID int64, instanceID, p
 		return CreatedAccount{}, fmt.Errorf("load user: %w", err)
 	}
 
-	remote, err := provider.CreateUser(ctx, username, password, inst.MediaServerConfig.LibraryIDs)
+	libraryIDs, err := s.accountLibraryIDs(userID, inst)
+	if err != nil {
+		return CreatedAccount{}, err
+	}
+	remote, err := provider.CreateUser(ctx, username, password, libraryIDs)
 	switch {
 	case errors.Is(err, mediaserver.ErrInvalidName):
 		return CreatedAccount{}, ErrInvalidName
@@ -1102,6 +1106,9 @@ func (s *Service) UnlinkAccount(userID int64, instanceID string) error {
 	if n == 0 {
 		return ErrNoAccount
 	}
+	if _, err := tx.Exec("UPDATE user_media_library_policies SET sync_pending=0,remote_user_id='' WHERE user_id=? AND instance_id=?", userID, instanceID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec("INSERT OR IGNORE INTO user_media_server_unlinks(user_id,instance_id) VALUES (?,?)", userID, instanceID); err != nil {
 		return err
 	}
@@ -1459,6 +1466,23 @@ func (s *Service) StartAccountMaintenance(ctx context.Context) {
 // to reach this screen, so a server that answers the list and then refuses
 // the write is the narrow case.
 func (s *Service) OnSharedLibrariesChanged(instanceID string, libraryIDs []string) {
+	if kind, err := s.store.ServiceTypeOf(instanceID); err == nil && kind == "audiobookshelf" {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return
+		}
+		defer tx.Rollback()
+		if err = queueDefaultLibraries(tx, instanceID); err != nil {
+			return
+		}
+		if err = tx.Commit(); err != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), libraryPropagationBudget)
+		defer cancel()
+		s.SweepAccountDrift(ctx)
+		return
+	}
 	inst, err := s.mediaServerInstance(instanceID)
 	if err != nil {
 		s.logger.Error("mediaaccess: shared libraries changed: load instance", "err", err, "instance_id", instanceID)
@@ -1564,12 +1588,19 @@ func (s *Service) reconcileAccountLocked(ctx context.Context, userID int64, inst
 	}
 	if live.IsAdministrator {
 		s.logger.Info("mediaaccess: linked administrator is never managed", "user_id", userID, "instance_id", instanceID)
+		_ = s.cancelLibrarySync(userID, instanceID)
 		// The provider's live answer is authoritative, including promotions
 		// made outside Cantinarr after a link was established.
 		if _, err := s.db.Exec("UPDATE user_media_server_accounts SET manage_access=0, access_sync_pending=0 WHERE user_id=? AND instance_id=?", userID, instanceID); err != nil {
 			s.logger.Error("mediaaccess: protect administrator", "err", err)
 		}
 		return
+	}
+	if !wantDisabled {
+		if err := s.syncLibrariesLocked(ctx, inst, row, provider); err != nil {
+			s.logger.Warn("mediaaccess: library change pending", "err", err, "user_id", userID, "instance_id", instanceID)
+			return
+		}
 	}
 	if live.IsDisabled != wantDisabled {
 		if err := provider.SetDisabled(ctx, row.RemoteUserID, wantDisabled); err != nil {

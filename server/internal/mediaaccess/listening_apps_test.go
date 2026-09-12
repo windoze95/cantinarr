@@ -113,3 +113,36 @@ func TestListeningAppsResolvePerInstanceDefaultsAndPersonalOverrides(t *testing.
 		}
 	}
 }
+
+func TestListeningAppDefaultsAndUserLibraryPoliciesSaveIndependently(t *testing.T) {
+	e, id, _ := absLibraryEnv(t)
+	reader, other := e.user("reader"), e.user("other-reader")
+	apps := instance.ListeningApps{IOS: "shelfplayer", Android: "theshelf"}
+	inst, err := e.store.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst.MediaServerConfig.ListeningApps = &apps
+	if err := e.store.Update(inst); err != nil {
+		t.Fatal(err)
+	}
+	users := []int64{reader, other}
+	saveLibraries(t, e, id, users, []string{"books"}, map[int64]LibraryPolicy{other: selectedLibraries("shared")})
+	saveLibraries(t, e, id, users, []string{"shared"}, nil)
+	inst, err = e.store.Get(id)
+	if err != nil || inst.MediaServerConfig.ListeningApps == nil || *inst.MediaServerConfig.ListeningApps != apps {
+		t.Fatalf("library save lost listening defaults: %+v %v", inst, err)
+	}
+	inst.MediaServerConfig.ListeningApps = &instance.ListeningApps{IOS: "browser", Android: "audiobookshelf"}
+	if err := e.store.Update(inst); err != nil {
+		t.Fatal(err)
+	}
+	access, err := e.svc.LibraryAccess(id)
+	if err != nil || len(access.UserIDs) != 2 || len(access.DefaultLibraryIDs) != 1 || access.DefaultLibraryIDs[0] != "shared" {
+		t.Fatalf("listening save changed access: %+v %v", access, err)
+	}
+	policy := access.Policies[other]
+	if policy.Mode != "selected" || len(policy.LibraryIDs) != 1 || policy.LibraryIDs[0] != "shared" {
+		t.Fatalf("listening save changed the individual selection: %+v", policy)
+	}
+}

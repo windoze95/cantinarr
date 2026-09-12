@@ -217,6 +217,18 @@ CREATE TABLE IF NOT EXISTS user_media_server_accounts (
     UNIQUE (instance_id, remote_user_id)
 );
 
+-- Audiobookshelf library choices exist before accounts are created and survive
+-- grant removal. remote_user_id binds pending writes to one managed account.
+CREATE TABLE IF NOT EXISTS user_media_library_policies (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    instance_id TEXT NOT NULL REFERENCES service_instances(id) ON DELETE CASCADE,
+    mode TEXT NOT NULL CHECK(mode IN ('default', 'all', 'selected')),
+    library_ids TEXT NOT NULL DEFAULT '[]',
+    remote_user_id TEXT NOT NULL DEFAULT '',
+    sync_pending INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, instance_id)
+);
+
 -- An explicit unlink prevents automatic Plex adoption/invitations from
 -- recreating the connection. No remote identity or credentials are retained.
 CREATE TABLE IF NOT EXISTS user_media_server_unlinks (
