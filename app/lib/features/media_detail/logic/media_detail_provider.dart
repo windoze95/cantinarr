@@ -1,9 +1,14 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../discover/data/discover_api_service.dart';
 import '../../discover/data/tmdb_models.dart';
 import 'title_facts.dart';
 import 'title_links.dart';
+
+/// Read on each build so the status date and Details use the same day.
+final mediaDetailClockProvider =
+    Provider<DateTime Function()>((ref) => DateTime.now);
 
 /// State for the media detail screen.
 class MediaDetailState {
@@ -75,9 +80,9 @@ class MediaDetailState {
           .take(5)
           .toList();
 
-  List<TitleFact> get facts => switch ((movieDetail, tvDetail)) {
+  List<TitleFact> facts({DateTime? now}) => switch ((movieDetail, tvDetail)) {
         (final movie?, _) => movieFacts(movie),
-        (_, final tv?) => tvFacts(tv),
+        (_, final tv?) => tvFacts(tv, now: now),
         _ => const [],
       };
 

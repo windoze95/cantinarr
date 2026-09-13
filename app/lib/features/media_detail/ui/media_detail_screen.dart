@@ -53,6 +53,7 @@ import '../logic/title_links.dart';
 import '../logic/release_schedule.dart';
 import '../logic/release_window.dart';
 import '../logic/title_facts.dart';
+import '../logic/tv_schedule.dart';
 import 'cast_crew_sheet.dart';
 import 'media_hero.dart';
 import 'season_table.dart';
@@ -337,6 +338,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
 
         final size = MediaQuery.sizeOf(context);
         final topPadding = MediaQuery.paddingOf(context).top;
+        final now = ref.watch(mediaDetailClockProvider)();
+        final facts = state.facts(now: now);
+        final tvDate = state.tvDetail == null ? null
+            : upcomingTVDateLabel(state.tvDetail!, now: now);
         return Scaffold(
           body: CustomScrollView(
             slivers: [
@@ -387,7 +392,14 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                               // admin arr-link resolution), so the dock height
                               // morphs instead of snapping when one appears.
                               child: _needsSetup
-                                  ? CatalogSetupButton(serviceType: _serviceType)
+                                  ? Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        CatalogSetupButton(serviceType: _serviceType),
+                                        if (tvDate != null)
+                                          _DateStatusLine(label: tvDate),
+                                      ],
+                                    )
                                   : AnimatedSize(
                                 duration: const Duration(milliseconds: 220),
                                 curve: Curves.easeOutCubic,
@@ -404,17 +416,16 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                         error: _requestNotifier.state.error,
                                         onRequest: () => _onRequest(),
                                       ),
-                                      // Sits with the status, not down in the
-                                      // facts: its whole job is to explain a
-                                      // badge that would otherwise read as a
-                                      // stalled download. Empty for TV, for
-                                      // titles not in the library, and once
-                                      // every date has passed.
-                                      _PendingReleaseLine(
-                                        releases:
-                                            _requestNotifier.state.releases,
-                                        status: _requestNotifier.state.status,
-                                      ),
+                                      // TV dates come from metadata, including
+                                      // when existing episodes are Available.
+                                      if (tvDate != null)
+                                        _DateStatusLine(label: tvDate),
+                                      if (widget.mediaType == MediaType.movie)
+                                        _PendingReleaseLine(
+                                          releases:
+                                              _requestNotifier.state.releases,
+                                          status: _requestNotifier.state.status,
+                                        ),
                                       // One chip per granted library when the
                                       // user holds more than one (HD vs 4K):
                                       // each carries that library's own
@@ -695,7 +706,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                           // render; the Links line closes it with the
                           // title's own pages elsewhere (TMDB's is always
                           // known, so the section is there once loaded).
-                          if (state.facts.isNotEmpty ||
+                          if (facts.isNotEmpty ||
                               state.studios.isNotEmpty ||
                               state.links.isNotEmpty) ...[
                             const SizedBox(height: 24),
@@ -703,7 +714,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                               padding:
                                   const EdgeInsets.symmetric(horizontal: 16),
                               child: _DetailsSection(
-                                facts: state.facts,
+                                facts: facts,
                                 studios: state.studios,
                                 onStudio: (studio) => _browse(
                                   BrowseFeed.discover,
@@ -1510,6 +1521,17 @@ class _PendingReleaseLine extends StatelessWidget {
   Widget build(BuildContext context) {
     final pending = pendingReleases(releases, status: status);
     if (pending.isEmpty) return const SizedBox.shrink();
+    return _DateStatusLine(label: formatPendingReleases(pending));
+  }
+}
+
+/// Shared supporting date style for movie milestones and TV schedules.
+class _DateStatusLine extends StatelessWidget {
+  final String label;
+  const _DateStatusLine({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(top: 8),
       child: Row(
@@ -1521,7 +1543,7 @@ class _PendingReleaseLine extends StatelessWidget {
           const SizedBox(width: 6),
           Flexible(
             child: Text(
-              formatPendingReleases(pending),
+              label,
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: AppTheme.textSecondary,
