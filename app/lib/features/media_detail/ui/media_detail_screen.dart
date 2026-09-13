@@ -1,4 +1,3 @@
-import '../../request/data/request_quota.dart';
 import '../../apple_tv/ui/apple_tv_open_button.dart';
 import 'dart:async';
 
@@ -974,11 +973,12 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       qualityProfileId: qualityProfileId,
     );
     if (!mounted) return;
+    final quotaMessage = _requestNotifier.state.quotaMessage;
     if (accepted) {
       _onRequestSucceeded();
-    } else if (_requestNotifier.state.quotaExceeded) {
+    } else if (quotaMessage != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text(requestQuotaExceededMessage)),
+        SnackBar(content: Text(quotaMessage)),
       );
     }
   }

@@ -17,7 +17,7 @@ class RequestState {
   final bool hasStatus;
   final String? error;
   // Refused requests use a toast, without turning the title into an error.
-  final bool quotaExceeded;
+  final String? quotaMessage;
 
   /// Per-season availability for TV titles (empty for movies or series not yet
   /// in the library). Drives the interactive season table.
@@ -46,7 +46,7 @@ class RequestState {
     this.isCheckingStatus = false,
     this.hasStatus = false,
     this.error,
-    this.quotaExceeded = false,
+    this.quotaMessage,
     this.seasons = const [],
     this.releases = MovieReleaseDates.none,
     this.instanceStatuses = const {},
@@ -75,7 +75,7 @@ class RequestState {
     bool? isCheckingStatus,
     bool? hasStatus,
     String? error,
-    bool quotaExceeded = false,
+    String? quotaMessage,
     List<RequestSeasonStatus>? seasons,
     MovieReleaseDates? releases,
     Map<String, RequestStatus>? instanceStatuses,
@@ -89,7 +89,7 @@ class RequestState {
         isCheckingStatus: isCheckingStatus ?? this.isCheckingStatus,
         hasStatus: hasStatus ?? this.hasStatus,
         error: error,
-        quotaExceeded: quotaExceeded,
+        quotaMessage: quotaMessage,
         seasons: seasons ?? this.seasons,
         releases: releases ?? this.releases,
         instanceStatuses: instanceStatuses ?? this.instanceStatuses,
@@ -218,7 +218,7 @@ class RequestNotifier extends ChangeNotifier {
         error: _service.lastRequestQuotaExceeded
             ? null
             : _service.lastRequestError ?? 'Request failed. Please try again.',
-        quotaExceeded: _service.lastRequestQuotaExceeded,
+        quotaMessage: _service.lastRequestQuotaExceeded ? _service.lastRequestError : null,
       );
       return false;
     }

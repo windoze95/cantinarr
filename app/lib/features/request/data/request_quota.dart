@@ -68,7 +68,24 @@ String? requestQuotaError(Object error) {
   if (error is! DioException) return null;
   final data = error.response?.data;
   if (data is! Map || data['code'] != 'request_quota_exceeded') return null;
-  return requestQuotaExceededMessage;
+  final allowances = data['allowances'];
+  final categories = <String>{};
+  if (allowances is List) {
+    for (final allowance in allowances.whereType<Map>()) {
+      final category = switch ((allowance['media_type'], allowance['book_format'])) {
+        ('movie', _) => 'Movie',
+        ('tv', _) => 'TV season',
+        ('book', 'ebook') => 'eBook',
+        ('book', 'audiobook') => 'Audiobook',
+        ('music', _) => 'Album',
+        _ => null,
+      };
+      if (category != null) categories.add(category);
+    }
+  }
+  if (categories.isEmpty) return requestQuotaExceededMessage;
+  if (categories.length == 1) return '${categories.single} request limit reached.';
+  return 'Request limits reached: ${categories.join(', ')}.';
 }
 
 class RequestQuotaService {

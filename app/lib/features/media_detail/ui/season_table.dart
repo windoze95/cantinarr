@@ -1,4 +1,3 @@
-import '../../request/data/request_quota.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../discover/data/tmdb_models.dart';
@@ -195,9 +194,10 @@ class _SeasonTableState extends State<SeasonTable> {
         return;
       }
       if (!accepted) {
-        if (notifier.state.quotaExceeded) {
+        final quotaMessage = notifier.state.quotaMessage;
+        if (quotaMessage != null) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text(requestQuotaExceededMessage)),
+            SnackBar(content: Text(quotaMessage)),
           );
         }
         return;

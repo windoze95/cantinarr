@@ -197,22 +197,33 @@ void main() {
     await tester.pump();
   });
 
-  test('book and music quota refusals use a short message', () async {
-    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))..httpClientAdapter = _Refuse();
-    final service = RequestService(backendDio: dio);
-    for (final future in [
-      service.requestBook(foreignId: 'book', title: 'Book', format: BookRequestFormat.both),
-      service.requestAlbum(foreignId: 'album', title: 'Album'),
+  test('book and music quota refusals name only the blocked categories', () async {
+    for (final (allowances, message) in [
+      ([{'media_type': 'book', 'book_format': 'ebook'}], 'eBook request limit reached.'),
+      ([{'media_type': 'book', 'book_format': 'audiobook'}], 'Audiobook request limit reached.'),
+      ([{'media_type': 'book', 'book_format': 'ebook'},
+        {'media_type': 'book', 'book_format': 'audiobook'}], 'Request limits reached: eBook, Audiobook.'),
+      ([{'media_type': 'music'}], 'Album request limit reached.'),
     ]) {
+      final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+        ..httpClientAdapter = _Refuse(allowances: allowances);
+      final service = RequestService(backendDio: dio);
+      final future = allowances.first['media_type'] == 'music'
+          ? service.requestAlbum(foreignId: 'album', title: 'Album')
+          : service.requestBook(foreignId: 'book', title: 'Book', format: BookRequestFormat.both);
       await expectLater(future, throwsA(isA<RequestSubmissionException>()
-          .having((e) => e.message, 'message', 'Request limit reached.')
+          .having((e) => e.message, 'message', message)
           .having((e) => e.quotaExceeded, 'quota refusal', true)));
     }
   });
 
   for (final surface in ['book', 'album', 'catalog book', 'catalog album']) {
     testWidgets('$surface quota refusal is only a toast and permits retry', (tester) async {
-      final adapter = _Refuse();
+      final isBook = surface.endsWith('book');
+      final message = isBook ? 'eBook request limit reached.' : 'Album request limit reached.';
+      final adapter = _Refuse(allowances: [
+        {'media_type': isBook ? 'book' : 'music', if (isBook) 'book_format': 'ebook'},
+      ]);
       final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))..httpClientAdapter = adapter;
       final service = RequestService(backendDio: dio);
       final panel = switch (surface) {
@@ -238,11 +249,11 @@ void main() {
       expect(adapter.submissions, 1);
       expect(adapter.previews, 0);
       expect(find.descendant(of: find.byType(SnackBar),
-          matching: find.text('Request limit reached.')), findsOneWidget);
+          matching: find.text(message)), findsOneWidget);
       expect(find.textContaining('remaining'), findsNothing);
       await tester.pump(const Duration(seconds: 5));
       await tester.pumpAndSettle();
-      expect(find.text('Request limit reached.'), findsNothing);
+      expect(find.text(message), findsNothing);
       await tester.tap(request);
       await tester.pumpAndSettle();
       expect(adapter.submissions, 2);
@@ -253,6 +264,8 @@ void main() {
 }
 
 class _Refuse implements HttpClientAdapter {
+  final List<Map<String, String>> allowances;
+  _Refuse({this.allowances = const [{'media_type': 'book', 'book_format': 'ebook'}]});
   int submissions = 0;
   int previews = 0;
   @override
@@ -262,7 +275,8 @@ class _Refuse implements HttpClientAdapter {
     return ResponseBody.fromString(jsonEncode(options.method == 'GET'
         ? {'success': true, 'status': 'unavailable', 'delivery': [],
             'book_formats': {'ebook': 'unavailable', 'audiobook': 'unavailable'}}
-        : {'code': 'request_quota_exceeded', 'error': 'eBooks: 1 requested, 0 remaining.'}),
+        : {'code': 'request_quota_exceeded', 'error': 'eBooks: 1 requested, 0 remaining.',
+            'allowances': allowances}),
         options.method == 'GET' ? 200 : 429, headers: {'content-type': ['application/json']});
   }
   @override

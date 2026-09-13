@@ -247,7 +247,7 @@ void main() {
     expect(n.state.error, isNull);
     expect(n.state.canReportProblem, isFalse);
     expect(find.descendant(of: find.byType(SnackBar),
-        matching: find.text('Request limit reached.')), findsOneWidget);
+        matching: find.text('TV season request limit reached.')), findsOneWidget);
     expect(find.textContaining('remaining'), findsNothing);
     expect(tester.widgetList<Checkbox>(find.byType(Checkbox)).every((c) => c.value == true), isTrue);
     await tester.tap(find.text('First'));
@@ -256,7 +256,7 @@ void main() {
     expect(adapter.posts.single['seasons'], [1, 2]);
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
-    expect(find.text('Request limit reached.'), findsNothing);
+    expect(find.text('TV season request limit reached.'), findsNothing);
   });
 
   testWidgets('a coarse request also refreshes existing season rows',
@@ -299,7 +299,11 @@ class _Adapter implements HttpClientAdapter {
       Future<void>? cancelFuture) async {
     if (options.method == 'POST') {
       posts.add(Map<String, dynamic>.from(options.data as Map));
-      if (quotaRefusal) return _response({'code': 'request_quota_exceeded', 'error': 'TV seasons: 2 requested, 1 remaining.'}, code: 429);
+      if (quotaRefusal) {
+        return _response({'code': 'request_quota_exceeded',
+          'error': 'TV seasons: 2 requested, 1 remaining.',
+          'allowances': [{'media_type': 'tv', 'count': 3, 'used': 2, 'requested_units': 2}]}, code: 429);
+      }
       return _response({'status': 'requested'});
     }
     return statusGate?.future ?? Future.value(_response(detail));
