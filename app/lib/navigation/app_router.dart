@@ -85,6 +85,7 @@ import '../features/settings/ui/discord_notifications_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
 import '../features/settings/ui/pending_requests_screen.dart';
 import '../features/settings/ui/request_settings_screen.dart';
+import '../features/request/ui/tv_matches_screen.dart';
 import '../features/settings/ui/settings_screen.dart';
 import '../features/settings/ui/listening_apps_screen.dart';
 import '../features/settings/ui/video_apps_screen.dart';
@@ -872,6 +873,17 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                     RequestSettingsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
+            path: '/settings/tv-matches',
+            builder: (_, __) => const AppAmbientBackground(child: TVMatchesScreen()),
+          ),
+          GoRoute(
+            path: '/settings/tv-matches/:tmdbId',
+            onExit: confirmSettingsExit,
+            builder: (_, state) => AppAmbientBackground(child: TVMatchEditorScreen(
+              tmdbId: int.tryParse(state.pathParameters['tmdbId'] ?? '') ?? 0,
+              instanceId: state.uri.queryParameters['instance_id'])),
+          ),
+          GoRoute(
             path: '/settings/discord-notifications',
             onExit: confirmSettingsExit,
             builder: (_, __) =>
@@ -1066,6 +1078,7 @@ bool _isAdminOnlyRoute(String path) {
     '/settings/ai-remediation',
     '/settings/agent-approval-rules',
     '/settings/request-settings',
+    '/settings/tv-matches',
     '/settings/discord-notifications',
     '/settings/push-notifications/server',
     '/settings/devices',

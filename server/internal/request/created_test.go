@@ -30,7 +30,15 @@ func (r *creationRecorder) RequestCreated(id int64, approval bool) {
 func TestCreationPendingAndDecisions(t *testing.T) {
 	for _, kind := range []string{"movie", "tv"} {
 		t.Run(kind, func(t *testing.T) {
-			s, uid := newHistoryTestService(t, "", "", "")
+			sonarrURL := ""
+			f := &fakeSonarrTV{lookupJSON: `[{"title":"A title","tvdbId":121361,"year":2022,"seasons":[{"seasonNumber":1}]}]`}
+			if kind == "tv" {
+				sonarrURL = newFakeSonarrServer(t, f).URL
+			}
+			s, uid := newHistoryTestService(t, "", sonarrURL, "")
+			if kind == "tv" {
+				installTVFixture(t, s, f, 550)
+			}
 			requireApproval(t, s)
 			rec := &creationRecorder{}
 			s.SetCreationObserver(rec)
@@ -126,6 +134,7 @@ func TestAutomaticTVCreationAndNewScope(t *testing.T) {
 	f := &fakeSonarrTV{lookupJSON: `[{"title":"Andor","tvdbId":121361,"year":2022,"seasons":[{"seasonNumber":1},{"seasonNumber":2}]}]`}
 	srv := newFakeSonarrServer(t, f)
 	s, uid := newHistoryTestService(t, "", srv.URL, "")
+	installTVFixture(t, s, f, 1399)
 	g := s.GetGlobalSettings()
 	g.AllowSeasonChoice = true
 	if err := s.SetGlobalSettings(g); err != nil {

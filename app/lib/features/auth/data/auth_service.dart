@@ -593,6 +593,7 @@ class ServerConfig {
 
   /// Server supports paired Apple TV handoffs.
   final bool appleTvRemote;
+  final bool tvMatchCorrections;
 
   /// Null means the server predates Discover visibility preferences.
   final List<String>? hiddenDiscoverTabs;
@@ -609,6 +610,7 @@ class ServerConfig {
     this.adminCatalogBrowsing = false,
     this.mediaAccountManagement = false,
     this.appleTvRemote = false,
+    this.tvMatchCorrections = false,
     this.hiddenDiscoverTabs,
   });
 
@@ -632,6 +634,7 @@ class ServerConfig {
       mediaAccountManagement:
           json['media_account_management'] as bool? ?? false,
       appleTvRemote: json['apple_tv_remote'] as bool? ?? false,
+      tvMatchCorrections: json['tv_match_corrections'] as bool? ?? false,
       hiddenDiscoverTabs:
           (json['hidden_discover_tabs'] as List?)?.cast<String>(),
     );

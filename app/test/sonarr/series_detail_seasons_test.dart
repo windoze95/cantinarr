@@ -223,7 +223,7 @@ void main() {
         for (final e in [12, 13])
           _queueRow(e,
               season: 22,
-              airDate: '2026-09-13T04:00:00Z',
+              airDate: DateTime.now().toUtc().add(const Duration(days: 1)).toIso8601String(),
               state: 'importPending'),
       ]),
     );

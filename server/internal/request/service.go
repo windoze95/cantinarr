@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -214,6 +213,7 @@ type Notifier interface {
 }
 
 type Service struct {
+	tvMatchMu        sync.Mutex
 	MusicCatalog     musicdiscovery.Catalog
 	dispatchMu       sync.Mutex
 	dispatchWake     chan struct{}
@@ -604,6 +604,7 @@ type BookFormatWait struct {
 }
 
 type CreateResponse struct {
+	Match               *TVMatch          `json:"match,omitempty"`
 	StatusUnknownReason string            `json:"status_unknown_reason,omitempty"`
 	StatusKnown         *bool             `json:"status_known,omitempty"`
 	RequestID           int64             `json:"request_id,omitempty"`
@@ -631,6 +632,7 @@ type CreateResponse struct {
 }
 
 type StatusResponse struct {
+	Match               *TVMatch        `json:"match,omitempty"`
 	StatusUnknownReason string          `json:"status_unknown_reason,omitempty"`
 	RequestID           int64           `json:"request_id,omitempty"`
 	CatalogRef          *CatalogRef     `json:"catalog_ref,omitempty"`
@@ -676,7 +678,8 @@ type StatusResponse struct {
 // InstanceStatus is one library's digest-grade status inside
 // StatusResponse.InstanceStatuses.
 type InstanceStatus struct {
-	Status string `json:"status"`
+	Status      string `json:"status"`
+	StatusKnown *bool  `json:"status_known,omitempty"`
 }
 
 // MovieReleases carries a movie's release milestones as plain YYYY-MM-DD
@@ -722,6 +725,7 @@ type SeasonStatus struct {
 }
 
 type RequestLog struct {
+	Match       *TVMatch        `json:"match,omitempty"`
 	RequestID   int64           `json:"request_id,omitempty"`
 	CatalogRef  *CatalogRef     `json:"catalog_ref,omitempty"`
 	Delivery    []DeliveryState `json:"delivery,omitempty"`
@@ -1172,6 +1176,11 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 			resolved.seasonScope = req.SeasonScope
 		}
 		if eff.AllowSeasonChoice {
+			for _, n := range req.Seasons {
+				if n <= 0 {
+					return nil, tvMatchFailure("tv_seasons_unmapped")
+				}
+			}
 			if nums := normalizeSeasonNumbers(req.Seasons); len(nums) > 0 {
 				resolved.seasonNumbers = nums
 				resolved.seasonScope = encodeSeasonNumbers(nums)
@@ -1189,6 +1198,9 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 	}
 	if req.QualityProfileID != 0 && eff.AllowQualityChoice {
 		resolved.qualityProfileID = req.QualityProfileID
+	}
+	if req.MediaType == "tv" {
+		return s.createTVRequest(resolved, eff.RequiresApproval)
 	}
 
 	// Serialize repeated submissions to this target through the live arr read
@@ -1371,11 +1383,6 @@ func (s *Service) createPendingUnlocked(r *resolvedRequest) (*CreateResponse, er
 	}
 	if err != nil {
 		return nil, fmt.Errorf("save pending request: %w", err)
-	}
-
-	// Cache the tvdb mapping so TV status checks resolve while pending.
-	if r.mediaType == "tv" && r.tvdbID != 0 {
-		s.db.Exec("INSERT OR REPLACE INTO tmdb_tvdb_cache (tmdb_id, tvdb_id) VALUES (?, ?)", r.tmdbID, r.tvdbID)
 	}
 
 	// Only notify admins when a new row was actually queued (not a duplicate).
@@ -2245,202 +2252,21 @@ func (s *Service) addMovie(r *resolvedRequest) (string, string, error) {
 }
 
 func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
-	// Same library-resolution rule as addMovie: stored instance under the
-	// acting authority, unstamped legacy rows under the requester's default.
-	resolveAs := r.userID
-	if r.instanceID != "" && r.actorID != 0 {
-		resolveAs = r.actorID
-	}
-	sonarrClient, instanceID, err := s.resolveSonarr(resolveAs, r.instanceID)
-	if err != nil {
-		return "", "", err
-	}
-	if sonarrClient == nil {
-		return "", "", fmt.Errorf("sonarr is not configured")
-	}
-	r.instanceID = instanceID
-
-	tvdbID := r.tvdbID
-	// A request that arrives with only a TMDB ID — e.g. the AI assistant's
-	// requestMedia tool, which sends just tmdb_id + media_type — has nothing for
-	// Sonarr's series lookup to match. Resolve the TVDB ID the same way the
-	// status path does (cache -> TMDB external IDs -> Trakt) so a TMDB ID alone
-	// is enough to add a series.
-	if tvdbID == 0 && s.bridge != nil {
-		if res, err := s.bridge.ResolveTVDBID(r.tmdbID); err == nil && res != nil && res.TVDBID != 0 {
-			tvdbID = res.TVDBID
-		}
-	}
-	if tvdbID != 0 {
-		s.db.Exec("INSERT OR REPLACE INTO tmdb_tvdb_cache (tmdb_id, tvdb_id) VALUES (?, ?)", r.tmdbID, tvdbID)
-	}
-
-	if tvdbID != 0 {
-		existing, err := sonarrClient.GetSeriesByTVDB(tvdbID)
-		if err == nil && existing != nil {
-			// Series is already in the library. With an explicit season list this
-			// is a "request more seasons" action: add the chosen seasons to the
-			// existing monitor set (without unmonitoring what's already there) and
-			// kick off a per-season search.
-			if len(r.seasonNumbers) > 0 {
-				changed, err := s.monitorSeasons(sonarrClient, existing, r.seasonNumbers)
-				if err != nil {
-					return "", "", err
-				}
-				for _, n := range r.seasonNumbers {
-					_ = sonarrClient.TriggerSeasonSearch(existing.ID, n)
-				}
-				r.newWork = len(changed) > 0
-				return StatusRequested, existing.Title, nil
-			}
-			return s.requestExistingSeries(sonarrClient, existing, r)
-		}
-	}
-
-	var lookup *sonarr.LookupResult
-	if tvdbID != 0 {
-		lookup, err = sonarrClient.LookupByTVDB(tvdbID)
-	}
-	if lookup == nil || err != nil {
-		if r.title == "" {
-			return "", "", fmt.Errorf("series lookup failed: could not resolve a TVDB ID for tmdb %d and no title was provided", r.tmdbID)
-		}
-		lookup, err = s.lookupSeriesByTitleIdentity(sonarrClient, r.tmdbID, r.title)
-		if err != nil {
-			return "", "", err
-		}
-		if lookup.TvdbID != tvdbID {
-			// The text search resolved an id the bridge couldn't. That id may
-			// name a series the library already tracks (TMDB just has no TVDB
-			// mapping for it), so honor the existing-series flows instead of
-			// an add Sonarr would reject as a duplicate.
-			tvdbID = lookup.TvdbID
-			if existing, exErr := sonarrClient.GetSeriesByTVDB(tvdbID); exErr == nil && existing != nil {
-				r.tvdbID = tvdbID
-				if len(r.seasonNumbers) > 0 {
-					if err := s.monitorAndSearchSeasons(sonarrClient, existing, r.seasonNumbers); err != nil {
-						return "", "", err
-					}
-					return StatusRequested, existing.Title, nil
-				}
-				return s.requestExistingSeries(sonarrClient, existing, r)
-			}
-		}
-	}
-	// Persist the resolved TVDB id so an approved title-only request stores it.
-	r.tvdbID = tvdbID
-
-	profiles, err := sonarrClient.GetQualityProfiles()
-	if err != nil || len(profiles) == 0 {
-		return "", "", fmt.Errorf("no quality profiles available")
-	}
-	folders, err := sonarrClient.GetRootFolders()
-	if err != nil {
-		return "", "", fmt.Errorf("load root folders: %w", err)
-	}
-	if len(folders) == 0 {
-		return "", "", fmt.Errorf("no root folders available")
-	}
-
-	profileID := r.qualityProfileID
-	if profileID == 0 || !sonarrProfileExists(profiles, profileID) {
-		profileID = profiles[0].ID
-	}
-
-	addReq := &sonarr.AddSeriesRequest{
-		Title:            lookup.Title,
-		TvdbID:           tvdbID,
-		Year:             lookup.Year,
-		QualityProfileID: profileID,
-		RootFolderPath:   folders[0].Path,
-		Monitored:        true,
-		SeasonFolder:     true,
-	}
-
-	// Explicit season list: Sonarr's addOptions.monitor enum has no "these
-	// specific seasons" value, but the add payload's seasons[].monitored flags
-	// survive the add and its async metadata refresh, and Sonarr applies
-	// episode monitoring from them (and runs the missing-episode search) once
-	// the refresh completes. Adding unmonitored and fixing monitoring up
-	// afterwards is NOT safe here: the refresh applies addOptions.monitor
-	// asynchronously and would race with — and overwrite — any immediate
-	// follow-up monitoring calls.
-	if len(r.seasonNumbers) > 0 {
-		addReq.Seasons = seasonSelection(lookup.Seasons, r.seasonNumbers)
-		addReq.AddOptions.SearchForMissingEpisodes = true
-		if err := sonarrClient.AddSeries(addReq); err != nil {
-			return "", "", fmt.Errorf("add series failed: %w", err)
-		}
-		r.newWork = true
-		return StatusRequested, lookup.Title, nil
-	}
-
-	addReq.AddOptions.SearchForMissingEpisodes = true
-	addReq.AddOptions.Monitor = sonarrMonitor(r.seasonScope)
-
-	if err := sonarrClient.AddSeries(addReq); err != nil {
-		return "", "", fmt.Errorf("add series failed: %w", err)
-	}
-	r.newWork = true
-	return StatusRequested, lookup.Title, nil
+	return "", "", fmt.Errorf("TV delivery requires a persisted target; submit or approve the request again")
 }
 
-// lookupSeriesByTitleIdentity resolves a series through Sonarr's text search
-// when no TVDB id could be bridged, verifying identity instead of trusting
-// relevance order: same-titled series are distinct records — the 2018
-// "Tremors" reboot pilot and the 2003 "Tremors" series share a title — and
-// blindly taking the first result would fulfil the request with the wrong
-// one. The premiere year of the TMDB record the requester actually chose is
-// the discriminator; ±1 absorbs TMDB and TVDB dating the same premiere
-// differently without reaching the years-apart gap that means a different
-// show. When TMDB can't supply a year at all (no client configured, fetch
-// failed), the first result is accepted as before — a TMDB-less deployment
-// keeps a working request path rather than a dead one.
-func (s *Service) lookupSeriesByTitleIdentity(client *sonarr.Client, tmdbID int, title string) (*sonarr.LookupResult, error) {
-	candidates, err := client.LookupByTitle(title)
+// lookupSeriesByTitleIdentity verifies both a canonical/original title and
+// premiere year. Missing metadata and ambiguous results require correction.
+func (s *Service) lookupSeriesByTitleIdentity(client *sonarr.Client, tmdbID int, _ string) (*sonarr.LookupResult, error) {
+	details, err := s.tvSource(tmdbID)
 	if err != nil {
-		return nil, fmt.Errorf("series lookup failed: %w", err)
+		return nil, err
 	}
-	year := s.tmdbTVYear(tmdbID)
-	if year == 0 {
-		return &candidates[0], nil
-	}
-	for i := range candidates {
-		c := &candidates[i]
-		if c.Year == 0 {
-			continue
-		}
-		if diff := c.Year - year; diff >= -1 && diff <= 1 {
-			return c, nil
-		}
-	}
-	closest := &candidates[0]
-	return nil, fmt.Errorf(
-		"series lookup could not verify a match for %q: the requested series premiered in %d, but the closest result is %q (%d) — a same-titled but different series is never substituted",
-		title, year, closest.Title, closest.Year,
-	)
-}
-
-// tmdbTVYear returns the premiere year TMDB records for a series, or 0 when
-// no TMDB client is configured or the lookup fails. Callers treat 0 as "no
-// year truth available", never as a year.
-func (s *Service) tmdbTVYear(tmdbID int) int {
-	if s.bridge == nil {
-		return 0
-	}
-	client := s.bridge.TMDB()
-	if client == nil {
-		return 0
-	}
-	details, err := client.GetTVDetails(tmdbID)
-	if err != nil || details == nil || len(details.FirstAir) < 4 {
-		return 0
-	}
-	year, err := strconv.Atoi(details.FirstAir[:4])
+	candidates, err := client.LookupByTitle(details.Name)
 	if err != nil {
-		return 0
+		return nil, tvMatchFailure("tv_metadata_unavailable")
 	}
-	return year
+	return strictTVTitleMatch(details, candidates)
 }
 
 // monitorAndSearchSeasons additively monitors the chosen seasons on an existing
@@ -2688,6 +2514,12 @@ func (s *Service) statusFor(userID int64, tmdbID int, mediaType, instanceID stri
 // library; when the user holds more than one granted instance for the media
 // type, the response also carries a digest-grade status per granted library.
 func (s *Service) GetUserStatus(userID int64, tmdbID int, mediaType, instanceID string) (*StatusResponse, error) {
+	return s.getUserStatus(userID, tmdbID, mediaType, instanceID, true)
+}
+
+// Catalog cards need only their selected library. Keep authorization and the
+// live title projection identical to details, without reading every sibling.
+func (s *Service) getUserStatus(userID int64, tmdbID int, mediaType, instanceID string, includeInstanceStatuses bool) (*StatusResponse, error) {
 	// Authorize an explicit selection up front so a forbidden library errors
 	// instead of quietly answering with default-library state.
 	if instanceID != "" && !s.userIsAdmin(userID) && s.registry != nil {
@@ -2718,7 +2550,9 @@ func (s *Service) GetUserStatus(userID int64, tmdbID int, mediaType, instanceID 
 	if err != nil {
 		return nil, err
 	}
-	resp.InstanceStatuses = s.instanceStatuses(userID, tmdbID, mediaType)
+	if includeInstanceStatuses {
+		resp.InstanceStatuses = s.instanceStatuses(userID, tmdbID, mediaType)
+	}
 	return resp, nil
 }
 
@@ -2728,6 +2562,9 @@ func (s *Service) GetUserStatus(userID int64, tmdbID int, mediaType, instanceID 
 // implicit default also absorbs legacy NULL rows, which factually meant "the
 // user's default" when they were written.
 func (s *Service) userStatusForInstance(userID int64, tmdbID int, mediaType, instanceID string) (*StatusResponse, error) {
+	if mediaType == "tv" {
+		return s.userTVStatus(userID, tmdbID, instanceID)
+	}
 	query := "SELECT status FROM request_log WHERE user_id = ? AND tmdb_id = ? AND media_type = ?"
 	args := []interface{}{userID, tmdbID, mediaType}
 	if instanceID != "" {
@@ -2789,8 +2626,32 @@ func (s *Service) instanceStatuses(userID int64, tmdbID int, mediaType string) m
 		serviceType = "sonarr"
 	}
 	granted, err := s.registry.VisibleInstanceIDs(userID, serviceType)
+	if mediaType == "tv" && s.userIsAdmin(userID) {
+		// Admin request options expose every Sonarr instance. Their badges
+		// must expose the same selection even after one library has accepted
+		// this title and its primary Request button is disabled.
+		var libraries []instance.Summary
+		libraries, err = s.registry.ListInstanceSummaries(serviceType)
+		granted = nil
+		for _, library := range libraries {
+			granted = append(granted, library.ID)
+		}
+	}
 	if err != nil || len(granted) < 2 {
 		return nil
+	}
+	if mediaType == "tv" {
+		out := make(map[string]InstanceStatus, len(granted))
+		for _, id := range granted {
+			live, err := s.userTVStatus(userID, tmdbID, id)
+			if err != nil {
+				known := false
+				out[id] = InstanceStatus{Status: StatusUnavailable, StatusKnown: &known}
+				continue
+			}
+			out[id] = InstanceStatus{Status: live.Status, StatusKnown: live.StatusKnown}
+		}
+		return out
 	}
 
 	// Latest own request row per library (NULL rows attribute to the default).
@@ -2814,29 +2675,14 @@ func (s *Service) instanceStatuses(userID int64, tmdbID int, mediaType string) m
 		_ = rows.Close()
 	}
 
-	tvdbID := 0
-	if mediaType == "tv" {
-		tvdbID = s.resolveTVDBIDCached(tmdbID)
-	}
-
 	out := make(map[string]InstanceStatus, len(granted))
 	for _, id := range granted {
 		status := StatusUnavailable
 		known := false
-		if mediaType == "tv" {
-			if tvdbID != 0 {
-				if digest, ok := s.seriesAvailabilityDigestForInstance(id); ok {
-					a, found := digest[tvdbID]
-					status = seriesAvailabilityStatus(a, found)
-					known = true
-				}
-			}
-		} else {
-			if digest, ok := s.movieAvailabilityDigestForInstance(id); ok {
-				a, found := digest[tmdbID]
-				status = movieAvailabilityStatus(a, found)
-				known = true
-			}
+		if digest, ok := s.movieAvailabilityDigestForInstance(id); ok {
+			a, found := digest[tmdbID]
+			status = movieAvailabilityStatus(a, found)
+			known = true
 		}
 		switch rowStatus[id] {
 		case StatusPending:
@@ -2849,24 +2695,6 @@ func (s *Service) instanceStatuses(userID int64, tmdbID int, mediaType string) m
 		out[id] = InstanceStatus{Status: status}
 	}
 	return out
-}
-
-// resolveTVDBIDCached resolves a TMDB id to a TVDB id via the local mapping
-// cache, then the bridge (which repopulates the cache). Returns 0 when no
-// mapping is known.
-func (s *Service) resolveTVDBIDCached(tmdbID int) int {
-	var tvdbID int
-	if err := s.db.QueryRow("SELECT tvdb_id FROM tmdb_tvdb_cache WHERE tmdb_id = ?", tmdbID).Scan(&tvdbID); err == nil && tvdbID != 0 {
-		return tvdbID
-	}
-	if s.bridge == nil {
-		return 0
-	}
-	res, err := s.bridge.ResolveTVDBID(tmdbID)
-	if err != nil || res == nil {
-		return 0
-	}
-	return res.TVDBID
 }
 
 // GetUserBookStatus reports a user's request state for a book, keyed by the
@@ -3413,46 +3241,7 @@ func (s *Service) getMovieStatus(userID int64, tmdbID int, instanceID string) (*
 }
 
 func (s *Service) getTVStatus(userID int64, tmdbID int, instanceID string) (*StatusResponse, error) {
-	sonarrClient, _, err := s.resolveSonarr(userID, instanceID)
-	if err != nil {
-		return nil, err
-	}
-	if sonarrClient == nil {
-		return &StatusResponse{Status: StatusUnavailable}, nil
-	}
-
-	tvdbID := s.resolveTVDBIDCached(tmdbID)
-	if tvdbID == 0 {
-		return &StatusResponse{Status: StatusUnavailable}, nil
-	}
-
-	series, err := sonarrClient.GetSeriesByTVDB(tvdbID)
-	if err != nil || series == nil {
-		return &StatusResponse{Status: StatusUnavailable}, nil
-	}
-
-	// Derive availability from the real episode list: "available" strictly
-	// means every aired episode has a file. Sonarr's percentOfEpisodes (and
-	// its season episodeCount) only count monitored episodes, so a series with
-	// two monitored, downloaded episodes and the rest unmonitored would read
-	// 100% / "available" while most of it is missing.
-	if episodes, epErr := sonarrClient.GetAllEpisodes(series.ID); epErr == nil {
-		completion, bySeason := sonarr.SeriesCompletion(episodes, time.Now())
-		status, progress := statusFromCompletion(completion, series.Monitored)
-		return &StatusResponse{
-			Status:   status,
-			Progress: progress,
-			Seasons:  seasonStatusesFromCompletion(series, bySeason),
-		}, nil
-	}
-
-	// Fallback (episode fetch failed): season-statistics totals. Stricter than
-	// the aired-aware path — unaired episodes count as missing — but still
-	// immune to the monitored-episodes-only skew.
-	seasons := seasonStatuses(series)
-	files, total := series.EpisodeTotals()
-	status, progress := statusFromCompletion(sonarr.Completion{Files: files, Aired: total}, series.Monitored)
-	return &StatusResponse{Status: status, Progress: progress, Seasons: seasons}, nil
+	return s.tvLiveStatus(userID, tmdbID, instanceID)
 }
 
 // statusFromCompletion maps on-disk completeness (plus the series' monitored
@@ -3671,9 +3460,6 @@ func (s *Service) overlayLiveStatuses(userID int64, history []historyRow) {
 		movieDigests      = map[string]map[int]movieAvailability{}
 		movieDigestDone   = map[string]bool{}
 		movieDigestOK     = map[string]bool{}
-		seriesDigests     = map[string]map[int]seriesAvailability{}
-		seriesDigestDone  = map[string]bool{}
-		seriesDigestOK    = map[string]bool{}
 		bookClients       = map[string]*chaptarr.Client{}
 		bookInstanceDone  = map[string]bool{}
 		bookInstanceOK    = map[string]bool{}
@@ -3707,30 +3493,17 @@ func (s *Service) overlayLiveStatuses(userID int64, history []historyRow) {
 			live = movieAvailabilityStatus(a, found)
 
 		case "tv":
-			instanceID := row.instanceID
-			if !seriesDigestDone[instanceID] {
-				if instanceID == "" {
-					seriesDigests[instanceID], seriesDigestOK[instanceID] = s.seriesAvailabilityDigest(userID)
-				} else {
-					seriesDigests[instanceID], seriesDigestOK[instanceID] = s.seriesAvailabilityDigestForInstance(instanceID)
-				}
-				seriesDigestDone[instanceID] = true
-			}
-			if !seriesDigestOK[instanceID] {
+			status, err := s.tvLiveStatus(userID, row.log.TmdbID, row.instanceID)
+			if err != nil {
+				row.log.StatusKnown = false
 				continue
 			}
-			series := seriesDigests[instanceID]
-			tvdbID := row.tvdbID
-			if tvdbID == 0 {
-				// Older rows predate the tvdb_id column; the id mapping cache
-				// usually still knows the title from request time.
-				_ = s.db.QueryRow("SELECT tvdb_id FROM tmdb_tvdb_cache WHERE tmdb_id = ?", row.log.TmdbID).Scan(&tvdbID)
-				if tvdbID == 0 {
-					continue
-				}
+			row.log.Match = status.Match
+			if status.StatusKnown != nil && !*status.StatusKnown {
+				row.log.StatusKnown = false
+				continue
 			}
-			a, found := series[tvdbID]
-			live = seriesAvailabilityStatus(a, found)
+			live = status.Status
 
 		case "book":
 			// Legacy unscoped rows cannot be safely attributed after a user's
@@ -4080,6 +3853,14 @@ func (s *Service) isAuthorImportParked(requestID int64) bool {
 // ApproveRequest fulfills a pending request (optionally with admin overrides)
 // and marks the row approved. The arr add reuses the normal add path.
 func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOverride) (*CreateResponse, error) {
+	if !s.userIsAdmin(adminID) {
+		return nil, ErrTVMatchAdmin
+	}
+	if r, status, err := s.loadRequest(requestID); err == nil && r.mediaType == "tv" && status == StatusPending && !s.hasDispatch(requestID) {
+		if err := s.migrateTVApproval(requestID, r); err != nil {
+			return nil, err
+		}
+	}
 	if s.hasDispatch(requestID) {
 		return s.approveDelivery(adminID, requestID, override)
 	}

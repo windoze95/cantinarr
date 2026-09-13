@@ -1,9 +1,13 @@
 import 'package:flutter/foundation.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../data/request_service.dart';
+import '../data/tv_match_service.dart';
 
 /// State for a single media item's request status.
 class RequestState {
+  final TVMatch? match;
+  final List<String> deliveryMessages;
+  final Set<String> unknownInstanceIds;
   final RequestStatus status;
   final bool isRequesting;
   final bool isCheckingStatus;
@@ -32,6 +36,9 @@ class RequestState {
   final Map<String, RequestStatus> instanceStatuses;
 
   const RequestState({
+    this.match,
+    this.deliveryMessages = const [],
+    this.unknownInstanceIds = const {},
     this.status = RequestStatus.unavailable,
     this.isRequesting = false,
     this.isCheckingStatus = false,
@@ -42,7 +49,24 @@ class RequestState {
     this.instanceStatuses = const {},
   });
 
+  /// A report becomes relevant after an accepted request or a completed
+  /// failure, including a match that blocks submission. Loading alone is not
+  /// a failure; neither is opening/cancelling options or a denied approval.
+  bool get canReportProblem => switch (status) {
+        RequestStatus.pending ||
+        RequestStatus.requested ||
+        RequestStatus.downloading ||
+        RequestStatus.partial ||
+        RequestStatus.available => true,
+        _ => !isCheckingStatus && !isRequesting &&
+            ((error?.trim().isNotEmpty ?? false) ||
+                (match != null && !match!.isResolved)),
+      };
+
   RequestState copyWith({
+    TVMatch? match,
+    List<String>? deliveryMessages,
+    Set<String>? unknownInstanceIds,
     RequestStatus? status,
     bool? isRequesting,
     bool? isCheckingStatus,
@@ -53,6 +77,9 @@ class RequestState {
     Map<String, RequestStatus>? instanceStatuses,
   }) =>
       RequestState(
+        match: match ?? this.match,
+        deliveryMessages: deliveryMessages ?? this.deliveryMessages,
+        unknownInstanceIds: unknownInstanceIds ?? this.unknownInstanceIds,
         status: status ?? this.status,
         isRequesting: isRequesting ?? this.isRequesting,
         isCheckingStatus: isCheckingStatus ?? this.isCheckingStatus,
@@ -92,7 +119,8 @@ class RequestNotifier extends ChangeNotifier {
     _libraryVersion++;
     _statusVersion++;
     // Never let a newly selected library use the previous library's seasons.
-    state = RequestState(instanceStatuses: state.instanceStatuses);
+    state = RequestState(instanceStatuses: state.instanceStatuses,
+        unknownInstanceIds: state.unknownInstanceIds);
   }
 
   RequestNotifier({
@@ -120,8 +148,12 @@ class RequestNotifier extends ChangeNotifier {
         seasons: detail.seasons,
         releases: detail.releases,
         instanceStatuses: detail.instanceStatuses,
+        unknownInstanceIds: detail.unknownInstanceIds,
+        match: detail.match,
+        deliveryMessages: detail.deliveryMessages,
+        error: detail.statusMessage,
         isCheckingStatus: false,
-        hasStatus: true,
+        hasStatus: detail.isKnown && (detail.match?.isResolved ?? true),
       );
     } catch (e) {
       if (_disposed || version != _statusVersion) return;
@@ -150,6 +182,7 @@ class RequestNotifier extends ChangeNotifier {
     int? qualityProfileId,
   }) async {
     if (state.isRequesting) return false;
+    if (_mediaType == MediaType.tv && !state.hasStatus) return false;
     final libraryVersion = _libraryVersion;
     // A read started before this write cannot overwrite the accepted result.
     _statusVersion++;
@@ -176,7 +209,7 @@ class RequestNotifier extends ChangeNotifier {
       state = state.copyWith(
         isRequesting: false,
         isCheckingStatus: false,
-        error: 'Request failed. Please try again.',
+        error: _service.lastRequestError ?? 'Request failed. Please try again.',
       );
       return false;
     }

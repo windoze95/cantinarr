@@ -72,14 +72,22 @@ type MovieDetails struct {
 }
 
 type TVDetails struct {
-	ID          int     `json:"id"`
-	Name        string  `json:"name"`
-	FirstAir    string  `json:"first_air_date"`
-	PosterPath  string  `json:"poster_path,omitempty"`
-	Overview    string  `json:"overview,omitempty"`
-	VoteAverage float64 `json:"vote_average,omitempty"`
-	Adult       bool    `json:"adult,omitempty"`
-	Genres      []Genre `json:"genres,omitempty"`
+	ID           int        `json:"id"`
+	Name         string     `json:"name"`
+	OriginalName string     `json:"original_name"`
+	Seasons      []TVSeason `json:"seasons"`
+	FirstAir     string     `json:"first_air_date"`
+	PosterPath   string     `json:"poster_path,omitempty"`
+	Overview     string     `json:"overview,omitempty"`
+	VoteAverage  float64    `json:"vote_average,omitempty"`
+	Adult        bool       `json:"adult,omitempty"`
+	Genres       []Genre    `json:"genres,omitempty"`
+}
+
+type TVSeason struct {
+	SeasonNumber int    `json:"season_number"`
+	Name         string `json:"name"`
+	EpisodeCount int    `json:"episode_count"`
 }
 
 // GenreIDs lists the detail's genre ids.

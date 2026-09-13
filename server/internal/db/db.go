@@ -127,6 +127,31 @@ CREATE TABLE IF NOT EXISTS request_dispatch (
     PRIMARY KEY (request_id, format)
 );
 CREATE INDEX IF NOT EXISTS request_dispatch_due ON request_dispatch(state, next_attempt_at);
+
+-- Local TV corrections are independent of the reviewed defaults bundled with
+-- the server. Reset retains a revision tombstone so stale edits stay stale.
+CREATE TABLE IF NOT EXISTS tv_match_overrides (
+    tmdb_id INTEGER PRIMARY KEY,
+    mode TEXT NOT NULL CHECK(mode IN ('custom','paused','default')),
+    tvdb_id INTEGER NOT NULL DEFAULT 0,
+    season_map TEXT NOT NULL DEFAULT '{}',
+    revision INTEGER NOT NULL DEFAULT 1,
+    updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Request seasons remain in TMDB coordinates. This immutable identity/scope
+-- snapshot and mutable delivery checkpoint survive approval and restarts.
+CREATE TABLE IF NOT EXISTS request_tv_targets (
+    request_id INTEGER PRIMARY KEY REFERENCES request_log(id) ON DELETE CASCADE,
+    snapshot TEXT NOT NULL,
+    phase TEXT NOT NULL DEFAULT 'queued',
+    series_id INTEGER NOT NULL DEFAULT 0,
+    repair_of INTEGER REFERENCES request_log(id),
+    repaired_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(repair_of)
+);
 -- Serializing native mutations per instance also covers aliases that resolve
 -- to the same book/album only after a metadata lookup, across server processes.
 CREATE TABLE IF NOT EXISTS request_dispatch_locks (
@@ -940,6 +965,12 @@ func Open(dbPath string) (*sql.DB, error) {
 	// are ignored). Backfill statements run only when the column is first added
 	// so they execute exactly once per database.
 	migrations := []schemaMigration{
+		{
+			// Old request intake cached client hints without verification. Clear
+			// that cache once; subsequent bridge entries retain their normal TTL.
+			alter:    "ALTER TABLE tmdb_tvdb_cache ADD COLUMN identity_version INTEGER NOT NULL DEFAULT 1",
+			backfill: []string{"DELETE FROM tmdb_tvdb_cache"},
+		},
 		{alter: "ALTER TABLE service_instances ADD COLUMN username TEXT NOT NULL DEFAULT ''"},
 		{alter: "ALTER TABLE service_instances ADD COLUMN password TEXT NOT NULL DEFAULT ''"},
 		{

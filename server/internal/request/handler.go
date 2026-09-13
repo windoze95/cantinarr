@@ -114,7 +114,15 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		mediaType = "movie" // default
 	}
 
-	resp, err := h.service.GetUserStatus(claims.UserID, tmdbID, mediaType, r.URL.Query().Get("instance_id"))
+	includeInstances := true
+	if raw := r.URL.Query().Get("include_instance_statuses"); raw != "" {
+		includeInstances, err = strconv.ParseBool(raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid include_instance_statuses"})
+			return
+		}
+	}
+	resp, err := h.service.getUserStatus(claims.UserID, tmdbID, mediaType, r.URL.Query().Get("instance_id"), includeInstances)
 	if err != nil {
 		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
@@ -398,7 +406,18 @@ func (h *Handler) GetMusicArtist(w http.ResponseWriter, r *http.Request) {
 }
 
 func requestErrorStatus(err error) int {
+	var tvError *tvMatchError
+	if errors.As(err, &tvError) {
+		if tvError.code == "tv_metadata_unavailable" {
+			return http.StatusServiceUnavailable
+		}
+		return http.StatusConflict
+	}
 	switch {
+	case errors.Is(err, ErrTVMatchAdmin):
+		return http.StatusForbidden
+	case errors.Is(err, ErrTVMatchStale):
+		return http.StatusConflict
 	case errors.Is(err, ErrChaptarrInstanceForbidden), errors.Is(err, ErrLidarrInstanceForbidden), errors.Is(err, ErrArrInstanceForbidden):
 		return http.StatusForbidden
 	case errors.Is(err, ErrChaptarrInstanceInvalid), errors.Is(err, ErrLidarrInstanceInvalid), errors.Is(err, ErrArrInstanceInvalid):

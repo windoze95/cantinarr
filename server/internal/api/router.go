@@ -352,6 +352,13 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{id}/wait", requestHandler.Wait)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/request-settings", requestHandler.GetSettings)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/request-settings", requestHandler.UpdateSettings)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/tv-matches", requestHandler.ListTVMatches)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/tv-matches/candidates", requestHandler.TVMatchCandidates)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/tv-matches/{tmdb_id}", requestHandler.GetTVMatch)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/tv-matches/{tmdb_id}", requestHandler.SaveTVMatch)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Delete("/tv-matches/{tmdb_id}", requestHandler.SaveTVMatch)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/tv-matches/{tmdb_id}/repairs", requestHandler.TVRepairPreviews)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{id}/repair-tv-match", requestHandler.RepairTVMatch)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/users/{userID}/request-settings", requestHandler.GetUserSettings)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/users/{userID}/request-settings", requestHandler.UpdateUserSettings)
 
@@ -929,6 +936,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			// grant can still ask for access from the guide.
 			"plex_access_requestable":  plexRequestable,
 			"admin_catalog_browsing":   true,
+			"tv_match_corrections":     true,
 			"apple_tv_remote":          len(appleTVCapability) > 0 && appleTVCapability[0](),
 			"media_account_management": true,
 			"hidden_discover_tabs":     hiddenTabs,

@@ -172,6 +172,10 @@ func (s *Service) dispatchFormat(ctx context.Context, id int64, format string) {
 		s.finishDelivery(id, format, token, "attention", "access_unavailable", nil)
 		return
 	}
+	if r.mediaType == "tv" {
+		s.dispatchTV(ctx, id, token, r)
+		return
+	}
 	var provider, sourceID string
 	var confirmed bool
 	err = s.db.QueryRow(`SELECT COALESCE(catalog_provider,''),COALESCE(catalog_id,''),match_confirmed FROM request_log WHERE id=?`, id).Scan(&provider, &sourceID, &confirmed)
@@ -385,7 +389,7 @@ func (s *Service) notifyDelivery(id int64, state string) {
 		}
 	}
 	for _, subscriber := range audience {
-		s.notifier.NotifyUser(subscriber.UserID, "request_updated", map[string]interface{}{"request_id": id, "delivery_state": state, "media_type": r.mediaType, "instance_id": r.instanceID, "foreign_id": r.foreignID})
+		s.notifier.NotifyUser(subscriber.UserID, "request_updated", map[string]interface{}{"request_id": id, "delivery_state": state, "media_type": r.mediaType, "instance_id": r.instanceID, "foreign_id": r.foreignID, "tmdb_id": r.tmdbID, "title": r.title})
 	}
 }
 

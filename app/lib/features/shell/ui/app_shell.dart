@@ -918,6 +918,7 @@ class _AppShellState extends ConsumerState<AppShell>
                                     searchState.isLoadingSearch)
                                   Expanded(
                                     child: SearchResultsView(
+                                      resolveTVStatus: true,
                                       results: searchState.searchResults,
                                       isLoading: searchState.isLoadingSearch,
                                       query: searchState.searchQuery,
@@ -980,6 +981,7 @@ class _AppShellState extends ConsumerState<AppShell>
                                             musicSearchState.artistsLoading,
                                       )
                                     : SearchResultsView(
+                                        resolveTVStatus: true,
                                         results: searchState.searchResults,
                                         isLoading: searchState.isLoadingSearch,
                                         query: searchState.searchQuery,

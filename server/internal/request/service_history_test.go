@@ -2,6 +2,7 @@ package request
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -94,7 +95,17 @@ func TestGetRequestsOverlaysLiveStatus(t *testing.T) {
 	})
 	// Series 500: 2 of 9 episodes on disk across seasons -> partial, even
 	// though its only monitored season is complete (the percentOfEpisodes trap).
+	episodes := []map[string]any{}
+	for n := 1; n <= 9; n++ {
+		season := 1
+		if n > 7 {
+			season = 2
+		}
+		episodes = append(episodes, map[string]any{"id": n, "seasonNumber": season, "episodeNumber": n, "hasFile": n > 7, "airDateUtc": "2020-01-01T00:00:00Z"})
+	}
+	episodeJSON, _ := json.Marshal(episodes)
 	sonarrSrv := jsonServer(t, map[string]string{
+		"/api/v3/episode": string(episodeJSON),
 		"/api/v3/series": `[
 			{"id":7,"tvdbId":500,"title":"Gappy Show","monitored":true,"seasons":[
 				{"seasonNumber":1,"monitored":false,"statistics":{"episodeFileCount":0,"episodeCount":0,"totalEpisodeCount":7}},
@@ -104,6 +115,7 @@ func TestGetRequestsOverlaysLiveStatus(t *testing.T) {
 	})
 
 	s, uid := newHistoryTestService(t, radarrSrv.URL, sonarrSrv.URL, "")
+	installTVFixture(t, s, &fakeSonarrTV{lookupJSON: `[{"title":"Gappy Show","tvdbId":500,"seasons":[{"seasonNumber":1},{"seasonNumber":2}]}]`}, 200)
 
 	seed := []struct {
 		title  string

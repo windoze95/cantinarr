@@ -26,6 +26,20 @@ import 'package:go_router/go_router.dart';
 import 'tv_schedule_fixtures.dart';
 
 void main() {
+  testWidgets('saved TV delivery refreshes without a websocket and retires its wait message', (tester) async {
+    final adapter = _TVAdapter(detail: carrieTVFixture)..statusFields = {
+      'delivery': [{'state': 'retry', 'message': 'Waiting for the initial TV refresh.'}],
+    };
+    await _pumpDetail(tester, adapter: adapter);
+    expect(find.text('Waiting for the initial TV refresh.'), findsOneWidget);
+    adapter.statusFields = {};
+    await tester.pump(const Duration(seconds: 15));
+    await tester.pumpAndSettle();
+    expect(find.text('Waiting for the initial TV refresh.'), findsNothing);
+    expect(adapter.requests.where((r) => r.path.endsWith('/status')).length, greaterThanOrEqualTo(2));
+    expect(find.text('Premieres Oct 7, 2026'), findsOneWidget);
+  });
+
   testWidgets('requested Carrie shows its premiere and cannot request Season 1',
       (tester) async {
     final adapter = _TVAdapter(detail: carrieTVFixture);
@@ -297,6 +311,7 @@ class _Auth extends AuthNotifier {
 }
 
 class _TVAdapter implements HttpClientAdapter {
+  Map<String, dynamic> statusFields = {};
   final Map<String, dynamic> detail;
   final String status;
   final int detailStatus;
@@ -316,6 +331,7 @@ class _TVAdapter implements HttpClientAdapter {
     }
     if (path == '/api/requests/123/status') {
       return _response({
+        ...statusFields,
         'status': status,
         'seasons': [
           {'season_number': 1, 'status': status, 'episode_count': 0},
