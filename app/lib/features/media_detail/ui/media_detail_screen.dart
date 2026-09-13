@@ -884,13 +884,13 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       }
     }
 
-    await _requestNotifier.request(
+    final accepted = await _requestNotifier.request(
       title: title,
       tvdbId: tvdbId,
       seasonScope: seasonScope,
       qualityProfileId: qualityProfileId,
     );
-    if (mounted && _requestNotifier.state.error == null) _onRequestSucceeded();
+    if (mounted && accepted) _onRequestSucceeded();
   }
 
   /// Every successful submission (coarse request or per-season table) lands

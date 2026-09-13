@@ -562,6 +562,14 @@ class RequestSeasonStatus {
   /// True once every episode of the season has a file.
   bool get isAvailable => status == RequestStatus.available;
 
+  /// A missing or incomplete season can be requested; accepted work cannot.
+  bool get isRequestable => switch (status) {
+        RequestStatus.unavailable ||
+        RequestStatus.partial ||
+        RequestStatus.denied => true,
+        _ => false,
+      };
+
   /// "x/y" episode-file availability, e.g. "7/10".
   String get episodesLabel => '$episodeFileCount/$episodeCount';
 }
@@ -714,26 +722,22 @@ class RequestService {
 
   /// Like [checkStatus] but also returns the per-season availability breakdown
   /// (TV only). An [instanceId] scopes the read to that granted library; null
-  /// reads the user's default. Falls back to an unavailable detail with no
-  /// seasons on error.
+  /// reads the user's default. Errors propagate so a failed read cannot make
+  /// an already-requested season look requestable again.
   Future<RequestStatusDetail> checkStatusDetail(
     int tmdbId,
     MediaType mediaType, {
     String? instanceId,
   }) async {
-    try {
-      final resp = await _backendDio.get(
-        '/api/requests/$tmdbId/status',
-        queryParameters: {
-          'media_type': mediaType.name,
-          if (instanceId != null && instanceId.isNotEmpty)
-            'instance_id': instanceId,
-        },
-      );
-      return RequestStatusDetail.fromJson(resp.data as Map<String, dynamic>);
-    } catch (_) {
-      return const RequestStatusDetail();
-    }
+    final resp = await _backendDio.get(
+      '/api/requests/$tmdbId/status',
+      queryParameters: {
+        'media_type': mediaType.name,
+        if (instanceId != null && instanceId.isNotEmpty)
+          'instance_id': instanceId,
+      },
+    );
+    return RequestStatusDetail.fromJson(resp.data as Map<String, dynamic>);
   }
 
   /// Fetch the option set the current user may choose for [mediaType]. An

@@ -40,6 +40,7 @@ func TestStatusFromCompletion(t *testing.T) {
 // counts: Specials dropped, x/y = files/aired, unknown seasons tolerated.
 func TestSeasonStatusesFromCompletion(t *testing.T) {
 	series := &sonarr.Series{
+		Monitored: true,
 		Seasons: []sonarr.SeasonResource{
 			{SeasonNumber: 0, Monitored: true},
 			{SeasonNumber: 1, Monitored: true},
@@ -82,6 +83,7 @@ func TestSeasonStatusesFromCompletion(t *testing.T) {
 // onto the title status vocabulary.
 func TestSeasonStatuses(t *testing.T) {
 	series := &sonarr.Series{
+		Monitored: true,
 		Seasons: []sonarr.SeasonResource{
 			// Specials: must be excluded regardless of stats.
 			{SeasonNumber: 0, Monitored: true, Statistics: seasonStats(5, 5)},
