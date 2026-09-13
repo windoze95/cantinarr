@@ -749,10 +749,14 @@ class RequestService {
   /// (TV only). An [instanceId] scopes the read to that granted library; null
   /// reads the user's default. Errors propagate so a failed read cannot make
   /// an already-requested season look requestable again.
+  /// Catalog cards set [includeInstanceStatuses] false to avoid reading every
+  /// sibling library. Older servers may ignore that optional query parameter.
   Future<RequestStatusDetail> checkStatusDetail(
     int tmdbId,
     MediaType mediaType, {
     String? instanceId,
+    bool includeInstanceStatuses = true,
+    CancelToken? cancelToken,
   }) async {
     final resp = await _backendDio.get(
       '/api/requests/$tmdbId/status',
@@ -760,7 +764,9 @@ class RequestService {
         'media_type': mediaType.name,
         if (instanceId != null && instanceId.isNotEmpty)
           'instance_id': instanceId,
+        if (!includeInstanceStatuses) 'include_instance_statuses': false,
       },
+      cancelToken: cancelToken,
     );
     return RequestStatusDetail.fromJson(resp.data as Map<String, dynamic>);
   }

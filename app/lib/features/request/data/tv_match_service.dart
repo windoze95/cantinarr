@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../core/providers/library_refresh_provider.dart';
 import '../../auth/logic/auth_provider.dart';
 
 final tvMatchesAllowedProvider = Provider<bool>((ref) {
@@ -8,8 +9,15 @@ final tvMatchesAllowedProvider = Provider<bool>((ref) {
   return auth?.user?.isAdmin == true && auth?.connection?.tvMatchCorrections == true;
 });
 
-final tvMatchServiceProvider = Provider<TVMatchService>((ref) =>
-    TVMatchService(ref.watch(backendClientProvider)));
+final tvMatchServiceProvider = Provider<TVMatchService>((ref) {
+  var disposed = false;
+  ref.onDispose(() => disposed = true);
+  return TVMatchService(ref.watch(backendClientProvider), onChanged: () {
+    if (!disposed) {
+      ref.read(libraryRefreshTickProvider.notifier).state++;
+    }
+  });
+});
 
 class TVMatch {
   final int tmdbId;
@@ -120,7 +128,8 @@ String tvMatchError(Object error) {
 
 class TVMatchService {
   final Dio dio;
-  TVMatchService(this.dio);
+  final void Function()? onChanged;
+  TVMatchService(this.dio, {this.onChanged});
   Future<List<TVMatch>> list() async => ((await dio.get('/api/admin/tv-matches')).data as List)
       .map((e) => TVMatch.fromJson(e as Map<String, dynamic>)).toList();
   Future<TVMatchView> read(int id, String? instanceId) async => TVMatchView.fromJson(
@@ -129,14 +138,18 @@ class TVMatchService {
       ((await dio.get('/api/admin/tv-matches/candidates', queryParameters: {'q': query, if (instanceId != null) 'instance_id': instanceId})).data as List)
           .map((e) => TVMatchCandidate.fromJson(e as Map<String, dynamic>)).toList();
   Future<TVMatchView> save(int id, String revision, String mode, String? instanceId,
-      {int? tvdbId, Map<int, int> seasons = const {}}) async => TVMatchView.fromJson(
-      (await dio.put('/api/admin/tv-matches/$id', data: {'revision': revision, 'mode': mode,
+      {int? tvdbId, Map<int, int> seasons = const {}}) async {
+    final response = await dio.put('/api/admin/tv-matches/$id', data: {'revision': revision, 'mode': mode,
         if (instanceId != null) 'instance_id': instanceId, if (tvdbId != null) 'tvdb_id': tvdbId,
-        'season_map': {for (final e in seasons.entries) '${e.key}': e.value}})).data as Map<String, dynamic>);
+        'season_map': {for (final e in seasons.entries) '${e.key}': e.value}});
+    onChanged?.call();
+    return TVMatchView.fromJson(response.data as Map<String, dynamic>);
+  }
   Future<List<TVRepairPreview>> repairs(int id) async =>
       ((await dio.get('/api/admin/tv-matches/$id/repairs')).data as List)
           .map((e) => TVRepairPreview.fromJson(e as Map<String, dynamic>)).toList();
   Future<void> repair(TVRepairPreview preview) async {
     await dio.post('/api/admin/requests/${preview.requestId}/repair-tv-match', data: {'revision': preview.revision});
+    onChanged?.call();
   }
 }

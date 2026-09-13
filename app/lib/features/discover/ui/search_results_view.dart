@@ -8,6 +8,7 @@ import '../../../core/widgets/cached_image.dart';
 import '../../person/ui/person_detail_sheet.dart';
 import '../data/tmdb_models.dart';
 import '../logic/search_library_status.dart';
+import 'catalog_status_builder.dart';
 
 /// List view of search results with poster thumbnails and metadata.
 class SearchResultsView extends StatelessWidget {
@@ -16,6 +17,7 @@ class SearchResultsView extends StatelessWidget {
   final String query;
   final void Function(MediaItem)? onLoadMore;
   final VoidCallback? onResultTap;
+  final bool resolveTVStatus;
 
   /// Availability chips keyed by (media type, TMDB id) — see
   /// [buildSearchLibraryStatus] for why a bare id is not identity.
@@ -28,6 +30,7 @@ class SearchResultsView extends StatelessWidget {
     required this.query,
     this.onLoadMore,
     this.onResultTap,
+    this.resolveTVStatus = false,
     this.libraryStatus = const {},
   });
 
@@ -77,10 +80,12 @@ class SearchResultsView extends StatelessWidget {
             return _buildShimmerRow();
           }
           final item = results[index];
-          final tile = _SearchResultTile(
+          final tile = CatalogStatusBuilder(
             item: item,
-            status: libraryStatus[(item.mediaType, item.id)],
-            onTap: onResultTap,
+            resolveTVStatus: resolveTVStatus,
+            legacyStatus: libraryStatus[(item.mediaType, item.id)],
+            builder: (status) => _SearchResultTile(
+              item: item, status: status, onTap: onResultTap),
           );
           final triggerIndex = results.length > 5 ? results.length - 5 : 0;
           if (onLoadMore != null && index == triggerIndex) {
@@ -305,7 +310,9 @@ class _SearchResultTile extends StatelessWidget {
 
     return _resultSurface(
       context,
-      semanticLabel: 'View ${item.title}, ${item.mediaType.displayName}',
+      semanticLabel: 'View ${item.title}, ${item.mediaType.displayName}'
+          '${status == null ? '' : ', ${status!.label}'}'
+          '${status?.episodeSubtitle == null ? '' : ', ${status!.episodeSubtitle}'}',
       onPressed: () {
         onTap?.call();
         context.push('/detail/${item.mediaType.name}/${item.id}');
@@ -365,26 +372,21 @@ class _SearchResultTile extends StatelessWidget {
                       // Year + library status + rating
                       Row(
                         children: [
-                          if (year != null)
-                            Text(
-                              year,
-                              style: const TextStyle(
-                                color: AppTheme.textSecondary,
-                                fontSize: 12,
-                              ),
-                            ),
-                          if (status != null) ...[
-                            const SizedBox(width: 6),
-                            _Chip(
-                              label: status!.label,
-                              color: status!.color,
-                              backgroundColor:
-                                  status!.color.withValues(alpha: 0.15),
-                            ),
-                          ],
+                          Expanded(child: Wrap(
+                            spacing: 6, runSpacing: 4,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              if (year != null) Text(year,
+                                style: const TextStyle(
+                                  color: AppTheme.textSecondary, fontSize: 12)),
+                              if (status != null) _Chip(
+                                label: status!.label, color: status!.color,
+                                backgroundColor: status!.color.withValues(alpha: 0.15)),
+                            ],
+                          )),
                           if (item.voteAverage != null &&
                               item.voteAverage! > 0) ...[
-                            const Spacer(),
+                            const SizedBox(width: 6),
                             const Icon(Icons.star_rounded,
                                 size: 13, color: AppTheme.accent),
                             const SizedBox(width: 2),

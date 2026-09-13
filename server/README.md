@@ -420,8 +420,8 @@ GET    /api/requests/music-artists         # user: the library's artists with pe
 GET    /api/requests/music-artist          # user: one artist by foreign_id + every album of theirs the
                                            #   library tracks, with ownership; optional instance_id.
                                            #   404 when that library holds no such artist
-GET    /api/requests/{tmdb_id}/status      # user: live availability + download progress; movies
-                                           #   already in the library also carry releases
+GET    /api/requests/{tmdb_id}/status      # user: live availability + download progress; optional include_instance_statuses=false skips sibling-library reads
+                                           #   movies already in the library also carry releases
                                            #   {in_cinemas, digital} as YYYY-MM-DD calendar dates.
                                            #   Optional instance_id scopes the read to that granted
                                            #   library; a user granted >1 library for the media type
@@ -452,7 +452,7 @@ POST   /api/admin/requests/{id}/repair-tv-match # admin: {revision} from preview
 ```
 Request statuses: `unavailable`, `requested`, `pending` (awaiting approval), `denied`, `downloading`, `partial`, `available`.
 
-TV responses add optional `match` (resolved TVDB identity, source-to-target `season_map`, provenance, revision, state, message, library `series_id`) and `delivery` data. `status_known:false` distinguishes an unresolved match or failed library read from confirmed absence; clients must not enable requests until a known result. Each TV `instance_statuses` entry has its own `status_known`. The `/api/config` capability `tv_match_corrections:true` enables admin correction controls without changing compatibility floors. Delivery reads by `request_id` support TV snapshots; foreign-ID delivery-status reads remain book/music-only.
+TV responses add optional `match` (resolved TVDB identity, source-to-target `season_map`, provenance, revision, state, message, library `series_id`) and `delivery` data. `status_known:false` distinguishes an unresolved match or failed library read from confirmed absence; clients must not enable requests until a known result. Each TV `instance_statuses` entry has its own `status_known`. Catalog cards can pass `include_instance_statuses=false` to read only their selected/default library using the same authorization, content policy, source-season projection and saved-request overlay as details. Omitting the parameter retains sibling-library statuses. The `/api/config` capability `tv_match_corrections:true` enables corrected catalog badges for all users and correction controls for admins without changing compatibility floors. Delivery reads by `request_id` support TV snapshots; foreign-ID delivery-status reads remain book/music-only.
 
 Book intake accepts the existing native `foreign_id`, `title`, `book_format`, optional `instance_id`, and `search_term`. Saving performs no Chaptarr reads or writes: it persists the original identity, instance, title, search term, approval requirement, and one job per format, wakes the durable worker, and returns the saved response. `request_id`, `catalog_ref`, `delivery`, and existing response fields remain compatible. New book `catalog_ref` submissions return HTTP 410 with structured `catalog_retired`, a message and `/dashboard/books` search action without contacting Open Library. Music retains native and MusicBrainz source-based requests.
 

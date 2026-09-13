@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
+import 'package:cantinarr/core/providers/library_refresh_provider.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/request/data/request_service.dart' hide RequestOptions;
@@ -58,6 +59,8 @@ void main() {
     expect(adapter.writes.single.data, containsPair('season_map', {'1': 4}));
     expect(adapter.writes.single.data, containsPair('revision', 'reviewed-v1'));
     expect(adapter.writes.single.data, containsPair('instance_id', 'sonarr-main'));
+    expect(ProviderScope.containerOf(tester.element(find.byType(TVMatchEditorScreen)))
+      .read(libraryRefreshTickProvider), 1);
     await tester.scrollUntilVisible(find.text('Local correction · resolved').hitTestable(), -300, scrollable: find.byType(Scrollable).first);
     expect(find.text('Local correction · resolved'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -76,6 +79,8 @@ void main() {
     await tester.tap(find.text('Pause matching'));
     await tester.pumpAndSettle();
     expect(adapter.writes.last.data['mode'], 'paused');
+    expect(ProviderScope.containerOf(tester.element(find.byType(TVMatchEditorScreen)))
+      .read(libraryRefreshTickProvider), 1);
     adapter.stale = true;
     await tester.ensureVisible(find.text('Restore bundled / default'));
     await tester.pumpAndSettle();
@@ -83,12 +88,16 @@ void main() {
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(find.text('This correction changed. Refresh before saving.').hitTestable(), -300, scrollable: find.byType(Scrollable).first);
     expect(find.text('This correction changed. Refresh before saving.'), findsOneWidget);
+    expect(ProviderScope.containerOf(tester.element(find.byType(TVMatchEditorScreen)))
+      .read(libraryRefreshTickProvider), 1);
     adapter.stale = false;
     await tester.ensureVisible(find.text('Restore bundled / default'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Restore bundled / default'));
     await tester.pumpAndSettle();
     expect(adapter.writes.last.data['mode'], 'default');
+    expect(ProviderScope.containerOf(tester.element(find.byType(TVMatchEditorScreen)))
+      .read(libraryRefreshTickProvider), 2);
     await tester.scrollUntilVisible(find.text('Bundled correction · resolved').hitTestable(), -300, scrollable: find.byType(Scrollable).first);
     expect(find.text('Bundled correction · resolved'), findsOneWidget);
   });
@@ -113,6 +122,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(adapter.writes.single.path, '/api/admin/requests/11/repair-tv-match');
     expect(adapter.writes.single.data, {'revision': 'preview-v1'});
+    expect(ProviderScope.containerOf(tester.element(find.byType(TVMatchEditorScreen)))
+      .read(libraryRefreshTickProvider), 1);
     expect(find.text('Corrective request #12 already saved.'), findsOneWidget);
   });
 

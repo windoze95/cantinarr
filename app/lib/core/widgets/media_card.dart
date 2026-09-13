@@ -17,6 +17,17 @@ class MediaCard extends StatelessWidget {
   /// poster when its cards never carry a [subtitle] line (e.g. movie rows).
   static const double plainRowExtraHeight = 54;
 
+  /// Reserve scaled title/subtitle height before statuses arrive, so a later
+  /// Partial badge cannot resize a shelf or overflow enlarged text.
+  static double rowExtraHeight(BuildContext context, {required bool withSubtitle}) {
+    final scaler = MediaQuery.textScalerOf(context);
+    final titleExtra = (scaler.scale(12.5) - 12.5).clamp(0, double.infinity) * 2 * 1.22;
+    final subtitleExtra = withSubtitle
+        ? (scaler.scale(11) - 11).clamp(0, double.infinity) * 1.4 : 0;
+    return (withSubtitle ? subtitleRowExtraHeight : plainRowExtraHeight) +
+        titleExtra + subtitleExtra;
+  }
+
   final Object id;
   final double artworkAspectRatio;
   final String title;
@@ -229,6 +240,9 @@ class _InteractiveMediaCardState extends State<_InteractiveMediaCard> {
                               top: 7,
                               right: 7,
                               child: Container(
+                                constraints: BoxConstraints(
+                                  maxWidth: (widget.width - 14).clamp(1, double.infinity),
+                                ),
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 8,
                                   vertical: 4,
@@ -246,6 +260,9 @@ class _InteractiveMediaCardState extends State<_InteractiveMediaCard> {
                                 ),
                                 child: Text(
                                   widget.statusLabel!,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
                                   style: TextStyle(
                                     color: badgeForeground,
                                     fontSize: 11,

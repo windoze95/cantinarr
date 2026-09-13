@@ -14,6 +14,7 @@ import '../logic/browse_grid_notifier.dart';
 import '../logic/browse_query.dart';
 import '../logic/library_snapshot_provider.dart';
 import '../logic/search_library_status.dart';
+import 'catalog_status_builder.dart';
 import 'filter_sheet.dart';
 
 /// A feed as a full-page poster grid that keeps loading: the "See all" behind
@@ -255,9 +256,7 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
               (usable - BrowseGridScreen.columnSpacing * (columns - 1)) /
                   columns;
           final extent = cardWidth * 1.5 +
-              (isTv
-                  ? MediaCard.subtitleRowExtraHeight
-                  : MediaCard.plainRowExtraHeight);
+              MediaCard.rowExtraHeight(context, withSubtitle: isTv);
 
           return CustomScrollView(
             controller: _scrollController,
@@ -302,9 +301,10 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
                     delegate: SliverChildBuilderDelegate(
                       (context, index) {
                         final item = items[index];
-                        final status =
-                            libraryStatus[(item.mediaType, item.id)];
-                        return MediaCard(
+                        return CatalogStatusBuilder(
+                          item: item,
+                          legacyStatus: libraryStatus[(item.mediaType, item.id)],
+                          builder: (status) => MediaCard(
                           id: item.id,
                           title: item.title,
                           posterPath: item.posterPath,
@@ -315,6 +315,7 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
                           width: cardWidth,
                           onTap: () => context.push(
                             '/detail/${item.mediaType.name}/${item.id}',
+                          ),
                           ),
                         );
                       },

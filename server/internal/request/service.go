@@ -2514,6 +2514,12 @@ func (s *Service) statusFor(userID int64, tmdbID int, mediaType, instanceID stri
 // library; when the user holds more than one granted instance for the media
 // type, the response also carries a digest-grade status per granted library.
 func (s *Service) GetUserStatus(userID int64, tmdbID int, mediaType, instanceID string) (*StatusResponse, error) {
+	return s.getUserStatus(userID, tmdbID, mediaType, instanceID, true)
+}
+
+// Catalog cards need only their selected library. Keep authorization and the
+// live title projection identical to details, without reading every sibling.
+func (s *Service) getUserStatus(userID int64, tmdbID int, mediaType, instanceID string, includeInstanceStatuses bool) (*StatusResponse, error) {
 	// Authorize an explicit selection up front so a forbidden library errors
 	// instead of quietly answering with default-library state.
 	if instanceID != "" && !s.userIsAdmin(userID) && s.registry != nil {
@@ -2544,7 +2550,9 @@ func (s *Service) GetUserStatus(userID int64, tmdbID int, mediaType, instanceID 
 	if err != nil {
 		return nil, err
 	}
-	resp.InstanceStatuses = s.instanceStatuses(userID, tmdbID, mediaType)
+	if includeInstanceStatuses {
+		resp.InstanceStatuses = s.instanceStatuses(userID, tmdbID, mediaType)
+	}
 	return resp, nil
 }
 
