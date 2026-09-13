@@ -385,8 +385,8 @@ POST   /api/requests/preview               # user: same selection as create; cos
 GET|PUT /api/admin/request-quotas           # admin: User defaults {allowances:[{media_type,book_format?,count,window_days}]}
 GET|PUT /api/admin/users/{userID}/request-quotas # admin: effective usage / complete overrides; inherit:true clears a rule
 POST   /api/admin/users/{userID}/request-quotas/reset # admin: {allowances:[{media_type,book_format?}]} audited reset
-GET    /api/requests/delivery-status        # book/music saved delivery; media_type + instance_id and foreign_id or catalog_provider + catalog_id; alternatively request_id (admins can inspect saved intent after instance removal, with live state unknown)
-POST   /api/requests/{id}/delivery          # requester/admin: {action: retry|cancel|confirm, foreign_id?}; confirm requires a current book match
+GET    /api/requests/delivery-status        # book/music by media_type + instance_id and foreign_id or catalog_provider + catalog_id; all media by request_id (admins can inspect saved intent after instance removal, with live state unknown)
+POST   /api/requests/{id}/delivery          # requester/admin: {action: retry|cancel, book_format?}; retired confirm returns 410
 POST   /api/requests                       # user: create (movie/tv by tmdb_id; books by foreign_id +
                                            #   book_format; music by foreign_id — the MusicBrainz
                                            #   release-group id; optional instance_id for every media
