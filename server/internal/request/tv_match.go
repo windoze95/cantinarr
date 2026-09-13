@@ -99,6 +99,9 @@ func configuredTVMatch(q tvMatchQuerier, tmdbID int) (*TVMatch, int64, error) {
 	}
 	if mode == "custom" || (mode == "paused" && target > 0) {
 		m.TVDBID, m.TargetTitle, m.Provenance = target, "", "custom"
+		// Unmarshal merges into a non-nil map; local corrections must instead
+		// replace every bundled key, including after bundled-data upgrades.
+		m.SeasonMap = map[int]int{}
 		if err = json.Unmarshal([]byte(raw), &m.SeasonMap); err != nil {
 			return nil, 0, err
 		}

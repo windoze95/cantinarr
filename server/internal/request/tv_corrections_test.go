@@ -236,6 +236,27 @@ func TestBundledTVTargetsAllStoriesAndScopes(t *testing.T) {
 	}
 }
 
+func TestTVOverrideReplacesEntireBundledMap(t *testing.T) {
+	for _, mode := range []string{"custom", "paused"} {
+		t.Run(mode, func(t *testing.T) {
+			s, _, _, _ := newCorrectionLab(t)
+			// A reviewed source numbering change must not inherit any keys
+			// from an older (or newly upgraded) bundled correction.
+			_, err := s.db.Exec(`INSERT INTO tv_match_overrides(tmdb_id,mode,tvdb_id,season_map,revision) VALUES(299939,?,389492,'{"2":4}',7)`, mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			match, revision, err := configuredTVMatch(s.db, 299939)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if revision != 7 || match.Provenance != "custom" || !reflect.DeepEqual(match.SeasonMap, map[int]int{2: 4}) {
+				t.Fatalf("bundled keys leaked into local override: %+v revision=%d", match, revision)
+			}
+		})
+	}
+}
+
 func TestTVCorrectionExistingParentIsAdditiveAndSeasonScoped(t *testing.T) {
 	s, uid, _, l := newCorrectionLab(t)
 	if _, err := s.CreateMediaRequest(uid, tvRequest(113988, SeasonScopeAll)); err != nil {
