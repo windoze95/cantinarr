@@ -1,3 +1,4 @@
+import '../../request/logic/request_quota_provider.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -99,6 +100,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       audiobookshelfVisible: audiobookshelfVisible,
       videoServersVisible: videoServersVisible,
       appleTvRemote: connection?.appleTvRemote ?? false,
+      requestQuotas: connection?.requestQuotas ?? false,
     );
     final searching = _query.trim().isNotEmpty;
 
@@ -173,6 +175,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
             // Account
             const _SectionHeader(title: 'Account'),
+            if (ref.watch(requestQuotasSupportedProvider)) _SettingsTile(
+              icon: Icons.data_usage, title: 'Request allowance',
+              subtitle: 'Usage, remaining requests, and replenishment',
+              onTap: () => context.push('/settings/request-allowance'),
+            ),
             _SettingsTile(
               icon: Icons.person_outline,
               title: user?.username ?? 'Unknown',

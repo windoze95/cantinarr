@@ -479,6 +479,7 @@ func TestStrictTVTitleIdentity(t *testing.T) {
 
 func TestTVRepairIsAuditedIdempotentAndKeepsApproval(t *testing.T) {
 	s, uid, admin, l := newCorrectionLab(t)
+	quotaLimit(t, s, admin, 0, "tv", "", 0)
 	instanceID := s.effectiveArrInstanceID(uid, "tv")
 	for _, status := range []string{StatusRequested, StatusPending, StatusDenied} {
 		original := &resolvedRequest{userID: uid, tmdbID: 299939, tvdbID: 12345, mediaType: "tv", title: "Original Lizzie title", instanceID: instanceID, seasonScope: SeasonScopePilot}
@@ -515,6 +516,9 @@ func TestTVRepairIsAuditedIdempotentAndKeepsApproval(t *testing.T) {
 		second, err := s.RepairTVMatch(admin, id, preview.Revision)
 		if err != nil || first.RequestID != second.RequestID {
 			t.Fatalf("duplicate repair: %+v %+v %v", first, second, err)
+		}
+		if quotaRows(t, s, "request_quota_charges") != 0 {
+			t.Fatal("corrective repair charged allowance")
 		}
 		if (first.Status == StatusPending) != (status == StatusPending) {
 			t.Fatalf("approval changed: %+v", first)

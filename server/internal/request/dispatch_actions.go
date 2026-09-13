@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/windoze95/cantinarr-server/internal/bookdiscovery"
+	"github.com/windoze95/cantinarr-server/internal/requestquota"
 )
 
 func (s *Service) approveDelivery(adminID, id int64, override *DecisionOverride) (*CreateResponse, error) {
@@ -24,17 +25,39 @@ func (s *Service) approveDelivery(adminID, id int64, override *DecisionOverride)
 	if override != nil && override.BookFormat != "" && normalizeBookFormat(override.BookFormat) != r.bookFormat {
 		return nil, fmt.Errorf("approve the saved formats; additional formats require a separate request")
 	}
+	r.authority, err = requestAuthority(s.db, r.userID)
+	if err != nil {
+		return nil, err
+	}
+	var review *tvApproval
+	if r.mediaType == "movie" {
+		client, instanceID, e := s.resolveRadarr(adminID, r.instanceID)
+		if e != nil {
+			return nil, e
+		}
+		if client == nil {
+			return nil, fmt.Errorf("radarr is not configured")
+		}
+		r.instanceID = instanceID
+	}
 	if r.mediaType == "tv" {
-		if err = s.reviewTVApproval(id, r, override); err != nil {
+		if review, err = s.reviewTVApproval(id, r, override); err != nil {
 			return nil, err
 		}
 	}
-	tx, err := s.db.Begin()
+	tx, err := s.beginRequest(r.userID, r.authority)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE request_log SET approved_by=?,decided_at=CURRENT_TIMESTAMP,park_reason='delivery' WHERE id=? AND status='pending' AND park_reason IS NULL`, adminID, id)
+	role, err := requestquota.Role(tx, adminID)
+	if err != nil {
+		return nil, err
+	}
+	if role != "admin" {
+		return nil, ErrTVMatchAdmin
+	}
+	res, err := tx.Exec(`UPDATE request_log SET approved_by=?,decided_at=CURRENT_TIMESTAMP,park_reason='delivery' WHERE id=? AND user_id=? AND status='pending' AND park_reason IS NULL`, adminID, id, r.userID)
 	if err != nil {
 		return nil, err
 	}
@@ -42,11 +65,33 @@ func (s *Service) approveDelivery(adminID, id int64, override *DecisionOverride)
 	if n == 0 {
 		return nil, fmt.Errorf("this request is not waiting for approval")
 	}
+	if review != nil {
+		if err = s.applyTVApproval(tx, id, r, review); err != nil {
+			return nil, err
+		}
+	}
+	if r.mediaType == "movie" && override != nil && override.QualityProfileID != 0 {
+		if _, err = tx.Exec(`UPDATE request_log SET quality_profile_id=? WHERE id=?`, override.QualityProfileID, id); err != nil {
+			return nil, err
+		}
+	}
+	if r.mediaType == "movie" {
+		if _, err = tx.Exec(`UPDATE request_log SET instance_id=? WHERE id=?`, r.instanceID, id); err != nil {
+			return nil, err
+		}
+	}
 	if _, err = tx.Exec(`UPDATE request_dispatch SET state='queued',next_attempt_at=0,message='' WHERE request_id=? AND state='approval'`, id); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
+	}
+	s.quotaRequestChanged(id)
+	if r.mediaType == "movie" {
+		s.dispatchRequest(context.Background(), id)
+		if saved, _, e := s.loadRequest(id); e == nil {
+			r.title = saved.title
+		}
 	}
 	if s.notifier != nil {
 		audience := []bookRequestSubscriber{{UserID: r.userID, BookFormat: r.bookFormat}}
@@ -56,12 +101,12 @@ func (s *Service) approveDelivery(adminID, id int64, override *DecisionOverride)
 			}
 		}
 		for _, subscriber := range audience {
-			s.notifier.NotifyUser(subscriber.UserID, "request_decision", map[string]interface{}{"request_id": id, "tmdb_id": r.tmdbID, "media_type": r.mediaType, "foreign_id": r.foreignID, "title": r.title, "instance_id": r.instanceID, "decision": "approved", "book_format": subscriber.BookFormat})
+			s.notifier.NotifyUser(subscriber.UserID, "request_decision", map[string]interface{}{"request_id": id, "tmdb_id": r.tmdbID, "media_type": r.mediaType, "foreign_id": r.foreignID, "title": r.title, "instance_id": r.instanceID, "decision": "approved", "status": StatusRequested, "book_format": subscriber.BookFormat})
 		}
 	}
 	if r.mediaType == "book" {
 		s.wakeDispatch()
-	} else {
+	} else if r.mediaType != "movie" {
 		s.dispatchRequest(context.Background(), id)
 	}
 	if r.mediaType == "tv" {
@@ -122,7 +167,7 @@ func (s *Service) DeliveryAction(ctx context.Context, userID, id int64, action, 
 	if _, err = s.deliveryInstance(userID, r.mediaType, r.instanceID); err != nil {
 		return nil, err
 	}
-	tx, err := s.db.Begin()
+	tx, err := requestquota.Begin(s.db)
 	if err != nil {
 		return nil, err
 	}

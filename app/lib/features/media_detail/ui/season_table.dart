@@ -1,3 +1,4 @@
+import '../../request/ui/request_cost.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../discover/data/tmdb_models.dart';
@@ -253,6 +254,11 @@ class _SeasonTableState extends State<SeasonTable> {
                 ),
               ),
               if (hasSelectable) ...[
+                if (_selected.isNotEmpty) RequestCost(selection: {
+                  'media_type': 'tv', 'tmdb_id': widget.notifier.tmdbId,
+                  'title': widget.title ?? '', 'seasons': _selected.toList()..sort(),
+                  if (widget.notifier.instanceId != null) 'instance_id': widget.notifier.instanceId,
+                }),
                 const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,

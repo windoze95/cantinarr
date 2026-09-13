@@ -1,3 +1,4 @@
+import '../../request/ui/request_cost.dart';
 import '../../apple_tv/ui/apple_tv_open_button.dart';
 import 'dart:async';
 
@@ -117,6 +118,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// Anchors the "Seasons" section so "Request More" can scroll the user to the
   /// per-season picker.
   final GlobalKey _seasonsKey = GlobalKey();
+  RequestOptionsResult? _lastRequestOptions;
 
   /// The request option set the server allows this user (season/quality
   /// choice). Loaded once for TV so the season picker can hide its request
@@ -461,6 +463,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                   builder: (_, __) => Column(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
+                                      if (widget.mediaType == MediaType.movie &&
+                                          {RequestStatus.unavailable, RequestStatus.denied, RequestStatus.partial}.contains(_requestNotifier.state.status))
+                                        RequestCost(selection: {'media_type': 'movie', 'tmdb_id': widget.id,
+                                          'title': state.title, if (_effectiveLibraryId != null) 'instance_id': _effectiveLibraryId}),
                                       RequestButton(
                                         status: _requestNotifier.state.status,
                                         isRequesting:
@@ -931,6 +937,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       final result = await showAppSheet<RequestOptionsResult>(
         context,
         builder: (_) => RequestOptionsSheet(
+          selection: {'media_type': widget.mediaType.name, 'tmdb_id': widget.id, 'title': title},
+          initialSelection: (_lastRequestOptions?.instanceId == null || _lastRequestOptions?.instanceId == _effectiveLibraryId) ? _lastRequestOptions : null,
           options: options ??
               const RequestOptions(
                 canChooseSeason: false,
@@ -945,6 +953,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
         ),
       );
       if (result == null) return; // cancelled
+      _lastRequestOptions = result;
       seasonScope = result.seasonScope;
       qualityProfileId = result.qualityProfileId;
       if (result.instanceId != null &&

@@ -102,6 +102,7 @@ class RequestNotifier extends ChangeNotifier {
 
   RequestState _state = const RequestState();
   RequestState get state => _state;
+  int get tmdbId => _tmdbId;
   set state(RequestState value) {
     _state = value;
     notifyListeners();

@@ -351,6 +351,11 @@ func NewRouter(
 			// watch instead of deciding it.
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{id}/wait", requestHandler.Wait)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/request-settings", requestHandler.GetSettings)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/request-quotas", requestHandler.AdminQuotas)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/request-quotas", requestHandler.AdminQuotas)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/users/{userID}/request-quotas", requestHandler.AdminQuotas)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/users/{userID}/request-quotas", requestHandler.AdminQuotas)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/users/{userID}/request-quotas/reset", requestHandler.ResetQuotas)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/request-settings", requestHandler.UpdateSettings)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/tv-matches", requestHandler.ListTVMatches)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/tv-matches/candidates", requestHandler.TVMatchCandidates)
@@ -465,6 +470,8 @@ func NewRouter(
 			r.Use(authService.AuthMiddleware)
 			r.Use(auth.RequirePermission(auth.PermissionMediaRequest))
 			r.Post("/requests", requestHandler.Create)
+			r.Post("/requests/preview", requestHandler.Preview)
+			r.Get("/me/request-quotas", requestHandler.MyQuotas)
 			r.Get("/requests", requestHandler.List)
 			r.Get("/requests/options", requestHandler.Options)
 			r.Get("/requests/delivery-status", requestHandler.GetDelivery)
@@ -936,6 +943,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			// grant can still ask for access from the guide.
 			"plex_access_requestable":  plexRequestable,
 			"admin_catalog_browsing":   true,
+			"request_quotas":           true,
 			"tv_match_corrections":     true,
 			"apple_tv_remote":          len(appleTVCapability) > 0 && appleTVCapability[0](),
 			"media_account_management": true,

@@ -1,3 +1,4 @@
+import 'request_cost.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -74,6 +75,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
   bool _loading = true;
   bool _hasLiveDetail = false;
   bool _refreshFailed = false;
+  String? _quotaError;
   List<Map<String, dynamic>> _delivery = const [];
   int _savedGeneration = 0;
   final Set<int> _actions = {};
@@ -169,6 +171,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       _loading = true;
       _hasLiveDetail = false;
       _reportedCanonicalId = null;
+      _quotaError = null;
       _serverDetail = const BookRequestStatusDetail(isKnown: false);
       // Another book (or library) knows nothing about what was requested here.
       _submitted.clear();
@@ -325,7 +328,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     }
     _savedGeneration++; // ignore reads started before this submission
     _checkGeneration++;
-    setState(() => _inFlight.addAll(selected));
+    setState(() { _quotaError = null; _inFlight.addAll(selected); });
     try {
       BookRequestSubmission? submission;
       String? failureMessage;
@@ -339,6 +342,10 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
           searchTerm: widget.searchTerm,
         );
       } on RequestSubmissionException catch (e) {
+        if (e.quotaExceeded) {
+          if (mounted) setState(() => _quotaError = e.message);
+          return;
+        }
         failureMessage = e.message;
         definitiveFailure = e.definitive;
       }
@@ -512,6 +519,16 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
                     style: Theme.of(context).textTheme.titleSmall),
               ),
               const Divider(height: 1, color: AppTheme.border),
+              if (_quotaError != null) Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(_quotaError!, style: const TextStyle(color: AppTheme.error)),
+              ),
+              Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: RequestCost(selection: {
+                'media_type': 'book', 'foreign_id': widget.foreignId,
+                'title': widget.title, 'book_format': 'both',
+                if (widget.instanceId != null) 'instance_id': widget.instanceId,
+                if (widget.searchTerm != null) 'search_term': widget.searchTerm,
+              })),
               _row(
                 detail,
                 format: BookRequestFormat.ebook,

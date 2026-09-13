@@ -1,9 +1,12 @@
 package request
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"github.com/windoze95/cantinarr-server/internal/bookdiscovery"
 	"github.com/windoze95/cantinarr-server/internal/musicdiscovery"
+	"github.com/windoze95/cantinarr-server/internal/requestquota"
 	"strings"
 	"time"
 )
@@ -30,6 +33,16 @@ type DeliveryState struct {
 const dispatchLease = 5 * time.Minute
 
 func (s *Service) deliveryInstance(userID int64, mediaType, requested string) (string, error) {
+	if mediaType == "movie" {
+		client, id, err := s.resolveRadarr(userID, requested)
+		if err != nil {
+			return "", err
+		}
+		if client == nil {
+			return "", ErrArrInstanceInvalid
+		}
+		return id, nil
+	}
 	if mediaType == "tv" {
 		client, id, err := s.resolveSonarr(userID, requested)
 		if err != nil {
@@ -60,7 +73,7 @@ func (s *Service) deliveryInstance(userID int64, mediaType, requested string) (s
 		}
 		return id, nil
 	}
-	return "", fmt.Errorf("delivery is only supported for books and music")
+	return "", fmt.Errorf("unsupported request media type")
 }
 
 func validateCatalogRef(mediaType string, ref *CatalogRef) error {
@@ -109,6 +122,9 @@ func (s *Service) createCatalogRequest(userID int64, req *CreateRequest, eff eff
 	if req.MediaType == "book" {
 		formats = expandBookFormat(normalizeBookFormat(req.BookFormat))
 	}
+	if req.previewOnly {
+		s.prepareCatalogQuota(userID, req, instanceID, foreignID, provider, sourceID)
+	}
 	lockKey := instanceID + "\x00" + provider + ":" + sourceID + ":" + foreignID
 	if req.MediaType == "music" {
 		lockKey = instanceID + "\x00music-intake"
@@ -117,15 +133,29 @@ func (s *Service) createCatalogRequest(userID int64, req *CreateRequest, eff eff
 	lock.Lock()
 	ids, inserted, err := s.saveDelivery(userID, req, instanceID, foreignID, provider, sourceID, formats, eff.RequiresApproval)
 	lock.Unlock()
+	var exceeded *requestquota.Exceeded
+	if errors.As(err, &exceeded) {
+		// Keep ordinary catalog intake independent of provider latency. When
+		// additional units would be refused, a bounded read can prove they
+		// are already available/monitored and therefore require no allowance.
+		// No database transaction or delivery write spans this read.
+		s.prepareCatalogQuota(userID, req, instanceID, foreignID, provider, sourceID)
+		lock.Lock()
+		ids, inserted, err = s.saveDelivery(userID, req, instanceID, foreignID, provider, sourceID, formats, eff.RequiresApproval)
+		lock.Unlock()
+	}
 	if err != nil {
 		return nil, err
 	}
-	if inserted && eff.RequiresApproval && s.notifier != nil {
-		s.notifier.NotifyAdmins("request_pending", map[string]interface{}{"media_type": req.MediaType, "title": req.Title, "instance_id": instanceID, "foreign_id": foreignID})
+	if req.previewOnly {
+		return &CreateResponse{QuotaPreview: req.quotaPreview}, nil
 	}
 	response, err := s.deliveryResponse(userID, ids, req.Title, instanceID, req.CatalogRef)
 	if err == nil {
 		savedDeliveryState(response)
+		if inserted && response.Status == StatusPending && s.notifier != nil {
+			s.notifier.NotifyAdmins("request_pending", map[string]interface{}{"media_type": req.MediaType, "title": req.Title, "instance_id": instanceID, "foreign_id": foreignID})
+		}
 	}
 	s.wakeDispatch()
 
@@ -135,7 +165,7 @@ func (s *Service) createCatalogRequest(userID int64, req *CreateRequest, eff eff
 // saveDelivery atomically records intent, subscriptions and each format's job.
 // A double submission shares pending work, including its approval decision.
 func (s *Service) saveDelivery(userID int64, req *CreateRequest, instanceID, foreignID, provider, sourceID string, formats []string, approval bool) ([]int64, bool, error) {
-	tx, err := s.db.Begin()
+	tx, err := s.beginRequest(userID, req.authority)
 	if err != nil {
 		return nil, false, err
 	}
@@ -143,10 +173,10 @@ func (s *Service) saveDelivery(userID int64, req *CreateRequest, instanceID, for
 	covered := map[string]int64{}
 	legacy := map[int64]struct{ format, park string }{}
 	query := `SELECT r.id,COALESCE(r.book_format,'both'),COALESCE(r.park_reason,''),EXISTS(SELECT 1 FROM request_dispatch d WHERE d.request_id=r.id) FROM request_log r
- WHERE r.media_type=? AND COALESCE(r.instance_id,'')=? AND (?!='' OR COALESCE(r.foreign_id,'')=?)
+ WHERE r.media_type=? AND COALESCE(r.instance_id,'')=? AND (?!='' OR COALESCE(r.foreign_id,'')=? OR EXISTS(SELECT 1 FROM request_dispatch d WHERE d.request_id=r.id AND d.canonical_foreign_id=?))
  AND COALESCE(r.catalog_provider,'')=? AND COALESCE(r.catalog_id,'')=? AND r.status='pending'
  AND (r.media_type='book' OR r.user_id=?) ORDER BY r.id`
-	args := []any{req.MediaType, instanceID, provider, foreignID, provider, sourceID, userID}
+	args := []any{req.MediaType, instanceID, provider, foreignID, foreignID, provider, sourceID, userID}
 	if req.MediaType == "music" {
 		where, identityArgs, e := musicIdentityWhere(tx, instanceID, foreignID, provider, sourceID)
 		if e != nil {
@@ -182,6 +212,74 @@ func (s *Service) saveDelivery(userID int64, req *CreateRequest, instanceID, for
 	rows.Close()
 	if err != nil {
 		return nil, false, err
+	}
+	// Preserve every existing subscriber's pre-upgrade acceptance before a
+	// new subscriber introduces accounting for this shared request. These
+	// items intentionally have no charge; later owner transfers cannot turn
+	// old work into a new charge, or make a new subscription free.
+	legacyIDs := map[int64]bool{}
+	for _, id := range covered {
+		if id != 0 {
+			legacyIDs[id] = true
+		}
+	}
+	for id := range legacyIDs {
+		var items int
+		if err = tx.QueryRow(`SELECT COUNT(*) FROM request_quota_items WHERE request_id=?`, id).Scan(&items); err != nil {
+			return nil, false, err
+		}
+		if items != 0 {
+			continue
+		}
+		key := catalogQuotaKey(req.MediaType, foreignID, provider, sourceID)
+		for _, f := range []string{"", BookFormatEbook, BookFormatAudiobook} {
+			_, err = tx.Exec(`INSERT INTO request_quota_items(request_id,user_id,media_type,book_format,unit_key)
+ SELECT r.id,sub.user_id,r.media_type,?,? FROM request_log r JOIN (
+ SELECT user_id,COALESCE(book_format,'both') AS format FROM request_log WHERE id=?
+ UNION SELECT user_id,book_format FROM book_request_waiters WHERE request_id=?) sub
+ WHERE r.id=? AND ((r.media_type!='book' AND ?='') OR (r.media_type='book' AND ?!='' AND (sub.format=? OR sub.format='both')))
+ ON CONFLICT DO NOTHING`, f, key, id, id, id, f, f, f)
+			if err != nil {
+				return nil, false, err
+			}
+		}
+	}
+	units := []requestquota.Unit{}
+	for _, f := range formats {
+		key := req.quotaKey
+		if key == "" {
+			key = catalogQuotaKey(req.MediaType, foreignID, provider, sourceID)
+		}
+		id := covered[f]
+		free := req.quotaFree[f] != ""
+		if id != 0 {
+			// A known alias follows the accepted unit's identity. Only the
+			// same pre-upgrade subscriber is grandfathered, never a new one.
+			var priorKey string
+			e := tx.QueryRow(`SELECT unit_key FROM request_quota_items WHERE request_id=? AND book_format=? LIMIT 1`, id, f).Scan(&priorKey)
+			if e == nil {
+				key = priorKey
+			} else if e != sql.ErrNoRows {
+				return nil, false, e
+			}
+			if req.MediaType == "book" {
+				// Each new subscriber owns a charge while this work is pending.
+				// Existing and grandfathered items are deduplicated by Price.
+				free = false
+			}
+		}
+		units = append(units, requestquota.Unit{Key: requestquota.Key{MediaType: req.MediaType, BookFormat: f}, RequestID: id, InstanceID: instanceID, UnitKey: key, Free: free})
+	}
+	preview, _, err := s.Quotas.Price(tx, userID, units)
+	if err != nil {
+		return nil, false, err
+	}
+	if req.previewOnly {
+		req.quotaPreview = preview
+		return nil, false, nil
+	}
+	if e := preview.Failure(); e != nil {
+		return nil, false, e
 	}
 	for id, row := range legacy {
 		// Revisited pre-upgrade requests retain their approval/import gate.
@@ -227,10 +325,17 @@ func (s *Service) saveDelivery(userID int64, req *CreateRequest, instanceID, for
 		}
 		createdID = id
 		for _, f := range missing {
-			if _, e = tx.Exec(`INSERT INTO request_dispatch(request_id,format,state) VALUES (?,?,?)`, id, f, state); e != nil {
+			jobState := state
+			if req.quotaFree[f] != "" {
+				jobState = "complete"
+			}
+			if _, e = tx.Exec(`INSERT INTO request_dispatch(request_id,format,state,code) VALUES (?,?,?,?)`, id, f, jobState, req.quotaFree[f]); e != nil {
 				return nil, false, e
 			}
 			covered[f] = id
+		}
+		if _, e = tx.Exec(`UPDATE request_log SET status='requested',park_reason=NULL WHERE id=? AND NOT EXISTS(SELECT 1 FROM request_dispatch WHERE request_id=? AND state!='complete')`, id, id); e != nil {
+			return nil, false, e
 		}
 	}
 	ids := []int64{}
@@ -249,9 +354,20 @@ func (s *Service) saveDelivery(userID int64, req *CreateRequest, instanceID, for
 			}
 		}
 	}
+	for i := range units {
+		units[i].RequestID = covered[units[i].BookFormat]
+	}
+	if _, err = s.Quotas.Accept(tx, userID, units); err != nil {
+		return nil, false, err
+	}
 	if err = tx.Commit(); err != nil {
 		return nil, false, err
 	}
-	s.notifyCreated(createdID, approval)
+	s.quotaChanged(userID)
+	awaitingApproval := false
+	if createdID != 0 {
+		s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM request_dispatch WHERE request_id=? AND state='approval')`, createdID).Scan(&awaitingApproval)
+	}
+	s.notifyCreated(createdID, awaitingApproval)
 	return ids, inserted, nil
 }

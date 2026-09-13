@@ -1,3 +1,4 @@
+import 'request_quota.dart';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -330,10 +331,12 @@ class BookRequestStatusDetail {
 class RequestSubmissionException implements Exception {
   final String message;
   final bool definitive;
+  final bool quotaExceeded;
 
   const RequestSubmissionException(
     this.message, {
     this.definitive = false,
+    this.quotaExceeded = false,
   });
 
   @override
@@ -422,6 +425,8 @@ class MusicRequestSubmission {
 }
 
 String _musicRequestErrorMessage(DioException error) {
+  final quota = requestQuotaError(error);
+  if (quota != null) return quota;
   final data = error.response?.data;
   String? raw;
   if (data is Map) {
@@ -446,6 +451,8 @@ String _musicRequestErrorMessage(DioException error) {
 }
 
 String _requestErrorMessage(DioException error) {
+  final quota = requestQuotaError(error);
+  if (quota != null) return quota;
   final data = error.response?.data;
   String? raw;
   if (data is Map) {
@@ -839,7 +846,7 @@ class RequestService {
         orElse: () => RequestStatus.requested,
       );
     } catch (error) {
-      lastRequestError = tvMatchError(error);
+      lastRequestError = requestQuotaError(error) ?? tvMatchError(error);
       return null;
     }
   }
@@ -972,6 +979,7 @@ class RequestService {
       return Map<String, dynamic>.from(response.data as Map);
     } on DioException catch (e) {
       throw RequestSubmissionException(_requestErrorMessage(e),
+          quotaExceeded: requestQuotaError(e) != null,
           definitive: _requestErrorIsDefinitive(e));
     }
   }
@@ -1053,7 +1061,8 @@ class RequestService {
     } on DioException catch (e) {
       throw RequestSubmissionException(
         _requestErrorMessage(e),
-        definitive: _requestErrorIsDefinitive(e),
+        quotaExceeded: requestQuotaError(e) != null,
+          definitive: _requestErrorIsDefinitive(e),
       );
     } catch (_) {
       return null;
@@ -1158,7 +1167,8 @@ class RequestService {
     } on DioException catch (e) {
       throw RequestSubmissionException(
         _musicRequestErrorMessage(e),
-        definitive: _requestErrorIsDefinitive(e),
+        quotaExceeded: requestQuotaError(e) != null,
+          definitive: _requestErrorIsDefinitive(e),
       );
     } catch (_) {
       return null;

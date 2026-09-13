@@ -285,7 +285,21 @@ func (s *Service) DeliveryByID(userID, id int64, includeLive ...bool) (*CreateRe
 		return nil, err
 	}
 	if len(includeLive) == 0 || includeLive[0] {
-		s.overlayDeliveryTruth(userID, r.mediaType, r.foreignID, out)
+		if r.mediaType == "movie" {
+			if err = s.checkContentPolicy(userID, s.userIsAdmin(userID), "movie", r.tmdbID); err != nil {
+				return nil, err
+			}
+			live, e := s.statusFor(userID, r.tmdbID, "movie", r.instanceID)
+			known := e == nil && live != nil
+			out.StatusKnown = &known
+			if !known {
+				out.StatusUnknownReason = "library_unavailable"
+			} else if live.Status == StatusAvailable || live.Status == StatusDownloading {
+				out.Status = live.Status
+			}
+		} else {
+			s.overlayDeliveryTruth(userID, r.mediaType, r.foreignID, out)
+		}
 	} else {
 		savedDeliveryState(out)
 	}

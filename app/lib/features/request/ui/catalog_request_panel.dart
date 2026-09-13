@@ -1,3 +1,4 @@
+import 'request_cost.dart';
 import 'dart:async';
 
 import 'package:dio/dio.dart';
@@ -281,6 +282,13 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
       requestable.add('');
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (!widget.progressOnly && requestable.isNotEmpty) RequestCost(selection: {
+        'media_type': widget.mediaType, 'title': widget.title,
+        'instance_id': widget.instanceId,
+        if (widget.provider.isEmpty) 'foreign_id': widget.foreignId,
+        if (widget.provider.isNotEmpty) 'catalog_ref': {'provider': widget.provider, 'id': widget.sourceId},
+        if (widget.mediaType == 'book') 'book_format': requestable.length == 2 ? 'both' : requestable.first,
+      }),
       if (!widget.progressOnly &&
           widget.mediaType == 'book' &&
           bookTruth?.isKnown == true)

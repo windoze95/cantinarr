@@ -46,6 +46,7 @@ class SettingsSearchGates {
   final bool audiobookshelfVisible;
   final bool videoServersVisible;
   final bool appleTvRemote;
+  final bool requestQuotas;
 
   const SettingsSearchGates({
     required this.user,
@@ -57,6 +58,7 @@ class SettingsSearchGates {
     this.audiobookshelfVisible = false,
     this.videoServersVisible = false,
     this.appleTvRemote = false,
+    this.requestQuotas = false,
   });
 }
 
@@ -65,6 +67,7 @@ class SettingsSearchGates {
 // settings screens' inline visibility `if`s use today — add a predicate only
 // when a screen actually gates on something new.
 bool gateEveryone(SettingsSearchGates g) => true;
+bool gateRequestQuotas(SettingsSearchGates g) => g.requestQuotas;
 bool gateAdmin(SettingsSearchGates g) => g.user?.isAdmin == true;
 bool gateNonAdmin(SettingsSearchGates g) =>
     g.user != null && g.user!.isAdmin != true;
@@ -228,6 +231,16 @@ const List<SettingsSearchEntry> _rootEntries = [
       'xai',
     ],
     gate: gateAiChat,
+  ),
+  SettingsSearchEntry(
+    id: 'screen.request-allowance',
+    title: 'Request allowance',
+    icon: Icons.data_usage,
+    route: '/settings/request-allowance',
+    screenTitle: 'Settings',
+    section: 'Account',
+    keywords: ['quota', 'limit', 'remaining', 'usage', 'rolling', 'replenish'],
+    gate: gateRequestQuotas,
   ),
   SettingsSearchEntry(
     id: 'screen.discovery',
@@ -467,7 +480,7 @@ const List<SettingsSearchEntry> _rootEntries = [
     route: '/settings/request-settings',
     screenTitle: 'Settings',
     section: 'Admin',
-    keywords: ['request defaults', 'approval', 'seasons', 'quality'],
+    keywords: ['request defaults', 'approval', 'seasons', 'quality', 'allowance', 'quota', 'rolling limits'],
     gate: gateAdmin,
   ),
   SettingsSearchEntry(

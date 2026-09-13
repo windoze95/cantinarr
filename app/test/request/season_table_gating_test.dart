@@ -4,6 +4,8 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cantinarr/features/request/logic/request_quota_provider.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cantinarr/features/discover/data/tmdb_models.dart';
 import 'package:cantinarr/features/media_detail/ui/season_table.dart';
@@ -29,9 +31,9 @@ void main() {
         mediaType: MediaType.tv,
       )..state = state ?? const RequestState(hasStatus: true);
 
-  Widget host(SeasonTable table) => MaterialApp(
+  Widget host(SeasonTable table) => ProviderScope(overrides: [requestQuotasSupportedProvider.overrideWithValue(false)], child: MaterialApp(
         home: Scaffold(body: SingleChildScrollView(child: table)),
-      );
+      ));
 
   testWidgets('season choice allowed: checkboxes, chips and submit render',
       (tester) async {
@@ -234,6 +236,22 @@ void main() {
     expect(adapter.posts, hasLength(1));
   });
 
+  testWidgets('quota refusal preserves seasons until the user reduces them', (tester) async {
+    final adapter = _Adapter()..quotaRefusal = true;
+    final n = notifier(adapter: adapter);
+    await tester.pumpWidget(host(SeasonTable(seasons: seasons, notifier: n)));
+    await tester.tap(find.text('All'));
+    await tester.pump();
+    await tester.tap(find.text('Request 2 seasons'));
+    await tester.pumpAndSettle();
+    expect(n.state.error, 'TV seasons: 2 requested, 1 remaining.');
+    expect(tester.widgetList<Checkbox>(find.byType(Checkbox)).every((c) => c.value == true), isTrue);
+    await tester.tap(find.text('First'));
+    await tester.pump();
+    expect(find.text('Request 1 season'), findsOneWidget);
+    expect(adapter.posts.single['seasons'], [1, 2]);
+  });
+
   testWidgets('a coarse request also refreshes existing season rows',
       (tester) async {
     final adapter = _Adapter()..detail = {
@@ -267,12 +285,14 @@ class _Adapter implements HttpClientAdapter {
   final posts = <Map<String, dynamic>>[];
   Map<String, dynamic> detail = {'status': 'requested'};
   Completer<ResponseBody>? statusGate;
+  bool quotaRefusal = false;
 
   @override
   Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? stream,
       Future<void>? cancelFuture) async {
     if (options.method == 'POST') {
       posts.add(Map<String, dynamic>.from(options.data as Map));
+      if (quotaRefusal) return _response({'code': 'request_quota_exceeded', 'error': 'TV seasons: 2 requested, 1 remaining.'}, code: 429);
       return _response({'status': 'requested'});
     }
     return statusGate?.future ?? Future.value(_response(detail));

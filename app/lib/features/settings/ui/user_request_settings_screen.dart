@@ -1,3 +1,4 @@
+import '../../request/ui/request_allowance_screen.dart';
 import 'dart:async';
 
 import 'package:dio/dio.dart';
@@ -403,6 +404,8 @@ class _UserRequestSettingsScreenState
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
         ..._buildKidsSection(),
+        Padding(padding: const EdgeInsets.all(16), child: RequestAllowanceSection(userId: widget.userId, username: widget.username)),
+
         const Padding(
           padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: Text(

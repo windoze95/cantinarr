@@ -42,60 +42,101 @@ func (s *Service) migrateTVApproval(id int64, r *resolvedRequest) error {
 	return tx.Commit()
 }
 
-func (s *Service) reviewTVApproval(id int64, r *resolvedRequest, override *DecisionOverride) error {
+type tvApproval struct{ previous, next *TVRequestTarget }
+
+// Provider reads finish before the approval transaction begins.
+func (s *Service) reviewTVApproval(id int64, r *resolvedRequest, override *DecisionOverride) (*tvApproval, error) {
 	target, _, _, err := s.loadTVTarget(id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	client, _, err := s.resolveSonarr(r.userID, r.instanceID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	current, err := s.resolveTVMatch(client, r.tmdbID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if current.Revision != target.Match.Revision {
-		return ErrTVMatchStale
+		return nil, ErrTVMatchStale
 	}
 	if override == nil {
-		return nil
+		return &tvApproval{target, target}, nil
 	}
 	if override.SeasonScope != "" {
 		if !validSeasonScope(override.SeasonScope) {
-			return errors.New("invalid season scope")
+			return nil, errors.New("invalid season scope")
 		}
 		r.seasonScope = override.SeasonScope
 		r.seasonNumbers = nil
 	}
+	if len(override.Seasons) > 0 {
+		for _, n := range override.Seasons {
+			if n <= 0 {
+				return nil, tvMatchFailure("tv_seasons_unmapped")
+			}
+		}
+		r.seasonNumbers = normalizeSeasonNumbers(override.Seasons)
+		r.seasonScope = encodeSeasonNumbers(r.seasonNumbers)
+	}
 	if override.QualityProfileID != 0 {
 		r.qualityProfileID = override.QualityProfileID
 	}
+	if override.SeasonScope == "" && len(override.Seasons) == 0 {
+		return &tvApproval{target, target}, nil
+	}
 	next, err := s.prepareTVTarget(r)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if next.Match.Revision != target.Match.Revision {
+		return nil, ErrTVMatchStale
+	}
+	return &tvApproval{target, next}, nil
+}
+
+func (s *Service) applyTVApproval(tx *sql.Tx, id int64, r *resolvedRequest, review *tvApproval) error {
+	previous, _ := json.Marshal(review.previous)
+	next, _ := json.Marshal(review.next)
+	res, err := tx.Exec(`UPDATE request_tv_targets SET snapshot=? WHERE request_id=? AND snapshot=?`, string(next), id, string(previous))
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
 		return ErrTVMatchStale
 	}
-	raw, _ := json.Marshal(next)
-	tx, err := s.db.Begin()
-	if err != nil {
+	var repair bool
+	var itemCount int
+	if err = tx.QueryRow(`SELECT repair_of IS NOT NULL FROM request_tv_targets WHERE request_id=?`, id).Scan(&repair); err != nil {
 		return err
 	}
-	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE request_log SET season_scope=?,quality_profile_id=? WHERE id=? AND status='pending' AND park_reason IS NULL`, r.seasonScope, sqlNullInt(r.qualityProfileID), id)
-	if err != nil {
+	if err = tx.QueryRow(`SELECT COUNT(*) FROM request_quota_items WHERE request_id=?`, id).Scan(&itemCount); err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
-	if n != 1 {
-		return errors.New("request is not waiting for approval")
+	for _, n := range review.previous.SourceSeasons {
+		if !slices.Contains(review.next.SourceSeasons, n) {
+			if err = s.Quotas.Release(tx, id, 0, "", fmt.Sprintf("%d:%d", r.tmdbID, n), "approval_reduced"); err != nil {
+				return err
+			}
+		}
 	}
-	if _, err = tx.Exec(`UPDATE request_tv_targets SET snapshot=? WHERE request_id=?`, string(raw), id); err != nil {
+	units := s.tvUnits(r, review.next, id)
+	for i := range units {
+		// Unchanged legacy approvals and corrective repairs are free.
+		if repair || (itemCount == 0 && slices.Contains(review.previous.SourceSeasons, review.next.SourceSeasons[i])) {
+			units[i].Free = true
+		}
+	}
+	if _, err = s.Quotas.Accept(tx, r.userID, units); err != nil {
 		return err
 	}
-	return tx.Commit()
+	_, err = tx.Exec(`UPDATE request_log SET season_scope=?,quality_profile_id=? WHERE id=?`, r.seasonScope, sqlNullInt(r.qualityProfileID), id)
+	return err
 }
 
 type TVRepairPreview struct {

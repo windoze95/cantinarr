@@ -1,3 +1,4 @@
+import 'request_cost.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
@@ -30,6 +31,8 @@ class LibraryChoice {
 /// null cancels.
 class RequestOptionsSheet extends StatefulWidget {
   final RequestOptions options;
+  final Map<String, dynamic>? selection;
+  final RequestOptionsResult? initialSelection;
 
   /// The libraries this user may choose between; the section renders only
   /// when there is more than one.
@@ -46,6 +49,8 @@ class RequestOptionsSheet extends StatefulWidget {
   const RequestOptionsSheet({
     super.key,
     required this.options,
+    this.selection,
+    this.initialSelection,
     this.libraries = const [],
     this.selectedLibraryId,
     this.onLibraryOptions,
@@ -65,7 +70,8 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
   void initState() {
     super.initState();
     _options = widget.options;
-    _seasonScope = widget.options.defaultSeasonScope;
+    _seasonScope = widget.initialSelection?.seasonScope ?? widget.options.defaultSeasonScope;
+    _qualityProfileId = widget.initialSelection?.qualityProfileId;
     _libraryId = widget.selectedLibraryId ??
         (widget.libraries.isNotEmpty ? widget.libraries.first.id : null);
   }
@@ -161,6 +167,11 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
             ),
             const SizedBox(height: 16),
           ],
+          if (widget.selection != null) RequestCost(selection: {
+            ...widget.selection!, if (o.canChooseSeason) 'season_scope': _seasonScope,
+            if (_libraryId != null) 'instance_id': _libraryId,
+            if (_qualityProfileId != null) 'quality_profile_id': _qualityProfileId,
+          }),
           if (o.canChooseQuality && o.qualityProfiles.isNotEmpty) ...[
             const _SectionLabel('Quality'),
             const SizedBox(height: 8),

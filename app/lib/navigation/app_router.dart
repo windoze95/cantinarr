@@ -1,3 +1,4 @@
+import '../features/request/ui/request_allowance_screen.dart';
 import '../features/apple_tv/ui/apple_tvs_screen.dart';
 import '../core/providers/instance_provider.dart';
 import '../features/discover/logic/discovery_access.dart';
@@ -864,6 +865,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             onExit: confirmSettingsExit,
             builder: (_, __) =>
                 const AppAmbientBackground(child: AgentApprovalRulesScreen()),
+          ),
+          GoRoute(
+            path: '/settings/request-allowance',
+            builder: (_, __) => const AppAmbientBackground(child: RequestAllowanceScreen()),
           ),
           GoRoute(
             path: '/settings/request-settings',

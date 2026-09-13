@@ -42,6 +42,29 @@ func NewClient(baseURL, apiKey string) *Client {
 	}
 }
 
+// WithMutationGuard checks immediately before every consequential request.
+func (c *Client) WithMutationGuard(check func() error) *Client {
+	clone := *c
+	client := *c.httpClient
+	client.Transport = mutationGuard{base: client.Transport, check: check}
+	clone.httpClient = &client
+	return &clone
+}
+
+type mutationGuard struct {
+	base  http.RoundTripper
+	check func() error
+}
+
+func (g mutationGuard) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		if err := g.check(); err != nil {
+			return nil, err
+		}
+	}
+	return g.base.RoundTrip(r)
+}
+
 type Series struct {
 	ID     int    `json:"id"`
 	Title  string `json:"title"`

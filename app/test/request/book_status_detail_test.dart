@@ -7,6 +7,8 @@ import 'package:cantinarr/features/request/data/request_service.dart'
 import 'package:cantinarr/features/request/ui/book_format_panel.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cantinarr/features/request/logic/request_quota_provider.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Minimal GET adapter returning a canned book-status JSON body.
@@ -369,7 +371,7 @@ void main() {
   for (final audioStatus in ['available', 'requested', 'unavailable']) {
     testWidgets('listening requires available audio ($audioStatus)',
         (tester) async {
-      await tester.pumpWidget(MaterialApp(
+      await tester.pumpWidget(ProviderScope(overrides: [requestQuotasSupportedProvider.overrideWithValue(false)], child: MaterialApp(
         home: Scaffold(
           body: BookFormatPanel(
             foreignId: 'hc:1',
@@ -382,7 +384,7 @@ void main() {
             audiobookListen: const Text('Listening action'),
           ),
         ),
-      ));
+      )));
       await tester.pumpAndSettle();
       expect(find.text('Listening action'),
           audioStatus == 'available' ? findsOneWidget : findsNothing);
@@ -553,7 +555,7 @@ void main() {
       final adapter = _DeferredStatusAdapter(delivery: []);
       final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
         ..httpClientAdapter = adapter;
-      await tester.pumpWidget(MaterialApp(
+      await tester.pumpWidget(ProviderScope(overrides: [requestQuotasSupportedProvider.overrideWithValue(false)], child: MaterialApp(
         home: Scaffold(
           body: Column(
             children: [
@@ -566,7 +568,7 @@ void main() {
             ],
           ),
         ),
-      ));
+      )));
       expect(find.text('Couldn’t check · Retry'), findsNothing);
       final panelState = tester.state(find.byType(BookFormatPanel));
       final synopsisPosition = tester.getTopLeft(find.text('About this book'));
@@ -703,7 +705,7 @@ void main() {
       'canonical_foreign_id': 'canon-1',
     };
     final service = _service(body);
-    Widget panel(int tick) => MaterialApp(
+    Widget panel(int tick) => ProviderScope(overrides: [requestQuotasSupportedProvider.overrideWithValue(false)], child: MaterialApp(
           home: Scaffold(
             body: BookFormatPanel(
               foreignId: 'fb',
@@ -713,7 +715,7 @@ void main() {
               onCanonicalForeignId: ids.add,
             ),
           ),
-        );
+        ));
     await tester.pumpWidget(panel(0));
     await tester.pumpAndSettle();
     expect(ids, ['canon-1']);
@@ -739,7 +741,7 @@ void main() {
       (tester) async {
     final ids = <String>[];
     await tester.pumpWidget(
-      MaterialApp(
+      ProviderScope(overrides: [requestQuotasSupportedProvider.overrideWithValue(false)], child: MaterialApp(
         home: Scaffold(
           body: BookFormatPanel(
             foreignId: 'fb',
@@ -752,7 +754,7 @@ void main() {
             onCanonicalForeignId: ids.add,
           ),
         ),
-      ),
+      )),
     );
     await tester.pumpAndSettle();
 
@@ -763,7 +765,7 @@ void main() {
       (tester) async {
     final ids = <String>[];
     await tester.pumpWidget(
-      MaterialApp(
+      ProviderScope(overrides: [requestQuotasSupportedProvider.overrideWithValue(false)], child: MaterialApp(
         home: Scaffold(
           body: BookFormatPanel(
             foreignId: 'fb',
@@ -776,7 +778,7 @@ void main() {
             onCanonicalForeignId: ids.add,
           ),
         ),
-      ),
+      )),
     );
     await tester.pumpAndSettle();
 
@@ -999,7 +1001,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(MaterialApp(
+    await tester.pumpWidget(ProviderScope(overrides: [requestQuotasSupportedProvider.overrideWithValue(false)], child: MaterialApp(
       home: Scaffold(
         body: MediaQuery(
           data: const MediaQueryData(textScaler: TextScaler.linear(2.0)),
@@ -1024,7 +1026,7 @@ void main() {
           ),
         ),
       ),
-    ));
+    )));
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
@@ -1180,7 +1182,7 @@ void main() {
     final parentRefresh = Completer<void>();
     var refreshTick = 0;
     await tester.pumpWidget(
-      MaterialApp(
+      ProviderScope(overrides: [requestQuotasSupportedProvider.overrideWithValue(false)], child: MaterialApp(
         home: Scaffold(
           body: StatefulBuilder(
             builder: (context, rebuild) => BookFormatPanel(
@@ -1195,7 +1197,7 @@ void main() {
             ),
           ),
         ),
-      ),
+      )),
     );
     await tester.pumpAndSettle();
     await tester.tap(_row('ebook'));
@@ -1263,7 +1265,7 @@ void main() {
     late StateSetter rebuild;
 
     await tester.pumpWidget(
-      MaterialApp(
+      ProviderScope(overrides: [requestQuotasSupportedProvider.overrideWithValue(false)], child: MaterialApp(
         home: Scaffold(
           body: StatefulBuilder(
             builder: (context, setState) {
@@ -1276,7 +1278,7 @@ void main() {
             },
           ),
         ),
-      ),
+      )),
     );
     await _waitForRequest(tester, adapter, 'old-book');
 
@@ -1306,7 +1308,7 @@ Widget _panel(
   bool ownershipStatusKnown = true,
   String foreignId = 'fb',
 }) =>
-    MaterialApp(
+    ProviderScope(overrides: [requestQuotasSupportedProvider.overrideWithValue(false)], child: MaterialApp(
       home: Scaffold(
         body: BookFormatPanel(
           foreignId: foreignId,
@@ -1315,7 +1317,7 @@ Widget _panel(
           ownershipStatusKnown: ownershipStatusKnown,
         ),
       ),
-    );
+    ));
 
 Finder _row(String format) => find.byKey(ValueKey('book-format-row:$format'));
 
@@ -1417,7 +1419,7 @@ void _concurrencyTests() {
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
       ..httpClientAdapter = adapter;
     await tester.pumpWidget(
-      MaterialApp(
+      ProviderScope(overrides: [requestQuotasSupportedProvider.overrideWithValue(false)], child: MaterialApp(
         home: Scaffold(
           body: BookFormatPanel(
             foreignId: 'fb',
@@ -1425,7 +1427,7 @@ void _concurrencyTests() {
             service: RequestService(backendDio: dio),
           ),
         ),
-      ),
+      )),
     );
     await tester.pumpAndSettle();
 
@@ -1470,7 +1472,7 @@ void _concurrencyTests() {
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
       ..httpClientAdapter = adapter;
     await tester.pumpWidget(
-      MaterialApp(
+      ProviderScope(overrides: [requestQuotasSupportedProvider.overrideWithValue(false)], child: MaterialApp(
         home: Scaffold(
           body: BookFormatPanel(
             foreignId: 'fb',
@@ -1478,7 +1480,7 @@ void _concurrencyTests() {
             service: RequestService(backendDio: dio),
           ),
         ),
-      ),
+      )),
     );
     await tester.pumpAndSettle();
 
