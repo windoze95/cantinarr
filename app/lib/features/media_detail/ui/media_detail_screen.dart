@@ -397,6 +397,25 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                   topPadding: topPadding,
                   disableAnimations: MediaQuery.disableAnimationsOf(context),
                   onBack: () => context.pop(),
+                  trailing: widget.mediaType == MediaType.tv &&
+                          ref.watch(tvMatchesAllowedProvider) && !_needsSetup
+                      ? PopupMenuButton<String>(
+                          tooltip: 'More options',
+                          icon: const Icon(Icons.more_horiz),
+                          iconColor: AppTheme.textPrimary,
+                          style: IconButton.styleFrom(
+                            minimumSize: const Size.square(48),
+                            visualDensity: VisualDensity.standard,
+                          ),
+                          onSelected: (_) => _correctTVMatch(),
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(
+                              value: 'correct_tv_match',
+                              child: Text('Correct TV match'),
+                            ),
+                          ],
+                        )
+                      : null,
                 ),
               ),
 
@@ -453,9 +472,6 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                           label: Text(_requestNotifier.state.isCheckingStatus ? 'Checking TV match…' : 'Retry TV match')),
                                       for (final message in _requestNotifier.state.deliveryMessages)
                                         Padding(padding: const EdgeInsets.only(top: 8), child: Text(message, textAlign: TextAlign.center)),
-                                      if (widget.mediaType == MediaType.tv && ref.watch(tvMatchesAllowedProvider))
-                                        TextButton.icon(onPressed: _correctTVMatch,
-                                          icon: const Icon(Icons.rule), label: const Text('Correct TV match')),
                                       // TV dates come from metadata, including
                                       // when existing episodes are Available.
                                       if (tvDate != null)
@@ -951,6 +967,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   }
 
   Future<void> _correctTVMatch() async {
+    if (!ref.read(tvMatchesAllowedProvider)) return;
     final uri = Uri(path: '/settings/tv-matches/${widget.id}', queryParameters: {
       if (_effectiveLibraryId != null) 'instance_id': _effectiveLibraryId!,
     });

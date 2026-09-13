@@ -10,6 +10,7 @@ void main() {
     String? posterPath,
     ScrollController? controller,
     bool disableAnimations = false,
+    Widget? trailing,
   }) {
     return MaterialApp(
       home: Scaffold(
@@ -28,6 +29,7 @@ void main() {
                 topPadding: 0,
                 disableAnimations: disableAnimations,
                 onBack: () {},
+                trailing: trailing,
               ),
             ),
             const SliverToBoxAdapter(child: SizedBox(height: 2000)),
@@ -192,5 +194,39 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.arrow_back));
     expect(popped, 2);
+  });
+
+  testWidgets('secondary header action stays reachable expanded and collapsed', (tester) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final controller = ScrollController();
+    addTearDown(controller.dispose);
+    var opened = 0;
+    final action = IconButton(
+      tooltip: 'More options', icon: const Icon(Icons.more_horiz),
+      onPressed: () => opened++,
+    );
+    await tester.pumpWidget(heroPage(title: 'A long title that shares the collapsed bar',
+      controller: controller, trailing: action));
+    await tester.pumpAndSettle();
+    final menu = find.byTooltip('More options');
+    final expanded = tester.getRect(menu);
+    expect(expanded.right, greaterThan(260));
+    await tester.tap(menu);
+    controller.jumpTo(480 - 64);
+    await tester.pumpAndSettle();
+    expect(tester.getRect(menu), expanded);
+    await tester.tap(menu);
+    expect(opened, 2);
+    expect(tester.takeException(), isNull);
+
+    // Capability/auth updates must remove the action without changing the
+    // title, artwork or geometry just to force a delegate rebuild.
+    await tester.pumpWidget(heroPage(title: 'A long title that shares the collapsed bar',
+      controller: controller));
+    await tester.pumpAndSettle();
+    expect(menu, findsNothing);
   });
 }

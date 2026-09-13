@@ -41,6 +41,9 @@ class MediaHeroDelegate extends SliverPersistentHeaderDelegate {
   final bool disableAnimations;
   final VoidCallback onBack;
 
+  /// Optional secondary action, kept out of the title's primary action dock.
+  final Widget? trailing;
+
   const MediaHeroDelegate({
     required this.title,
     this.year,
@@ -51,6 +54,7 @@ class MediaHeroDelegate extends SliverPersistentHeaderDelegate {
     required this.topPadding,
     required this.disableAnimations,
     required this.onBack,
+    this.trailing,
   });
 
   /// Expanded hero height. Decided from whether a backdrop *path* exists —
@@ -101,6 +105,7 @@ class MediaHeroDelegate extends SliverPersistentHeaderDelegate {
         topPadding: topPadding,
         disableAnimations: disableAnimations,
         onBack: onBack,
+        trailing: trailing,
         t: t,
         shrinkOffset: shrinkOffset,
         // During overscroll stretch shrinkOffset stays 0 while the box is
@@ -121,7 +126,8 @@ class MediaHeroDelegate extends SliverPersistentHeaderDelegate {
       expandedExtent != oldDelegate.expandedExtent ||
       collapsedExtent != oldDelegate.collapsedExtent ||
       topPadding != oldDelegate.topPadding ||
-      disableAnimations != oldDelegate.disableAnimations;
+      disableAnimations != oldDelegate.disableAnimations ||
+      trailing != oldDelegate.trailing;
 }
 
 /// Linear ramp of [t] across [a]..[b], clamped to 0..1.
@@ -139,6 +145,7 @@ class _MediaHeroBody extends StatefulWidget {
   final double topPadding;
   final bool disableAnimations;
   final VoidCallback onBack;
+  final Widget? trailing;
   final double t;
   final double shrinkOffset;
   final double height;
@@ -153,6 +160,7 @@ class _MediaHeroBody extends StatefulWidget {
     required this.topPadding,
     required this.disableAnimations,
     required this.onBack,
+    this.trailing,
     required this.t,
     required this.shrinkOffset,
     required this.height,
@@ -356,6 +364,7 @@ class _MediaHeroBodyState extends State<_MediaHeroBody> {
               hairlineIn: barHairline,
               backPillAlpha: backPillAlpha,
               onBack: widget.onBack,
+              trailing: widget.trailing,
             ),
           ),
         ],
@@ -808,6 +817,7 @@ class _MarqueeBar extends StatelessWidget {
   final double hairlineIn;
   final double backPillAlpha;
   final VoidCallback onBack;
+  final Widget? trailing;
 
   const _MarqueeBar({
     required this.title,
@@ -818,6 +828,7 @@ class _MarqueeBar extends StatelessWidget {
     required this.hairlineIn,
     required this.backPillAlpha,
     required this.onBack,
+    this.trailing,
   });
 
   @override
@@ -934,7 +945,19 @@ class _MarqueeBar extends StatelessWidget {
                       ),
                     ),
                   ),
+                )
+              else if (trailing != null)
+                const Spacer(),
+              if (trailing != null) ...[
+                const SizedBox(width: 12),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: backPillAlpha),
+                    shape: BoxShape.circle,
+                  ),
+                  child: trailing!,
                 ),
+              ],
             ],
           ),
         ),

@@ -30,8 +30,11 @@ void main() {
     List<Map<String, dynamic>> sonarrSeries = const [],
     List<Map<String, dynamic>> sonarrEpisodes = const [],
     Map<String, dynamic>? tvMatch,
+    bool? tvCorrections,
+    Size viewport = const Size(390, 844),
+    double textScale = 1,
   }) async {
-    tester.view.physicalSize = const Size(390, 844);
+    tester.view.physicalSize = viewport;
     tester.view.devicePixelRatio = 1;
     addTearDown(() {
       tester.view.resetPhysicalSize();
@@ -50,6 +53,13 @@ void main() {
                 : MediaType.movie,
           ),
         ),
+        GoRoute(
+          path: '/settings/tv-matches/:id',
+          builder: (_, state) => Scaffold(
+            body: Text('Editor ${state.pathParameters['id']} · '
+                '${state.uri.queryParameters['instance_id']}'),
+          ),
+        ),
       ],
     );
 
@@ -64,7 +74,7 @@ void main() {
                 mediaType,
                 instanceMediaDownloads: instanceMediaDownloads,
                 mappedSibling: mappedSibling,
-                tvCorrections: tvMatch != null,
+                tvCorrections: tvCorrections ?? tvMatch != null,
               ),
             ),
           ),
@@ -76,7 +86,13 @@ void main() {
           )),
           realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
         ],
-        child: MaterialApp.router(routerConfig: router),
+        child: MaterialApp.router(
+          routerConfig: router,
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(textScale)),
+            child: child!,
+          ),
+        ),
       ),
     );
     await tester.pumpAndSettle();
@@ -246,7 +262,8 @@ void main() {
         'episodeFile': {'id': 109, 'seriesId': 7, 'seasonNumber': 4, 'size': 100},
       }]);
     expect(find.text('Open in Sonarr'), findsOneWidget);
-    expect(find.text('Correct TV match'), findsOneWidget);
+    expect(find.text('Correct TV match'), findsNothing);
+    expect(find.byTooltip('More options'), findsOneWidget);
     expect(find.byTooltip('Download Season 4 episodes'), findsNothing);
     await tester.ensureVisible(find.byTooltip('Download Season 1 episodes'));
     await tester.pumpAndSettle();
@@ -255,6 +272,40 @@ void main() {
     expect(find.text('S01E01 · Lizzie file'), findsOneWidget);
     expect(find.textContaining('Dahmer file'), findsNothing);
   });
+
+  testWidgets('TV correction lives only in the header menu and opens the selected title and library', (tester) async {
+    await pumpDetail(tester, isAdmin: true, mediaType: MediaType.tv,
+      radarrMovies: [], tvCorrections: true, viewport: const Size(320, 640), textScale: 2);
+    expect(find.text('Correct TV match'), findsNothing);
+    final menu = find.byTooltip('More options');
+    final bounds = tester.getRect(menu);
+    expect(bounds.top, lessThan(64));
+    expect(bounds.right, greaterThan(260));
+    expect(bounds.width, greaterThanOrEqualTo(44));
+    expect(bounds.height, greaterThanOrEqualTo(44));
+    await tester.tap(menu);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(PopupMenuItem<String>, 'Correct TV match'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Correct TV match'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.text('Correct TV match'));
+    await tester.pumpAndSettle();
+    expect(find.text('Editor $_tmdbId · sonarr-main'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final scenario in [
+    (name: 'requesters', admin: false, corrections: true, type: MediaType.tv),
+    (name: 'older servers', admin: true, corrections: false, type: MediaType.tv),
+    (name: 'movie details', admin: true, corrections: true, type: MediaType.movie),
+  ]) {
+    testWidgets('correction menu stays hidden for ${scenario.name}', (tester) async {
+      await pumpDetail(tester, isAdmin: scenario.admin, mediaType: scenario.type,
+        radarrMovies: [], tvCorrections: scenario.corrections);
+      expect(find.byTooltip('More options'), findsNothing);
+      expect(find.text('Correct TV match'), findsNothing);
+    });
+  }
 }
 
 AuthState _state(
