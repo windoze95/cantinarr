@@ -1,4 +1,3 @@
-import 'request_cost.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
@@ -217,7 +216,13 @@ class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
       _refresh();
     } on RequestSubmissionException catch (e) {
       if (mounted && generation == _generation) {
-        setState(() => _error = e.message);
+        if (e.quotaExceeded) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(e.message)),
+          );
+        } else {
+          setState(() => _error = e.message);
+        }
       }
     } catch (_) {
       if (mounted && generation == _generation) {
@@ -234,10 +239,6 @@ class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
     final label = _label;
     final available = label == 'Available';
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      if (label == 'Request') RequestCost(selection: {
-        'media_type': 'music', 'foreign_id': _canonical ?? widget.foreignId,
-        'title': widget.title, if (widget.instanceId != null) 'instance_id': widget.instanceId,
-      }),
       SizedBox(
           height: 54,
           child: FilledButton.icon(

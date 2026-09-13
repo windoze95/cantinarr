@@ -1,4 +1,3 @@
-import 'request_cost.dart';
 import 'dart:async';
 
 import 'package:dio/dio.dart';
@@ -7,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/library_refresh_provider.dart';
+import '../data/request_quota.dart';
 import '../data/request_service.dart';
 import '../../discover/ui/book_browse_screen.dart';
 import '../../discover/logic/discovery_access.dart';
@@ -168,6 +168,13 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
           ref.read(catalogDiscoveryScopeProvider) != scope) {
         return;
       }
+      final quota = requestQuotaError(e);
+      if (quota != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(quota)),
+        );
+        return;
+      }
       final body = e.response?.data;
       setState(() => _error = body is Map && body['error'] is String
           ? body['error'] as String
@@ -282,13 +289,6 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
       requestable.add('');
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      if (!widget.progressOnly && requestable.isNotEmpty) RequestCost(selection: {
-        'media_type': widget.mediaType, 'title': widget.title,
-        'instance_id': widget.instanceId,
-        if (widget.provider.isEmpty) 'foreign_id': widget.foreignId,
-        if (widget.provider.isNotEmpty) 'catalog_ref': {'provider': widget.provider, 'id': widget.sourceId},
-        if (widget.mediaType == 'book') 'book_format': requestable.length == 2 ? 'both' : requestable.first,
-      }),
       if (!widget.progressOnly &&
           widget.mediaType == 'book' &&
           bookTruth?.isKnown == true)

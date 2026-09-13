@@ -743,6 +743,7 @@ class RequestOptions {
 class RequestService {
   final Dio _backendDio;
   String? lastRequestError;
+  bool lastRequestQuotaExceeded = false;
 
   RequestService({required Dio backendDio}) : _backendDio = backendDio;
 
@@ -816,6 +817,7 @@ class RequestService {
     String? instanceId,
   }) async {
     lastRequestError = null;
+    lastRequestQuotaExceeded = false;
     try {
       final body = <String, dynamic>{
         'tmdb_id': tmdbId,
@@ -846,7 +848,9 @@ class RequestService {
         orElse: () => RequestStatus.requested,
       );
     } catch (error) {
-      lastRequestError = requestQuotaError(error) ?? tvMatchError(error);
+      final quota = requestQuotaError(error);
+      lastRequestQuotaExceeded = quota != null;
+      lastRequestError = quota ?? tvMatchError(error);
       return null;
     }
   }

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -27,20 +26,6 @@ final requestQuotaViewProvider = FutureProvider.autoDispose.family<RequestQuotaV
   ref.watch(requestQuotaSyncProvider);
   ref.watch(requestQuotaRevisionProvider);
   final view = await ref.watch(requestQuotaServiceProvider).read(path);
-  final next = view.nextChange;
-  if (next != null) {
-    final timer = Timer(requestQuotaRefreshDelay(view, next), ref.invalidateSelf);
-    ref.onDispose(timer.cancel);
-  }
-  return view;
-});
-
-// JSON gives equivalent selections a stable key across widget rebuilds.
-final requestQuotaPreviewProvider = FutureProvider.autoDispose.family<RequestQuotaView, String>((ref, selection) async {
-  ref.watch(requestQuotaSyncProvider);
-  ref.watch(requestQuotaRevisionProvider);
-  final view = await ref.watch(requestQuotaServiceProvider).preview(
-      jsonDecode(selection) as Map<String, dynamic>);
   final next = view.nextChange;
   if (next != null) {
     final timer = Timer(requestQuotaRefreshDelay(view, next), ref.invalidateSelf);

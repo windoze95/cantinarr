@@ -1,4 +1,4 @@
-import '../../request/ui/request_cost.dart';
+import '../../request/data/request_quota.dart';
 import '../../apple_tv/ui/apple_tv_open_button.dart';
 import 'dart:async';
 
@@ -463,10 +463,6 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                   builder: (_, __) => Column(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      if (widget.mediaType == MediaType.movie &&
-                                          {RequestStatus.unavailable, RequestStatus.denied, RequestStatus.partial}.contains(_requestNotifier.state.status))
-                                        RequestCost(selection: {'media_type': 'movie', 'tmdb_id': widget.id,
-                                          'title': state.title, if (_effectiveLibraryId != null) 'instance_id': _effectiveLibraryId}),
                                       RequestButton(
                                         status: _requestNotifier.state.status,
                                         isRequesting:
@@ -937,7 +933,6 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       final result = await showAppSheet<RequestOptionsResult>(
         context,
         builder: (_) => RequestOptionsSheet(
-          selection: {'media_type': widget.mediaType.name, 'tmdb_id': widget.id, 'title': title},
           initialSelection: (_lastRequestOptions?.instanceId == null || _lastRequestOptions?.instanceId == _effectiveLibraryId) ? _lastRequestOptions : null,
           options: options ??
               const RequestOptions(
@@ -978,7 +973,14 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       seasonScope: seasonScope,
       qualityProfileId: qualityProfileId,
     );
-    if (mounted && accepted) _onRequestSucceeded();
+    if (!mounted) return;
+    if (accepted) {
+      _onRequestSucceeded();
+    } else if (_requestNotifier.state.quotaExceeded) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text(requestQuotaExceededMessage)),
+      );
+    }
   }
 
   Future<void> _correctTVMatch() async {

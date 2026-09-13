@@ -4,11 +4,14 @@ import 'dart:typed_data';
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/network/websocket_client.dart';
+import 'package:cantinarr/features/discover/logic/discovery_access.dart';
 import 'package:cantinarr/features/request/data/request_quota.dart';
 import 'package:cantinarr/features/request/data/request_service.dart' hide RequestOptions;
 import 'package:cantinarr/features/request/logic/request_quota_provider.dart';
 import 'package:cantinarr/features/request/ui/request_allowance_screen.dart';
-import 'package:cantinarr/features/request/ui/request_cost.dart';
+import 'package:cantinarr/features/request/ui/album_request_panel.dart';
+import 'package:cantinarr/features/request/ui/book_format_panel.dart';
+import 'package:cantinarr/features/request/ui/catalog_request_panel.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,8 +31,6 @@ class _QuotaService extends RequestQuotaService {
   int? resetUser;
   @override
   Future<RequestQuotaView> read(String path) async { reads++; return view; }
-  @override
-  Future<RequestQuotaView> preview(Map<String, dynamic> selection) async => view;
   @override
   Future<void> save(String path, Map<String, dynamic> rule) async { savedPath = path; saved = rule; }
   @override
@@ -69,14 +70,11 @@ void main() {
     expect(requestQuotaRefreshDelay(view, serverNow.add(const Duration(days: 30))),
         const Duration(days: 1));
   });
-  testWidgets('older servers hide both allowance settings and previews', (tester) async {
+  testWidgets('older servers hide allowance settings', (tester) async {
     final service = _QuotaService();
-    await tester.pumpWidget(_host(service, const Column(children: [
-      RequestAllowanceSection(editDefaults: true),
-      RequestCost(selection: {'media_type': 'movie', 'tmdb_id': 550}),
-    ]), supported: false));
+    await tester.pumpWidget(_host(service,
+      const RequestAllowanceSection(editDefaults: true), supported: false));
     expect(find.text('Request allowances'), findsNothing);
-    expect(find.textContaining('for this selection'), findsNothing);
     expect(service.reads, 0);
     expect(const BackendConnection(serverUrl: '', accessToken: '', refreshToken: '').requestQuotas, isFalse);
   });
@@ -141,23 +139,18 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets('usage and preview display local replenishment and a reducible selection', (tester) async {
+  testWidgets('allowance settings display usage and local replenishment', (tester) async {
     final service = _QuotaService();
     final next = DateTime.now().add(const Duration(days: 1));
-    service.view = RequestQuotaView(fits: false, reduceSelection: true, allowances: [
+    service.view = RequestQuotaView(allowances: [
       RequestAllowance(mediaType: 'tv', count: 2, used: 2, remaining: 0,
-        requestedUnits: 3, nextReplenishesAt: next, fullyReplenishesAt: next.add(const Duration(days: 1))),
+        nextReplenishesAt: next, fullyReplenishesAt: next.add(const Duration(days: 1))),
     ]);
-    await tester.pumpWidget(_host(service, const Column(children: [
-      RequestAllowanceSection(),
-      RequestCost(selection: {'media_type': 'tv', 'tmdb_id': 1, 'seasons': [1, 2, 3]}),
-    ])));
+    await tester.pumpWidget(_host(service, const RequestAllowanceSection()));
     await tester.pumpAndSettle();
     expect(find.text('2 used · 0 remaining'), findsOneWidget);
     expect(find.textContaining('Next returns'), findsOneWidget);
     expect(find.textContaining('Fully replenishes'), findsOneWidget);
-    expect(find.textContaining('3 units for this selection · 0 remaining'), findsOneWidget);
-    expect(find.text('Reduce the selection to fit the configured limit.'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });
@@ -204,7 +197,7 @@ void main() {
     await tester.pump();
   });
 
-  test('book and music errors preserve the structured allowance refusal', () async {
+  test('book and music quota refusals use a short message', () async {
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))..httpClientAdapter = _Refuse();
     final service = RequestService(backendDio: dio);
     for (final future in [
@@ -212,17 +205,66 @@ void main() {
       service.requestAlbum(foreignId: 'album', title: 'Album'),
     ]) {
       await expectLater(future, throwsA(isA<RequestSubmissionException>()
-          .having((e) => e.message, 'message', 'eBooks: 1 requested, 0 remaining.')
+          .having((e) => e.message, 'message', 'Request limit reached.')
           .having((e) => e.quotaExceeded, 'quota refusal', true)));
     }
   });
+
+  for (final surface in ['book', 'album', 'catalog book', 'catalog album']) {
+    testWidgets('$surface quota refusal is only a toast and permits retry', (tester) async {
+      final adapter = _Refuse();
+      final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))..httpClientAdapter = adapter;
+      final service = RequestService(backendDio: dio);
+      final panel = switch (surface) {
+        'book' => BookFormatPanel(foreignId: 'book', title: 'Book', service: service),
+        'album' => AlbumRequestPanel(foreignId: 'album', title: 'Album', service: service),
+        _ => CatalogRequestPanel(mediaType: surface == 'catalog book' ? 'book' : 'music',
+            foreignId: 'catalog', title: 'Title', instanceId: 'library',
+            provider: 'catalog', sourceId: '1'),
+      };
+      await tester.pumpWidget(ProviderScope(overrides: [
+        requestQuotasSupportedProvider.overrideWithValue(true),
+        backendClientProvider.overrideWithValue(dio),
+        catalogDiscoveryScopeProvider.overrideWithValue('quota-test'),
+      ], child: MaterialApp(home: Scaffold(body: SingleChildScrollView(child: panel)))));
+      await tester.pumpAndSettle();
+      final request = switch (surface) {
+        'catalog book' => find.text('Request eBook'),
+        'catalog album' => find.text('Request album'),
+        _ => find.text('Request').first,
+      };
+      await tester.tap(request);
+      await tester.pumpAndSettle();
+      expect(adapter.submissions, 1);
+      expect(adapter.previews, 0);
+      expect(find.descendant(of: find.byType(SnackBar),
+          matching: find.text('Request limit reached.')), findsOneWidget);
+      expect(find.textContaining('remaining'), findsNothing);
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(find.text('Request limit reached.'), findsNothing);
+      await tester.tap(request);
+      await tester.pumpAndSettle();
+      expect(adapter.submissions, 2);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    });
+  }
 }
 
 class _Refuse implements HttpClientAdapter {
+  int submissions = 0;
+  int previews = 0;
   @override
-  Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? body, Future<void>? cancel) async =>
-      ResponseBody.fromString(jsonEncode({'code': 'request_quota_exceeded', 'error': 'eBooks: 1 requested, 0 remaining.'}), 429,
-        headers: {'content-type': ['application/json']});
+  Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? body, Future<void>? cancel) async {
+    if (options.path == '/api/requests/preview') previews++;
+    if (options.path == '/api/requests' && options.method == 'POST') submissions++;
+    return ResponseBody.fromString(jsonEncode(options.method == 'GET'
+        ? {'success': true, 'status': 'unavailable', 'delivery': [],
+            'book_formats': {'ebook': 'unavailable', 'audiobook': 'unavailable'}}
+        : {'code': 'request_quota_exceeded', 'error': 'eBooks: 1 requested, 0 remaining.'}),
+        options.method == 'GET' ? 200 : 429, headers: {'content-type': ['application/json']});
+  }
   @override
   void close({bool force = false}) {}
 }
