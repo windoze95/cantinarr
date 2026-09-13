@@ -28,6 +28,7 @@ import '../../discover/data/tmdb_models.dart';
 import '../../discover/data/discover_api_service.dart';
 import '../../discover/logic/browse_query.dart';
 import '../../issues/logic/issues_provider.dart';
+import '../../issues/data/issue_models.dart';
 import '../../issues/ui/report_problem_sheet.dart';
 import '../../media_access/data/media_access_service.dart';
 import '../../media_access/logic/media_app_launcher.dart';
@@ -72,6 +73,24 @@ class MediaDetailScreen extends ConsumerStatefulWidget {
 
   @override
   ConsumerState<MediaDetailScreen> createState() => _MediaDetailScreenState();
+}
+
+sealed class _TVProblemChoice {
+  const _TVProblemChoice();
+}
+
+class _CorrectTVMatchChoice extends _TVProblemChoice {
+  const _CorrectTVMatchChoice();
+}
+
+class _ViewTVReportChoice extends _TVProblemChoice {
+  final int reportId;
+  const _ViewTVReportChoice(this.reportId);
+}
+
+class _ReportTVScopeChoice extends _TVProblemChoice {
+  final ReportScope scope;
+  const _ReportTVScopeChoice(this.scope);
 }
 
 class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
@@ -264,6 +283,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     _requestNotifier.instanceId = libraryId;
     _checkStatus();
     _resolveArrLink();
+    _loadMyOpenReport();
   }
 
   @override
@@ -272,8 +292,11 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     // rebuild the affordance and capture the new concrete instance id.
     ref.watch(instanceProvider);
     ref.watch(discoveryAccessProvider);
+    ref.watch(authProvider);
+    ref.watch(tvMatchesAllowedProvider);
     ref.listen(discoveryAccessProvider.select((access) => access.activeId(_serviceType)), (previous, next) {
       if (previous == null && next != null) _loadRequestState();
+      if (previous != next) _loadMyOpenReport();
       if (next == null && _needsSetup) _requestNotifier.state = const RequestState();
     });
     // Live-update the request button when an approval decision for THIS title
@@ -397,25 +420,6 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                   topPadding: topPadding,
                   disableAnimations: MediaQuery.disableAnimationsOf(context),
                   onBack: () => context.pop(),
-                  trailing: widget.mediaType == MediaType.tv &&
-                          ref.watch(tvMatchesAllowedProvider) && !_needsSetup
-                      ? PopupMenuButton<String>(
-                          tooltip: 'More options',
-                          icon: const Icon(Icons.more_horiz),
-                          iconColor: AppTheme.textPrimary,
-                          style: IconButton.styleFrom(
-                            minimumSize: const Size.square(48),
-                            visualDensity: VisualDensity.standard,
-                          ),
-                          onSelected: (_) => _correctTVMatch(),
-                          itemBuilder: (_) => const [
-                            PopupMenuItem(
-                              value: 'correct_tv_match',
-                              child: Text('Correct TV match'),
-                            ),
-                          ],
-                        )
-                      : null,
                 ),
               ),
 
@@ -524,10 +528,11 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                                     .state.status.label,
                                               ),
                                             ),
-                                          if (_myOpenReportId != null)
+                                          if (_myOpenReportId != null &&
+                                              !_canCorrectTVMatch)
                                             TextButton.icon(
-                                              onPressed: () => context.push(
-                                                  '/issues/$_myOpenReportId'),
+                                              onPressed: () =>
+                                                  _viewReport(_myOpenReportId!),
                                               icon: const Icon(
                                                 Icons.flag,
                                                 size: 17,
@@ -536,9 +541,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                                 'View your report',
                                               ),
                                             )
-                                          else if (_canReport(
-                                            _requestNotifier.state.status,
-                                          ))
+                                          else if (_canReport ||
+                                              (_myOpenReportId != null &&
+                                                  _canCorrectTVMatch))
                                             TextButton.icon(
                                               onPressed: () =>
                                                   _onReportProblem(state),
@@ -949,6 +954,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
         // pre-request read could land after it and overwrite it.
         setState(() => _selectedLibraryId = result.instanceId);
         _requestNotifier.instanceId = result.instanceId;
+        _loadMyOpenReport();
         if (widget.mediaType == MediaType.tv) {
           await _requestNotifier.checkStatus();
           if (!_requestNotifier.state.hasStatus) return;
@@ -967,7 +973,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   }
 
   Future<void> _correctTVMatch() async {
-    if (!ref.read(tvMatchesAllowedProvider)) return;
+    if (!_canCorrectTVMatch) return;
     final uri = Uri(path: '/settings/tv-matches/${widget.id}', queryParameters: {
       if (_effectiveLibraryId != null) 'instance_id': _effectiveLibraryId!,
     });
@@ -1251,42 +1257,56 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     );
   }
 
-  /// The caller's own OPEN report for this exact title, when one exists — the
-  /// detail page then offers the thread instead of a duplicate report. Loaded
-  /// once per screen from the self-scoped inbox; best-effort (a failed read
-  /// just leaves the plain Report button).
-  int? _myOpenReportId;
+  /// Keep the self-scoped inbox separate from the current library selection.
+  /// Switching libraries immediately stops showing the previous one's report,
+  /// even while a fresh inbox read is in flight.
+  List<Issue> _myReports = const [];
+  int _reportLoadGeneration = 0;
+
+  int? get _myOpenReportId {
+    final instanceId = _reportInstanceId;
+    for (final issue in _myReports) {
+      if (issue.closedAt == null &&
+          issue.mediaType == widget.mediaType.name &&
+          issue.tmdbId == widget.id && issue.instanceId == instanceId) {
+        return issue.id;
+      }
+    }
+    return null;
+  }
 
   Future<void> _loadMyOpenReport() async {
+    final generation = ++_reportLoadGeneration;
     try {
       final mine = await ref.read(issuesServiceProvider).listMyIssues();
-      if (!mounted) return;
-      final wantType = widget.mediaType == MediaType.movie ? 'movie' : 'tv';
-      for (final issue in mine) {
-        if (issue.closedAt == null &&
-            issue.mediaType == wantType &&
-            issue.tmdbId == widget.id) {
-          setState(() => _myOpenReportId = issue.id);
-          return;
-        }
-      }
+      if (!mounted || generation != _reportLoadGeneration) return;
+      setState(() => _myReports = mine);
     } catch (_) {
-      // The chip is a convenience; the report flow works without it.
+      // The shortcut is best-effort; never retain a stale/closed report after
+      // a failed refresh. Report submission still has server-side deduplication.
+      if (mounted && generation == _reportLoadGeneration) {
+        setState(() => _myReports = const []);
+      }
     }
   }
 
-  /// Reporting is offered only once the title is at least partially in the
-  /// library (so there's a download to complain about) and the server allows
-  /// it.
-  bool _canReport(RequestStatus status) {
-    final allow =
-        ref.watch(authProvider).valueOrNull?.connection?.allowReporting ??
-            false;
-    if (!allow || _reportInstanceId == null) return false;
-    return status == RequestStatus.available ||
-        status == RequestStatus.partial ||
-        status == RequestStatus.downloading;
+  Future<void> _viewReport(int id) async {
+    await context.push('/issues/$id');
+    if (mounted) await _loadMyOpenReport();
   }
+
+  bool get _reportingAllowed =>
+      ref.read(authProvider).valueOrNull?.connection?.allowReporting ?? false;
+
+  bool get _canCorrectTVMatch => widget.mediaType == MediaType.tv &&
+      ref.read(tvMatchesAllowedProvider) && !_needsSetup &&
+      _reportInstanceId != null;
+
+  /// The same state rule covers one-tap requests, season-table requests and
+  /// failures that block either. Admin corrections do not enable reporting.
+  bool get _canReport => !_needsSetup && _reportInstanceId != null &&
+      (_reportingAllowed || _canCorrectTVMatch) &&
+      _requestNotifier.state.canReportProblem;
 
   /// Opens the report flow. For a movie, scopes directly to the movie. For TV,
   /// lets the reporter narrow to a season/episode (reusing the loaded seasons)
@@ -1294,6 +1314,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   Future<void> _onReportProblem(MediaDetailState state) async {
     final instanceId = _reportInstanceId;
     if (instanceId == null) return;
+    final canCorrect = _canCorrectTVMatch;
+    if (!_reportingAllowed && !canCorrect) return;
     final title = state.title;
     if (widget.mediaType == MediaType.movie) {
       await showReportProblemSheet(
@@ -1303,24 +1325,38 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
           tmdbId: widget.id,
           title: title,
         ),
+        onSubmitted: _loadMyOpenReport,
       );
       return;
     }
 
     final tvdbId = state.tvDetail?.externalIds?.tvdbId;
-    final scope = await _pickTvScope(state, title, tvdbId, instanceId);
-    if (scope == null) return; // cancelled
-    if (!mounted) return;
-    await showReportProblemSheet(context, scope: scope);
+    final choice = await _pickTvScope(state, title, tvdbId, instanceId,
+      canCorrect: canCorrect, allowReporting: _reportingAllowed,
+      reportId: _myOpenReportId);
+    if (!mounted || instanceId != _reportInstanceId) return;
+    switch (choice) {
+      case _CorrectTVMatchChoice():
+        await _correctTVMatch();
+      case _ViewTVReportChoice(:final reportId):
+        await _viewReport(reportId);
+      case _ReportTVScopeChoice(:final scope):
+        if (!_reportingAllowed) return;
+        await showReportProblemSheet(context, scope: scope,
+          onSubmitted: _loadMyOpenReport);
+      case null:
+        return;
+    }
   }
 
   /// Presents a small picker for which part of a show the report is about.
   /// Returns null if cancelled.
-  Future<ReportScope?> _pickTvScope(
-      MediaDetailState state, String title, int? tvdbId, String instanceId) {
+  Future<_TVProblemChoice?> _pickTvScope(
+      MediaDetailState state, String title, int? tvdbId, String instanceId,
+      {required bool canCorrect, required bool allowReporting, int? reportId}) {
     // Real seasons only (drop a season 0 / specials placeholder when empty).
     final seasons = state.seasons.where((s) => s.seasonNumber > 0).toList();
-    return showAppSheet<ReportScope>(
+    return showAppSheet<_TVProblemChoice>(
       context,
       builder: (sheetContext) {
         return AppSheet(
@@ -1332,63 +1368,94 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
               const Padding(
                 padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
                 child: Text(
-                  "What's the problem with?",
+                  'Report a problem',
                   style: TextStyle(
                       color: AppTheme.textPrimary,
-                      fontSize: 16,
+                      fontSize: 20,
                       fontWeight: FontWeight.bold),
                 ),
               ),
-              ListTile(
-                leading: const Icon(Icons.tv_outlined,
-                    color: AppTheme.textSecondary),
-                title: const Text('The whole series',
-                    style: TextStyle(color: AppTheme.textPrimary)),
-                onTap: () => Navigator.of(sheetContext).pop(
-                  ReportScope.series(
-                    instanceId: instanceId,
-                    tmdbId: widget.id,
-                    tvdbId: tvdbId,
-                    title: title,
+              if (canCorrect)
+                ListTile(
+                  leading: const Icon(Icons.rule_outlined,
+                      color: AppTheme.textSecondary),
+                  title: const Text('Correct TV match',
+                      style: TextStyle(color: AppTheme.textPrimary)),
+                  onTap: () => Navigator.of(sheetContext).pop(
+                      const _CorrectTVMatchChoice()),
+                ),
+              if (reportId != null)
+                ListTile(
+                  leading: const Icon(Icons.flag_outlined,
+                      color: AppTheme.textSecondary),
+                  title: const Text('View your report',
+                      style: TextStyle(color: AppTheme.textPrimary)),
+                  onTap: () => Navigator.of(sheetContext).pop(
+                      _ViewTVReportChoice(reportId)),
+                ),
+              if (!allowReporting)
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 8, 20, 8),
+                  child: Text('Problem reporting is disabled. You can still correct this TV match.',
+                      style: TextStyle(color: AppTheme.textSecondary)),
+                ),
+              if (allowReporting && reportId == null) ...[
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 12, 20, 8),
+                  child: Text("What's the problem with?",
+                      style: TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.tv_outlined,
+                      color: AppTheme.textSecondary),
+                  title: const Text('The whole series',
+                      style: TextStyle(color: AppTheme.textPrimary)),
+                  onTap: () => Navigator.of(sheetContext).pop(
+                    _ReportTVScopeChoice(ReportScope.series(
+                      instanceId: instanceId,
+                      tmdbId: widget.id,
+                      tvdbId: tvdbId,
+                      title: title,
+                    )),
                   ),
                 ),
-              ),
-              for (final s in seasons)
-                ListTile(
-                  leading: const Icon(Icons.video_library_outlined,
-                      color: AppTheme.textSecondary),
-                  title: Text('Season ${s.seasonNumber}',
-                      style: const TextStyle(color: AppTheme.textPrimary)),
-                  trailing: (s.episodeCount ?? 0) > 0
-                      ? const Icon(Icons.chevron_right,
-                          color: AppTheme.textSecondary, size: 18)
-                      : null,
-                  onTap: () async {
-                    // A season with a known episode list narrows once more —
-                    // "wrong episode" deserves an episode-shaped report, and a
-                    // tighter scope is a cheaper diagnosis. No count, no
-                    // second step.
-                    final episodes = s.episodeCount ?? 0;
-                    if (episodes <= 0) {
-                      Navigator.of(sheetContext).pop(
-                        ReportScope.series(
-                          instanceId: instanceId,
-                          tmdbId: widget.id,
-                          tvdbId: tvdbId,
-                          seasonNumber: s.seasonNumber,
-                          title: title,
-                        ),
-                      );
-                      return;
-                    }
-                    final scope = await _pickSeasonScope(
-                        sheetContext, s.seasonNumber, episodes,
-                        title: title, tvdbId: tvdbId, instanceId: instanceId);
-                    if (scope != null && sheetContext.mounted) {
-                      Navigator.of(sheetContext).pop(scope);
-                    }
-                  },
-                ),
+                for (final s in seasons)
+                  ListTile(
+                    leading: const Icon(Icons.video_library_outlined,
+                        color: AppTheme.textSecondary),
+                    title: Text('Season ${s.seasonNumber}',
+                        style: const TextStyle(color: AppTheme.textPrimary)),
+                    trailing: (s.episodeCount ?? 0) > 0
+                        ? const Icon(Icons.chevron_right,
+                            color: AppTheme.textSecondary, size: 18)
+                        : null,
+                    onTap: () async {
+                      // A season with a known episode list narrows once more —
+                      // "wrong episode" deserves an episode-shaped report, and a
+                      // tighter scope is a cheaper diagnosis. No count, no
+                      // second step.
+                      final episodes = s.episodeCount ?? 0;
+                      if (episodes <= 0) {
+                        Navigator.of(sheetContext).pop(
+                          _ReportTVScopeChoice(ReportScope.series(
+                            instanceId: instanceId,
+                            tmdbId: widget.id,
+                            tvdbId: tvdbId,
+                            seasonNumber: s.seasonNumber,
+                            title: title,
+                          )),
+                        );
+                        return;
+                      }
+                      final scope = await _pickSeasonScope(
+                          sheetContext, s.seasonNumber, episodes,
+                          title: title, tvdbId: tvdbId, instanceId: instanceId);
+                      if (scope != null && sheetContext.mounted) {
+                        Navigator.of(sheetContext).pop(_ReportTVScopeChoice(scope));
+                      }
+                    },
+                  ),
+              ],
               const SizedBox(height: 8),
             ],
           ),
@@ -1470,22 +1537,20 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     );
   }
 
-  /// The concrete arr currently backing this media surface. An already
-  /// resolved detail link is authoritative; regular requester screens fall
-  /// back to the active/default instance exposed for that media type.
+  /// Reports follow the request library, never a stale arr-link read from the
+  /// previous selection. A link is only a fallback when no default is known.
   String? get _reportInstanceId {
-    final linked = _arrLink?.instanceId;
-    if (linked != null && linked.isNotEmpty) return linked;
-    if (_selectedLibraryId != null) return _selectedLibraryId;
+    final selected = _effectiveLibraryId;
+    if (selected != null && selected.isNotEmpty) return selected;
 
     final instances = ref.read(instanceProvider);
     final connection = ref.read(authProvider).valueOrNull?.connection;
     if (widget.mediaType == MediaType.movie) {
       return instances.activeRadarrInstance?.id ??
-          connection?.defaultRadarrInstance?.id;
+          connection?.defaultRadarrInstance?.id ?? _arrLink?.instanceId;
     }
     return instances.activeSonarrInstance?.id ??
-        connection?.defaultSonarrInstance?.id;
+        connection?.defaultSonarrInstance?.id ?? _arrLink?.instanceId;
   }
 
   void _showStatusSheet(

@@ -53,13 +53,6 @@ void main() {
                 : MediaType.movie,
           ),
         ),
-        GoRoute(
-          path: '/settings/tv-matches/:id',
-          builder: (_, state) => Scaffold(
-            body: Text('Editor ${state.pathParameters['id']} · '
-                '${state.uri.queryParameters['instance_id']}'),
-          ),
-        ),
       ],
     );
 
@@ -263,7 +256,7 @@ void main() {
       }]);
     expect(find.text('Open in Sonarr'), findsOneWidget);
     expect(find.text('Correct TV match'), findsNothing);
-    expect(find.byTooltip('More options'), findsOneWidget);
+    expect(find.byTooltip('More options'), findsNothing);
     expect(find.byTooltip('Download Season 4 episodes'), findsNothing);
     await tester.ensureVisible(find.byTooltip('Download Season 1 episodes'));
     await tester.pumpAndSettle();
@@ -273,24 +266,12 @@ void main() {
     expect(find.textContaining('Dahmer file'), findsNothing);
   });
 
-  testWidgets('TV correction lives only in the header menu and opens the selected title and library', (tester) async {
+  testWidgets('unrequested TV details have no correction button or header menu', (tester) async {
     await pumpDetail(tester, isAdmin: true, mediaType: MediaType.tv,
       radarrMovies: [], tvCorrections: true, viewport: const Size(320, 640), textScale: 2);
     expect(find.text('Correct TV match'), findsNothing);
-    final menu = find.byTooltip('More options');
-    final bounds = tester.getRect(menu);
-    expect(bounds.top, lessThan(64));
-    expect(bounds.right, greaterThan(260));
-    expect(bounds.width, greaterThanOrEqualTo(44));
-    expect(bounds.height, greaterThanOrEqualTo(44));
-    await tester.tap(menu);
-    await tester.pumpAndSettle();
-    expect(find.widgetWithText(PopupMenuItem<String>, 'Correct TV match'), findsOneWidget);
-    expect(find.widgetWithText(TextButton, 'Correct TV match'), findsNothing);
-    expect(tester.takeException(), isNull);
-    await tester.tap(find.text('Correct TV match'));
-    await tester.pumpAndSettle();
-    expect(find.text('Editor $_tmdbId · sonarr-main'), findsOneWidget);
+    expect(find.byTooltip('More options'), findsNothing);
+    expect(find.text('Report a problem'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

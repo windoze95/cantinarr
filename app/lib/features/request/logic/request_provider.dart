@@ -49,6 +49,20 @@ class RequestState {
     this.instanceStatuses = const {},
   });
 
+  /// A report becomes relevant after an accepted request or a completed
+  /// failure, including a match that blocks submission. Loading alone is not
+  /// a failure; neither is opening/cancelling options or a denied approval.
+  bool get canReportProblem => switch (status) {
+        RequestStatus.pending ||
+        RequestStatus.requested ||
+        RequestStatus.downloading ||
+        RequestStatus.partial ||
+        RequestStatus.available => true,
+        _ => !isCheckingStatus && !isRequesting &&
+            ((error?.trim().isNotEmpty ?? false) ||
+                (match != null && !match!.isResolved)),
+      };
+
   RequestState copyWith({
     TVMatch? match,
     List<String>? deliveryMessages,
