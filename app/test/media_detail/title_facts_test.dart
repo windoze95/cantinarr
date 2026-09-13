@@ -119,6 +119,39 @@ void main() {
     test('a show TMDB knows nothing about has no lines', () {
       expect(tvFacts(const TVDetail(id: 1, name: 'x', status: ' ')), isEmpty);
     });
+
+    test('premiere retains the original full date before and on the day', () {
+      const detail = TVDetail(id: 1, name: 'x', firstAirDate: '2026-10-07');
+      for (final now in [DateTime(2026, 9, 12), DateTime(2026, 10, 7, 23, 59)]) {
+        expect(tvFacts(detail, now: now),
+            const [TitleFact('Premiere', 'Oct 7, 2026')]);
+      }
+      expect(tvFacts(detail, now: DateTime(2026, 10, 8)),
+          const [TitleFact('First aired', 'Oct 7, 2026')]);
+    });
+
+    test('the original first-air date remains when a returning season is due', () {
+      const detail = TVDetail(id: 1, name: 'x', firstAirDate: '2024-10-02',
+        seasons: [Season(id: 2, seasonNumber: 2, airDate: '2026-10-07')],
+      );
+      expect(tvFacts(detail, now: DateTime(2026, 9, 12)),
+          const [TitleFact('First aired', 'Oct 2, 2024')]);
+    });
+
+    test('Season 1 supplies the original date when TMDB omits first_air_date', () {
+      const detail = TVDetail(id: 1, name: 'x', seasons: [
+        Season(id: 0, seasonNumber: 0, airDate: '2024-01-01'),
+        Season(id: 1, seasonNumber: 1, airDate: '2026-10-07'),
+      ]);
+      expect(tvFacts(detail, now: DateTime(2026, 9, 12)),
+          const [TitleFact('Premiere', 'Oct 7, 2026')]);
+    });
+
+    test('invalid and incomplete premiere dates never become facts', () {
+      for (final date in [null, '', '2026', '2026-02-30']) {
+        expect(tvFacts(TVDetail(id: 1, name: 'x', firstAirDate: date)), isEmpty);
+      }
+    });
   });
 
   group('formatMoney', () {

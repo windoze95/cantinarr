@@ -2,6 +2,48 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:cantinarr/features/discover/data/tmdb_models.dart';
 
 void main() {
+  group('TVDetail episode summaries', () {
+    test('parses optional next and last dates and episode numbers', () {
+      final detail = TVDetail.fromJson({
+        'id': 123,
+        'next_episode_to_air': {
+          'air_date': '2026-10-07', 'season_number': 2, 'episode_number': 1,
+        },
+        'last_episode_to_air': {
+          'air_date': '2024-11-20', 'season_number': 1, 'episode_number': 8,
+        },
+      });
+      expect(detail.nextEpisodeToAir?.airDate, '2026-10-07');
+      expect(detail.nextEpisodeToAir?.seasonNumber, 2);
+      expect(detail.nextEpisodeToAir?.episodeNumber, 1);
+      expect(detail.lastEpisodeToAir?.airDate, '2024-11-20');
+      expect(detail.lastEpisodeToAir?.seasonNumber, 1);
+      expect(detail.lastEpisodeToAir?.episodeNumber, 8);
+    });
+
+    test('missing, null and malformed summaries do not invent an episode', () {
+      expect(TVDetail.fromJson({'id': 123}).nextEpisodeToAir, isNull);
+      for (final value in [null, '', [], {}, {'name': null}, {'id': 0},
+        {'air_date': 123, 'season_number': '2', 'episode_number': -1}]) {
+        final detail = TVDetail.fromJson({
+          'id': 123, 'next_episode_to_air': value, 'last_episode_to_air': value,
+        });
+        expect(detail.nextEpisodeToAir, isNull);
+        expect(detail.lastEpisodeToAir, isNull);
+      }
+    });
+
+    test('an explicit episode may omit its date and numbers', () {
+      final episode = TVDetail.fromJson({
+        'id': 123, 'next_episode_to_air': {'id': 12, 'air_date': ''},
+      }).nextEpisodeToAir;
+      expect(episode, isNotNull);
+      expect(episode?.airDate, isNull);
+      expect(episode?.seasonNumber, isNull);
+      expect(episode?.episodeNumber, isNull);
+    });
+  });
+
   group('MediaItem', () {
     test('fromMovieJson parses correctly', () {
       final json = {
