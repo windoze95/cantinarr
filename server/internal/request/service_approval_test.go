@@ -129,15 +129,16 @@ func TestCreateMediaRequestPendingDedupe(t *testing.T) {
 	}
 }
 
-// TestCreateTVRequestPendingCachesTvdbID: a pending TV request stores the
-// supplied TVDB id mapping so status checks resolve while it waits, and the
-// resolved season scope rides along for the approval queue.
-func TestCreateTVRequestPendingCachesTvdbID(t *testing.T) {
-	s, uid := newHistoryTestService(t, "", "", "")
+// Pending requests retain a verified server target and the source scope.
+func TestCreateTVRequestPendingCachesVerifiedTvdbID(t *testing.T) {
+	f := &fakeSonarrTV{lookupJSON: `[{"title":"Andor","tvdbId":121361,"year":2022,"seasons":[{"seasonNumber":1}]}]`}
+	srv := newFakeSonarrServer(t, f)
+	s, uid := newHistoryTestService(t, "", srv.URL, "")
+	installTVFixture(t, s, f, 1399)
 	requireApproval(t, s)
 
 	resp, err := s.CreateMediaRequest(uid, &CreateRequest{
-		TmdbID: 1399, TvdbID: 121361, MediaType: "tv", Title: "Andor",
+		TmdbID: 1399, TvdbID: 999999, MediaType: "tv", Title: "Andor",
 	})
 	if err != nil {
 		t.Fatalf("CreateMediaRequest: %v", err)
@@ -281,6 +282,7 @@ func TestApproveRequestSeasonScopeOverrideReplacesExplicitSeasons(t *testing.T) 
 	srv := newFakeSonarrServer(t, f)
 
 	s, uid := newHistoryTestService(t, "", srv.URL, "")
+	installTVFixture(t, s, f, 1399)
 	requireApproval(t, s)
 	adminID := createTestAdmin(t, s)
 
@@ -306,12 +308,10 @@ func TestApproveRequestSeasonScopeOverrideReplacesExplicitSeasons(t *testing.T) 
 	}
 
 	addOptions, _ := f.addBody["addOptions"].(map[string]any)
-	if addOptions["monitor"] != "firstSeason" {
-		t.Errorf("addOptions.monitor = %v, want firstSeason (override replaces the explicit list)", addOptions["monitor"])
+	if addOptions["monitor"] != nil {
+		t.Errorf("addOptions.monitor = %v, want explicit source-season flags", addOptions["monitor"])
 	}
-	if _, present := f.addBody["seasons"]; present {
-		t.Errorf("seasons = %v, want omitted once the explicit list is overridden", f.addBody["seasons"])
-	}
+	assertAddedTVSeasons(t, f, 1)
 	var storedScope string
 	if err := s.db.QueryRow("SELECT season_scope FROM request_log WHERE id = ?", pending[0].ID).Scan(&storedScope); err != nil {
 		t.Fatalf("read season_scope: %v", err)

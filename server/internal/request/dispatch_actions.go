@@ -24,6 +24,11 @@ func (s *Service) approveDelivery(adminID, id int64, override *DecisionOverride)
 	if override != nil && override.BookFormat != "" && normalizeBookFormat(override.BookFormat) != r.bookFormat {
 		return nil, fmt.Errorf("approve the saved formats; additional formats require a separate request")
 	}
+	if r.mediaType == "tv" {
+		if err = s.reviewTVApproval(id, r, override); err != nil {
+			return nil, err
+		}
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
@@ -51,13 +56,16 @@ func (s *Service) approveDelivery(adminID, id int64, override *DecisionOverride)
 			}
 		}
 		for _, subscriber := range audience {
-			s.notifier.NotifyUser(subscriber.UserID, "request_decision", map[string]interface{}{"request_id": id, "tmdb_id": 0, "media_type": r.mediaType, "foreign_id": r.foreignID, "title": r.title, "instance_id": r.instanceID, "decision": "approved", "book_format": subscriber.BookFormat})
+			s.notifier.NotifyUser(subscriber.UserID, "request_decision", map[string]interface{}{"request_id": id, "tmdb_id": r.tmdbID, "media_type": r.mediaType, "foreign_id": r.foreignID, "title": r.title, "instance_id": r.instanceID, "decision": "approved", "book_format": subscriber.BookFormat})
 		}
 	}
 	if r.mediaType == "book" {
 		s.wakeDispatch()
 	} else {
 		s.dispatchRequest(context.Background(), id)
+	}
+	if r.mediaType == "tv" {
+		return s.tvDeliveryResponse(r.userID, id)
 	}
 	return s.deliveryResponse(r.userID, []int64{id}, r.title, r.instanceID, nil)
 }

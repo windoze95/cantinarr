@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import '../../discover/data/tmdb_models.dart';
 import 'book_ownership.dart';
+import 'tv_match_service.dart';
 
 /// Status of a media request from the user's perspective.
 enum RequestStatus {
@@ -618,12 +619,22 @@ DateTime? _parseCalendarDate(String? value) {
 /// more than one library for the media type, [instanceStatuses] carries each
 /// granted library's own status so the screen can show one chip per library.
 class RequestStatusDetail {
+  final bool isKnown;
+  final TVMatch? match;
+  final String? statusMessage;
+  final List<String> deliveryMessages;
+  final Set<String> unknownInstanceIds;
   final RequestStatus status;
   final List<RequestSeasonStatus> seasons;
   final MovieReleaseDates releases;
   final Map<String, RequestStatus> instanceStatuses;
 
   const RequestStatusDetail({
+    this.isKnown = true,
+    this.match,
+    this.statusMessage,
+    this.deliveryMessages = const [],
+    this.unknownInstanceIds = const {},
     this.status = RequestStatus.unavailable,
     this.seasons = const [],
     this.releases = MovieReleaseDates.none,
@@ -635,10 +646,15 @@ class RequestStatusDetail {
     final releases = json['releases'];
     final rawInstanceStatuses = json['instance_statuses'];
     final instanceStatuses = <String, RequestStatus>{};
+    final unknownInstanceIds = <String>{};
     if (rawInstanceStatuses is Map<String, dynamic>) {
       for (final entry in rawInstanceStatuses.entries) {
         final value = entry.value;
         if (value is! Map<String, dynamic>) continue;
+        if (value['status_known'] == false) {
+          unknownInstanceIds.add(entry.key);
+          continue;
+        }
         final name = value['status'] as String? ?? 'unavailable';
         instanceStatuses[entry.key] = RequestStatus.values.firstWhere(
           (s) => s.name == name,
@@ -647,6 +663,13 @@ class RequestStatusDetail {
       }
     }
     return RequestStatusDetail(
+      isKnown: json['status_known'] != false,
+      match: json['match'] is Map<String, dynamic>
+          ? TVMatch.fromJson(json['match'] as Map<String, dynamic>) : null,
+      statusMessage: json['status_known'] == false
+          ? (json['match']?['message'] as String? ?? 'Could not verify this library. Retry before requesting.') : null,
+      deliveryMessages: [for (final d in (json['delivery'] as List?) ?? [])
+        if (d['state'] != 'complete' && d['state'] != 'cancelled' && d['message'] is String) d['message'] as String],
       status: RequestStatus.values.firstWhere(
         (s) => s.name == statusName,
         orElse: () => RequestStatus.unavailable,
@@ -658,6 +681,7 @@ class RequestStatusDetail {
           ? MovieReleaseDates.fromJson(releases)
           : MovieReleaseDates.none,
       instanceStatuses: instanceStatuses,
+      unknownInstanceIds: unknownInstanceIds,
     );
   }
 }
@@ -711,6 +735,7 @@ class RequestOptions {
 /// communication transparently.
 class RequestService {
   final Dio _backendDio;
+  String? lastRequestError;
 
   RequestService({required Dio backendDio}) : _backendDio = backendDio;
 
@@ -777,6 +802,7 @@ class RequestService {
     int? qualityProfileId,
     String? instanceId,
   }) async {
+    lastRequestError = null;
     try {
       final body = <String, dynamic>{
         'tmdb_id': tmdbId,
@@ -806,7 +832,8 @@ class RequestService {
         (s) => s.name == statusName,
         orElse: () => RequestStatus.requested,
       );
-    } catch (_) {
+    } catch (error) {
+      lastRequestError = tvMatchError(error);
       return null;
     }
   }

@@ -28,7 +28,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
 - **One-tap requests with an approval queue** -- Users browse and tap request; the server handles ID bridging, arr lookups, quality profiles, and root folders. Admins can require approval globally or per user, and per user allow season-level choice, quality choice, and per-service default quality profiles.
 - **Books via Chaptarr** -- A Readarr-API (v1) books module with per-format (ebook/audiobook) monitoring, requesting, and library awareness. Chaptarr access is granted per user by an admin.
 - **Completed-media downloads** -- Opt-in delivery of ebook, audiobook, movie, and episode files from read-only library mounts. Deployment roots form the outer filesystem allowlist; per-instance path mappings translate each arr namespace into that boundary. The server accepts only live arr file IDs and streams through short-lived file-scoped links with HEAD and Range support.
-- **Automatic ID bridging** -- Transparently translates TMDB IDs to TVDB IDs for Sonarr. Falls back to Trakt cross-references, then a premiere-year-verified title search (a same-titled series years apart is never substituted). Results cached in SQLite for 30 days.
+- **TV match corrections** -- Server-owned, season-aware TV identity with bundled Monster corrections and admin overrides. Verified TMDB/Trakt bridging uses a 30-day cache; title fallback requires a unique title and compatible known year. Uncertain matches stop before Sonarr delivery.
 - **Availability computed live** -- Request status is derived from the arrs' real episode/file state (never from a stale snapshot or monitored-only stats), refreshed by queue polling and instant arr webhooks.
 - **Connect link auth, passwordless by default** -- Admins generate connect links; redeeming one starts a permanent device session (an opaque refresh token validated against the DB -- never expires, never rotates, independent of the JWT secret) that mints month-long access JWTs (stamped with an `access` scope so they can never pass the legacy-refresh amnesty gate). Expiry adds no security -- every request re-validates the user and device against the DB, so revocation is instant regardless -- it only decides how often a client must complete the refresh round-trip. Sessions end through device revocation, user deletion, SSO unlinking, or SSO-only policy revoking a regular user’s local and Plex devices, Plex unlinking, or disabling Plex sign-in. Passwords and passkeys (WebAuthn, incl. native iOS/Android/Windows) are admin-gated per user. Connect links and passkey setup links embed the admin-configured external address when one is set (`/api/admin/external-address`), so they work for invitees who cannot reach the admin's LAN; unset, a connect link falls back to the address the generating admin's own app is connected with, and a passkey link to the requesting origin. Issuing a connect link supersedes that user's outstanding unredeemed one -- reissuing exists so an admin whose link went to the wrong place can kill it, so a superseded link must stop working rather than live out its seven days.
 - **External OIDC sign-in** -- One discovery-based provider with Authorization Code + PKCE, explicit identity linking, optional ordinary-account creation and exact group restrictions. SSO-only policy revokes regular users’ local sessions while preserving administrator recovery. Setup, supported providers and session limits: [OIDC setup](../docs/oidc-setup.md).
@@ -426,7 +426,8 @@ GET    /api/requests/{tmdb_id}/status      # user: live availability + download 
                                            #   Optional instance_id scopes the read to that granted
                                            #   library; a user granted >1 library for the media type
                                            #   also gets instance_statuses {id: {status}} chips
-                                           #   (digest-grade: no downloading state, brief cache)
+                                           #   (TV: live, season-scoped, with status_known;
+                                           #   movies: digest-grade, brief cache)
 GET    /api/admin/requests                 # admin: pending approval queue; rows carry the book's
                                            #   foreign_id, a best-effort TMDB poster_path (movie/tv),
                                            #   and add_failure_reason when the row is not a policy
@@ -435,14 +436,23 @@ GET    /api/admin/requests/waiting         # admin: pending rows the SERVER owns
                                            #   (park_reason set); same row shape plus wait_reason and
                                            #   last_attempt_at and delivery. Recovery actions use /requests/{id}/delivery;
                                            #   never counted by the badge or request_pending push
-POST   /api/admin/requests/{id}/approve    # admin: approve (books wake background delivery; other media retain their request path)
+POST   /api/admin/requests/{id}/approve    # admin: approve (TV/books/music retain durable delivery)
 POST   /api/admin/requests/{id}/deny       # admin: deny with optional reason
 POST   /api/admin/requests/{id}/wait       # admin: "try again" on an ended author-import wait — replay the add and resume the watch
 GET|PUT /api/admin/request-settings        # admin: global policy (require_approval,
                                            #   allow_season_choice, default scope/quality...)
 GET|PUT /api/admin/users/{userID}/request-settings  # admin: per-user overrides
+GET    /api/admin/tv-matches               # admin: bundled/custom/paused matches and revisions
+GET    /api/admin/tv-matches/candidates    # admin: q=title or TVDB ID; optional instance_id
+GET    /api/admin/tv-matches/{tmdb_id}     # admin: resolved match + source/target seasons; optional instance_id
+PUT    /api/admin/tv-matches/{tmdb_id}     # admin: {revision, mode: custom|paused|default, instance_id?, tvdb_id?, season_map?}
+DELETE /api/admin/tv-matches/{tmdb_id}     # admin: restore default with {revision, instance_id?}
+GET    /api/admin/tv-matches/{tmdb_id}/repairs # admin: latest 200 accepted original requests, affected targets/scopes
+POST   /api/admin/requests/{id}/repair-tv-match # admin: {revision} from preview; idempotent linked corrective request
 ```
 Request statuses: `unavailable`, `requested`, `pending` (awaiting approval), `denied`, `downloading`, `partial`, `available`.
+
+TV responses add optional `match` (resolved TVDB identity, source-to-target `season_map`, provenance, revision, state, message, library `series_id`) and `delivery` data. `status_known:false` distinguishes an unresolved match or failed library read from confirmed absence; clients must not enable requests until a known result. Each TV `instance_statuses` entry has its own `status_known`. The `/api/config` capability `tv_match_corrections:true` enables admin correction controls without changing compatibility floors. Delivery reads by `request_id` support TV snapshots; foreign-ID delivery-status reads remain book/music-only.
 
 Book intake accepts the existing native `foreign_id`, `title`, `book_format`, optional `instance_id`, and `search_term`. Saving performs no Chaptarr reads or writes: it persists the original identity, instance, title, search term, approval requirement, and one job per format, wakes the durable worker, and returns the saved response. `request_id`, `catalog_ref`, `delivery`, and existing response fields remain compatible. New book `catalog_ref` submissions return HTTP 410 with structured `catalog_retired`, a message and `/dashboard/books` search action without contacting Open Library. Music retains native and MusicBrainz source-based requests.
 
@@ -751,39 +761,34 @@ WebSocket events:
 
 ## Architecture
 
-### ID Bridge (TMDB-to-TVDB)
+### TV identity and season corrections
 
-TMDB has the best metadata and images, but Sonarr only speaks TVDB. The bridge translates transparently:
+One server resolver owns TV requests, approvals, retries, live status, history and sibling-library badges. Precedence is local admin correction or pause → reviewed bundled correction → verified TMDB/Trakt bridge (30-day SQLite cache) → strict title fallback. Title fallback requires exactly one canonical/original-title match with known premiere years within one year; search position or year alone never identifies a show. Provider failures remain unknown, not permission to guess. Client TVDB IDs are hints only. The additive migration clears the old unverified bridge cache once; ordinary expiry continues afterward.
 
-```
-User taps "Request" on Breaking Bad (TMDB 1396)
-  |
-  v
-1. Check SQLite cache for TMDB 1396 -> found TVDB 81189 (cache hit)
-  |  or
-  v
-2. GET api.themoviedb.org/3/tv/1396/external_ids -> { tvdb_id: 81189 }
-  |  or (if TMDB has no mapping)
-  v
-3. GET api.trakt.tv/search/tmdb/1396?type=show -> extract TVDB from Trakt IDs
-  |  or (last resort)
-  v
-4. Sonarr title search as fallback (premiere year must match TMDB's, ±1)
-  |
-  v
-GET sonarr/api/v3/series/lookup?term=tvdb:81189  (exact match)
-POST sonarr/api/v3/series  (add with the user's effective defaults)
-```
+The bundled data in `internal/request/tv_matches.v1.json` maps these TMDB titles to **Monster (2022), TVDB 389492**:
+
+| TMDB title | TMDB ID | Source season | Sonarr season |
+|---|---:|---:|---:|
+| Dahmer | 113988 | 1 | 1 |
+| Menendez | 225634 | 1 | 2 |
+| Ed Gein | 286801 | 1 | 3 |
+| Lizzie Borden | 299939 | 1 | 4 |
+
+Submitted seasons and returned season statuses always use TMDB numbering. All/first/latest are expanded over that title's source seasons; specials and unmapped seasons are refused. One title maps to one target series, with one distinct target season per source season. Custom mappings must cover current TMDB seasons and pass live Sonarr validation.
+
+TV intake resolves and persists a target snapshot before mutation, alongside the original TMDB identity and source scope. The durable dispatcher retains approval, pinned instances, leases, retries and restart recovery. It rechecks the requester's current grants/content policy and the mapping revision before mutations. A changed or paused mapping needs admin review. New parents receive explicit season flags and `monitorNewItems: none`; existing parents receive additive monitoring without changing unrelated seasons, episodes, files, profiles or settings. Pilot-only targets episode 1 of the first mapped source season. A new pilot parent is added without monitoring/search; the saved job waits until Sonarr clears its initial `addOptions` before enabling/searching that one episode. It never sends the parent-series `pilot` monitor option.
+
+Admins manage corrections through the routes below and the capability-gated app editor. Local overrides survive bundled-data upgrades. Pause and restore retain revision tombstones to reject stale edits. Saving changes no Sonarr monitoring. Repair previews name the original and intended targets, library, season/episode scope and approval requirement; legacy target uncertainty is explicit. A repair creates one auditable, idempotent corrective request linked to the original. It never deletes files, unmonitors the previous target, revives a denied request, or erases history. Pending requests keep approval requirements. Upgrades do not re-request old content.
 
 Movies skip bridging entirely -- Radarr natively supports `term=tmdb:{id}`. Books have no TMDB id at all; they're keyed by the Chaptarr/Readarr `foreignBookId` plus a strict `book_format` (`ebook`, `audiobook`, or `both`). Book request bodies may include `instance_id`; status and library endpoints accept the same field as a query parameter. The server authorizes that selection and persists it with new pending/history rows, so approval always targets the instance the requester was viewing. Omitted IDs on new requests resolve through the requester's effective grant (or the admin fallback). Legacy rows are deliberately left unscoped because today's default cannot prove their original library; a legacy pending book row must be resubmitted instead of being approved against a guessed instance.
 
-**Library selection (movies/TV).** The same `instance_id` field routes movie and TV requests to a specific granted Radarr/Sonarr instance -- the HD/4K split. The selection is authorized and resolved at submission (a selection outside the user's granted set is a 403, an unknown id a 400 -- never a silent fall-back to the default), stamped on the pending/history row, and echoed back in the create response. Approval replays the add on the stored library under the approving admin's authority, so a requester-grant change between submission and decision cannot reroute a request away from the library the admin saw on the queue row; that row also carries the library's `instance_id`/`instance_name`. The duplicate guard is per library -- the same title may be pending on the HD and 4K instance at once, while a re-submit to the same library still dedupes. Movie/TV rows written before library stamping (NULL `instance_id`) are absorbed only by a default-library submit and replay on the requester's effective default at approval, which is what their approval would have done when they were written.
+**Library selection (movies/TV).** The same `instance_id` field routes requests to a specific authorized Radarr/Sonarr library, with per-library status badges and duplicate protection. New requests persist and echo that selection; unknown or forbidden IDs never fall back to another library. TV delivery and repair recheck the original requester's current access and content policy even after approval. Admin TV badges expose all configured Sonarr libraries, matching the request options. Legacy TV approvals resolve and snapshot their current intended target only on explicit approval; legacy history is not proof of the old library or target, and repairs refuse an unrecorded library. Movies retain their existing approval and legacy-default behavior.
 
 Adding a new native book requires a fresh lookup of the selected ID; editions are round-tripped into Chaptarr's add body. The worker tries the original successful search term first, then ID/title fallbacks, accepting only the exact native ID. A similarly titled summary or another author's book can never become the target. Open Library translation and match confirmation are retired. See [book setup](../docs/books-setup.md) for saved-state and recovery behavior.
 
 ### Requests, approvals & live availability
 
-Movie/TV approval replays the stored season/quality selection. Book/music requests use the durable delivery states above; approval records the decision before delivery begins. Book format choices remain immutable at approval. Pending book work is shared by source/native identity and pinned instance, with each subscriber's requested formats retained separately. A successful format is not repeated when its sibling fails. Delivery progress and approval decisions remain visible independently.
+Movie approval replays the stored selection; TV approval validates its stored source scope and target revision before durable delivery. TV/book/music approval records the decision before delivery begins. Book format choices remain immutable at approval. Pending book work is shared by source/native identity and pinned instance, with each subscriber's requested formats retained separately. A successful format is not repeated when its sibling fails. Delivery progress and approval decisions remain visible independently.
 
 For a brand-new Chaptarr title, Cantinarr resolves each concrete format independently: it selects the unique quality profile typed `ebook` or `audiobook`, the corresponding metadata profile typed `2` or `1`, and one accessible root path matching that format. Legacy untyped entries retain deterministic format-name, sole-profile, or unique-`Default` fallbacks, and a sole generic root remains valid; ambiguous choices fail with an admin-fixable error. Adding a missing sibling format beside an existing canonical book instead reuses that author's live quality profile, metadata profile, and root path for the requested format. Bounded in-process striped locks serialize conflicting canonical-book mutations and instance projection refreshes without a single global network-call lock; the supported deployment remains the repository's single-process SQLite server, not multiple independent writers.
 
@@ -1062,7 +1067,7 @@ The pool holds **exactly one connection** (SQLite is single-writer), so every qu
 | Area | Tables |
 |---|---|
 | Accounts & sessions | `users`, `refresh_tokens`, `connect_tokens`, `devices` (local hardware-id deduplication; `auth_method`, `oidc_issuer` and `plex_account_id` preserve session provenance), `oidc_identities` (unique issuer/subject and user/issuer pairs), `plex_identities` (unique numeric Plex account ID and one per user; email/username for display), `webauthn_credentials`, `user_content_policies` (a row makes the user a kids account: rating caps per media type in a region's scheme, hide-unrated, hidden genre ids; cascades with the user; never for an admin) |
-| Requests | `request_log` (approval + season/quality/book-format/instance capture, the fulfilled arr record id in `book_record_id` — Chaptarr book or Lidarr album — so status survives foreign-id re-keys, `catalog_provider`/`catalog_id` retaining public source identity, `match_confirmed` recording a verified user choice, `park_reason` marking server-owned delivery/import waits, and `add_failure_reason` marking an approval-queue row whose automatic add already failed), `book_request_waiters` (shared pending book subscribers + their concrete format coverage; music rows are per-user and need none), `user_request_settings`, `request_dispatch` (durable per-format state, attempts, retry schedule, lease, canonical/native record identity), `request_dispatch_locks` (per-instance worker leases) |
+| Requests | `request_log` (approval + season/quality/book-format/instance capture, the fulfilled arr record id in `book_record_id` — Chaptarr book or Lidarr album — so status survives foreign-id re-keys, `catalog_provider`/`catalog_id` retaining public source identity, `match_confirmed` recording a verified user choice, `park_reason` marking server-owned delivery/import waits, and `add_failure_reason` marking an approval-queue row whose automatic add already failed), `book_request_waiters` (shared pending book subscribers + their concrete format coverage; music rows are per-user and need none), `user_request_settings`, `request_dispatch` (durable per-format state, attempts, retry schedule, lease, canonical/native record identity), `request_dispatch_locks` (per-instance worker leases), `tv_match_overrides` (local correction/pause/default revision tombstones), `request_tv_targets` (source/target snapshots, mapping revisions, resumable pilot phase and unique audited repair links) |
 | Instances | `service_instances` (encrypted keys/passwords + current/pending server-only webhook credentials + the encrypted per-Chaptarr-instance `hardcover_token` and connection-change `hardcover_revision` + per-instance media path mappings/legacy mode + the media servers' `media_server_config` document), `user_default_instances`, `user_media_library_policies` (ABS per-user library choices and pending managed updates), `user_instance_grants` (additional per-user access grants beside the default, so one person can hold e.g. an HD and a 4K library; for Jellyfin, Emby, and Plex the grant is access eligibility), `user_media_server_accounts` (one row per user × media-server instance: remote id and name -- on Plex the canonical email of the share -- whether Cantinarr created it, `manage_access`, `access_sync_pending`, `disabled_at`), `user_media_server_unlinks` (per-user/per-instance automatic relink suppression; no remote identity retained), `video_app_preferences` (personal per-service iPhone/iPad overrides of video-server app defaults; cascades on user deletion), `listening_app_preferences` (personal iOS/Android overrides of per-instance Audiobookshelf app defaults; cascades on user deletion), `arr_queue_witness` (durable per-instance queue-departure completion witness; its `observed_at` doubles as the import-history catch-up cursor; one row per instance, ignored past 6h) |
 | Apple TV | `apple_tv_devices` (stable identity, address, encrypted pairing credentials, revision), `apple_tv_grants` (per-TV adult access; cascades on user/TV deletion) |
 | Hardcover OAuth | `hardcover_connections` (encrypted access/refresh-token pair, credential revision and reconnect flag), `hardcover_instance_connections` (one selected OAuth connection per Chaptarr instance; explicit sharing and final-link credential cleanup) |

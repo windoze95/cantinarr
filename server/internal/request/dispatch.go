@@ -30,6 +30,16 @@ type DeliveryState struct {
 const dispatchLease = 5 * time.Minute
 
 func (s *Service) deliveryInstance(userID int64, mediaType, requested string) (string, error) {
+	if mediaType == "tv" {
+		client, id, err := s.resolveSonarr(userID, requested)
+		if err != nil {
+			return "", err
+		}
+		if client == nil {
+			return "", ErrArrInstanceInvalid
+		}
+		return id, nil
+	}
 	if mediaType == "book" {
 		client, id, err := s.resolveChaptarr(userID, requested)
 		if err != nil {

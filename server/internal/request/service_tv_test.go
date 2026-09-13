@@ -2,12 +2,15 @@ package request
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/windoze95/cantinarr-server/internal/sonarr"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 	"github.com/windoze95/cantinarr-server/internal/trakt"
 )
@@ -87,6 +90,58 @@ func newFakeSonarrServer(t *testing.T, f *fakeSonarrTV) *httptest.Server {
 	return srv
 }
 
+// Independent TMDB truth for the identity-numbered normal-series fixtures.
+func installTVFixture(t *testing.T, s *Service, f *fakeSonarrTV, tmdbID int) {
+	t.Helper()
+	var records []sonarr.LookupResult
+	raw := f.lookupJSON
+	if raw == "" {
+		raw = f.libraryJSON
+	}
+	if err := json.Unmarshal([]byte(raw), &records); err != nil || len(records) == 0 {
+		t.Fatalf("TV fixture metadata missing: %v", err)
+	}
+	record := records[0]
+	if f.lookupJSON == "" {
+		f.lookupJSON = raw
+	}
+	seasons := []tmdb.TVSeason{}
+	for _, season := range record.Seasons {
+		if season.SeasonNumber > 0 {
+			seasons = append(seasons, tmdb.TVSeason{SeasonNumber: season.SeasonNumber, Name: fmt.Sprintf("Season %d", season.SeasonNumber)})
+		}
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/external_ids") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"tvdb_id": record.TvdbID})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(tmdb.TVDetails{ID: tmdbID, Name: record.Title, FirstAir: "2022-01-01", Seasons: seasons})
+	}))
+	t.Cleanup(upstream.Close)
+	s.bridge = tmdb.NewBridge(bridgeClients{tmdb.NewClientWithBaseURL("fixture", upstream.URL)}, s.db)
+}
+
+func assertAddedTVSeasons(t *testing.T, f *fakeSonarrTV, want ...int) {
+	t.Helper()
+	chosen := map[int]bool{}
+	for _, n := range want {
+		chosen[n] = true
+	}
+	rows, ok := f.addBody["seasons"].([]any)
+	if !ok {
+		t.Fatal("explicit season flags missing")
+	}
+	for _, raw := range rows {
+		season := raw.(map[string]any)
+		n := int(season["seasonNumber"].(float64))
+		if (season["monitored"] == true) != chosen[n] {
+			t.Errorf("season %d monitored=%v", n, season["monitored"])
+		}
+	}
+}
+
 // TestCreateTVRequestAddsSeriesWithCoarseScope covers the auto-approve add of
 // a series not yet in Sonarr: the payload carries the effective per-user
 // quality profile, the first root folder, season folders, the coarse scope
@@ -99,6 +154,7 @@ func TestCreateTVRequestAddsSeriesWithCoarseScope(t *testing.T) {
 	srv := newFakeSonarrServer(t, f)
 
 	s, uid := newHistoryTestService(t, "", srv.URL, "")
+	installTVFixture(t, s, f, 1399)
 	profile := 9
 	if err := s.SetUserSettings(uid, UserSettingsDTO{QualityProfileSonarr: &profile}); err != nil {
 		t.Fatalf("SetUserSettings: %v", err)
@@ -132,12 +188,10 @@ func TestCreateTVRequestAddsSeriesWithCoarseScope(t *testing.T) {
 		t.Errorf("add body = %#v, want /tv + monitored + seasonFolder", f.addBody)
 	}
 	addOptions, _ := f.addBody["addOptions"].(map[string]any)
-	if addOptions["monitor"] != "firstSeason" || addOptions["searchForMissingEpisodes"] != true {
+	if addOptions["monitor"] != nil || addOptions["searchForMissingEpisodes"] != true {
 		t.Errorf("addOptions = %#v, want monitor firstSeason + search", addOptions)
 	}
-	if _, present := f.addBody["seasons"]; present {
-		t.Errorf("seasons = %v, want omitted for a coarse-scope add", f.addBody["seasons"])
-	}
+	assertAddedTVSeasons(t, f, 1)
 
 	// The tmdb->tvdb mapping is cached so the status path never needs the bridge.
 	var cachedTvdb int
@@ -170,6 +224,7 @@ func TestCreateTVRequestExplicitSeasonsNewSeries(t *testing.T) {
 	}
 	srv := newFakeSonarrServer(t, f)
 	s, uid := newHistoryTestService(t, "", srv.URL, "")
+	installTVFixture(t, s, f, 1399)
 
 	resp, err := s.CreateMediaRequest(uid, &CreateRequest{
 		TmdbID:    1399,
@@ -233,6 +288,7 @@ func TestCreateTVRequestExistingSeriesExplicitSeasons(t *testing.T) {
 	}
 	srv := newFakeSonarrServer(t, f)
 	s, uid := newHistoryTestService(t, "", srv.URL, "")
+	installTVFixture(t, s, f, 1399)
 
 	resp, err := s.CreateMediaRequest(uid, &CreateRequest{
 		TmdbID:    1399,
@@ -287,6 +343,7 @@ func TestCreateTVRequestExistingSeriesPilotScope(t *testing.T) {
 	}
 	srv := newFakeSonarrServer(t, f)
 	s, uid := newHistoryTestService(t, "", srv.URL, "")
+	installTVFixture(t, s, f, 1399)
 
 	resp, err := s.CreateMediaRequest(uid, &CreateRequest{
 		TmdbID:      1399,
@@ -357,6 +414,7 @@ func TestGetTVStatusFromEpisodeList(t *testing.T) {
 	}
 	srv := newFakeSonarrServer(t, f)
 	s, uid := newHistoryTestService(t, "", srv.URL, "")
+	installTVFixture(t, s, f, 300)
 	seedTvdbCache(t, s, 300, 999)
 
 	st, err := s.getTVStatus(uid, 300, "")
@@ -409,6 +467,7 @@ func TestGetTVStatusSeasonStatisticsFallback(t *testing.T) {
 	}
 	srv := newFakeSonarrServer(t, f)
 	s, uid := newHistoryTestService(t, "", srv.URL, "")
+	installTVFixture(t, s, f, 300)
 	seedTvdbCache(t, s, 300, 999)
 
 	st, err := s.getTVStatus(uid, 300, "")
@@ -470,6 +529,7 @@ func TestGetTVStatusRespectsSeriesMonitoring(t *testing.T) {
 			}
 			srv := newFakeSonarrServer(t, f)
 			s, uid := newHistoryTestService(t, "", srv.URL, "")
+			installTVFixture(t, s, f, 300)
 			seedTvdbCache(t, s, 300, 999)
 			for _, monitored := range []bool{true, false, true} {
 				f.libraryJSON = library
@@ -544,7 +604,12 @@ func installTitleFallbackBridge(t *testing.T, s *Service, firstAirDate string) {
 		case strings.HasSuffix(r.URL.Path, "/external_ids"):
 			_, _ = w.Write([]byte(`{"tvdb_id": null, "imdb_id": null}`))
 		case strings.HasPrefix(r.URL.Path, "/tv/"):
-			_, _ = w.Write([]byte(`{"id": 1, "name": "Lookup Show", "first_air_date": "` + firstAirDate + `"}`))
+			id, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/tv/"))
+			title := "Andor"
+			if id == 75977 {
+				title = "Tremors"
+			}
+			_ = json.NewEncoder(w).Encode(tmdb.TVDetails{ID: id, Name: title, FirstAir: firstAirDate, Seasons: []tmdb.TVSeason{{SeasonNumber: 1, Name: "Season 1"}}})
 		default:
 			t.Errorf("unexpected tmdb request %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -575,8 +640,8 @@ func TestCreateTVRequestTitleFallbackRejectsWrongYear(t *testing.T) {
 	if err == nil {
 		t.Fatal("CreateMediaRequest succeeded, want identity mismatch error")
 	}
-	if !strings.Contains(err.Error(), "2018") || !strings.Contains(err.Error(), "2003") {
-		t.Errorf("error = %v, want both premiere years named", err)
+	if !strings.Contains(err.Error(), "Correct TV match") {
+		t.Errorf("error = %v, want an actionable correction error", err)
 	}
 	if f.addBody != nil {
 		t.Errorf("AddSeries was called with %v, want no add", f.addBody)
@@ -664,29 +729,15 @@ func TestCreateTVRequestTitleFallbackFindsExistingSeries(t *testing.T) {
 	}
 }
 
-// TestCreateTVRequestTitleFallbackWithoutYearTruth pins the availability
-// choice: with no bridge there is no TMDB year to verify against, and the
-// first lookup result is accepted exactly as before, so TMDB-less
-// deployments keep a working title request path.
+// Missing year truth never enables a first-result fallback.
 func TestCreateTVRequestTitleFallbackWithoutYearTruth(t *testing.T) {
-	f := &fakeSonarrTV{
-		lookupJSON: `[{"title":"Andor","tvdbId":121361,"year":2022,"seasons":[{"seasonNumber":1}]}]`,
-	}
+	f := &fakeSonarrTV{lookupJSON: `[{"title":"Andor","tvdbId":121361,"year":2022,"seasons":[{"seasonNumber":1}]}]`}
 	srv := newFakeSonarrServer(t, f)
-	s, uid := newHistoryTestService(t, "", srv.URL, "") // bridge stays nil
-
-	resp, err := s.CreateMediaRequest(uid, &CreateRequest{
-		TmdbID:    83867,
-		MediaType: "tv",
-		Title:     "andor",
-	})
-	if err != nil {
-		t.Fatalf("CreateMediaRequest: %v", err)
+	s, uid := newHistoryTestService(t, "", srv.URL, "")
+	if _, err := s.CreateMediaRequest(uid, &CreateRequest{TmdbID: 83867, MediaType: "tv", Title: "Andor"}); err == nil {
+		t.Fatal("missing year truth accepted")
 	}
-	if resp.Status != StatusRequested {
-		t.Fatalf("status = %s, want requested", resp.Status)
-	}
-	if f.addBody == nil || f.addBody["tvdbId"] != float64(121361) {
-		t.Fatalf("add body = %v, want tvdbId 121361", f.addBody)
+	if f.addBody != nil {
+		t.Fatal("unverified title was sent to Sonarr")
 	}
 }

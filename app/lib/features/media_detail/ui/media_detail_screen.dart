@@ -40,6 +40,7 @@ import '../../radarr/data/radarr_api_service.dart';
 import '../../radarr/data/radarr_models.dart';
 import '../../radarr/ui/radarr_movie_detail_screen.dart';
 import '../../request/data/request_service.dart';
+import '../../request/data/tv_match_service.dart';
 import '../../request/logic/request_provider.dart';
 import '../../request/ui/request_button.dart';
 import '../../request/ui/request_options_sheet.dart';
@@ -116,6 +117,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// change or replace files directly in Radarr/Sonarr at any time.
   RadarrMovieFile? _downloadMovieFile;
   List<SonarrEpisode> _downloadEpisodes = const [];
+  Map<int, int> _downloadSourceSeasons = const {};
+  Timer? _tvDeliveryPoll;
+  String? _resolvedMatchKey;
   String? _downloadInstanceId;
   int _arrResolveGeneration = 0;
 
@@ -179,11 +183,21 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     });
     _requestNotifier.addListener(_onRequestStateChanged);
     _loadRequestState();
+    if (widget.mediaType == MediaType.tv) {
+      _tvDeliveryPoll = Timer.periodic(const Duration(seconds: 15), (_) {
+        final state = _requestNotifier.state;
+        if (mounted && state.deliveryMessages.isNotEmpty &&
+            !state.isCheckingStatus && !state.isRequesting) {
+          _checkStatus();
+        }
+      });
+    }
     _loadMyOpenReport();
   }
 
   @override
   void dispose() {
+    _tvDeliveryPoll?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _requestNotifier.removeListener(_onRequestStateChanged);
     super.dispose();
@@ -191,7 +205,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _resolveWatchLinks();
+    if (state == AppLifecycleState.resumed) {
+      _resolveWatchLinks();
+      if (widget.mediaType == MediaType.tv) _checkStatus();
+    }
   }
 
   /// Re-asks the media servers when the request status moves, and only then:
@@ -199,6 +216,14 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// change nothing about where the title can be watched.
   void _onRequestStateChanged() {
     if (_requestNotifier.state.status != _watchedStatus) _resolveWatchLinks();
+    if (widget.mediaType == MediaType.tv) {
+      final state = _requestNotifier.state;
+      final key = '${state.match?.revision}:${state.match?.seriesId}:${state.hasStatus}';
+      if (key != _resolvedMatchKey) {
+        _resolvedMatchKey = key;
+        _resolveArrLink();
+      }
+    }
   }
 
   /// Whether the user may pick specific seasons. Defaults to true (the
@@ -266,6 +291,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     // both bump this tick) — re-check so the admin "Open in …" link appears,
     // and ask the media servers again.
     ref.listen(libraryRefreshTickProvider, (_, __) {
+      if (widget.mediaType == MediaType.tv &&
+          !_requestNotifier.state.isCheckingStatus && !_requestNotifier.state.isRequesting) {
+        _checkStatus();
+      }
       _resolveArrLink();
       _resolveWatchLinks();
     });
@@ -414,8 +443,19 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                         isRequesting:
                                             _requestNotifier.state.isRequesting,
                                         error: _requestNotifier.state.error,
-                                        onRequest: () => _onRequest(),
+                                        onRequest: widget.mediaType == MediaType.tv && !_requestNotifier.state.hasStatus
+                                            ? null : () => _onRequest(),
                                       ),
+                                      if (widget.mediaType == MediaType.tv && !_requestNotifier.state.hasStatus)
+                                        TextButton.icon(onPressed: _requestNotifier.state.isCheckingStatus
+                                            ? null : _requestNotifier.checkStatus,
+                                          icon: const Icon(Icons.refresh),
+                                          label: Text(_requestNotifier.state.isCheckingStatus ? 'Checking TV match…' : 'Retry TV match')),
+                                      for (final message in _requestNotifier.state.deliveryMessages)
+                                        Padding(padding: const EdgeInsets.only(top: 8), child: Text(message, textAlign: TextAlign.center)),
+                                      if (widget.mediaType == MediaType.tv && ref.watch(tvMatchesAllowedProvider))
+                                        TextButton.icon(onPressed: _correctTVMatch,
+                                          icon: const Icon(Icons.rule), label: const Text('Correct TV match')),
                                       // TV dates come from metadata, including
                                       // when existing episodes are Available.
                                       if (tvDate != null)
@@ -433,6 +473,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                       // whole screen — status, request,
                                       // downloads — at that library.
                                       _LibraryStatusChips(
+                                        unknownIds: _requestNotifier.state.unknownInstanceIds,
                                         statuses: _requestNotifier
                                             .state.instanceStatuses,
                                         libraries: _libraryChoices,
@@ -832,6 +873,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// the one-tap experience.
   Future<void> _onRequest() async {
     if (_needsSetup) return;
+    if (widget.mediaType == MediaType.tv && !_requestNotifier.state.hasStatus) return;
     final s = _detailNotifier.state;
 
     final options = await _requestNotifier.fetchOptions();
@@ -891,6 +933,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
         // pre-request read could land after it and overwrite it.
         setState(() => _selectedLibraryId = result.instanceId);
         _requestNotifier.instanceId = result.instanceId;
+        if (widget.mediaType == MediaType.tv) {
+          await _requestNotifier.checkStatus();
+          if (!_requestNotifier.state.hasStatus) return;
+        }
         _resolveArrLink();
       }
     }
@@ -902,6 +948,16 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       qualityProfileId: qualityProfileId,
     );
     if (mounted && accepted) _onRequestSucceeded();
+  }
+
+  Future<void> _correctTVMatch() async {
+    final uri = Uri(path: '/settings/tv-matches/${widget.id}', queryParameters: {
+      if (_effectiveLibraryId != null) 'instance_id': _effectiveLibraryId!,
+    });
+    await context.push(uri.toString());
+    if (!mounted) return;
+    await _requestNotifier.checkStatus();
+    if (mounted) _resolveArrLink();
   }
 
   /// Every successful submission (coarse request or per-season table) lands
@@ -936,6 +992,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
         _arrLink = null;
         _downloadMovieFile = null;
         _downloadEpisodes = const [];
+        _downloadSourceSeasons = const {};
         _downloadInstanceId = null;
       });
     }
@@ -986,14 +1043,24 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
           backendDio: backendDio,
           instanceId: instanceId,
         );
+        final serverMatch = _requestNotifier.state.match;
+        final correctedServer = connection?.tvMatchCorrections == true;
+        if (correctedServer && (!_requestNotifier.state.hasStatus ||
+            serverMatch?.isResolved != true || serverMatch!.seriesId <= 0)) {
+          return;
+        }
         final series = await service.getSeries();
-        final match = matchSonarrSeries(
-          series,
-          tvdbId: _detailNotifier.state.tvDetail?.externalIds?.tvdbId,
-          tmdbId: widget.id,
-          title: _detailNotifier.state.title,
-          year: tmdbPremiereYear(_detailNotifier.state.tvDetail?.firstAirDate),
-        );
+        final exact = correctedServer ? series.where((s) =>
+            s.id == serverMatch!.seriesId && s.tvdbId == serverMatch.tvdbId).toList() : null;
+        final match = correctedServer
+            ? (exact!.length == 1 ? exact.single : null)
+            : matchSonarrSeries(series,
+                tvdbId: _detailNotifier.state.tvDetail?.externalIds?.tvdbId,
+                tmdbId: widget.id, title: _detailNotifier.state.title,
+                year: tmdbPremiereYear(_detailNotifier.state.tvDetail?.firstAirDate));
+        final sourceSeasons = <int, int>{
+          if (correctedServer) for (final e in serverMatch!.seasonMap.entries) e.value: e.key,
+        };
         var episodes = const <SonarrEpisode>[];
         if (downloadsEnabled && match != null && match.id > 0) {
           episodes = (await service.getEpisodes(
@@ -1001,7 +1068,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
             includeEpisodeFile: true,
           ))
               .where((episode) =>
-                  episode.hasFile && episode.episodeFileId > 0)
+                  episode.hasFile && episode.episodeFileId > 0 &&
+                  (!correctedServer || sourceSeasons.containsKey(episode.seasonNumber)))
               .toList()
             ..sort((left, right) {
               final season =
@@ -1018,6 +1086,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
               : null;
           if (downloadsEnabled && episodes.isNotEmpty) {
             _downloadEpisodes = episodes;
+            _downloadSourceSeasons = sourceSeasons;
             _downloadInstanceId = instanceId;
           }
         });
@@ -1032,17 +1101,19 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       _episodeDownloadChoicesBySeason {
     final result = <int, List<MediaDownloadChoice>>{};
     for (final episode in _downloadEpisodes) {
+      final sourceSeason = _downloadSourceSeasons[episode.seasonNumber] ?? episode.seasonNumber;
+      final episodeLabel = 'S${sourceSeason.toString().padLeft(2, '0')}E${episode.episodeNumber.toString().padLeft(2, '0')}';
       final title = episode.title?.trim();
       final file = episode.episodeFile;
       final details = <String>[
         if (file?.quality?.trim().isNotEmpty ?? false) file!.quality!.trim(),
         if (file != null && file.size > 0) file.sizeFormatted,
       ];
-      (result[episode.seasonNumber] ??= []).add(MediaDownloadChoice(
+      (result[sourceSeason] ??= []).add(MediaDownloadChoice(
         fileId: episode.episodeFileId,
         label: title == null || title.isEmpty
-            ? episode.seasonEpisodeLabel
-            : '${episode.seasonEpisodeLabel} · $title',
+            ? episodeLabel
+            : '$episodeLabel · $title',
         subtitle: details.isEmpty ? null : details.join(' · '),
         reportedPath: file?.path,
       ));
@@ -1563,11 +1634,13 @@ class _DateStatusLine extends StatelessWidget {
 /// library, so single-library users keep today's dock exactly.
 class _LibraryStatusChips extends StatelessWidget {
   final Map<String, RequestStatus> statuses;
+  final Set<String> unknownIds;
   final List<LibraryChoice> libraries;
   final String? selectedId;
   final ValueChanged<String> onSelect;
 
   const _LibraryStatusChips({
+    required this.unknownIds,
     required this.statuses,
     required this.libraries,
     required this.selectedId,
@@ -1576,11 +1649,11 @@ class _LibraryStatusChips extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (statuses.length < 2) return const SizedBox.shrink();
+    if (statuses.length + unknownIds.length < 2) return const SizedBox.shrink();
     // Connection order (the admin's sort order); ignore libraries the server
     // reported no status for.
     final chips = libraries
-        .where((library) => statuses.containsKey(library.id))
+        .where((library) => statuses.containsKey(library.id) || unknownIds.contains(library.id))
         .toList();
     if (chips.length < 2) return const SizedBox.shrink();
     return Padding(
@@ -1592,7 +1665,7 @@ class _LibraryStatusChips extends StatelessWidget {
         children: chips.map((library) {
           final selected = library.id == selectedId;
           return ChoiceChip(
-            label: Text('${library.name} · ${statuses[library.id]!.label}'),
+            label: Text('${library.name} · ${unknownIds.contains(library.id) ? 'Could not check' : statuses[library.id]!.label}'),
             selected: selected,
             onSelected: (_) => onSelect(library.id),
             showCheckmark: false,

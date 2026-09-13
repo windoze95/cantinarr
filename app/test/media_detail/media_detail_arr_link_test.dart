@@ -29,6 +29,7 @@ void main() {
     MediaType mediaType = MediaType.movie,
     List<Map<String, dynamic>> sonarrSeries = const [],
     List<Map<String, dynamic>> sonarrEpisodes = const [],
+    Map<String, dynamic>? tvMatch,
   }) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
@@ -63,6 +64,7 @@ void main() {
                 mediaType,
                 instanceMediaDownloads: instanceMediaDownloads,
                 mappedSibling: mappedSibling,
+                tvCorrections: tvMatch != null,
               ),
             ),
           ),
@@ -70,6 +72,7 @@ void main() {
             radarrMovies,
             sonarrSeries: sonarrSeries,
             sonarrEpisodes: sonarrEpisodes,
+            tvMatch: tvMatch,
           )),
           realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
         ],
@@ -223,6 +226,35 @@ void main() {
     expect(find.text('S01E01 · Pilot'), findsOneWidget);
     expect(find.text('S01E02 · Second'), findsOneWidget);
   });
+  testWidgets('corrected TV links and downloads use only the server target, with source season labels', (tester) async {
+    await pumpDetail(tester, isAdmin: true, mediaDownloads: true,
+      mediaType: MediaType.tv, radarrMovies: [],
+      tvMatch: {'tmdb_id': _tmdbId, 'tvdb_id': 389492, 'series_id': 7,
+        'title': 'The Show', 'target_title': 'Monster (2022)', 'provenance': 'bundled',
+        'revision': 'v1', 'state': 'resolved', 'season_map': {'1': 4}},
+      sonarrSeries: [
+        {'id': 8, 'title': 'The Show', 'tvdbId': 81189},
+        {'id': 7, 'title': 'Monster (2022)', 'tvdbId': 389492},
+      ],
+      sonarrEpisodes: [for (final n in [1, 4]) {
+        'id': 70 + n, 'seriesId': 7, 'seasonNumber': n, 'episodeNumber': 1,
+        'title': n == 1 ? 'Dahmer file' : 'Lizzie file', 'hasFile': true, 'episodeFileId': 100 + n,
+        'episodeFile': {'id': 100 + n, 'seriesId': 7, 'seasonNumber': n, 'size': 100},
+      }, {
+        'id': 79, 'seriesId': 7, 'seasonNumber': 4, 'episodeNumber': 2,
+        'title': 'Lizzie second file', 'hasFile': true, 'episodeFileId': 109,
+        'episodeFile': {'id': 109, 'seriesId': 7, 'seasonNumber': 4, 'size': 100},
+      }]);
+    expect(find.text('Open in Sonarr'), findsOneWidget);
+    expect(find.text('Correct TV match'), findsOneWidget);
+    expect(find.byTooltip('Download Season 4 episodes'), findsNothing);
+    await tester.ensureVisible(find.byTooltip('Download Season 1 episodes'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Download Season 1 episodes'));
+    await tester.pumpAndSettle();
+    expect(find.text('S01E01 · Lizzie file'), findsOneWidget);
+    expect(find.textContaining('Dahmer file'), findsNothing);
+  });
 }
 
 AuthState _state(
@@ -232,12 +264,14 @@ AuthState _state(
   {
   bool? instanceMediaDownloads,
   bool mappedSibling = false,
+  bool tvCorrections = false,
 }) =>
     AuthState(
       connection: BackendConnection(
         serverUrl: 'http://localhost',
         accessToken: 'access',
         refreshToken: 'refresh',
+        tvMatchCorrections: tvCorrections,
         services: AvailableServices(mediaDownloads: mediaDownloads),
         instances: mediaType == MediaType.movie
             ? [
@@ -286,12 +320,14 @@ Dio _fakeDio(
   List<Map<String, dynamic>> radarrMovies, {
   List<Map<String, dynamic>> sonarrSeries = const [],
   List<Map<String, dynamic>> sonarrEpisodes = const [],
+  Map<String, dynamic>? tvMatch,
 }) {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   dio.httpClientAdapter = _JsonAdapter(
     radarrMovies,
     sonarrSeries: sonarrSeries,
     sonarrEpisodes: sonarrEpisodes,
+    tvMatch: tvMatch,
   );
   return dio;
 }
@@ -302,11 +338,13 @@ class _JsonAdapter implements HttpClientAdapter {
   final List<Map<String, dynamic>> radarrMovies;
   final List<Map<String, dynamic>> sonarrSeries;
   final List<Map<String, dynamic>> sonarrEpisodes;
+  final Map<String, dynamic>? tvMatch;
 
   _JsonAdapter(
     this.radarrMovies, {
     this.sonarrSeries = const [],
     this.sonarrEpisodes = const [],
+    this.tvMatch,
   });
 
   @override
@@ -330,7 +368,8 @@ class _JsonAdapter implements HttpClientAdapter {
     } else if (path.endsWith('/recommendations') || path.endsWith('/similar')) {
       body = {'results': <dynamic>[]};
     } else if (path.endsWith('/status')) {
-      body = {'status': 'unavailable', 'seasons': <dynamic>[]};
+      body = {'status': 'unavailable', 'seasons': <dynamic>[],
+        if (tvMatch != null) 'match': tvMatch, 'status_known': true};
     } else if (path.contains('/api/media/tv/')) {
       body = {
         'id': _tmdbId,

@@ -398,7 +398,18 @@ func (h *Handler) GetMusicArtist(w http.ResponseWriter, r *http.Request) {
 }
 
 func requestErrorStatus(err error) int {
+	var tvError *tvMatchError
+	if errors.As(err, &tvError) {
+		if tvError.code == "tv_metadata_unavailable" {
+			return http.StatusServiceUnavailable
+		}
+		return http.StatusConflict
+	}
 	switch {
+	case errors.Is(err, ErrTVMatchAdmin):
+		return http.StatusForbidden
+	case errors.Is(err, ErrTVMatchStale):
+		return http.StatusConflict
 	case errors.Is(err, ErrChaptarrInstanceForbidden), errors.Is(err, ErrLidarrInstanceForbidden), errors.Is(err, ErrArrInstanceForbidden):
 		return http.StatusForbidden
 	case errors.Is(err, ErrChaptarrInstanceInvalid), errors.Is(err, ErrLidarrInstanceInvalid), errors.Is(err, ErrArrInstanceInvalid):

@@ -8,6 +8,8 @@ import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../data/request_settings_service.dart';
 import '../settings_anchors.dart';
 import '../../request/data/request_service.dart';
+import '../../request/data/tv_match_service.dart';
+import 'package:go_router/go_router.dart';
 
 /// Admin screen for editing the global media-request defaults.
 class RequestSettingsScreen extends ConsumerStatefulWidget {
@@ -168,6 +170,12 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
           ),
         ),
         const _SectionLabel('Seasons'),
+        if (ref.watch(tvMatchesAllowedProvider)) ListTile(
+          leading: const Icon(Icons.rule), title: const Text('TV matches'),
+          subtitle: const Text('Correct series and season matching, and review affected requests.'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => context.push('/settings/tv-matches'),
+        ),
         SettingsHighlight(
           anchorId: SettingsAnchors.requestsSeasonChoice,
           highlightId: widget.highlightId,

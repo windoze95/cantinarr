@@ -30,6 +30,18 @@ func dispatchMessage(state string) string {
 // Messages explain the action a requester can take without exposing service
 // URLs, credentials, or untrusted upstream error bodies.
 func deliveryMessage(state, code string) string {
+	switch code {
+	case "tv_match_changed":
+		return "The TV match changed. An admin must review the affected request in TV matches before delivery can continue."
+	case "tv_match_paused", "tv_seasons_unmapped", "tv_match_ambiguous", "tv_metadata_unavailable":
+		return (&tvMatchError{code: code}).Error()
+	case "tv_target_missing":
+		return "This request has no verified TV target. An admin must review its TV match."
+	case "tv_metadata_refresh":
+		return "Your request is saved. Waiting for the library to finish adding the series before selecting the episode."
+	case "tv_pilot_unavailable":
+		return "Your pilot request is saved. Waiting for episode 1 of the selected season to appear in the library."
+	}
 	if code == "catalog_retired" {
 		return "Needs attention. Open Library requests can no longer be matched. Cancel this request and search your Chaptarr library for the book."
 	}
@@ -244,6 +256,28 @@ func (s *Service) DeliveryByID(userID, id int64, includeLive ...bool) (*CreateRe
 	if err = s.authorizeDeliveryRead(userID, id, r); err != nil {
 		return nil, err
 	}
+	if r.mediaType == "tv" {
+		if err = s.checkContentPolicy(userID, s.userIsAdmin(userID), "tv", r.tmdbID); err != nil {
+			return nil, err
+		}
+		out, err := s.tvDeliveryResponse(userID, id)
+		if err != nil {
+			return nil, err
+		}
+		if len(includeLive) == 0 || includeLive[0] {
+			live, err := s.tvLiveStatus(userID, r.tmdbID, r.instanceID)
+			if err != nil {
+				return nil, err
+			}
+			out.StatusKnown, out.StatusUnknownReason, out.Match = live.StatusKnown, live.StatusUnknownReason, live.Match
+			if live.Status == StatusAvailable || live.Status == StatusPartial {
+				out.Status = live.Status
+			}
+		} else {
+			savedDeliveryState(out)
+		}
+		return out, nil
+	}
 	p := PendingRequest{ID: id}
 	s.attachPendingDelivery(&p)
 	out, err := s.deliveryResponse(userID, []int64{id}, r.title, r.instanceID, p.CatalogRef)
@@ -262,6 +296,11 @@ func (s *Service) DeliveryByID(userID, id int64, includeLive ...bool) (*CreateRe
 }
 
 func (s *Service) DeliveryStatus(userID int64, mediaType, foreignID, instanceID string, ref *CatalogRef, includeLive ...bool) (*CreateResponse, error) {
+	// TV identity is TMDB-based, not foreign_id-based. Use its title status or
+	// the authorized delivery-by-request-ID endpoint, never an empty-ID group.
+	if mediaType != "book" && mediaType != "music" {
+		return nil, fmt.Errorf("delivery status requires book or music identity")
+	}
 	if err := validateCatalogRef(mediaType, ref); err != nil {
 		return nil, err
 	}
