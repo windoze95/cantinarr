@@ -125,7 +125,7 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
                         ? 'Specials'
                         : 'Season ${s.seasonNumber}',
                     style: TextStyle(
-                      color: s.monitored
+                      color: show.monitored && s.monitored
                           ? AppTheme.textPrimary
                           : AppTheme.textSecondary,
                       fontSize: 15,

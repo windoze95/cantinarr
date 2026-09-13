@@ -442,6 +442,62 @@ func TestGetTVStatusSeasonStatisticsFallback(t *testing.T) {
 	}
 }
 
+// The series flag pauses its seasons while retaining their saved flags. Both
+// status paths must stop calling an empty season Requested while it is paused.
+func TestGetTVStatusRespectsSeriesMonitoring(t *testing.T) {
+	for _, fallback := range []bool{false, true} {
+		name := "episodes"
+		if fallback {
+			name = "statistics fallback"
+		}
+		t.Run(name, func(t *testing.T) {
+			const library = `[{"id":7,"title":"Future Show","tvdbId":999,"monitored":true,"seasons":[
+				{"seasonNumber":1,"monitored":true,"statistics":{"episodeFileCount":0,"totalEpisodeCount":8}},
+				{"seasonNumber":2,"monitored":true,"statistics":{"episodeFileCount":1,"totalEpisodeCount":2}},
+				{"seasonNumber":3,"monitored":true,"statistics":{"episodeFileCount":1,"totalEpisodeCount":1}},
+				{"seasonNumber":4,"monitored":false,"statistics":{"episodeFileCount":0,"totalEpisodeCount":1}},
+				{"seasonNumber":5,"monitored":true}]}]`
+			f := &fakeSonarrTV{
+				libraryJSON:  library,
+				episodesFail: fallback,
+				episodesJSON: map[string]string{"": `[
+					{"id":1,"seasonNumber":1,"episodeNumber":1,"monitored":true,"airDateUtc":"2100-01-01T00:00:00Z"},
+					{"id":2,"seasonNumber":2,"episodeNumber":1,"hasFile":true},
+					{"id":3,"seasonNumber":2,"episodeNumber":2,"airDateUtc":"2020-01-01T00:00:00Z"},
+					{"id":4,"seasonNumber":3,"episodeNumber":1,"hasFile":true},
+					{"id":5,"seasonNumber":4,"episodeNumber":1,"airDateUtc":"2100-01-01T00:00:00Z"}
+				]`},
+			}
+			srv := newFakeSonarrServer(t, f)
+			s, uid := newHistoryTestService(t, "", srv.URL, "")
+			seedTvdbCache(t, s, 300, 999)
+			for _, monitored := range []bool{true, false, true} {
+				f.libraryJSON = library
+				if !monitored {
+					f.libraryJSON = strings.Replace(library, `"monitored":true`, `"monitored":false`, 1)
+				}
+				st, err := s.getTVStatus(uid, 300, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				emptyStatus := StatusUnavailable
+				if monitored {
+					emptyStatus = StatusRequested
+				}
+				want := map[int]string{1: emptyStatus, 2: StatusPartial, 3: StatusAvailable, 4: StatusUnavailable, 5: emptyStatus}
+				if len(st.Seasons) != len(want) {
+					t.Fatalf("got %d seasons, want %d", len(st.Seasons), len(want))
+				}
+				for _, season := range st.Seasons {
+					if season.Status != want[season.SeasonNumber] {
+						t.Errorf("series monitored=%v, season %d: got %s, want %s", monitored, season.SeasonNumber, season.Status, want[season.SeasonNumber])
+					}
+				}
+			}
+		})
+	}
+}
+
 // TestGetTVStatusUnresolvable pins the unavailable outcomes: a cached mapping
 // pointing at a series Sonarr doesn't have, and a missing mapping with no
 // bridge configured (no HTTP may happen at all in that case).

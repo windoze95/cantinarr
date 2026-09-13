@@ -3502,7 +3502,7 @@ func seasonStatusesFromCompletion(series *sonarr.Series, bySeason map[int]sonarr
 			continue // skip Specials
 		}
 		c := bySeason[n]
-		status, progress := statusFromCompletion(c, monitored[n])
+		status, progress := statusFromCompletion(c, series.Monitored && monitored[n])
 		out = append(out, SeasonStatus{
 			SeasonNumber:     n,
 			EpisodeFileCount: c.Files,
@@ -3544,8 +3544,8 @@ func seasonStatuses(series *sonarr.Series) []SeasonStatus {
 			ss.EpisodeFileCount = s.Statistics.EpisodeFileCount
 			ss.EpisodeCount = total
 			ss.Status, ss.Progress = statusFromCompletion(
-				sonarr.Completion{Files: s.Statistics.EpisodeFileCount, Aired: total}, s.Monitored)
-		} else if s.Monitored {
+				sonarr.Completion{Files: s.Statistics.EpisodeFileCount, Aired: total}, series.Monitored && s.Monitored)
+		} else if series.Monitored && s.Monitored {
 			ss.Status = StatusRequested
 		}
 		out = append(out, ss)

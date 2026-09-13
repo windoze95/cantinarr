@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -43,6 +45,7 @@ class SonarrSeasonScreen extends ConsumerStatefulWidget {
 
 class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   late final SonarrApiService _service;
+  late SonarrSeries _series;
   List<SonarrEpisode> _episodes = [];
   Map<int, SonarrQueueItem> _queueByEpisode = {};
   bool _isLoading = true;
@@ -58,6 +61,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   @override
   void initState() {
     super.initState();
+    _series = widget.series;
     _service = SonarrApiService(
       backendDio: ref.read(backendClientProvider),
       instanceId: widget.instanceId,
@@ -68,21 +72,23 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   Future<void> _load() async {
     setState(() => _isLoading = true);
     try {
-      // Kick off both requests, then await — effectively parallel without the
-      // heterogeneous Future.wait cast.
-      final episodesFuture = _service.getEpisodes(
-        widget.series.id,
-        seasonNumber: widget.seasonNumber,
-        includeEpisodeFile: true,
-      );
-      final queueFuture = _service.getQueueDetailed();
-      final episodes = await episodesFuture;
-      final queue = await queueFuture;
+      // The parent can change in Sonarr while this route is open. Refresh it
+      // with the episodes so monitoring never relies on the navigation copy.
+      final (series, episodes, queue) = await (
+        _service.getSeriesById(_series.id),
+        _service.getEpisodes(
+          _series.id,
+          seasonNumber: widget.seasonNumber,
+          includeEpisodeFile: true,
+        ),
+        _service.getQueueDetailed(),
+      ).wait;
       if (!mounted) return;
       episodes.sort((a, b) => b.seasonNumber != a.seasonNumber
           ? b.seasonNumber.compareTo(a.seasonNumber)
           : b.episodeNumber.compareTo(a.episodeNumber));
       setState(() {
+        _series = series;
         _episodes = episodes;
         _queueByEpisode = {
           for (final q in queue)
@@ -114,10 +120,10 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   Future<void> _automaticSearch() async {
     try {
       if (_allSeasons) {
-        await _service.searchSeries(widget.series.id);
-        _toast('Searching for monitored episodes of ${widget.series.title}…');
+        await _service.searchSeries(_series.id);
+        _toast('Searching for monitored episodes of ${_series.title}…');
       } else {
-        await _service.searchSeason(widget.series.id, widget.seasonNumber!);
+        await _service.searchSeason(_series.id, widget.seasonNumber!);
         _toast('Searching for ${seasonLabel(widget.seasonNumber!)}…');
       }
     } catch (e) {
@@ -130,7 +136,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   Future<void> _interactiveSearch() async {
     var seasonNumber = widget.seasonNumber;
     if (seasonNumber == null) {
-      final seasons = [...widget.series.seasons]
+      final seasons = [..._series.seasons]
         ..sort((a, b) => a.seasonNumber.compareTo(b.seasonNumber));
       if (seasons.isEmpty) {
         _toast('No seasons available');
@@ -147,7 +153,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
                     child: Text(
                       seasonLabel(s.seasonNumber),
                       style: TextStyle(
-                        color: s.monitored
+                        color: _series.monitored && s.monitored
                             ? AppTheme.textPrimary
                             : AppTheme.textSecondary,
                         fontSize: 15,
@@ -163,9 +169,9 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
       AmbientPageRoute(
         builder: (_) => SonarrReleasesScreen(
           instanceId: widget.instanceId,
-          seriesId: widget.series.id,
+          seriesId: _series.id,
           seasonNumber: seasonNumber!,
-          seriesTitle: widget.series.title,
+          seriesTitle: _series.title,
         ),
       ),
     );
@@ -185,9 +191,9 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
       AmbientPageRoute(
         builder: (_) => SonarrReleasesScreen(
           instanceId: widget.instanceId,
-          seriesId: widget.series.id,
+          seriesId: _series.id,
           seasonNumber: episode.seasonNumber,
-          seriesTitle: widget.series.title,
+          seriesTitle: _series.title,
           episodeId: episode.id,
           episodeLabel: episode.seasonEpisodeLabel,
         ),
@@ -199,6 +205,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   /// is patched into the list in place rather than refetching the season, so
   /// the menu tells the truth the next time it opens.
   Future<void> _toggleEpisodeMonitored(SonarrEpisode episode) async {
+    if (!_series.monitored) return;
     final target = !episode.monitored;
     try {
       await _service.setEpisodesMonitored([episode.id], monitored: target);
@@ -233,7 +240,8 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
         SheetAction(
             'monitor',
             episode.monitored ? Icons.bookmark_border : Icons.bookmark,
-            episode.monitored ? 'Unmonitor Episode' : 'Monitor Episode'),
+            episode.monitored ? 'Unmonitor Episode' : 'Monitor Episode',
+            enabled: _series.monitored),
         if (episode.hasFile)
           const SheetAction('delete', Icons.delete_outline, 'Delete File',
               color: AppTheme.error),
@@ -353,7 +361,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
       context,
       builder: (_) => EpisodeDetailSheet(
         instanceId: widget.instanceId,
-        series: widget.series,
+        series: _series,
         episode: episode,
         queueItem: _queueByEpisode[episode.id],
         onAutomaticSearch: () => _automaticEpisodeSearch(episode),
@@ -375,7 +383,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
           children: [
             Text(_title),
             Text(
-              widget.series.title,
+              _series.title,
               style: const TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 12,
@@ -462,6 +470,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
           final episode = row as SonarrEpisode;
           return _EpisodeTile(
             episode: episode,
+            seriesMonitored: _series.monitored,
             queueItem: _queueByEpisode[episode.id],
             selecting: _selecting,
             selected: _selectedIds.contains(episode.id),
@@ -511,6 +520,7 @@ class _SeasonHeader extends StatelessWidget {
 
 class _EpisodeTile extends StatelessWidget {
   final SonarrEpisode episode;
+  final bool seriesMonitored;
   final SonarrQueueItem? queueItem;
   final bool selecting;
   final bool selected;
@@ -520,6 +530,7 @@ class _EpisodeTile extends StatelessWidget {
 
   const _EpisodeTile({
     required this.episode,
+    required this.seriesMonitored,
     required this.queueItem,
     required this.selecting,
     required this.selected,
@@ -533,7 +544,7 @@ class _EpisodeTile extends StatelessWidget {
   /// its own meaning (a faint red "Missing" is still missing, just not
   /// something anyone is working on). The checkbox and the magnifier stay at
   /// full strength — they still work.
-  double get _contentOpacity => episode.monitored ? 1 : 0.5;
+  double get _contentOpacity => seriesMonitored && episode.monitored ? 1 : 0.5;
 
   @override
   Widget build(BuildContext context) {

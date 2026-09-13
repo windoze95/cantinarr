@@ -129,6 +129,9 @@ class _SonarrSeriesDetailScreenState
   }
 
   Future<void> _toggleSeasonMonitored(SonarrSeason season) async {
+    if (!_series.monitored || _togglingSeasons.contains(season.seasonNumber)) {
+      return;
+    }
     final target = !season.monitored;
     setState(() => _togglingSeasons.add(season.seasonNumber));
     try {
@@ -360,6 +363,7 @@ class _SonarrSeriesDetailScreenState
                       const SizedBox(height: 4),
                       ...seasons.map((s) => _SeasonCard(
                             season: s,
+                            seriesMonitored: _series.monitored,
                             queue: _queueBySeason[s.seasonNumber] ?? const [],
                             episodeMonitor:
                                 _episodeMonitorBySeason[s.seasonNumber],
@@ -474,6 +478,7 @@ class _AllSeasonsCard extends StatelessWidget {
 
 class _SeasonCard extends StatelessWidget {
   final SonarrSeason season;
+  final bool seriesMonitored;
   final List<SonarrQueueItem> queue;
 
   /// How many of this season's episodes Sonarr is monitoring, out of how many
@@ -487,6 +492,7 @@ class _SeasonCard extends StatelessWidget {
 
   const _SeasonCard({
     required this.season,
+    required this.seriesMonitored,
     required this.queue,
     required this.episodeMonitor,
     required this.busy,
@@ -519,6 +525,7 @@ class _SeasonCard extends StatelessWidget {
   /// half-filled — the availability line calls a still-airing season's
   /// remainder "unaired", so nothing else on the card says it.
   String get _tooltip {
+    if (!seriesMonitored) return 'Series is unmonitored';
     final counts = episodeMonitor;
     if (season.monitored) {
       final left = counts == null ? 0 : counts.total - counts.monitored;
@@ -532,9 +539,8 @@ class _SeasonCard extends StatelessWidget {
         '${on == 1 ? 'episode is' : 'episodes are'} monitored';
   }
 
-  /// A season nobody is monitoring fades, the same way its episodes do one
-  /// level down. The bookmark keeps its full strength — it is the way back.
-  double get _contentOpacity => season.monitored ? 1 : 0.5;
+  /// The series pauses all of its seasons without changing their saved flags.
+  double get _contentOpacity => seriesMonitored && season.monitored ? 1 : 0.5;
 
   @override
   Widget build(BuildContext context) {
@@ -563,7 +569,7 @@ class _SeasonCard extends StatelessWidget {
                 ),
                 child: Icon(
                   Icons.video_library_outlined,
-                  color: season.monitored
+                  color: seriesMonitored && season.monitored
                       ? AppTheme.available
                       : AppTheme.unavailable,
                   size: 22,
@@ -598,16 +604,23 @@ class _SeasonCard extends StatelessWidget {
                 ),
               ),
             ),
-            IconButton(
-              onPressed: busy ? null : onToggleMonitored,
-              tooltip: _tooltip,
-              icon: busy
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: AppTheme.accent))
-                  : MonitorBookmark(_fill),
+            GestureDetector(
+              // A disabled bookmark must not pass its tap to the season's
+              // navigation InkWell underneath it.
+              behavior: HitTestBehavior.opaque,
+              excludeFromSemantics: true,
+              onTap: busy || !seriesMonitored ? () {} : null,
+              child: IconButton(
+                onPressed: busy || !seriesMonitored ? null : onToggleMonitored,
+                tooltip: _tooltip,
+                icon: busy
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: AppTheme.accent))
+                    : MonitorBookmark(_fill, enabled: seriesMonitored),
+              ),
             ),
           ],
         ),

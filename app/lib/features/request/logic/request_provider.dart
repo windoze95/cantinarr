@@ -6,6 +6,11 @@ import '../data/request_service.dart';
 class RequestState {
   final RequestStatus status;
   final bool isRequesting;
+  final bool isCheckingStatus;
+
+  /// The selected library has a successful status read. A failed refresh
+  /// leaves this false, while retaining the last known status for display.
+  final bool hasStatus;
   final String? error;
 
   /// Per-season availability for TV titles (empty for movies or series not yet
@@ -29,6 +34,8 @@ class RequestState {
   const RequestState({
     this.status = RequestStatus.unavailable,
     this.isRequesting = false,
+    this.isCheckingStatus = false,
+    this.hasStatus = false,
     this.error,
     this.seasons = const [],
     this.releases = MovieReleaseDates.none,
@@ -38,6 +45,8 @@ class RequestState {
   RequestState copyWith({
     RequestStatus? status,
     bool? isRequesting,
+    bool? isCheckingStatus,
+    bool? hasStatus,
     String? error,
     List<RequestSeasonStatus>? seasons,
     MovieReleaseDates? releases,
@@ -46,6 +55,8 @@ class RequestState {
       RequestState(
         status: status ?? this.status,
         isRequesting: isRequesting ?? this.isRequesting,
+        isCheckingStatus: isCheckingStatus ?? this.isCheckingStatus,
+        hasStatus: hasStatus ?? this.hasStatus,
         error: error,
         seasons: seasons ?? this.seasons,
         releases: releases ?? this.releases,
@@ -58,6 +69,9 @@ class RequestNotifier extends ChangeNotifier {
   final RequestService _service;
   final int _tmdbId;
   final MediaType _mediaType;
+  int _statusVersion = 0;
+  int _libraryVersion = 0;
+  bool _disposed = false;
 
   RequestState _state = const RequestState();
   RequestState get state => _state;
@@ -70,7 +84,16 @@ class RequestNotifier extends ChangeNotifier {
   /// the user's default. Set by the detail screen when the user picks a
   /// library chip or a Library option on the request sheet, so every
   /// subsequent status check and submit follows the same selection.
-  String? instanceId;
+  String? _instanceId;
+  String? get instanceId => _instanceId;
+  set instanceId(String? value) {
+    if (_instanceId == value) return;
+    _instanceId = value;
+    _libraryVersion++;
+    _statusVersion++;
+    // Never let a newly selected library use the previous library's seasons.
+    state = RequestState(instanceStatuses: state.instanceStatuses);
+  }
 
   RequestNotifier({
     required RequestService service,
@@ -83,20 +106,29 @@ class RequestNotifier extends ChangeNotifier {
   /// Check current status from the backend, including the per-season breakdown
   /// for TV titles.
   Future<void> checkStatus() async {
+    final version = ++_statusVersion;
+    state = state.copyWith(isCheckingStatus: true, hasStatus: false);
     try {
       final detail = await _service.checkStatusDetail(
         _tmdbId,
         _mediaType,
         instanceId: instanceId,
       );
+      if (_disposed || version != _statusVersion) return;
       state = state.copyWith(
         status: detail.status,
         seasons: detail.seasons,
         releases: detail.releases,
         instanceStatuses: detail.instanceStatuses,
+        isCheckingStatus: false,
+        hasStatus: true,
       );
     } catch (e) {
-      state = state.copyWith(error: 'Could not check status');
+      if (_disposed || version != _statusVersion) return;
+      state = state.copyWith(
+        isCheckingStatus: false,
+        error: 'Could not check status',
+      );
     }
   }
 
@@ -107,16 +139,25 @@ class RequestNotifier extends ChangeNotifier {
 
   /// Submit the request, optionally with chosen season scope / quality. The
   /// resulting status (which may be [RequestStatus.pending]) is reflected in
-  /// state rather than assuming "requested".
-  Future<void> request({
+  /// state rather than assuming "requested". Returns whether the write was
+  /// accepted, separately from a later status-refresh error. TV requests keep
+  /// selection blocked until their updated season breakdown has been read.
+  Future<bool> request({
     String? title,
     int? tvdbId,
     String? seasonScope,
     List<int>? seasons,
     int? qualityProfileId,
   }) async {
-    if (state.isRequesting) return;
-    state = state.copyWith(isRequesting: true, error: null);
+    if (state.isRequesting) return false;
+    final libraryVersion = _libraryVersion;
+    // A read started before this write cannot overwrite the accepted result.
+    _statusVersion++;
+    state = state.copyWith(
+      isRequesting: true,
+      isCheckingStatus: false,
+      error: null,
+    );
 
     final status = await _service.request(
       tmdbId: _tmdbId,
@@ -129,16 +170,26 @@ class RequestNotifier extends ChangeNotifier {
       instanceId: instanceId,
     );
 
-    if (status != null) {
-      state = state.copyWith(
-        status: status,
-        isRequesting: false,
-      );
-    } else {
+    if (_disposed || libraryVersion != _libraryVersion) return status != null;
+    _statusVersion++;
+    if (status == null) {
       state = state.copyWith(
         isRequesting: false,
+        isCheckingStatus: false,
         error: 'Request failed. Please try again.',
       );
+      return false;
     }
+    state = state.copyWith(status: status, isCheckingStatus: false);
+    if (_mediaType == MediaType.tv) await checkStatus();
+    if (_disposed || libraryVersion != _libraryVersion) return true;
+    state = state.copyWith(isRequesting: false, error: state.error);
+    return true;
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
   }
 }
