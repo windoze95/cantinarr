@@ -21,6 +21,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/musicdiscovery"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
+	"github.com/windoze95/cantinarr-server/internal/requestquota"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
@@ -213,6 +214,7 @@ type Notifier interface {
 }
 
 type Service struct {
+	Quotas           *requestquota.Service
 	tvMatchMu        sync.Mutex
 	MusicCatalog     musicdiscovery.Catalog
 	dispatchMu       sync.Mutex
@@ -348,6 +350,7 @@ func (s *Service) hideBlockedRequests(userID int64, isAdmin bool, requests []Req
 
 func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, notifier Notifier) *Service {
 	return &Service{
+		Quotas:       requestquota.New(db),
 		dispatchWake: make(chan struct{}, 1),
 		MusicCatalog: musicdiscovery.NewService(),
 		db:           db,
@@ -549,11 +552,16 @@ func (s *Service) resolveSonarr(userID int64, instanceID string) (*sonarr.Client
 }
 
 type CreateRequest struct {
-	CatalogRef *CatalogRef `json:"catalog_ref,omitempty"`
-	TmdbID     int         `json:"tmdb_id"`
-	MediaType  string      `json:"media_type"`
-	Title      string      `json:"title"`
-	TvdbID     int         `json:"tvdb_id"`
+	quotaFree    map[string]string
+	quotaKey     string
+	previewOnly  bool
+	quotaPreview *requestquota.Preview
+	authority    string
+	CatalogRef   *CatalogRef `json:"catalog_ref,omitempty"`
+	TmdbID       int         `json:"tmdb_id"`
+	MediaType    string      `json:"media_type"`
+	Title        string      `json:"title"`
+	TvdbID       int         `json:"tvdb_id"`
 	// ForeignID is the arr-native metadata id for requests with no TMDB id:
 	// the Chaptarr/Readarr foreignBookId for books, the MusicBrainz
 	// release-group id for music. Required when media_type is "book" or
@@ -604,16 +612,17 @@ type BookFormatWait struct {
 }
 
 type CreateResponse struct {
-	Match               *TVMatch          `json:"match,omitempty"`
-	StatusUnknownReason string            `json:"status_unknown_reason,omitempty"`
-	StatusKnown         *bool             `json:"status_known,omitempty"`
-	RequestID           int64             `json:"request_id,omitempty"`
-	CatalogRef          *CatalogRef       `json:"catalog_ref,omitempty"`
-	Delivery            []DeliveryState   `json:"delivery,omitempty"`
-	Success             bool              `json:"success"`
-	Status              string            `json:"status"`
-	Title               string            `json:"title"`
-	BookFormats         map[string]string `json:"book_formats,omitempty"`
+	QuotaPreview        *requestquota.Preview `json:"quota_preview,omitempty"`
+	Match               *TVMatch              `json:"match,omitempty"`
+	StatusUnknownReason string                `json:"status_unknown_reason,omitempty"`
+	StatusKnown         *bool                 `json:"status_known,omitempty"`
+	RequestID           int64                 `json:"request_id,omitempty"`
+	CatalogRef          *CatalogRef           `json:"catalog_ref,omitempty"`
+	Delivery            []DeliveryState       `json:"delivery,omitempty"`
+	Success             bool                  `json:"success"`
+	Status              string                `json:"status"`
+	Title               string                `json:"title"`
+	BookFormats         map[string]string     `json:"book_formats,omitempty"`
 	// BookFormatWaits explains, per format, a book_formats entry that reads
 	// "requested" only because the server is finishing it unattended.
 	BookFormatWaits map[string]BookFormatWait `json:"book_format_waits,omitempty"`
@@ -791,16 +800,18 @@ type QualityProfile struct {
 
 // RequestOptions tells the client what the current user may choose for a request.
 type RequestOptions struct {
-	CanChooseSeason    bool             `json:"can_choose_season"`
-	CanChooseQuality   bool             `json:"can_choose_quality"`
-	DefaultSeasonScope string           `json:"default_season_scope"`
-	QualityProfiles    []QualityProfile `json:"quality_profiles"`
+	Quotas             *requestquota.View `json:"request_quotas,omitempty"`
+	CanChooseSeason    bool               `json:"can_choose_season"`
+	CanChooseQuality   bool               `json:"can_choose_quality"`
+	DefaultSeasonScope string             `json:"default_season_scope"`
+	QualityProfiles    []QualityProfile   `json:"quality_profiles"`
 }
 
 // DecisionOverride lets an admin tweak supported TV/movie options when
 // approving. BookFormat remains in the wire shape for compatibility but is
 // immutable: a non-empty different value is rejected.
 type DecisionOverride struct {
+	Seasons          []int  `json:"seasons,omitempty"`
 	SeasonScope      string `json:"season_scope"`
 	QualityProfileID int    `json:"quality_profile_id"`
 	BookFormat       string `json:"book_format"`
@@ -857,6 +868,10 @@ type effective struct {
 
 // resolvedRequest is a request whose options have all been resolved server-side.
 type resolvedRequest struct {
+	quotaPreview         *requestquota.Preview
+	previewOnly          bool
+	authority            string
+	beforeMutation       func() error
 	newSubmission        bool // public intake only; approval replays never emit creation
 	newWork              bool // a new arr record or genuinely revived monitoring
 	userID               int64
@@ -1084,6 +1099,12 @@ func (s *Service) effectiveSettings(userID int64, isAdmin bool) (effective, erro
 }
 
 func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateResponse, error) {
+	req.quotaFree, req.quotaKey, req.quotaPreview = nil, "", nil
+	var authErr error
+	req.authority, authErr = requestAuthority(s.db, userID)
+	if authErr != nil {
+		return nil, authErr
+	}
 	if req.MediaType != "movie" && req.MediaType != "tv" && req.MediaType != "book" && req.MediaType != "music" {
 		return nil, fmt.Errorf("unsupported media type: %s", req.MediaType)
 	}
@@ -1124,6 +1145,8 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 	}
 
 	resolved := &resolvedRequest{
+		previewOnly:   req.previewOnly,
+		authority:     req.authority,
 		newSubmission: true,
 		userID:        userID,
 		tmdbID:        req.TmdbID,
@@ -1203,35 +1226,7 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		return s.createTVRequest(resolved, eff.RequiresApproval)
 	}
 
-	// Serialize repeated submissions to this target through the live arr read
-	// and history insert, so concurrent automatic requests share one alert.
-	creationLock := s.bookLock(fmt.Sprintf("submission:%d:%s:%s:%d", userID, resolved.instanceID, resolved.mediaType, resolved.tmdbID))
-	creationLock.Lock()
-	defer creationLock.Unlock()
-	if eff.RequiresApproval {
-		resp, err := s.createPending(resolved)
-		if err != nil {
-			return nil, err
-		}
-		resp.InstanceID = resolved.instanceID
-		return resp, nil
-	}
-
-	status, title, err := s.addToArr(resolved)
-	if err != nil {
-		return nil, err
-	}
-	resolved.title = title
-	resolved.newSubmission = s.isNewSubmission(resolved)
-	s.logRequest(resolved, title, status)
-	return &CreateResponse{
-		Success:            true,
-		Status:             status,
-		Title:              title,
-		InstanceID:         resolved.instanceID,
-		BookFormats:        resolved.bookFormats,
-		CanonicalForeignID: resolved.responseCanonicalForeignID(),
-	}, nil
+	return s.createMovieRequest(resolved, eff.RequiresApproval)
 }
 
 // createPending records a request awaiting admin approval without touching the
@@ -1484,6 +1479,9 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 
 	client = client.WithMutationGuard(func() error {
 		_, _, err := s.resolveChaptarr(actorID, instanceID)
+		if err == nil && r.beforeMutation != nil {
+			return r.beforeMutation()
+		}
 		return err
 	})
 
@@ -2192,7 +2190,13 @@ func (s *Service) addMovie(r *resolvedRequest) (string, string, error) {
 	}
 	r.instanceID = instanceID
 
+	if r.beforeMutation != nil {
+		radarrClient = radarrClient.WithMutationGuard(r.beforeMutation)
+	}
 	existing, err := radarrClient.GetMovieByTMDB(r.tmdbID)
+	if err != nil {
+		return "", "", fmt.Errorf("check existing movie state: %w", err)
+	}
 	if err == nil && existing != nil {
 		if existing.HasFile {
 			return StatusAvailable, existing.Title, nil
@@ -2565,7 +2569,7 @@ func (s *Service) userStatusForInstance(userID int64, tmdbID int, mediaType, ins
 	if mediaType == "tv" {
 		return s.userTVStatus(userID, tmdbID, instanceID)
 	}
-	query := "SELECT status FROM request_log WHERE user_id = ? AND tmdb_id = ? AND media_type = ?"
+	query := "SELECT id,status,COALESCE(park_reason,'') FROM request_log WHERE user_id = ? AND tmdb_id = ? AND media_type = ?"
 	args := []interface{}{userID, tmdbID, mediaType}
 	if instanceID != "" {
 		query += " AND instance_id = ?"
@@ -2576,11 +2580,25 @@ func (s *Service) userStatusForInstance(userID int64, tmdbID int, mediaType, ins
 	}
 	query += " ORDER BY requested_at DESC, id DESC LIMIT 1"
 
-	var status string
-	err := s.db.QueryRow(query, args...).Scan(&status)
+	var status, park string
+	var requestID int64
+	err := s.db.QueryRow(query, args...).Scan(&requestID, &status, &park)
 	if err == nil {
 		// A pending request isn't in the arr yet, so always surface it.
 		if status == StatusPending {
+			if park == "delivery" {
+				delivery, e := s.deliveryResponse(userID, []int64{requestID}, "", instanceID, nil)
+				if e != nil {
+					return nil, e
+				}
+				live, e := s.statusFor(userID, tmdbID, mediaType, instanceID)
+				if e == nil && live != nil && live.Status != StatusUnavailable {
+					live.RequestID, live.Delivery = requestID, delivery.Delivery
+					return live, nil
+				}
+				known := e == nil && live != nil
+				return &StatusResponse{Status: StatusRequested, RequestID: requestID, Delivery: delivery.Delivery, StatusKnown: &known}, nil
+			}
 			return &StatusResponse{Status: StatusPending}, nil
 		}
 		// A denied request shows "denied" only while the title isn't otherwise
@@ -2658,7 +2676,7 @@ func (s *Service) instanceStatuses(userID int64, tmdbID int, mediaType string) m
 	rowStatus := map[string]string{}
 	defaultID := s.effectiveArrInstanceID(userID, mediaType)
 	rows, err := s.db.Query(
-		"SELECT COALESCE(instance_id, ''), status FROM request_log WHERE user_id = ? AND tmdb_id = ? AND media_type = ? ORDER BY requested_at ASC, id ASC",
+		"SELECT COALESCE(instance_id, ''), CASE WHEN status='pending' AND park_reason='delivery' THEN 'delivery' ELSE status END FROM request_log WHERE user_id = ? AND tmdb_id = ? AND media_type = ? ORDER BY requested_at ASC, id ASC",
 		userID, tmdbID, mediaType,
 	)
 	if err == nil {
@@ -2685,6 +2703,10 @@ func (s *Service) instanceStatuses(userID int64, tmdbID int, mediaType string) m
 			known = true
 		}
 		switch rowStatus[id] {
+		case "delivery":
+			if !known || status == StatusUnavailable {
+				status = StatusRequested
+			}
 		case StatusPending:
 			status = StatusPending
 		case StatusDenied:
@@ -3670,8 +3692,12 @@ type bookRequestSubscriber struct {
 }
 
 func (s *Service) bookRequestAudience(requestID, ownerID int64, ownerFormat string) ([]bookRequestSubscriber, error) {
+	return bookRequestAudienceFrom(s.db, requestID, ownerID, ownerFormat)
+}
+
+func bookRequestAudienceFrom(q requestquota.Queryer, requestID, ownerID int64, ownerFormat string) ([]bookRequestSubscriber, error) {
 	audience := map[int64]string{ownerID: ownerFormat}
-	rows, err := s.db.Query("SELECT user_id, COALESCE(book_format, 'both') FROM book_request_waiters WHERE request_id = ?", requestID)
+	rows, err := q.Query("SELECT user_id, COALESCE(book_format, 'both') FROM book_request_waiters WHERE request_id = ?", requestID)
 	if err != nil {
 		return nil, fmt.Errorf("query book request subscribers: %w", err)
 	}
@@ -3855,6 +3881,11 @@ func (s *Service) isAuthorImportParked(requestID int64) bool {
 func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOverride) (*CreateResponse, error) {
 	if !s.userIsAdmin(adminID) {
 		return nil, ErrTVMatchAdmin
+	}
+	if r, status, err := s.loadRequest(requestID); err == nil && r.mediaType == "movie" && status == StatusPending && !s.hasDispatch(requestID) {
+		if err := s.migrateMovieApproval(requestID, r); err != nil {
+			return nil, err
+		}
 	}
 	if r, status, err := s.loadRequest(requestID); err == nil && r.mediaType == "tv" && status == StatusPending && !s.hasDispatch(requestID) {
 		if err := s.migrateTVApproval(requestID, r); err != nil {
@@ -4705,10 +4736,6 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 	audience := []bookRequestSubscriber{{UserID: r.userID}}
 	wasAuthorImportWait := false
 	if r.mediaType == "book" {
-		audience, err = s.bookRequestAudience(requestID, r.userID, r.bookFormat)
-		if err != nil {
-			return err
-		}
 		// Read the wait marker before the decision overwrites the row's story:
 		// a denied author-import wait must also cancel the arr's queued import
 		// (below), or the stored add intent delivers the book anyway later.
@@ -4720,11 +4747,28 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 				isBookImportAddFailure(addFailure.String)
 		}
 	}
-	tx, err := s.db.Begin()
+	tx, err := requestquota.Begin(s.db)
 	if err != nil {
 		return fmt.Errorf("begin request denial: %w", err)
 	}
 	defer tx.Rollback()
+	role, err := requestquota.Role(tx, adminID)
+	if err != nil {
+		return err
+	}
+	if role != "admin" {
+		return ErrTVMatchAdmin
+	}
+	if err = tx.QueryRow(`SELECT user_id,COALESCE(book_format,'') FROM request_log WHERE id=?`, requestID).Scan(&r.userID, &r.bookFormat); err != nil {
+		return err
+	}
+	audience = []bookRequestSubscriber{{UserID: r.userID}}
+	if r.mediaType == "book" {
+		audience, err = bookRequestAudienceFrom(tx, requestID, r.userID, r.bookFormat)
+		if err != nil {
+			return err
+		}
+	}
 	var processing int
 	if err = tx.QueryRow(`SELECT COUNT(*) FROM request_dispatch WHERE request_id=? AND state='processing'`, requestID).Scan(&processing); err != nil {
 		return err
@@ -4759,9 +4803,13 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 			}
 		}
 	}
+	if err = s.Quotas.Release(tx, requestID, 0, "*", "", "denied"); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit request denial: %w", err)
 	}
+	s.quotaRequestChanged(requestID)
 	if wasAuthorImportWait {
 		s.cancelAuthorImportForDeniedRequest(requestID, r)
 	}
@@ -4812,6 +4860,11 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 // inside an instance, so a selection on one library must never offer a
 // sibling's profile ids); empty resolves the user's effective default.
 func (s *Service) GetRequestOptions(userID int64, isAdmin bool, mediaType, instanceID string) (*RequestOptions, error) {
+	role, err := requestquota.Role(s.db, userID)
+	if err != nil {
+		return nil, err
+	}
+	isAdmin = role == "admin"
 	eff, err := s.effectiveSettings(userID, isAdmin)
 	if err != nil {
 		return nil, err
@@ -4821,6 +4874,10 @@ func (s *Service) GetRequestOptions(userID int64, isAdmin bool, mediaType, insta
 		CanChooseQuality:   eff.AllowQualityChoice && mediaType != "book" && mediaType != "music",
 		DefaultSeasonScope: eff.SeasonScope,
 		QualityProfiles:    []QualityProfile{},
+	}
+	opts.Quotas, err = s.Quotas.Read(s.db, userID)
+	if err != nil {
+		return nil, err
 	}
 	if eff.AllowQualityChoice && mediaType != "book" && mediaType != "music" {
 		profiles, err := s.qualityProfilesForInstance(userID, mediaType, instanceID)

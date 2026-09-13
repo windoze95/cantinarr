@@ -149,6 +149,10 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 
 ### Settings
 
+**Request allowances** are edited in **Request Defaults** and each user's existing request-settings page. Each media allowance can inherit the User default, replace its whole count/window rule, or be unlimited. User pages show effective rules and usage; **Reset selected allowances** confirms the exact units restored and records an administrator audit. **Request allowance** is the last entry under **Settings > Account** (`/settings/request-allowance`); opening it shows usage, remaining units, and local next/full replenishment times. These controls are hidden when the server does not advertise `request_quotas`.
+
+Movie, season, book-format, and album controls keep allowance data out of the request flow. Refusals show a short toast naming the blocked category, such as **Movie request limit reached.**, and preserve the user's choices for an explicit reduction. If both book formats exceed their limits, the toast names both. Availability and playback remain usable at zero remaining. Allowance settings refresh after request changes, `request_quota_changed` events, resume/reconnect, and rolling-window expiration. Movie delivery now uses the same saved waiting/retry states as the other media.
+
 **TV matches** (`/settings/tv-matches`, under Request Settings) and **Correct TV match** inside the TV detail's **Report a problem** sheet are admin-only and hidden on older servers without `tv_match_corrections`. There is no separate correction button or header menu. The editor shows bundled/custom provenance, searches Sonarr or accepts a TVDB ID, and requires an explicit target season for every source season. Save creates a local override; Pause matching blocks resolution; Restore bundled / default removes the override behavior. Revisions reject stale edits. None changes monitoring. Affected-request previews show recorded/intended targets, the pinned library and exact season/pilot scope, including unverified legacy targets. Confirming creates an idempotent linked corrective request, preserves original history/files/monitoring, and retains normal approval requirements.
 
 On movie and TV details, **Report a problem** appears after an accepted request (including Pending Approval), for existing Downloading/Partial/Available titles, or when a matching, status-read, or submission error blocks requesting. Initial loading, cancelled options, and denied approval alone do not reveal it. A blocked TV match can therefore be corrected before Request is usable. TV admins retain the correction shortcut when reporting is disabled, but cannot submit reports through it. An existing report remains scoped to the selected library: TV admins find **View your report** alongside corrections in the same sheet; other users keep the direct report shortcut. Opening a correction submits neither a request nor a report. Settings remains available before any request or error.
@@ -280,7 +284,7 @@ app/lib/
 │   ├── notifications/            # push registration (APNs/FCM), prefs, deep-link routing
 │   ├── person/                   # Cast/crew detail sheet
 │   ├── radarr/                   # Movie management: library/queue/history/wanted/calendar
-│   ├── request/                  # Request controls, status, admin TV match editor and repair previews
+│   ├── request/                  # Request controls, allowances, status, TV match editor and repair previews
 │   ├── settings/                 # Everything under Settings (see Features)
 │   ├── setup_wizard/             # Live setup checklist wizard
 │   ├── shell/                    # App shell: navigation + search-to-AI hand-off

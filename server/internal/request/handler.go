@@ -85,6 +85,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.service.CreateMediaRequest(claims.UserID, &req)
 	if err != nil {
+		if writeQuotaError(w, err) {
+			return
+		}
 		// Service errors are host-free by construction, so the one line that
 		// makes a failed create diagnosable from the container log is safe.
 		log.Printf("request: create %s request failed: %v", req.MediaType, err)
@@ -528,6 +531,9 @@ func (h *Handler) Approve(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.service.ApproveRequest(claims.UserID, id, &override)
 	if err != nil {
+		if writeQuotaError(w, err) {
+			return
+		}
 		if errors.Is(err, bookdiscovery.ErrRetired) {
 			bookdiscovery.WriteRetired(w)
 			return

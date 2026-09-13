@@ -229,6 +229,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
             meta['media_account_management'] as bool? ?? false,
         appleTvRemote: meta['apple_tv_remote'] as bool? ?? false,
         tvMatchCorrections: meta['tv_match_corrections'] as bool? ?? false,
+        requestQuotas: meta['request_quotas'] as bool? ?? false,
         hiddenDiscoverTabs:
             (meta['hidden_discover_tabs'] as List?)?.cast<String>(),
       );
@@ -310,6 +311,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
           mediaAccountManagement: config.mediaAccountManagement,
           appleTvRemote: config.appleTvRemote,
           tvMatchCorrections: config.tvMatchCorrections,
+        requestQuotas: config.requestQuotas,
           hiddenDiscoverTabs: config.hiddenDiscoverTabs,
           configConfirmed: true,
         );
@@ -397,6 +399,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         mediaAccountManagement: config.mediaAccountManagement,
         appleTvRemote: config.appleTvRemote,
         tvMatchCorrections: config.tvMatchCorrections,
+        requestQuotas: config.requestQuotas,
         hiddenDiscoverTabs: config.hiddenDiscoverTabs,
         configConfirmed: true,
       );
@@ -540,6 +543,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         mediaAccountManagement: config.mediaAccountManagement,
         appleTvRemote: config.appleTvRemote,
         tvMatchCorrections: config.tvMatchCorrections,
+        requestQuotas: config.requestQuotas,
         hiddenDiscoverTabs: config.hiddenDiscoverTabs,
         configConfirmed: true,
       );
@@ -730,6 +734,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         mediaAccountManagement: config.mediaAccountManagement,
         appleTvRemote: config.appleTvRemote,
         tvMatchCorrections: config.tvMatchCorrections,
+        requestQuotas: config.requestQuotas,
         hiddenDiscoverTabs: config.hiddenDiscoverTabs,
         configConfirmed: true,
       );
@@ -874,6 +879,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       mediaAccountManagement: config.mediaAccountManagement,
       appleTvRemote: config.appleTvRemote,
       tvMatchCorrections: config.tvMatchCorrections,
+        requestQuotas: config.requestQuotas,
       hiddenDiscoverTabs: config.hiddenDiscoverTabs,
       configConfirmed: true,
     );
@@ -958,6 +964,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         mediaAccountManagement: config.mediaAccountManagement,
         appleTvRemote: config.appleTvRemote,
         tvMatchCorrections: config.tvMatchCorrections,
+        requestQuotas: config.requestQuotas,
         hiddenDiscoverTabs: config.hiddenDiscoverTabs,
         clearHiddenDiscoverTabs: config.hiddenDiscoverTabs == null,
         configConfirmed: true,
@@ -1188,6 +1195,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         mediaAccountManagement: config.mediaAccountManagement,
         appleTvRemote: config.appleTvRemote,
         tvMatchCorrections: config.tvMatchCorrections,
+        requestQuotas: config.requestQuotas,
         hiddenDiscoverTabs: config.hiddenDiscoverTabs,
         configConfirmed: true,
       );
@@ -1363,6 +1371,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         'media_account_management': conn.mediaAccountManagement,
         'apple_tv_remote': conn.appleTvRemote,
         'tv_match_corrections': conn.tvMatchCorrections,
+        'request_quotas': conn.requestQuotas,
         if (conn.hiddenDiscoverTabs != null)
           'hidden_discover_tabs': conn.hiddenDiscoverTabs,
       }),

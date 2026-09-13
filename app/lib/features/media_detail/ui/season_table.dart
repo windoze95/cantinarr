@@ -190,7 +190,16 @@ class _SeasonTableState extends State<SeasonTable> {
         seasons: seasons,
       );
       if (!mounted || notifier != widget.notifier ||
-          instanceId != notifier.instanceId || !accepted) {
+          instanceId != notifier.instanceId) {
+        return;
+      }
+      if (!accepted) {
+        final quotaMessage = notifier.state.quotaMessage;
+        if (quotaMessage != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(quotaMessage)),
+          );
+        }
         return;
       }
       widget.onRequested?.call();

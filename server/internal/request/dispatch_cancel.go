@@ -1,18 +1,26 @@
 package request
 
-import "fmt"
+import (
+	"fmt"
+	"github.com/windoze95/cantinarr-server/internal/requestquota"
+)
 
 // A requester cancels their subscription. Only an admin cancels shared work
 // for everyone. Ownership moves to a remaining subscriber so subsequent
 // delivery continues to run with a requester's current service grant.
 func (s *Service) cancelDelivery(userID, id int64, r *resolvedRequest, admin bool) (*CreateResponse, error) {
-	tx, err := s.db.Begin()
+	tx, err := requestquota.Begin(s.db)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
+	role, err := requestquota.Role(tx, userID)
+	if err != nil {
+		return nil, err
+	}
+	admin = role == "admin"
 	var status, provider, sourceID string
-	if err = tx.QueryRow(`SELECT status,COALESCE(catalog_provider,''),COALESCE(catalog_id,'') FROM request_log WHERE id=?`, id).Scan(&status, &provider, &sourceID); err != nil {
+	if err = tx.QueryRow(`SELECT user_id,COALESCE(book_format,''),status,COALESCE(catalog_provider,''),COALESCE(catalog_id,'') FROM request_log WHERE id=?`, id).Scan(&r.userID, &r.bookFormat, &status, &provider, &sourceID); err != nil {
 		return nil, err
 	}
 	var total, processing, active int
@@ -109,9 +117,17 @@ func (s *Service) cancelDelivery(userID, id int64, r *resolvedRequest, admin boo
 			return nil, err
 		}
 	}
+	refundUser := int64(0)
+	if !admin {
+		refundUser = userID
+	}
+	if err = s.Quotas.Release(tx, id, refundUser, "*", "", "cancelled"); err != nil {
+		return nil, err
+	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
+	s.quotaRequestChanged(id)
 	if !shared && r.parkReason == bookParkReasonAuthorImport {
 		s.cancelAuthorImportForDeniedRequest(id, r)
 	}

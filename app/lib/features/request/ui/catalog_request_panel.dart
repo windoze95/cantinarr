@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/library_refresh_provider.dart';
+import '../data/request_quota.dart';
 import '../data/request_service.dart';
 import '../../discover/ui/book_browse_screen.dart';
 import '../../discover/logic/discovery_access.dart';
@@ -165,6 +166,13 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
       if (!mounted ||
           _key != key ||
           ref.read(catalogDiscoveryScopeProvider) != scope) {
+        return;
+      }
+      final quota = requestQuotaError(e);
+      if (quota != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(quota)),
+        );
         return;
       }
       final body = e.response?.data;

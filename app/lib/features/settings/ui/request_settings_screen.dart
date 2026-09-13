@@ -1,3 +1,4 @@
+import '../../request/ui/request_allowance_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
@@ -150,6 +151,7 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
+        const Padding(padding: EdgeInsets.all(16), child: RequestAllowanceSection(editDefaults: true)),
         const _SectionLabel('Approval'),
         SettingsHighlight(
           anchorId: SettingsAnchors.requestsRequireApproval,

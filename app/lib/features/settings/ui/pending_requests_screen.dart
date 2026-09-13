@@ -1,6 +1,7 @@
 import '../../request/ui/catalog_request_panel.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import '../../request/data/request_quota.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/config/app_config.dart';
@@ -42,6 +43,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
   AdminRequestSettings? _admin;
   bool _isLoading = true;
   String? _error;
+  final Map<int, ({String scope, int? profile})> _approvalSelections = {};
 
   @override
   void initState() {
@@ -55,6 +57,8 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
   }
 
   String _friendlyError(Object e) {
+    final quota = requestQuotaError(e);
+    if (quota != null) return quota;
     String? raw;
     if (e is DioException) {
       final data = e.response?.data;
@@ -198,7 +202,8 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
     String chosenScope = isExplicit
         ? _keepRequestedScope
         : (item.seasonScope.isNotEmpty ? item.seasonScope : SeasonScope.all);
-    int? chosenProfile;
+    chosenScope = _approvalSelections[item.id]?.scope ?? chosenScope;
+    int? chosenProfile = _approvalSelections[item.id]?.profile;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -335,6 +340,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
     if (confirmed != true) return;
     if (!mounted) return;
     try {
+      _approvalSelections[item.id] = (scope: chosenScope, profile: chosenProfile);
       final result = await _service.approve(
         item.id,
         // The "keep requested" sentinel sends no override, so the server keeps
@@ -345,6 +351,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
         qualityProfileId: item.isBook || item.isMusic ? null : chosenProfile,
       );
       if (!mounted) return;
+      _approvalSelections.remove(item.id);
       await _load();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

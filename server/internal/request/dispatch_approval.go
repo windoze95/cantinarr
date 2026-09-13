@@ -1,6 +1,9 @@
 package request
 
-import "context"
+import (
+	"context"
+	"github.com/windoze95/cantinarr-server/internal/requestquota"
+)
 
 // Already-owned formats need no approval or library mutation. Reconcile them
 // in the worker so saving an approval request never waits on Chaptarr.
@@ -47,7 +50,7 @@ func (s *Service) reconcileBookApprovals(ctx context.Context) {
 		if _, _, err = s.resolveChaptarr(r.userID, instanceID); err != nil {
 			continue
 		}
-		tx, err := s.db.Begin()
+		tx, err := requestquota.Begin(s.db)
 		if err != nil {
 			continue
 		}
@@ -64,6 +67,12 @@ func (s *Service) reconcileBookApprovals(ctx context.Context) {
 			}
 			n, _ := res.RowsAffected()
 			changed = changed || n > 0
+			if n > 0 {
+				err = s.refundNoOp(tx, id, format)
+				if err != nil {
+					break
+				}
+			}
 		}
 		if err == nil {
 			_, err = tx.Exec(`UPDATE request_log SET status='requested',completed_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending' AND park_reason IS NULL
@@ -75,6 +84,7 @@ func (s *Service) reconcileBookApprovals(ctx context.Context) {
 		}
 		if tx.Commit() == nil && changed {
 			s.notifyDelivery(id, "approval")
+			s.quotaRequestChanged(id)
 		}
 	}
 }
@@ -142,11 +152,14 @@ func (s *Service) reconcileMusicApprovals(ctx context.Context) {
 		if _, _, err = s.resolveLidarr(r.userID, instanceID); err != nil {
 			continue
 		}
-		tx, err := s.db.Begin()
+		tx, err := requestquota.Begin(s.db)
 		if err != nil {
 			continue
 		}
 		result, err := tx.Exec(`UPDATE request_dispatch SET state='complete',code=?,book_record_id=?,canonical_foreign_id=?,message='' WHERE request_id=? AND state='approval' AND EXISTS(SELECT 1 FROM request_log WHERE id=? AND status='pending' AND park_reason IS NULL)`, status, recordID, foreign, id, id)
+		if err == nil {
+			err = s.refundNoOp(tx, id, "")
+		}
 		if err == nil {
 			_, err = tx.Exec(`UPDATE request_log SET status='requested',book_record_id=?,completed_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending' AND park_reason IS NULL AND NOT EXISTS(SELECT 1 FROM request_dispatch WHERE request_id=? AND state NOT IN ('complete','cancelled'))`, recordID, id, id)
 		}
@@ -157,6 +170,7 @@ func (s *Service) reconcileMusicApprovals(ctx context.Context) {
 		changed, _ := result.RowsAffected()
 		if tx.Commit() == nil && changed > 0 {
 			s.notifyDelivery(id, "approval")
+			s.quotaRequestChanged(id)
 		}
 	}
 }

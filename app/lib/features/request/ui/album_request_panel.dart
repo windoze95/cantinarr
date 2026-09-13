@@ -216,7 +216,13 @@ class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
       _refresh();
     } on RequestSubmissionException catch (e) {
       if (mounted && generation == _generation) {
-        setState(() => _error = e.message);
+        if (e.quotaExceeded) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(e.message)),
+          );
+        } else {
+          setState(() => _error = e.message);
+        }
       }
     } catch (_) {
       if (mounted && generation == _generation) {

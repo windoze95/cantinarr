@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/requestquota"
 	"github.com/windoze95/cantinarr-server/internal/transporterr"
 	"log"
 	"time"
@@ -96,7 +97,7 @@ func leaseToken() string {
 // claimDelivery also owns an instance-wide lease. Alias and source/native
 // requests cannot concurrently mutate the same library through different IDs.
 func (s *Service) claimDelivery(id int64, format string) (string, string, bool) {
-	tx, err := s.db.Begin()
+	tx, err := requestquota.Begin(s.db)
 	if err != nil {
 		return "", "", false
 	}
@@ -168,7 +169,15 @@ func (s *Service) dispatchFormat(ctx context.Context, id int64, format string) {
 		s.finishDelivery(id, format, token, "attention", "instance_missing", nil)
 		return
 	}
-	if _, err = s.deliveryInstance(r.userID, r.mediaType, instanceID); err != nil {
+	actor := r.userID
+	if r.mediaType == "movie" {
+		var approver int64
+		if s.db.QueryRow(`SELECT COALESCE(approved_by,0) FROM request_log WHERE id=?`, id).Scan(&approver) == nil && approver != 0 && s.userIsAdmin(approver) {
+			actor = approver
+			r.actorID = approver
+		}
+	}
+	if _, err = s.deliveryInstance(actor, r.mediaType, instanceID); err != nil {
 		s.finishDelivery(id, format, token, "attention", "access_unavailable", nil)
 		return
 	}
@@ -176,6 +185,11 @@ func (s *Service) dispatchFormat(ctx context.Context, id int64, format string) {
 		s.dispatchTV(ctx, id, token, r)
 		return
 	}
+	if r.mediaType == "movie" {
+		s.dispatchMovie(ctx, id, token, r)
+		return
+	}
+	r.beforeMutation = func() error { return s.startDelivery(ctx, id, format, token) }
 	var provider, sourceID string
 	var confirmed bool
 	err = s.db.QueryRow(`SELECT COALESCE(catalog_provider,''),COALESCE(catalog_id,''),match_confirmed FROM request_log WHERE id=?`, id).Scan(&provider, &sourceID, &confirmed)
@@ -226,6 +240,9 @@ func (s *Service) dispatchFormat(ctx context.Context, id int64, format string) {
 			}
 			client = client.WithMutationGuard(func() error {
 				_, _, err := s.resolveChaptarr(r.userID, instanceID)
+				if err == nil {
+					return r.beforeMutation()
+				}
 				return err
 			})
 			books, e := client.GetAllBooks()
@@ -315,7 +332,7 @@ func (s *Service) dispatchFormat(ctx context.Context, id int64, format string) {
 }
 
 func (s *Service) finishDelivery(id int64, format, token, state, code string, cause error) {
-	tx, err := s.db.Begin()
+	tx, err := requestquota.Begin(s.db)
 	if err != nil {
 		return
 	}
@@ -356,6 +373,11 @@ func (s *Service) finishDelivery(id int64, format, token, state, code string, ca
 	if _, err = tx.Exec(`UPDATE request_dispatch SET state=?,code=?,message=?,next_attempt_at=?,lease_until=0,lease_token='' WHERE request_id=? AND format=? AND lease_token=?`, state, code, message, next, id, format, token); err != nil {
 		return
 	}
+	if state == "complete" {
+		if err = s.refundNoOp(tx, id, format); err != nil {
+			return
+		}
+	}
 	var unfinished, waiting int
 	if err = tx.QueryRow(`SELECT COUNT(*),COALESCE(SUM(CASE WHEN state='waiting_library' THEN 1 ELSE 0 END),0) FROM request_dispatch WHERE request_id=? AND state NOT IN ('complete','cancelled')`, id).Scan(&unfinished, &waiting); err != nil {
 		return
@@ -372,6 +394,7 @@ func (s *Service) finishDelivery(id int64, format, token, state, code string, ca
 		return
 	}
 	s.notifyDelivery(id, state)
+	s.quotaRequestChanged(id)
 }
 
 func (s *Service) notifyDelivery(id int64, state string) {

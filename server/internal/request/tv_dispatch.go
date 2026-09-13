@@ -10,12 +10,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/requestquota"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
 
 // TVRequestTarget is persisted before the first Sonarr mutation. SourceSeasons
 // are the user's selection; TargetSeasons are a snapshot, never retranslated.
 type TVRequestTarget struct {
+	freeSeasons   map[int]bool
+	noOpStatus    string
 	Match         TVMatch `json:"match"`
 	SourceSeasons []int   `json:"source_seasons"`
 	TargetSeasons []int   `json:"target_seasons"`
@@ -81,8 +84,57 @@ func (s *Service) prepareTVTarget(r *resolvedRequest) (*TVRequestTarget, error) 
 				}
 			}
 		}
+		out.freeSeasons, out.noOpStatus, err = tvNoOpSeasons(client, existing, out)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
+}
+
+// Fully monitored includes episode flags: a monitored season containing an
+// unmonitored missing episode still needs new work. Specials are never priced.
+func tvNoOpSeasons(client *sonarr.Client, series *sonarr.Series, target *TVRequestTarget) (map[int]bool, string, error) {
+	free := map[int]bool{}
+	allAvailable := true
+	for i, n := range target.TargetSeasons {
+		source := target.SourceSeasons[i]
+		if !target.Pilot && seasonHasAllFiles(series, n) {
+			free[source] = true
+			continue
+		}
+		episodes, err := client.GetEpisodes(series.ID, n)
+		if err != nil {
+			return nil, "", err
+		}
+		if target.Pilot {
+			for _, ep := range episodes {
+				if ep.SeasonNumber == n && ep.EpisodeNumber == 1 {
+					free[source] = ep.HasFile || (series.Monitored && ep.Monitored)
+					allAvailable = allAvailable && ep.HasFile
+				}
+			}
+			continue
+		}
+		monitored := false
+		for _, season := range series.Seasons {
+			if season.SeasonNumber == n {
+				monitored = series.Monitored && season.Monitored
+			}
+		}
+		for _, ep := range episodes {
+			if ep.SeasonNumber == n && !ep.Monitored && !ep.HasFile {
+				monitored = false
+			}
+		}
+		free[source] = monitored
+		allAvailable = false
+	}
+	status := StatusRequested
+	if allAvailable && len(free) == len(target.SourceSeasons) {
+		status = StatusAvailable
+	}
+	return free, status, nil
 }
 
 func (s *Service) loadTVTarget(id int64) (*TVRequestTarget, string, int, error) {
@@ -111,6 +163,14 @@ func (s *Service) createTVRequest(r *resolvedRequest, approval bool) (*CreateRes
 	if err != nil {
 		return nil, err
 	}
+	if r.previewOnly {
+		return &CreateResponse{QuotaPreview: r.quotaPreview}, nil
+	}
+	if inserted {
+		if err = s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM request_dispatch WHERE request_id=? AND state='approval')`, id).Scan(&approval); err != nil {
+			return nil, err
+		}
+	}
 	if inserted && notifyNew {
 		s.notifyCreated(id, approval)
 	}
@@ -129,7 +189,7 @@ func (s *Service) saveTVDelivery(r *resolvedRequest, target *TVRequestTarget, ap
 	if err != nil {
 		return 0, false, err
 	}
-	tx, err := s.db.Begin()
+	tx, err := s.beginRequest(r.userID, r.authority)
 	if err != nil {
 		return 0, false, err
 	}
@@ -138,13 +198,27 @@ func (s *Service) saveTVDelivery(r *resolvedRequest, target *TVRequestTarget, ap
 	if repairOf > 0 {
 		err = tx.QueryRow(`SELECT request_id FROM request_tv_targets WHERE repair_of=?`, repairOf).Scan(&id)
 	} else {
-		err = tx.QueryRow(`SELECT r.id FROM request_log r JOIN request_tv_targets t ON t.request_id=r.id WHERE r.user_id=? AND r.tmdb_id=? AND r.media_type='tv' AND r.instance_id=? AND r.status='pending' AND t.snapshot=? AND COALESCE(r.quality_profile_id,0)=? ORDER BY r.id DESC LIMIT 1`, r.userID, r.tmdbID, r.instanceID, string(raw), r.qualityProfileID).Scan(&id)
+		err = tx.QueryRow(`SELECT r.id FROM request_log r JOIN request_tv_targets t ON t.request_id=r.id WHERE r.user_id=? AND r.tmdb_id=? AND r.media_type='tv' AND r.instance_id=? AND r.status='pending' AND json_extract(t.snapshot,'$.source_seasons')=? AND json_extract(t.snapshot,'$.target_seasons')=? AND json_extract(t.snapshot,'$.pilot')=? AND json_extract(t.snapshot,'$.match.revision')=? AND json_extract(t.snapshot,'$.match.tvdb_id')=? ORDER BY r.id DESC LIMIT 1`, r.userID, r.tmdbID, r.instanceID, encodeSeasonNumbers(target.SourceSeasons), encodeSeasonNumbers(target.TargetSeasons), target.Pilot, target.Match.Revision, target.Match.TVDBID).Scan(&id)
 	}
-	if err == nil {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, false, err
+	}
+	preview, _, err := s.Quotas.Price(tx, r.userID, s.tvUnits(r, target, id))
+	if err != nil {
+		return 0, false, err
+	}
+	preview.Seasons = target.SourceSeasons
+	if r.previewOnly {
+		r.quotaPreview = preview
 		return id, false, nil
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return 0, false, err
+	if id != 0 {
+		return id, false, nil
+	}
+	if repairOf == 0 {
+		if e := preview.Failure(); e != nil {
+			return 0, false, e
+		}
 	}
 	if repairOf > 0 {
 		var allowed int
@@ -158,6 +232,13 @@ func (s *Service) saveTVDelivery(r *resolvedRequest, target *TVRequestTarget, ap
 	state, park := "queued", "delivery"
 	if approval {
 		state, park = "approval", ""
+	}
+	allFree := true
+	for _, n := range target.SourceSeasons {
+		allFree = allFree && target.freeSeasons[n]
+	}
+	if allFree {
+		state, park = "complete", ""
 	}
 	res, err := tx.Exec(`INSERT INTO request_log(user_id,tmdb_id,tvdb_id,instance_id,media_type,title,status,season_scope,quality_profile_id,park_reason) VALUES (?,?,?,?,'tv',?,'pending',?,?,?)`, r.userID, r.tmdbID, target.Match.TVDBID, r.instanceID, r.title, sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID), sqlNullStr(park))
 	if err != nil {
@@ -177,9 +258,23 @@ func (s *Service) saveTVDelivery(r *resolvedRequest, target *TVRequestTarget, ap
 	if _, err = tx.Exec(`INSERT INTO request_dispatch(request_id,format,state) VALUES (?,'',?)`, id, state); err != nil {
 		return 0, false, err
 	}
+	if allFree {
+		if _, err = tx.Exec(`UPDATE request_log SET status=? WHERE id=?`, target.noOpStatus, id); err != nil {
+			return 0, false, err
+		}
+		if _, err = tx.Exec(`UPDATE request_dispatch SET code=? WHERE request_id=?`, target.noOpStatus, id); err != nil {
+			return 0, false, err
+		}
+	}
+	if repairOf == 0 {
+		if _, err = s.Quotas.Accept(tx, r.userID, s.tvUnits(r, target, id)); err != nil {
+			return 0, false, err
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		return 0, false, err
 	}
+	s.quotaChanged(r.userID)
 	return id, true, nil
 }
 
@@ -253,6 +348,12 @@ func (s *Service) dispatchTV(ctx context.Context, id int64, token string, r *res
 		}
 		s.finishDelivery(id, "", token, state, code, err)
 	}
+	client = client.WithMutationGuard(func() error {
+		if err := guard(); err != nil {
+			return err
+		}
+		return s.startDelivery(ctx, id, "", token)
+	})
 	if err = guard(); err != nil {
 		fail(err)
 		return
@@ -352,6 +453,38 @@ func (s *Service) dispatchTV(ctx context.Context, id int64, token string, r *res
 			return
 		}
 	}
+	free, noOpStatus, err := tvNoOpSeasons(client, series, target)
+	if err != nil {
+		fail(err)
+		return
+	}
+	tx, err := requestquota.Begin(s.db)
+	if err != nil {
+		fail(err)
+		return
+	}
+	remainingSource, remainingTarget := []int{}, []int{}
+	for i, n := range target.SourceSeasons {
+		if free[n] {
+			if err = s.Quotas.Release(tx, id, 0, "", fmt.Sprintf("%d:%d", r.tmdbID, n), "no_op"); err != nil {
+				tx.Rollback()
+				fail(err)
+				return
+			}
+		} else {
+			remainingSource = append(remainingSource, n)
+			remainingTarget = append(remainingTarget, target.TargetSeasons[i])
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		fail(err)
+		return
+	}
+	if len(remainingSource) == 0 {
+		s.finishDelivery(id, "", token, "complete", noOpStatus, nil)
+		return
+	}
+	target.SourceSeasons, target.TargetSeasons = remainingSource, remainingTarget
 	if target.Pilot {
 		episodes, e := client.GetEpisodes(series.ID, target.TargetSeasons[0])
 		if e != nil {

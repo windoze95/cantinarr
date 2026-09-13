@@ -16,6 +16,8 @@ class RequestState {
   /// leaves this false, while retaining the last known status for display.
   final bool hasStatus;
   final String? error;
+  // Refused requests use a toast, without turning the title into an error.
+  final String? quotaMessage;
 
   /// Per-season availability for TV titles (empty for movies or series not yet
   /// in the library). Drives the interactive season table.
@@ -44,6 +46,7 @@ class RequestState {
     this.isCheckingStatus = false,
     this.hasStatus = false,
     this.error,
+    this.quotaMessage,
     this.seasons = const [],
     this.releases = MovieReleaseDates.none,
     this.instanceStatuses = const {},
@@ -72,6 +75,7 @@ class RequestState {
     bool? isCheckingStatus,
     bool? hasStatus,
     String? error,
+    String? quotaMessage,
     List<RequestSeasonStatus>? seasons,
     MovieReleaseDates? releases,
     Map<String, RequestStatus>? instanceStatuses,
@@ -85,6 +89,7 @@ class RequestState {
         isCheckingStatus: isCheckingStatus ?? this.isCheckingStatus,
         hasStatus: hasStatus ?? this.hasStatus,
         error: error,
+        quotaMessage: quotaMessage,
         seasons: seasons ?? this.seasons,
         releases: releases ?? this.releases,
         instanceStatuses: instanceStatuses ?? this.instanceStatuses,
@@ -102,6 +107,7 @@ class RequestNotifier extends ChangeNotifier {
 
   RequestState _state = const RequestState();
   RequestState get state => _state;
+  int get tmdbId => _tmdbId;
   set state(RequestState value) {
     _state = value;
     notifyListeners();
@@ -209,7 +215,10 @@ class RequestNotifier extends ChangeNotifier {
       state = state.copyWith(
         isRequesting: false,
         isCheckingStatus: false,
-        error: _service.lastRequestError ?? 'Request failed. Please try again.',
+        error: _service.lastRequestQuotaExceeded
+            ? null
+            : _service.lastRequestError ?? 'Request failed. Please try again.',
+        quotaMessage: _service.lastRequestQuotaExceeded ? _service.lastRequestError : null,
       );
       return false;
     }

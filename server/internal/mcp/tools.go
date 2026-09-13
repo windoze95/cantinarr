@@ -15,6 +15,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/musicdiscovery"
 	"github.com/windoze95/cantinarr-server/internal/request"
+	"github.com/windoze95/cantinarr-server/internal/requestquota"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
 
@@ -207,10 +208,21 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "get_request_options",
 		Permission:  auth.PermissionMediaRequest,
-		Description: "Show whether the current user may choose request options and list the quality profiles available for a movie, TV, book, or music request. When the user holds more than one library for the media type, the response also lists their libraries (id, name, is_default) for request_media's instance_id.",
+		Description: "Show request choices, quality profiles, libraries and current request allowances. Optional preview prices a selected request without reserving allowance. TV costs one unit per selected season; books have separate ebook and audiobook allowances. Use preview to offer an affordable selection; submission always recalculates.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
+				"preview": map[string]interface{}{"type": "object", "description": "Optional selected request to price without reservation. Uses this call's media_type and default instance_id.", "properties": map[string]interface{}{
+					"tmdb_id":      map[string]interface{}{"type": "integer"},
+					"title":        map[string]interface{}{"type": "string"},
+					"foreign_id":   map[string]interface{}{"type": "string"},
+					"book_format":  map[string]interface{}{"type": "string", "enum": []string{"ebook", "audiobook", "both"}},
+					"season_scope": map[string]interface{}{"type": "string", "enum": []string{"all", "first", "latest", "pilot"}},
+					"seasons":      map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "integer", "minimum": 1}},
+					"instance_id":  map[string]interface{}{"type": "string"},
+					"search_term":  map[string]interface{}{"type": "string"},
+					"catalog_ref":  map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "enum": []string{"musicbrainz", "musicbrainz_release"}}, "id": map[string]interface{}{"type": "string"}}, "required": []string{"provider", "id"}},
+				}},
 				"media_type": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"movie", "tv", "book", "music"},
@@ -227,12 +239,14 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "request_media",
 		Permission:  auth.PermissionMediaRequest,
-		Description: "Request a movie, TV show, book, or album, optionally selecting a quality_profile_id returned by get_request_options when the current user may choose quality. Movies/TV are keyed by tmdb_id; books by the foreign_book_id from search_books plus an optional book_format; music by the foreign_album_id from search_music (one request is one album).",
+		Description: "Request a movie, selected TV seasons, book formats, or album under the user's request allowance. Use get_request_options with preview to check cost; preserve the user's selection on request_quota_exceeded and ask them to reduce it. Movies/TV use tmdb_id; books use foreign_book_id from search_books; music uses foreign_album_id from search_music. Quality choices do not have separate allowances.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"search_term": map[string]interface{}{"type": "string", "description": "Original Chaptarr search query that returned the selected book."},
-				"catalog_ref": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "enum": []string{"musicbrainz", "musicbrainz_release"}}, "id": map[string]interface{}{"type": "string"}}, "required": []string{"provider", "id"}, "description": "Public identity from catalog search, separate from a native foreign_id."},
+				"search_term":  map[string]interface{}{"type": "string", "description": "Original Chaptarr search query that returned the selected book."},
+				"season_scope": map[string]interface{}{"type": "string", "enum": []string{"all", "first", "latest", "pilot"}, "description": "TV selection when no explicit seasons are supplied. A pilot costs one season."},
+				"seasons":      map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "integer", "minimum": 1}, "description": "Explicit TV seasons shown to the user, excluding specials. Overrides season_scope when season choice is allowed."},
+				"catalog_ref":  map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "enum": []string{"musicbrainz", "musicbrainz_release"}}, "id": map[string]interface{}{"type": "string"}}, "required": []string{"provider", "id"}, "description": "Public identity from catalog search, separate from a native foreign_id."},
 
 				"request_id": map[string]interface{}{"type": "integer", "description": "Saved request to retry, cancel, or confirm."},
 				"action":     map[string]interface{}{"type": "string", "enum": []string{"retry", "cancel"}, "description": "Modify saved delivery. confirm uses foreign_id and is allowed only after the user explicitly chooses that book from the offered matches. Never infer confirmation from title similarity."},
@@ -935,8 +949,9 @@ func (s *ToolServer) checkRequestStatus(input json.RawMessage, userID int64) (*T
 
 func (s *ToolServer) getRequestOptions(input json.RawMessage, userID int64, role string) (*ToolResult, error) {
 	var params struct {
-		MediaType  string `json:"media_type"`
-		InstanceID string `json:"instance_id"`
+		MediaType  string                 `json:"media_type"`
+		InstanceID string                 `json:"instance_id"`
+		Preview    *request.CreateRequest `json:"preview"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -948,14 +963,26 @@ func (s *ToolServer) getRequestOptions(input json.RawMessage, userID int64, role
 	if err != nil {
 		return nil, err
 	}
+	var preview *requestquota.Preview
+	if params.Preview != nil {
+		params.Preview.MediaType = params.MediaType
+		if params.Preview.InstanceID == "" {
+			params.Preview.InstanceID = params.InstanceID
+		}
+		preview, err = s.request.PreviewRequest(userID, params.Preview)
+		if err != nil {
+			return nil, err
+		}
+	}
 	// When the caller holds more than one library for the media type, list
 	// them (id, name, is_default — names only, never hosts) so the model can
 	// route request_media's instance_id. Single-library users get exactly the
 	// old payload.
 	data, _ := json.Marshal(struct {
 		*request.RequestOptions
-		Libraries []toolLibrary `json:"libraries,omitempty"`
-	}{opts, s.visibleLibraries(userID, params.MediaType)})
+		Libraries []toolLibrary         `json:"libraries,omitempty"`
+		Preview   *requestquota.Preview `json:"preview,omitempty"`
+	}{opts, s.visibleLibraries(userID, params.MediaType), preview})
 	return &ToolResult{Text: string(data)}, nil
 }
 
@@ -1019,6 +1046,8 @@ func (s *ToolServer) visibleLibraries(userID int64, mediaType string) []toolLibr
 
 func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolResult, error) {
 	var params struct {
+		SeasonScope      string              `json:"season_scope"`
+		Seasons          []int               `json:"seasons"`
 		CatalogRef       *request.CatalogRef `json:"catalog_ref"`
 		RequestID        int64               `json:"request_id"`
 		Action           string              `json:"action"`
@@ -1060,6 +1089,8 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 	// The request service authorizes the selection; a library outside the
 	// user's granted set comes back as the benign "Request failed" text.
 	resp, err := s.request.CreateMediaRequest(userID, &request.CreateRequest{
+		SeasonScope:      params.SeasonScope,
+		Seasons:          params.Seasons,
 		CatalogRef:       params.CatalogRef,
 		TmdbID:           params.TmdbID,
 		MediaType:        params.MediaType,
@@ -1071,6 +1102,11 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 		InstanceID:       params.InstanceID,
 	})
 	if err != nil {
+		var exceeded *requestquota.Exceeded
+		if errors.As(err, &exceeded) {
+			data, _ := json.Marshal(exceeded)
+			return &ToolResult{Text: string(data)}, nil
+		}
 		return &ToolResult{Text: fmt.Sprintf("Request failed: %s", err.Error())}, nil
 	}
 	data, _ := json.Marshal(resp)

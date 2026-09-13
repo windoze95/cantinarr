@@ -14,6 +14,61 @@ import (
 )
 
 const initSQL = `
+-- Allowances start unlimited, with no historical charge backfill. Accounting
+-- is independent of mutable request owners, subscriptions and library state.
+CREATE TABLE IF NOT EXISTS request_quota_lock (id INTEGER PRIMARY KEY CHECK(id=1));
+INSERT OR IGNORE INTO request_quota_lock(id) VALUES (1);
+CREATE TABLE IF NOT EXISTS request_quota_defaults (
+    media_type TEXT NOT NULL,
+    book_format TEXT NOT NULL DEFAULT '',
+    count INTEGER CHECK(count >= 0),
+    window_days INTEGER NOT NULL CHECK(window_days IN (1,7,30)),
+    PRIMARY KEY(media_type,book_format)
+);
+CREATE TABLE IF NOT EXISTS user_request_quotas (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    media_type TEXT NOT NULL,
+    book_format TEXT NOT NULL DEFAULT '',
+    count INTEGER CHECK(count >= 0),
+    window_days INTEGER NOT NULL CHECK(window_days IN (1,7,30)),
+    PRIMARY KEY(user_id,media_type,book_format)
+);
+CREATE TABLE IF NOT EXISTS request_quota_resets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    admin_id INTEGER NOT NULL,
+    allowances TEXT NOT NULL,
+    restored_units TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS request_quota_charges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    media_type TEXT NOT NULL,
+    book_format TEXT NOT NULL DEFAULT '',
+    instance_id TEXT NOT NULL,
+    unit_key TEXT NOT NULL,
+    charged_at INTEGER NOT NULL,
+    refunded_at INTEGER,
+    refund_reason TEXT,
+    reset_id INTEGER REFERENCES request_quota_resets(id)
+);
+CREATE INDEX IF NOT EXISTS request_quota_usage ON request_quota_charges(user_id,media_type,book_format,charged_at);
+CREATE TABLE IF NOT EXISTS request_quota_items (
+    request_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    media_type TEXT NOT NULL,
+    book_format TEXT NOT NULL DEFAULT '',
+    unit_key TEXT NOT NULL,
+    work TEXT NOT NULL DEFAULT '',
+    charge_id INTEGER REFERENCES request_quota_charges(id),
+    delivery_started_at INTEGER NOT NULL DEFAULT 0,
+    released_at INTEGER,
+    release_reason TEXT,
+    PRIMARY KEY(request_id,user_id,media_type,book_format,unit_key)
+);
+CREATE INDEX IF NOT EXISTS request_quota_item_charge ON request_quota_items(charge_id);
+
 -- Apple TV pairing material is encrypted with the server's secrets key.
 -- Device names/addresses are not identities; reconnects verify the paired ID.
 CREATE TABLE IF NOT EXISTS apple_tv_devices (
@@ -116,6 +171,7 @@ CREATE TABLE IF NOT EXISTS request_dispatch (
     format TEXT NOT NULL DEFAULT '',
     state TEXT NOT NULL,
     attempts INTEGER NOT NULL DEFAULT 0,
+    delivery_started_at INTEGER NOT NULL DEFAULT 0,
     next_attempt_at INTEGER NOT NULL DEFAULT 0,
     last_attempt_at INTEGER NOT NULL DEFAULT 0,
     lease_until INTEGER NOT NULL DEFAULT 0,
@@ -947,7 +1003,7 @@ func Open(dbPath string) (*sql.DB, error) {
 		// Parent directory should exist; caller creates it.
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -965,6 +1021,7 @@ func Open(dbPath string) (*sql.DB, error) {
 	// are ignored). Backfill statements run only when the column is first added
 	// so they execute exactly once per database.
 	migrations := []schemaMigration{
+		{alter: "ALTER TABLE request_dispatch ADD COLUMN delivery_started_at INTEGER NOT NULL DEFAULT 0"},
 		{
 			// Old request intake cached client hints without verification. Clear
 			// that cache once; subsequent bridge entries retain their normal TTL.

@@ -1,3 +1,4 @@
+import '../../request/logic/request_quota_provider.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -99,6 +100,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       audiobookshelfVisible: audiobookshelfVisible,
       videoServersVisible: videoServersVisible,
       appleTvRemote: connection?.appleTvRemote ?? false,
+      requestQuotas: connection?.requestQuotas ?? false,
     );
     final searching = _query.trim().isNotEmpty;
 
@@ -222,6 +224,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: 'Listening apps',
                 subtitle: 'Choose audiobook apps for iPhone, iPad and Android',
                 onTap: () => context.push('/settings/listening-apps'),
+              ),
+            if (ref.watch(requestQuotasSupportedProvider))
+              _SettingsTile(
+                icon: Icons.data_usage,
+                title: 'Request allowance',
+                onTap: () => context.push('/settings/request-allowance'),
               ),
 
             const SizedBox(height: 16),
@@ -1258,7 +1266,7 @@ Widget _setupChecklistTile(BuildContext context, SetupStatus? status) {
 class _SettingsTile extends StatelessWidget {
   final IconData icon;
   final String title;
-  final String subtitle;
+  final String? subtitle;
 
   /// Rendered instead of [subtitle] when the copy needs more than one colour.
   /// [subtitle] stays the plain-text equivalent of the same sentence.
@@ -1269,7 +1277,7 @@ class _SettingsTile extends StatelessWidget {
   const _SettingsTile({
     required this.icon,
     required this.title,
-    required this.subtitle,
+    this.subtitle,
     this.subtitleSpans,
     this.onTap,
     this.trailing,
@@ -1304,9 +1312,11 @@ class _SettingsTile extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
-          subtitle: subtitleSpans == null
+          subtitle: subtitle == null && subtitleSpans == null
+              ? null
+              : subtitleSpans == null
               ? Text(
-                  subtitle,
+                  subtitle!,
                   style: const TextStyle(
                     color: AppTheme.textSecondary,
                     fontSize: 13,

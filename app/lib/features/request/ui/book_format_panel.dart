@@ -339,6 +339,10 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
           searchTerm: widget.searchTerm,
         );
       } on RequestSubmissionException catch (e) {
+        if (e.quotaExceeded) {
+          if (mounted) _announce(e.message);
+          return;
+        }
         failureMessage = e.message;
         definitiveFailure = e.definitive;
       }

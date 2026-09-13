@@ -108,6 +108,9 @@ func (s *Service) addToLidarr(r *resolvedRequest) (string, string, error) {
 
 	client = client.WithMutationGuard(func() error {
 		_, _, err := s.resolveLidarr(actorID, instanceID)
+		if err == nil && r.beforeMutation != nil {
+			return r.beforeMutation()
+		}
 		return err
 	})
 

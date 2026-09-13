@@ -117,6 +117,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// Anchors the "Seasons" section so "Request More" can scroll the user to the
   /// per-season picker.
   final GlobalKey _seasonsKey = GlobalKey();
+  RequestOptionsResult? _lastRequestOptions;
 
   /// The request option set the server allows this user (season/quality
   /// choice). Loaded once for TV so the season picker can hide its request
@@ -931,6 +932,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       final result = await showAppSheet<RequestOptionsResult>(
         context,
         builder: (_) => RequestOptionsSheet(
+          initialSelection: (_lastRequestOptions?.instanceId == null || _lastRequestOptions?.instanceId == _effectiveLibraryId) ? _lastRequestOptions : null,
           options: options ??
               const RequestOptions(
                 canChooseSeason: false,
@@ -945,6 +947,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
         ),
       );
       if (result == null) return; // cancelled
+      _lastRequestOptions = result;
       seasonScope = result.seasonScope;
       qualityProfileId = result.qualityProfileId;
       if (result.instanceId != null &&
@@ -969,7 +972,15 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       seasonScope: seasonScope,
       qualityProfileId: qualityProfileId,
     );
-    if (mounted && accepted) _onRequestSucceeded();
+    if (!mounted) return;
+    final quotaMessage = _requestNotifier.state.quotaMessage;
+    if (accepted) {
+      _onRequestSucceeded();
+    } else if (quotaMessage != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(quotaMessage)),
+      );
+    }
   }
 
   Future<void> _correctTVMatch() async {

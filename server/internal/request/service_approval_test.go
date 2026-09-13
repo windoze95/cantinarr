@@ -9,6 +9,7 @@ import (
 type recordingNotifier struct {
 	userEvents  []notifierEvent
 	adminEvents []notifierEvent
+	quotaEvents []notifierEvent
 }
 
 type notifierEvent struct {
@@ -18,10 +19,18 @@ type notifierEvent struct {
 }
 
 func (r *recordingNotifier) NotifyUser(userID int64, eventType string, data map[string]interface{}) {
+	if eventType == "request_quota_changed" {
+		r.quotaEvents = append(r.quotaEvents, notifierEvent{userID: userID, eventType: eventType, data: data})
+		return
+	}
 	r.userEvents = append(r.userEvents, notifierEvent{userID: userID, eventType: eventType, data: data})
 }
 
 func (r *recordingNotifier) NotifyAdmins(eventType string, data map[string]interface{}) {
+	if eventType == "request_quota_changed" {
+		r.quotaEvents = append(r.quotaEvents, notifierEvent{eventType: eventType, data: data})
+		return
+	}
 	r.adminEvents = append(r.adminEvents, notifierEvent{eventType: eventType, data: data})
 }
 
@@ -218,10 +227,16 @@ func TestApproveRequestPerformsArrAdd(t *testing.T) {
 			status, title, approvedBy, decidedAt)
 	}
 
-	if len(rec.userEvents) != 1 {
+	decisions := []notifierEvent{}
+	for _, event := range rec.userEvents {
+		if event.eventType == "request_decision" {
+			decisions = append(decisions, event)
+		}
+	}
+	if len(decisions) != 1 {
 		t.Fatalf("user events = %+v, want exactly one decision", rec.userEvents)
 	}
-	ev := rec.userEvents[0]
+	ev := decisions[0]
 	if ev.userID != uid || ev.eventType != "request_decision" {
 		t.Errorf("event = %+v, want request_decision to the requester", ev)
 	}
@@ -387,10 +402,16 @@ func TestDenyRequest(t *testing.T) {
 		t.Errorf("denied row = %s/%q by %d, want denied/library full by admin", status, reason, approvedBy)
 	}
 
-	if len(rec.userEvents) != 1 {
+	decisions := []notifierEvent{}
+	for _, event := range rec.userEvents {
+		if event.eventType == "request_decision" {
+			decisions = append(decisions, event)
+		}
+	}
+	if len(decisions) != 1 {
 		t.Fatalf("user events = %+v, want exactly one decision", rec.userEvents)
 	}
-	ev := rec.userEvents[0]
+	ev := decisions[0]
 	if ev.userID != uid || ev.data["decision"] != "denied" || ev.data["reason"] != "library full" {
 		t.Errorf("event = %+v, want denied with the reason", ev)
 	}

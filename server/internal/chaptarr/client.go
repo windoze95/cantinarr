@@ -56,6 +56,24 @@ func (c *Client) WithMutationGuard(check func() error) *Client {
 	return &clone
 }
 
+// WithContext bounds metadata reads made during responsive request intake.
+func (c *Client) WithContext(ctx context.Context) *Client {
+	clone := *c
+	client := *c.httpClient
+	client.Transport = contextTransport{base: client.Transport, ctx: ctx}
+	clone.httpClient = &client
+	return &clone
+}
+
+type contextTransport struct {
+	base http.RoundTripper
+	ctx  context.Context
+}
+
+func (t contextTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return t.base.RoundTrip(r.Clone(t.ctx))
+}
+
 type mutationGuard struct {
 	base  http.RoundTripper
 	check func() error
