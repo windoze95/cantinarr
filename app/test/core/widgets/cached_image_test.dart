@@ -166,6 +166,71 @@ void main() {
       );
       expect(source.url, odd);
     });
+
+    // A Hardcover cover fetched straight from the CDN can only render as a DOM
+    // image element, and Flutter web paints platform views above the canvas —
+    // which hid the availability badge and rating on every card past the first
+    // handful. The relay keeps covers on the canvas path so they layer right.
+    test('web rewrites Hardcover covers to the backend relay with the bearer',
+        () {
+      for (final path in [
+        // Hardcover serves covers under both spellings.
+        '/edition/31601422/3a01ea07.jpeg',
+        '/editions/3274049/8741341047797682-91mYu67RfUL._SL1500_.jpg',
+      ]) {
+        final source = resolveImageSource(
+          url: 'https://assets.hardcover.app$path',
+          serverUrl: 'https://cantina.example',
+          accessToken: 'tok',
+          isWeb: true,
+        );
+        expect(source.url, 'https://cantina.example/api/discover/books/images$path');
+        expect(source.headers, {'Authorization': 'Bearer tok'});
+      }
+    });
+
+    test('native fetches Hardcover covers straight from the CDN', () {
+      const cover = 'https://assets.hardcover.app/edition/1/cover.jpg';
+      final source = resolveImageSource(
+        url: cover,
+        serverUrl: 'https://cantina.example',
+        accessToken: 'tok',
+        isWeb: false,
+      );
+      expect(source.url, cover);
+      expect(source.headers, isNull);
+    });
+
+    test('web never relays a Hardcover lookalike host', () {
+      const lookalike = 'https://assets.hardcover.app.evil.com/edition/1/a.jpg';
+      final source = resolveImageSource(
+        url: lookalike,
+        serverUrl: 'https://cantina.example',
+        accessToken: 'tok',
+        isWeb: true,
+      );
+      expect(source.url, lookalike);
+      expect(source.headers, isNull);
+    });
+
+    test('a relayed Hardcover cover no longer wants a DOM image element', () {
+      final source = resolveImageSource(
+        url: 'https://assets.hardcover.app/edition/1/cover.jpg',
+        serverUrl: 'https://cantina.example',
+        accessToken: 'tok',
+        isWeb: true,
+      );
+      expect(usesHtmlImageElement(source, isWeb: true), isFalse);
+    });
+
+    test('web without a session still falls back to the CDN url', () {
+      // No server URL to build a relay path from: showing the cover through a
+      // DOM image element beats showing no cover at all.
+      const cover = 'https://assets.hardcover.app/edition/1/cover.jpg';
+      final source = resolveImageSource(url: cover, isWeb: true);
+      expect(source.url, cover);
+      expect(usesHtmlImageElement(source, isWeb: true), isTrue);
+    });
   });
 
   group('CachedImage render method', () {

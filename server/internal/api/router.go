@@ -475,6 +475,12 @@ func NewRouter(
 			// the token connected to the caller's Chaptarr instance. A static
 			// segment, so chi matches it ahead of the retired {feed} routes.
 			r.Get("/discover/books/trending", bookTrending.Trending)
+			// Hardcover cover-art relay: the CDN sends no CORS headers, so the
+			// web client cannot decode its bytes cross-origin and would fall
+			// back to a DOM <img>, which Flutter composites above the canvas
+			// and hides the availability badge. Same-origin fixes the layering.
+			// Multi-segment, so it never collides with the {feed} route below.
+			r.Get("/discover/books/images/*", bookdiscovery.CoverImage)
 			r.Get("/discover/books/{feed}", books.Feed)
 			r.Get("/genres/book", books.Genres)
 			r.Get("/media/book/{workId}", books.Book)

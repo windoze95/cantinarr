@@ -34,11 +34,20 @@ ImageProvider cachedImageProvider(ImageSource source) {
 /// image element can display them without a relay. Headered images still use
 /// HTTP so authentication is never silently dropped, and native keeps the
 /// shared disk cache.
+///
+/// On web this is only the fallback for a client with no server URL to build a
+/// relay path from: a DOM image element is a platform view, which Flutter web
+/// composites above the canvas, so the availability badge and rating painted
+/// over the artwork disappear behind it. [resolveImageSource] routes these
+/// covers through the backend instead wherever it can.
 bool usesHtmlImageElement(ImageSource source, {bool isWeb = kIsWeb}) {
   if (!isWeb || (source.headers?.isNotEmpty ?? false)) return false;
   final uri = Uri.tryParse(source.url);
-  return uri?.scheme == 'https' && uri?.host == 'assets.hardcover.app';
+  return uri?.scheme == 'https' && uri?.host == _hardcoverAssetHost;
 }
+
+/// The single host Hardcover serves cover art from.
+const _hardcoverAssetHost = 'assets.hardcover.app';
 
 /// True for Trakt's artwork CDNs (media.trakt.tv today, walter*.trakt.tv
 /// before July 2026 — Trakt migrates these hosts, so match the domain rather
@@ -50,9 +59,17 @@ bool _isTraktCdnHost(String host) => host.endsWith('.trakt.tv');
 /// Resolves what [CachedImage] should actually fetch.
 ///
 /// On native this is the identity function — native HTTP has no CORS, so every
-/// host works directly. On web, Trakt CDN URLs are rewritten to the backend's
-/// same-origin relay with the session bearer attached; everything else (TMDB,
-/// author art, the backend's own proxy URLs) passes through untouched.
+/// host works directly. On web, Trakt CDN and Hardcover cover URLs are
+/// rewritten to the backend's same-origin relay with the session bearer
+/// attached; everything else (TMDB, author art, the backend's own proxy URLs)
+/// passes through untouched.
+///
+/// Both relays exist because their CDNs send no CORS headers. Trakt's relay
+/// makes the artwork loadable at all. Hardcover's covers would load without
+/// one, as a DOM image element — but that makes every cover a platform view,
+/// which Flutter web paints above the canvas, hiding the availability badge
+/// and rating drawn over it. Routing through the backend puts covers back on
+/// the canvas path, where the badges layer correctly.
 ImageSource resolveImageSource({
   required String url,
   Map<String, String>? headers,
@@ -64,9 +81,14 @@ ImageSource resolveImageSource({
   if (!isWeb) return passthrough;
 
   final uri = Uri.tryParse(url);
-  if (uri == null ||
-      !_isTraktCdnHost(uri.host) ||
-      !uri.path.startsWith('/images/')) {
+  if (uri == null) return passthrough;
+
+  final String relayPath;
+  if (_isTraktCdnHost(uri.host) && uri.path.startsWith('/images/')) {
+    relayPath = '/api/trakt/images/${uri.host}${uri.path}';
+  } else if (uri.host == _hardcoverAssetHost) {
+    relayPath = '/api/discover/books/images${uri.path}';
+  } else {
     return passthrough;
   }
   if (serverUrl == null || serverUrl.isEmpty) return passthrough;
@@ -79,10 +101,7 @@ ImageSource resolveImageSource({
     if (accessToken != null && accessToken.isNotEmpty)
       'Authorization': 'Bearer $accessToken',
   };
-  return (
-    url: '$base/api/trakt/images/${uri.host}${uri.path}',
-    headers: merged.isEmpty ? null : merged,
-  );
+  return (url: '$base$relayPath', headers: merged.isEmpty ? null : merged);
 }
 
 /// The app's one network-image widget. Every poster/cover/photo goes through it
