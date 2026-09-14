@@ -22,7 +22,9 @@ on:
     branches: [main]
     paths:
       - "app/android/**"
+      - "app/.flutter-version"
       - "app/pubspec.yaml"
+      - "app/pubspec.lock"
       - ".github/workflows/playstore.yml"
       - "scripts/tests/test_playstore_release.rb"
   workflow_dispatch:
@@ -121,13 +123,18 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Read Flutter version
+        id: flutter-version
+        run: echo "version=$(cat .flutter-version)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
           channel: stable
 
       - name: Install dependencies
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Configure signing
         env:
@@ -146,7 +153,7 @@ jobs:
 
       - name: Build AAB
         run: |
-          flutter build appbundle \
+          flutter build appbundle --no-pub \
             --build-number=${{ steps.build_number.outputs.build_number }} \
             --build-name=${{ steps.build_number.outputs.version }}
 

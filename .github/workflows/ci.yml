@@ -105,20 +105,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Read Flutter version
+        id: flutter-version
+        run: echo "version=$(cat .flutter-version)" >> "$GITHUB_OUTPUT"
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
           channel: stable
           cache: true
 
       - name: Install dependencies
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Analyze
-        run: flutter analyze --no-fatal-infos
+        run: flutter analyze --no-fatal-infos --no-pub
 
       - name: Test
-        run: flutter test
+        run: flutter test --no-pub
 
       - name: Build web
-        run: flutter build web --release
+        run: flutter build web --release --no-pub

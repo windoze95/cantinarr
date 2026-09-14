@@ -5,7 +5,7 @@ VERSION ?= $(shell git describe --tags --always --dirty --match 'v[0-9]*' 2>/dev
 all: flutter-web copy-web server
 
 flutter-web:
-	cd app && flutter pub get && flutter build web --release
+	cd app && flutter pub get --enforce-lockfile && flutter build web --release --no-pub
 
 copy-web: flutter-web
 	rm -rf server/internal/web/dist/*

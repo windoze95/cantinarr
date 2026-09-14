@@ -1,5 +1,12 @@
 # Stage 1: Build Flutter web
 FROM --platform=$BUILDPLATFORM ghcr.io/cirruslabs/flutter:stable AS flutter-builder
+# The base image's stable SDK can lag the stable SDK installed by GitHub Actions.
+# Use the same checked-in version as CI and the store builds before resolving pub.
+COPY app/.flutter-version /tmp/cantinarr-flutter-version
+RUN git -C "$FLUTTER_ROOT" fetch --depth=1 origin \
+        "refs/tags/$(cat /tmp/cantinarr-flutter-version)" \
+    && git -C "$FLUTTER_ROOT" checkout --detach --force FETCH_HEAD \
+    && flutter --version
 ARG CANTINARR_E2E_WEB_SEMANTICS=false
 # Build number for the web bundle, shown in Settings → About. Without it the
 # bundle reports pubspec's placeholder (`+1`) and every self-hosted deployment
@@ -7,10 +14,10 @@ ARG CANTINARR_E2E_WEB_SEMANTICS=false
 # (see docker.yml); local builds leave it unset and keep the placeholder.
 ARG APP_BUILD_NUMBER=
 WORKDIR /app
-COPY app/pubspec.yaml ./
-RUN flutter pub get
+COPY app/pubspec.yaml app/pubspec.lock ./
+RUN flutter pub get --enforce-lockfile
 COPY app/ .
-RUN flutter build web --release \
+RUN flutter build web --release --no-pub \
     --dart-define=CANTINARR_E2E_WEB_SEMANTICS=${CANTINARR_E2E_WEB_SEMANTICS} \
     ${APP_BUILD_NUMBER:+--build-number=${APP_BUILD_NUMBER}}
 

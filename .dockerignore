@@ -1,0 +1,9 @@
+# Preserve the dependency metadata generated inside flutter-builder. Host paths
+# in a local package_config.json are invalid inside the Linux build container.
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.packages
+app/.pub/
+app/.pub-cache/
+app/build/
