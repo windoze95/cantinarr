@@ -67,13 +67,16 @@ type Handler struct {
 	hub         Broadcaster
 	requests    AvailabilityInvalidator
 	content     ws.ContentNotifier
+	tvImports   sonarr.ImportResolver
 	preAir      PreAirImportWitness
 	parkResumer BookParkResumer
 }
 
 // NewHandler builds the webhook handler. content may be nil (push disabled).
 func NewHandler(store *instance.Store, registry *instance.Registry, hub Broadcaster, requests AvailabilityInvalidator, content ws.ContentNotifier) *Handler {
-	return &Handler{store: store, registry: registry, hub: hub, requests: requests, content: content}
+	h := &Handler{store: store, registry: registry, hub: hub, requests: requests, content: content}
+	h.tvImports, _ = requests.(sonarr.ImportResolver)
+	return h
 }
 
 // SetPreAirImportWitness wires the pre-air detector after construction, matching
@@ -302,7 +305,8 @@ func (h *Handler) handleVideoEvent(instanceID, serviceType string, payload arrPa
 			h.movieImported(instanceID, payload.Movie.ID, payload.Movie.Title, payload.Movie.TmdbID, payload.IsUpgrade)
 		}
 		if payload.Series != nil {
-			h.seriesChanged(instanceID, payload.Series.ID, payload.Series.Title, payload.Series.TmdbID, true, payload.IsUpgrade)
+			h.seriesChanged(instanceID, payload.Series.ID, payload.Series.TmdbID)
+			h.seriesImported(instanceID, payload)
 			h.checkPreAirImport(instanceID, payload)
 			h.checkSuspectImport(instanceID, payload)
 		}
@@ -324,7 +328,7 @@ func (h *Handler) handleVideoEvent(instanceID, serviceType string, payload arrPa
 	case "EpisodeFileDelete":
 		h.requests.InvalidateAvailabilityDigests(instanceID)
 		if payload.Series != nil {
-			h.seriesChanged(instanceID, payload.Series.ID, payload.Series.Title, payload.Series.TmdbID, false, false)
+			h.seriesChanged(instanceID, payload.Series.ID, payload.Series.TmdbID)
 		}
 
 	default:
@@ -600,14 +604,12 @@ func (h *Handler) movieFileDeleted(instanceID string, movieID, tmdbID int) {
 
 // seriesChanged recomputes a series' availability from the live episode list
 // (the same aired-aware completion the hub and status endpoint use) and
-// broadcasts it; notify pushes the new-episode alert too (import events only —
-// file deletions change availability but aren't news). isUpgrade reroutes that
-// alert to the admin content_upgraded category.
-func (h *Handler) seriesChanged(instanceID string, seriesID int, title string, tmdbID int, notify, isUpgrade bool) {
+// broadcasts it independently of notification identity resolution.
+func (h *Handler) seriesChanged(instanceID string, seriesID, tmdbID int) {
 	status := "partially_available"
 	if client, err := h.registry.GetSonarrClient(instanceID); err == nil {
 		if series, err := client.GetSeries(seriesID); err == nil {
-			title, tmdbID = series.Title, series.TmdbID
+			tmdbID = series.TmdbID
 		}
 		if episodes, err := client.GetAllEpisodes(seriesID); err == nil {
 			if completion, _ := sonarr.SeriesCompletion(episodes, time.Now()); completion.Complete() {
@@ -626,11 +628,42 @@ func (h *Handler) seriesChanged(instanceID string, seriesID int, title string, t
 			"instance_id": instanceID,
 		},
 	})
-	if notify && h.content != nil {
-		if isUpgrade {
-			h.content.NotifyUpgradedEpisode(title, tmdbID, instanceID)
+}
+
+func (h *Handler) seriesImported(instanceID string, payload arrPayload) {
+	if h.content == nil {
+		return
+	}
+	series := &sonarr.Series{ID: payload.Series.ID, TvdbID: payload.Series.TvdbID,
+		TmdbID: payload.Series.TmdbID, Title: payload.Series.Title}
+	client, err := h.registry.GetSonarrClient(instanceID)
+	if err == nil {
+		if live, e := client.GetSeries(series.ID); e == nil {
+			series = live
+		}
+	}
+	imports := make([]sonarr.ImportedEpisode, 0, len(payload.Episodes))
+	for _, episode := range payload.Episodes {
+		imports = append(imports, sonarr.ImportedEpisode{EpisodeID: episode.ID,
+			SeasonNumber: episode.SeasonNumber, Upgrade: payload.IsUpgrade})
+	}
+	// A callback without episodes still preserves ordinary-series upgrade
+	// classification, but carries no usable season evidence for corrections.
+	if len(imports) == 0 {
+		imports = append(imports, sonarr.ImportedEpisode{Upgrade: payload.IsUpgrade})
+	}
+	titles := sonarr.UncorrectedImportTitle(series, imports)
+	if h.tvImports != nil {
+		titles, err = h.tvImports.ResolveTVImports(client, series, imports)
+		if err != nil {
+			log.Printf("webhooks: skipping unresolved TV import scope (%s): %v", instanceID, err)
+		}
+	}
+	for _, title := range titles {
+		if title.Upgrade {
+			h.content.NotifyUpgradedEpisode(title.Title, title.TmdbID, instanceID)
 		} else {
-			h.content.NotifyNewEpisode(title, tmdbID, instanceID)
+			h.content.NotifyNewEpisode(title.Title, title.TmdbID, instanceID)
 		}
 	}
 }

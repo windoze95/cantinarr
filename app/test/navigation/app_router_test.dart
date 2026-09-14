@@ -17,6 +17,8 @@ import 'package:cantinarr/features/dashboard/ui/requester_album_detail_screen.da
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/features/discover/ui/browse_grid_screen.dart';
 import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
+import 'package:cantinarr/features/media_detail/ui/media_detail_screen.dart';
+import 'package:cantinarr/features/notifications/push_service.dart';
 import 'package:cantinarr/features/monitoring/ui/monitoring_module_shell.dart';
 import 'package:cantinarr/features/settings/ui/instance_edit_screen.dart';
 import 'package:cantinarr/features/shell/ui/app_shell.dart';
@@ -24,11 +26,47 @@ import 'package:cantinarr/features/sonarr/ui/sonarr_module_shell.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show MethodChannel, StandardMethodCodec, MethodCall;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
+  for (final cold in [true, false]) {
+    for (final restoringAuth in [true, false]) {
+      testWidgets('TV tap cold=$cold restoringAuth=$restoringAuth retains story and library', (tester) async {
+        final (:container, :router) = await _pumpRouter(tester,
+            restoringAuth ? const AuthState() : _authedState);
+        const channel = MethodChannel('codes.julian.cantinarr/push');
+        final payload = {'type': 'new_episode', 'media_type': 'tv',
+          'tmdb_id': 225634, 'instance_id': 'tv-importing'};
+        final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(channel, (call) async =>
+            call.method == 'getInitialNotification' ? payload : null);
+        addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+        final service = container.read(pushServiceProvider);
+        if (cold) {
+          await service.handleInitialNotification();
+        } else {
+          const codec = StandardMethodCodec();
+          await messenger.handlePlatformMessage(channel.name,
+              codec.encodeMethodCall(MethodCall('onNotificationTap', payload)), (_) {});
+        }
+        await tester.pumpAndSettle();
+        if (restoringAuth) {
+          expect(router.routerDelegate.currentConfiguration.uri.path, '/login');
+          (container.read(authProvider.notifier) as _FakeAuthNotifier).push(_authedState);
+          await tester.pumpAndSettle();
+        }
+        final screen = tester.widget<MediaDetailScreen>(find.byType(MediaDetailScreen));
+        expect(screen.id, 225634);
+        expect(screen.instanceId, 'tv-importing');
+        // The fixture has no such grant. It must still land on that library,
+        // visibly unavailable, rather than another library's detail state.
+        expect(find.text('Library unavailable'), findsOneWidget);
+      });
+    }
+  }
   testWidgets('hidden Movies at login lands on the first visible tab',
       (tester) async {
     final (:container, :router) = await _pumpRouter(tester, const AuthState());
@@ -646,6 +684,7 @@ Future<({ProviderContainer container, GoRouter router})> _pumpRouter(
       authProvider.overrideWith(() => _FakeAuthNotifier(authState)),
       backendClientProvider.overrideWithValue(_fakeDio()),
       webSocketClientProvider.overrideWith((ref) => _QuietWebSocket()),
+      pushServiceProvider.overrideWith((ref) => PushService(ref, supported: true)),
     ],
   );
   addTearDown(container.dispose);

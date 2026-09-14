@@ -1,10 +1,12 @@
 import 'package:flutter/foundation.dart';
+import 'package:dio/dio.dart' show DioException;
 import '../../discover/data/tmdb_models.dart';
 import '../data/request_service.dart';
 import '../data/tv_match_service.dart';
 
 /// State for a single media item's request status.
 class RequestState {
+  final bool libraryUnavailable;
   final TVMatch? match;
   final List<String> deliveryMessages;
   final Set<String> unknownInstanceIds;
@@ -38,6 +40,7 @@ class RequestState {
   final Map<String, RequestStatus> instanceStatuses;
 
   const RequestState({
+    this.libraryUnavailable = false,
     this.match,
     this.deliveryMessages = const [],
     this.unknownInstanceIds = const {},
@@ -67,6 +70,7 @@ class RequestState {
       };
 
   RequestState copyWith({
+    bool? libraryUnavailable,
     TVMatch? match,
     List<String>? deliveryMessages,
     Set<String>? unknownInstanceIds,
@@ -81,6 +85,7 @@ class RequestState {
     Map<String, RequestStatus>? instanceStatuses,
   }) =>
       RequestState(
+        libraryUnavailable: libraryUnavailable ?? this.libraryUnavailable,
         match: match ?? this.match,
         deliveryMessages: deliveryMessages ?? this.deliveryMessages,
         unknownInstanceIds: unknownInstanceIds ?? this.unknownInstanceIds,
@@ -150,6 +155,7 @@ class RequestNotifier extends ChangeNotifier {
       );
       if (_disposed || version != _statusVersion) return;
       state = state.copyWith(
+        libraryUnavailable: false,
         status: detail.status,
         seasons: detail.seasons,
         releases: detail.releases,
@@ -164,6 +170,10 @@ class RequestNotifier extends ChangeNotifier {
     } catch (e) {
       if (_disposed || version != _statusVersion) return;
       state = state.copyWith(
+        // The status endpoint uses 400 for a deleted/wrong-type instance
+        // and 403 for a revoked grant. A 404 may be a hidden title instead.
+        libraryUnavailable: instanceId != null && e is DioException &&
+            (e.response?.statusCode == 400 || e.response?.statusCode == 403),
         isCheckingStatus: false,
         error: 'Could not check status',
       );

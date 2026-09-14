@@ -266,7 +266,11 @@ class PushService {
         final tmdbId = _asInt(data['tmdb_id']);
         if (tmdbId == null || tmdbId <= 0) return;
         final mediaType = data['media_type'] == 'tv' ? 'tv' : 'movie';
-        router.push('/detail/$mediaType/$tmdbId');
+        final instanceId = mediaType == 'tv'
+            ? _asTrimmedString(data['instance_id']) : null;
+        final suffix = instanceId == null
+            ? '' : '?instance_id=${Uri.encodeQueryComponent(instanceId)}';
+        router.push('/detail/$mediaType/$tmdbId$suffix');
       case 'issue_created':
         // A coalesced alert stands for a whole wave of incidents, so it carries
         // no issue_id — the list is the only honest destination. A single-issue

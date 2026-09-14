@@ -30,6 +30,7 @@ type videoBackend struct {
 	deleteHistoryTotal int    // overrides the delete page's totalRecords when > 0
 	movies             map[int]string
 	series             map[int]string
+	episodes           string
 	historyHits        int
 	mediaHits          int
 }
@@ -59,7 +60,11 @@ func (b *videoBackend) handler() http.HandlerFunc {
 			}
 			fmt.Fprintf(w, `{"page":1,"pageSize":200,"totalRecords":%d,"records":%s}`, total, records)
 		case r.URL.Path == b.apiPrefix+"/episode":
-			fmt.Fprint(w, `[]`)
+			if b.episodes == "" {
+				fmt.Fprint(w, `[]`)
+			} else {
+				fmt.Fprint(w, b.episodes)
+			}
 		default:
 			var id int
 			if _, err := fmt.Sscanf(r.URL.Path, b.apiPrefix+"/movie/%d", &id); err == nil {

@@ -327,6 +327,10 @@ func (s *Service) ListTVMatches(adminID int64) ([]TVMatch, error) {
 	if !s.userIsAdmin(adminID) {
 		return nil, ErrTVMatchAdmin
 	}
+	return s.configuredTVMatches()
+}
+
+func (s *Service) configuredTVMatches() ([]TVMatch, error) {
 	ids := map[int]bool{}
 	for _, m := range bundledTVMatches.Corrections {
 		ids[m.TmdbID] = true

@@ -200,6 +200,29 @@ void main() {
       expect(h.router.pushed, ['/detail/tv/7']);
     });
 
+    for (final type in ['new_episode', 'content_upgraded', 'request_decision']) {
+      test('$type opens the corrected story in its importing TV library', () async {
+        final h = _Harness();
+        await _emitNativeCall('onNotificationTap', {
+          'type': type, 'tmdb_id': '225634', 'media_type': 'tv',
+          'instance_id': ' tv & 4k ',
+        });
+        expect(h.router.pushed,
+            ['/detail/tv/225634?instance_id=tv+%26+4k']);
+      });
+    }
+
+    for (final instanceId in [null, '', '  ', 123]) {
+      test('legacy TV library value $instanceId keeps the default destination', () async {
+        final h = _Harness();
+        await _emitNativeCall('onNotificationTap', {
+          'type': 'new_episode', 'tmdb_id': 286801, 'media_type': 'tv',
+          'instance_id': instanceId,
+        });
+        expect(h.router.pushed, ['/detail/tv/286801']);
+      });
+    }
+
     test('missing or unknown media_type falls back to movie', () async {
       final h = _Harness();
       await _emitNativeCall('onNotificationTap', {

@@ -142,6 +142,8 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **Persistent session** -- the focused `/assistant` workspace keeps one conversation alive across navigation (30-minute idle expiry).
 
 ### Notifications (iOS & Android)
+
+- TV availability and upgrade notifications open the corrected story in the payload’s importing library (`/detail/tv/:id?instance_id=…`). That library initializes status, episode downloads, and the Sonarr link before their first reads. Cold and warm taps retain the destination through sign-in/session restoration. A removed or inaccessible library shows **Library unavailable**; payloads without a library retain the default-library behavior.
 - **Native push on both platforms** via the same `MethodChannel` -- no Flutter Firebase plugin. iOS registers with APNs in `AppDelegate.swift`; Android obtains an FCM token natively (`MainActivity.kt`) and renders the gateway's data-only messages itself (`PushMessagingService.kt`), so presentation matches iOS's always-banner behavior. Tokens register with the backend per device; taps deep-link to the right screen (detail page, approvals, issue thread...).
 - `android/app/google-services.json` is committed on purpose: it holds Firebase project identifiers, not secrets (the FCM send credential lives with the push gateway). Self-builders swap it for their own Firebase app's file.
 - The app-icon badge (approvals count) is iOS-only -- Android has no numeric badge API, so `setBadgeCount` is a deliberate native no-op and launchers show their standard notification dot.

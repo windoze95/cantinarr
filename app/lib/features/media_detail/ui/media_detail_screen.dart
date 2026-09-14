@@ -64,11 +64,13 @@ import 'season_table.dart';
 class MediaDetailScreen extends ConsumerStatefulWidget {
   final int id;
   final MediaType mediaType;
+  final String? instanceId;
 
   const MediaDetailScreen({
     super.key,
     required this.id,
     required this.mediaType,
+    this.instanceId,
   });
 
   @override
@@ -151,22 +153,23 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   RequestStatus? _watchedStatus;
 
   /// The library this screen currently reads and requests against; null means
-  /// the user's default. Only ever set when the connection exposes more than
-  /// one library for this media type (multi-grant users, or admins).
+  /// the user's default. Notification destinations initialize this before any
+  /// library reads, even when that library is no longer accessible.
   String? _selectedLibraryId;
 
   String get _serviceType => widget.mediaType == MediaType.movie ? 'radarr' : 'sonarr';
   bool get _needsSetup {
+    if (_selectedLibraryId != null) return false;
     final access = ref.read(discoveryAccessProvider);
     return access.isAdmin && access.activeId(_serviceType) == null;
   }
 
   void _checkStatus() {
-    if (!_needsSetup) _requestNotifier.checkStatus();
+    if (!_needsSetup && !_missingSelectedLibrary) _requestNotifier.checkStatus();
   }
 
   void _loadRequestState() {
-    if (_needsSetup) return;
+    if (_needsSetup || _missingSelectedLibrary) return;
     _checkStatus();
     if (widget.mediaType == MediaType.tv) {
       _requestNotifier.fetchOptions().then((opts) {
@@ -179,6 +182,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    final initialInstance = widget.instanceId?.trim();
+    _selectedLibraryId = initialInstance == null || initialInstance.isEmpty
+        ? null : initialInstance;
     final api = ref.read(discoverServiceProvider);
     _detailNotifier = MediaDetailNotifier(
       api: api,
@@ -190,7 +196,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       service: RequestService(backendDio: backendDio),
       tmdbId: widget.id,
       mediaType: widget.mediaType,
-    );
+    )..instanceId = _selectedLibraryId;
 
     // Resolve the arr deep link once the TMDB detail is in — Sonarr matching
     // needs the show's TVDB id, which only lands after the detail loads. The
@@ -276,6 +282,12 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// else the connection's default for this media type.
   String? get _effectiveLibraryId => _selectedLibraryId ?? _defaultLibraryId;
 
+  bool get _missingSelectedLibrary => _selectedLibraryId != null &&
+      !_libraryChoices.any((library) => library.id == _selectedLibraryId);
+
+  bool get _libraryUnavailable => _missingSelectedLibrary ||
+      _requestNotifier.state.libraryUnavailable;
+
   /// Switches every read and write on this screen to [libraryId] and
   /// refreshes what depends on it.
   void _selectLibrary(String? libraryId) {
@@ -326,6 +338,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     // landing after the initial detail load (e.g. an optimistic reconnect).
     ref.listen(videoAppRevisionProvider, (_, __) => _resolveWatchLinks());
     ref.listen(authProvider, (previous, next) {
+      if (_selectedLibraryId != null) _loadRequestState();
       _resolveArrLink();
       if (previous?.valueOrNull?.connection != null) {
         if (previous?.valueOrNull?.user?.id != next.valueOrNull?.user?.id ||
@@ -345,8 +358,22 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       (_, __) => _resolveArrLink(),
     );
     return ListenableBuilder(
-      listenable: _detailNotifier,
+      listenable: Listenable.merge([_detailNotifier, _requestNotifier]),
       builder: (context, _) {
+        if (_libraryUnavailable) {
+          return Scaffold(
+            appBar: AppBar(title: const Text('Library unavailable')),
+            body: const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Text(
+                  'This library was removed or you no longer have access to it.',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+          );
+        }
         final state = _detailNotifier.state;
 
         if (state.isLoading &&
@@ -1030,6 +1057,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
         _downloadInstanceId = null;
       });
     }
+    if (_libraryUnavailable) return;
     try {
       if (widget.mediaType == MediaType.movie) {
         final instanceId = _selectedLibraryId ??
@@ -1170,7 +1198,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
         status == RequestStatus.partial;
     final askable = connection?.mediaServerInstances.any((server) => server.serviceType != 'audiobookshelf') ?? false;
     final detail = _detailNotifier.state;
-    if (!watchable || !askable) {
+    if (_libraryUnavailable || !watchable || !askable) {
       if (_watchLinks.isNotEmpty) setState(() => _watchLinks = const []);
       return;
     }
