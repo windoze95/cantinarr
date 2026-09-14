@@ -766,38 +766,43 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 			// movie/episode to be present in the live arr library before accepting
 			// even a typed auto-incident conclusion.
 			resolution, resolutionKind := arrStateClearedResolution, ResolutionArrStateCleared
-			proven, known, proofErr := r.svc.exactRecoveryProven(issue)
-			if proofErr != nil || !known || !proven {
-				// The proof above was written for missing media, where recovery
-				// means a new file arrives. A deliberately abandoned upgrade
-				// recovers the opposite way — the library keeps exactly the file
-				// it already had — so an unchanged file reads as failure there.
-				// Safe to check only here: this branch has already typed-proven
-				// the exact queue target is gone.
-				abandoned, abandonErr := r.svc.upgradeAbandonProven(issue)
-				if abandonErr != nil || !abandoned {
-					// A book want can end a third way: the dispatched blocklist
-					// fix removed the only live attempt and the arr's own
-					// replacement search found nothing. The missing-media proof
-					// reads that as failure (0 files → 0 files, no receipt),
-					// but it is this fix's success shape, and closing it wrong
-					// was what claimed the one verifiably executed fix "could
-					// not be verified" (issue 859). Same queue-target-gone
-					// contract as the abandon proof above.
-					removed, removedErr := r.svc.bookRemoveWithoutReplacementProven(issue)
-					if removedErr == nil && removed {
-						resolution, resolutionKind = removedNoReplacementResolution, ResolutionRemovedNoReplacement
-					} else {
-						// All proofs above read issue_observations and call
-						// exactIssueFileState, which fails closed on a
-						// season-scoped TV issue. A season the service filled
-						// before it aired is exactly that shape and has no
-						// queue row to begin with, so it carries its own
-						// proof: nothing unaired still holds a file.
-						repaired, repairErr := r.svc.preAirRepairProven(issue)
-						if repairErr != nil || !repaired {
-							return r.giveUp(ctx, issue.ID, st.runID, model, stopUnverifiedClose,
-								unverifiedCloseMessage(attempts))
+			waiting, waitingErr := r.svc.unairedQueueRemovalProven(issue)
+			if waitingErr == nil && waiting {
+				resolution, resolutionKind = removedWaitingForAirResolution, ResolutionRemovedWaitingForAir
+			} else {
+				proven, known, proofErr := r.svc.exactRecoveryProven(issue)
+				if proofErr != nil || !known || !proven {
+					// The proof above was written for missing media, where recovery
+					// means a new file arrives. A deliberately abandoned upgrade
+					// recovers the opposite way — the library keeps exactly the file
+					// it already had — so an unchanged file reads as failure there.
+					// Safe to check only here: this branch has already typed-proven
+					// the exact queue target is gone.
+					abandoned, abandonErr := r.svc.upgradeAbandonProven(issue)
+					if abandonErr != nil || !abandoned {
+						// A book want can end a third way: the dispatched blocklist
+						// fix removed the only live attempt and the arr's own
+						// replacement search found nothing. The missing-media proof
+						// reads that as failure (0 files → 0 files, no receipt),
+						// but it is this fix's success shape, and closing it wrong
+						// was what claimed the one verifiably executed fix "could
+						// not be verified" (issue 859). Same queue-target-gone
+						// contract as the abandon proof above.
+						removed, removedErr := r.svc.bookRemoveWithoutReplacementProven(issue)
+						if removedErr == nil && removed {
+							resolution, resolutionKind = removedNoReplacementResolution, ResolutionRemovedNoReplacement
+						} else {
+							// All proofs above read issue_observations and call
+							// exactIssueFileState, which fails closed on a
+							// season-scoped TV issue. A season the service filled
+							// before it aired is exactly that shape and has no
+							// queue row to begin with, so it carries its own
+							// proof: nothing unaired still holds a file.
+							repaired, repairErr := r.svc.preAirRepairProven(issue)
+							if repairErr != nil || !repaired {
+								return r.giveUp(ctx, issue.ID, st.runID, model, stopUnverifiedClose,
+									unverifiedCloseMessage(attempts))
+							}
 						}
 					}
 				}

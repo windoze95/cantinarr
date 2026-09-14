@@ -101,6 +101,8 @@ const (
 	// copy exists to grab today, and the library keeps monitoring, so a future
 	// release is grabbed without anyone's involvement.
 	ResolutionRemovedNoReplacement = "removed_no_replacement"
+	// The bad download is gone; no file is expected until the episode airs.
+	ResolutionRemovedWaitingForAir = "removed_waiting_for_air"
 	// ResolutionRemediationProviderConfigured closes the "remediation is on but
 	// has no AI provider" system issue when the runner first resolves a shared
 	// turn again.

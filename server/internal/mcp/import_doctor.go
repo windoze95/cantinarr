@@ -28,6 +28,7 @@ func sonarrSignal(item sonarr.DetailedQueueItem) arr.QueueSignal {
 		StatusMessages:        messages,
 		Protocol:              item.Protocol,
 		MediaFileID:           item.FileIDAtSnapshot(),
+		EpisodeAirsAt:         item.AirTimeAtSnapshot(),
 	}
 }
 

@@ -2,6 +2,12 @@ import 'package:cantinarr/features/issues/data/issue_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('unaired cleanup resolution does not claim media is available', () {
+    final kind = IssueResolutionKind.fromValue('removed_waiting_for_air');
+    expect(kind, IssueResolutionKind.removedWaitingForAir);
+    expect(kind.label, 'Bad download removed; episode has not aired yet');
+  });
+
   group('IssueCategory', () {
     test('maps wire values and labels', () {
       expect(IssueCategory.fromValue('wrong_audio'), IssueCategory.wrongAudio);

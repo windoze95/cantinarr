@@ -859,26 +859,27 @@ class _ActionTarget extends StatelessWidget {
 class _ActionCopy {
   /// A one-line plain-language summary of what approving will do.
   static String summary(AgentAction a) {
+    final params = a.approvedParams ?? a.params;
     switch (a.kind) {
       case AgentActionKind.grabRelease:
-        return a.params.queueIdToReplace != null
+        return params.queueIdToReplace != null
             ? 'Grab a different release and remove the current one'
             : 'Grab a specific release';
       case AgentActionKind.remediateQueue:
-        switch (a.params.queueAction) {
+        switch (params.queueAction) {
           case 'remove':
             return 'Remove the stuck item from the download queue';
           case 'blocklist_search':
             return 'Blocklist the current release and let the service replace it';
           case 'blocklist_only':
-            return 'Drop and blocklist this release — you already have a copy';
+            return 'Remove and blocklist this release without searching for a replacement';
           case 'change_category':
             return 'Change the download category to unblock the import';
           default:
             return 'Fix the stuck download-queue item';
         }
       case AgentActionKind.manualImport:
-        return a.params.force
+        return params.force
             ? 'Force-import the downloaded files (overrides safety checks)'
             : 'Manually import the downloaded files';
       case AgentActionKind.triggerSearch:
@@ -886,7 +887,7 @@ class _ActionCopy {
       case AgentActionKind.rescan:
         return 'Rescan the files on disk and re-run the import';
       case AgentActionKind.deleteMediaFiles:
-        return _deleteSummary(a.params);
+        return _deleteSummary(params);
       case AgentActionKind.unknown:
         return 'Apply a fix';
     }
@@ -926,9 +927,9 @@ class _ActionCopy {
           case 'remove':
             return 'Cantinarr will remove an item from the download queue. This cannot be undone from Cantinarr.';
           case 'blocklist_search':
-            return 'Cantinarr will blocklist the current release and remove it from the queue. Whether a replacement is searched for follows your service\'s own failed-download settings.';
+            return 'Cantinarr will blocklist the current release and remove it from the queue. Replacement searches follow your service\'s failed-download settings, but are suppressed for unaired episodes.';
           case 'blocklist_only':
-            return 'Cantinarr will blocklist the stuck release and remove it from the queue, without searching for a replacement. The copy already in your library is untouched.';
+            return 'Cantinarr will blocklist the stuck release and remove it from the queue, without searching for a replacement. Episode monitoring and existing library files are unchanged.';
           case 'change_category':
             return 'Cantinarr will change a download category in your connected services.';
           default:

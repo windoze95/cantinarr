@@ -824,6 +824,10 @@ func TestRemediateQueueItemTVBlocklistSearchLeavesReplacementToTheService(t *tes
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/queue":
 			_, _ = w.Write([]byte(`{"totalRecords":1,"records":[{"id":8,"seriesId":3,"episodeId":55,"downloadId":"dl-8","protocol":"torrent","series":{"id":3,"title":"Scoped Show","tmdbId":42},"episode":{"id":55,"seasonNumber":2,"episodeNumber":7}}]}`))
+		case r.URL.Path == "/api/v3/history":
+			_, _ = w.Write([]byte(`{"totalRecords":0,"records":[]}`))
+		case r.URL.Path == "/api/v3/episode":
+			_, _ = w.Write([]byte(`[{"id":55,"seriesId":3,"seasonNumber":2,"episodeNumber":7,"airDateUtc":"2020-01-01T00:00:00Z"}]`))
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v3/queue/"):
 			recorder.record(r)
 			w.WriteHeader(http.StatusOK)

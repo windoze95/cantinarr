@@ -165,7 +165,7 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 		return false, fmt.Errorf("begin conclude issue: %w", err)
 	}
 	defer tx.Rollback()
-	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionRemovedNoReplacement || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionAdminCompleted || resolutionKind == ResolutionReporterConfirmed {
+	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionRemovedNoReplacement || resolutionKind == ResolutionRemovedWaitingForAir || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionAdminCompleted || resolutionKind == ResolutionReporterConfirmed {
 		var executing int
 		if err := tx.QueryRowContext(ctx,
 			"SELECT COUNT(*) FROM agent_actions WHERE issue_id = ? AND status = ?",
@@ -180,7 +180,7 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 			return false, fmt.Errorf("an approved fix is still executing; wait for its outcome before closing the issue")
 		}
 	}
-	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionRemovedNoReplacement {
+	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionRemovedNoReplacement || resolutionKind == ResolutionRemovedWaitingForAir {
 		var unknown int
 		if err := tx.QueryRowContext(ctx,
 			"SELECT COUNT(*) FROM agent_actions WHERE issue_id = ? AND status = ?",
@@ -289,7 +289,7 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 				// Removed-and-blocklisted with no replacement available IS the
 				// intended outcome of the rule's own action; issue 859's rule
 				// was paused by its success for want of this membership.
-				resolutionKind == ResolutionRemovedNoReplacement):
+				resolutionKind == ResolutionRemovedNoReplacement || resolutionKind == ResolutionRemovedWaitingForAir):
 			for _, ruleID := range autoRuleIDs {
 				if _, err := tx.ExecContext(ctx,
 					`UPDATE agent_approval_rules
@@ -319,7 +319,7 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 	// An external observation/admin close can race a running or parked agent.
 	// Terminalize those runs here; an agent-concluded run is finalized by the
 	// Runner immediately after this transaction and must not be mislabeled.
-	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionRemovedNoReplacement || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionReporterTimeout || resolutionKind == ResolutionAdminCompleted || resolutionKind == ResolutionReporterConfirmed {
+	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionRemovedNoReplacement || resolutionKind == ResolutionRemovedWaitingForAir || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionReporterTimeout || resolutionKind == ResolutionAdminCompleted || resolutionKind == ResolutionReporterConfirmed {
 		stopReason := "external_resolution"
 		if resolutionKind == ResolutionAdminDismissed {
 			stopReason = "admin_dismissed"
@@ -624,6 +624,10 @@ func (s *Service) ProposeAction(ctx context.Context, issueID int64, kindStr stri
 	rationale = secrets.RedactText(rationale)
 	kind := ActionKind(kindStr)
 	canonical, verr := validateActionParams(kind, rawParams)
+	if verr != nil {
+		return 0, false, verr
+	}
+	canonical, verr = s.normalizeLiveAction(issueID, kind, canonical)
 	if verr != nil {
 		return 0, false, verr
 	}

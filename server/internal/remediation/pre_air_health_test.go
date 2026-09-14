@@ -94,6 +94,15 @@ func (f *preAirFake) start() *httptest.Server {
 			f.mu.Lock()
 			records := copyPreAirRecords(f.history)
 			f.mu.Unlock()
+			if query.Get("eventType") == "1" {
+				filtered := make([]map[string]any, 0)
+				for _, rec := range records {
+					if rec["eventType"] == "grabbed" && (query.Get("downloadId") == "" || strings.EqualFold(fmt.Sprint(rec["downloadId"]), query.Get("downloadId"))) {
+						filtered = append(filtered, rec)
+					}
+				}
+				records = filtered
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"totalRecords": len(records), "records": records})
 		case r.URL.Path == "/api/v3/history/series":
 			f.mu.Lock()
@@ -175,7 +184,7 @@ func (f *preAirFake) episodesFor(seriesID, season string) []map[string]any {
 	defer f.mu.Unlock()
 	out := make([]map[string]any, 0, len(f.episodes))
 	for _, ep := range f.episodes {
-		if fmt.Sprint(ep["seriesId"]) == seriesID && fmt.Sprint(ep["seasonNumber"]) == season {
+		if fmt.Sprint(ep["seriesId"]) == seriesID && (season == "" || fmt.Sprint(ep["seasonNumber"]) == season) {
 			out = append(out, ep)
 		}
 	}
@@ -1102,9 +1111,9 @@ func TestSuspectImportSentinel(t *testing.T) {
 // record shapes, for cases the preAirEpisode fixtures cannot express (margins
 // measured in minutes rather than days).
 func stubSeason(season int, specs []struct {
-	number    int
-	airsIn    time.Duration
-	hasFile   bool
+	number     int
+	airsIn     time.Duration
+	hasFile    bool
 	importedIn time.Duration
 }) (episodes, files []map[string]any) {
 	now := time.Now().UTC()
@@ -1139,9 +1148,9 @@ func stubSeason(season int, specs []struct {
 func TestPreAirWitnessIgnoresPremiereStagger(t *testing.T) {
 	svc, notifier, fake := setupPreAirService(t)
 	episodes, files := stubSeason(12, []struct {
-		number    int
-		airsIn    time.Duration
-		hasFile   bool
+		number     int
+		airsIn     time.Duration
+		hasFile    bool
 		importedIn time.Duration
 	}{
 		{1, -27 * time.Minute, true, -1 * time.Minute},
@@ -1164,9 +1173,9 @@ func TestPreAirWitnessIgnoresPremiereStagger(t *testing.T) {
 	// days) must still open the finding — the floor must not blunt the
 	// detector it protects.
 	episodes, files = stubSeason(13, []struct {
-		number    int
-		airsIn    time.Duration
-		hasFile   bool
+		number     int
+		airsIn     time.Duration
+		hasFile    bool
 		importedIn time.Duration
 	}{
 		{1, 2 * 24 * time.Hour, true, -1 * time.Hour},

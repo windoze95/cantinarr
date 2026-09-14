@@ -76,8 +76,11 @@ type Service struct {
 // the arr state this fix was reasoned about was last read. A proposal can wait
 // on a human indefinitely, so a fix that destroys something needs a way to tell
 // the thing it diagnosed apart from whatever happens to be in its place now.
+// beforeQueueMutation records the effective queue action after the shared live
+// date/identity checks, before Sonarr receives a mutation. A failed audit write
+// must stop dispatch; crash recovery must never invent which action ran.
 type actionExecutor interface {
-	Execute(ctx context.Context, issueID int64, kind ActionKind, params json.RawMessage, proposedAt time.Time) (string, error)
+	Execute(ctx context.Context, issueID int64, kind ActionKind, params json.RawMessage, proposedAt time.Time, beforeQueueMutation ...func(string) error) (string, error)
 }
 
 // NewService constructs the remediation service, mirroring request.NewService.

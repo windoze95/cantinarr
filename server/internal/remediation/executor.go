@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
-	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
@@ -70,7 +70,7 @@ type issueContext struct {
 // client resolution. A non-nil error is a DEFINITIVE failure (the caller marks
 // the action failed); a benign "not configured / not found" outcome is returned
 // as resultText with a nil error.
-func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, params json.RawMessage, proposedAt time.Time) (resultText string, err error) {
+func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, params json.RawMessage, proposedAt time.Time, beforeQueueMutation ...func(string) error) (resultText string, err error) {
 	ic, err := e.loadIssueContext(issueID)
 	if err != nil {
 		return "", beforeMutation(err)
@@ -120,7 +120,22 @@ func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, 
 		if err := e.validateQueueItem(p.MediaType, p.QueueID, ic, rc, sc, cc, lc); err != nil {
 			return "", beforeMutation(err)
 		}
-		return mcp.RemediateQueueItemHelper(rc, sc, cc, lc, p.MediaType, p.QueueID, p.Action)
+		return mcp.RemediateQueueItemHelper(rc, sc, cc, lc, p.MediaType, p.QueueID, p.Action, func(action string, item *sonarr.DetailedQueueItem) error {
+			// Bind the final date preflight's queue snapshot to the same issue
+			// identity that was approved, before recording its effective action.
+			if err := validateDownloadIdentity(p.QueueID, ic.downloadID, item.DownloadID); err != nil {
+				return err
+			}
+			if err := e.validateSonarrMediaIdentity(p.QueueID, ic, *item, sc); err != nil {
+				return err
+			}
+			for _, guard := range beforeQueueMutation {
+				if err := guard(action); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
 
 	case ActionManualImport:
 		var p ManualImportParams
@@ -146,6 +161,11 @@ func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, 
 		}
 		if err := requireConfiguredClient(p.MediaType, rc, sc, cc, lc); err != nil {
 			return "", beforeMutation(err)
+		}
+		if p.MediaType == "tv" {
+			if err := e.validateTVSearchDates(ic, p, sc); err != nil {
+				return "", beforeMutation(err)
+			}
 		}
 		var bookIDs []int
 		if p.BookID != 0 {

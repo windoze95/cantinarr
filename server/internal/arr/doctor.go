@@ -41,6 +41,9 @@ type QueueSignal struct {
 	// abandoning it costs the user nothing. Unknown fails safe toward chasing a
 	// replacement, because a library gap must never be left unfilled.
 	MediaFileID *int64
+	// EpisodeAirsAt is a verified TV episode's live air time. It only narrows
+	// replacement search suggestions; it does not diagnose content as wrong.
+	EpisodeAirsAt *time.Time
 	// GrabbedOpportunistically reports that the service found this release on
 	// its own (an RSS pass), rather than because something went looking for it.
 	// nil means unknown. Resolving it costs a history read, so only the callers
@@ -127,8 +130,8 @@ const (
 	ActionRemove          = "remove"
 	ActionBlocklistSearch = "blocklist_search"
 	// ActionBlocklistOnly drops a dead release and blocklists it WITHOUT
-	// chasing a replacement. It is the right remedy when the library already
-	// holds a copy: the download was an upgrade, nothing is unwatchable, and
+	// chasing a replacement. Use it for an unrequested upgrade when the library
+	// already holds a copy, or for a TV episode that has not aired. For upgrades,
 	// the service's own RSS pass keeps grabbing better releases as they are
 	// posted — which is how such a download was picked up in the first place.
 	ActionBlocklistOnly  = "blocklist_only"
@@ -464,7 +467,22 @@ func (s QueueSignal) healthy() bool {
 //  5. trackedDownloadState == failed -> remove + blocklist + re-search.
 //  6. otherwise healthy.
 func Diagnose(sig QueueSignal) Diagnosis {
-	return abandonUnwantedUpgrade(classify(sig), sig)
+	d := abandonUnwantedUpgrade(classify(sig), sig)
+	if sig.EpisodeAirsAt != nil && sig.EpisodeAirsAt.After(time.Now().UTC()) {
+		changed := false
+		// Copy the shared rule's slice before changing any suggested verb.
+		d.SuggestedActions = append([]string(nil), d.SuggestedActions...)
+		for i, action := range d.SuggestedActions {
+			if action == ActionBlocklistSearch {
+				d.SuggestedActions[i] = ActionBlocklistOnly
+				changed = true
+			}
+		}
+		if changed {
+			d.Transparency += " This episode has not aired yet. If the release is removed and blocklisted, do not search for a replacement; leave monitoring unchanged."
+		}
+	}
+	return d
 }
 
 // ReplacementIsOptional reports that this verdict's only remedy is throwing the
