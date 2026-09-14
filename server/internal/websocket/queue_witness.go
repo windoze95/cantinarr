@@ -15,6 +15,15 @@ type witnessRow struct {
 	serviceType string
 	ids         []int
 	observedAt  time.Time
+	tvImports   bool
+}
+
+// Sonarr's versioned envelope distinguishes episode-aware witnesses from
+// older parent-only snapshots. This changes no schema; other arrs retain the
+// existing array. A rollback simply re-seeds a format it cannot understand.
+type sonarrWitnessEnvelope struct {
+	Version int   `json:"version"`
+	IDs     []int `json:"media_ids"`
 }
 
 // queueWitness persists the poller's queue-departure memory.
@@ -76,12 +85,16 @@ func (w *queueWitness) load(now time.Time, staleAfter time.Duration) (map[string
 			continue
 		}
 		var ids []int
+		tvImports := false
 		if err := json.Unmarshal([]byte(mediaIDs), &ids); err != nil {
-			// A row we cannot parse is not a reason to lose every other
-			// instance's witness; it re-seeds on the next poll.
-			continue
+			var envelope sonarrWitnessEnvelope
+			if serviceType != "sonarr" || json.Unmarshal([]byte(mediaIDs), &envelope) != nil || envelope.Version != 1 {
+				// Unreadable rows re-seed independently of the other instances.
+				continue
+			}
+			ids, tvImports = envelope.IDs, true
 		}
-		out[instanceID] = witnessRow{serviceType: serviceType, ids: ids, observedAt: observedAt}
+		out[instanceID] = witnessRow{serviceType: serviceType, ids: ids, observedAt: observedAt, tvImports: tvImports}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate queue witness: %w", err)
@@ -96,7 +109,11 @@ func (w *queueWitness) save(instanceID, serviceType string, ids []int, now time.
 		return nil
 	}
 	sort.Ints(ids)
-	encoded, err := json.Marshal(ids)
+	var value any = ids
+	if serviceType == "sonarr" {
+		value = sonarrWitnessEnvelope{Version: 1, IDs: ids}
+	}
+	encoded, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("encode queue witness: %w", err)
 	}

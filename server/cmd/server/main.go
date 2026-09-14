@@ -272,6 +272,7 @@ func main() {
 	mediaAccessService.SetNotifier(notifier)
 	authHandler.SetAccessRequestHook(mediaAccessService.OnPlexEmailShared)
 	requestService := request.NewService(database, registry, bridge, notifier)
+	wsHub.SetTVImportResolver(requestService)
 	discordNotifications := discordnotify.NewService(database, cipher, func() string { return serverSettings.Get().ExternalURL })
 	requestService.SetCreationObserver(request.CreationObservers{discordNotifications, pushNotifier})
 	discordNotifications.Start(ctx)

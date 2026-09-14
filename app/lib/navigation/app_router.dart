@@ -1199,8 +1199,10 @@ Widget _mediaDetailChild(GoRouterState state) {
   }
   final mediaType = type == 'tv' ? MediaType.tv : MediaType.movie;
   return MediaDetailScreen(
+    key: ValueKey((mediaType, id, state.uri.queryParameters['instance_id'])),
     id: id,
     mediaType: mediaType,
+    instanceId: state.uri.queryParameters['instance_id'],
   );
 }
 

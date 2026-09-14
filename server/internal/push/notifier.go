@@ -842,7 +842,7 @@ func (n *Notifier) notifyUpgradedContent(broadcastCategory, mediaType, title, bo
 		data["instance_id"] = instanceID
 	}
 	n.sendWithOptions(client, recipients, title, body, data, SendOptions{
-		CollapseID: fmt.Sprintf("%s:%d", CategoryContentUpgraded, tmdbID),
+		CollapseID: fmt.Sprintf("%s:%s", CategoryContentUpgraded, contentClaimID(instanceID, strconv.Itoa(tmdbID))),
 	})
 }
 
@@ -888,7 +888,7 @@ func (n *Notifier) notifyNewContent(category, mediaType, serviceType, title, bod
 		data["instance_id"] = instanceID
 	}
 	n.sendWithOptions(client, recipients, title, body, data, SendOptions{
-		CollapseID: fmt.Sprintf("%s:%d", category, tmdbID),
+		CollapseID: fmt.Sprintf("%s:%s", category, contentClaimID(instanceID, strconv.Itoa(tmdbID))),
 	})
 }
 
