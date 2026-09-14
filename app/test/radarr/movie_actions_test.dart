@@ -21,6 +21,9 @@ import 'package:flutter_test/flutter_test.dart';
 /// Fake Dio adapter: routes GETs to canned bodies and records every request
 /// (method, path, query, decoded body) for assertions.
 class _FakeAdapter implements HttpClientAdapter {
+  _FakeAdapter({this.movieHistory = const []});
+
+  final List<Map<String, dynamic>> movieHistory;
   final List<
       ({
         String method,
@@ -54,7 +57,7 @@ class _FakeAdapter implements HttpClientAdapter {
       if (path.endsWith('/qualityprofile')) response = _profiles;
       if (path.endsWith('/tag')) response = _tags;
       if (path.endsWith('/queue')) response = {'records': <dynamic>[]};
-      if (path.endsWith('/history/movie')) response = <dynamic>[];
+      if (path.endsWith('/history/movie')) response = movieHistory;
     }
     return ResponseBody.fromString(
       jsonEncode(response),
@@ -101,8 +104,10 @@ const _tags = [
 
 final _movie = RadarrMovie.fromJson(Map<String, dynamic>.from(_rawMovie));
 
-({_FakeAdapter adapter, Dio dio}) _fakeDio() {
-  final adapter = _FakeAdapter();
+({_FakeAdapter adapter, Dio dio}) _fakeDio({
+  List<Map<String, dynamic>> movieHistory = const [],
+}) {
+  final adapter = _FakeAdapter(movieHistory: movieHistory);
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
     ..httpClientAdapter = adapter;
   return (adapter: adapter, dio: dio);
@@ -349,8 +354,11 @@ void main() {
   });
 
   group('RadarrMovieDetailScreen', () {
-    Future<_FakeAdapter> pumpDetail(WidgetTester tester) async {
-      final fake = _fakeDio();
+    Future<_FakeAdapter> pumpDetail(
+      WidgetTester tester, {
+      List<Map<String, dynamic>> movieHistory = const [],
+    }) async {
+      final fake = _fakeDio(movieHistory: movieHistory);
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
@@ -406,6 +414,33 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Edit Movie'), findsOneWidget);
       expect(find.text('Minimum Availability'), findsOneWidget);
+    });
+
+    testWidgets('recent history rows share the same left edge', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await pumpDetail(tester, movieHistory: const [
+        {
+          'id': 1,
+          'sourceTitle': 'A much longer release title for the same movie',
+          'eventType': 'grabbed',
+          'date': '2026-09-13T20:00:00Z',
+        },
+        {
+          'id': 2,
+          'sourceTitle': 'Short release',
+          'eventType': 'downloadFolderImported',
+          'date': '2026-09-13T19:59:00Z',
+        },
+      ]);
+
+      final longTitle = tester.getTopLeft(
+        find.text('A much longer release title for the same movie'),
+      );
+      final shortTitle = tester.getTopLeft(find.text('Short release'));
+
+      expect(shortTitle.dx, longTitle.dx);
     });
   });
 }
