@@ -574,7 +574,7 @@ var arrToolDefinitions = []Tool{
 		Name:        "remediate_queue_item",
 		AdminOnly:   true,
 		Permission:  auth.PermissionDownloadsManage,
-		Description: "Apply a one-click fix to a stuck queue item: remove (delete it and the download), blocklist_search (remove and blocklist the release, leaving the replacement to the service's own failed-download settings), blocklist_only (remove and blocklist, and suppress the service's replacement search too — the right choice when the library already holds a copy AND nobody asked for this download), or change_category (hand the download to the client's post-import category for tools like Unpackerr). Admin only",
+		Description: "Apply a one-click fix to a stuck queue item: remove (delete it and the download), blocklist_search (remove and blocklist the release, leaving the replacement to the service's own failed-download settings), blocklist_only (remove and blocklist, and suppress the service's replacement search too — the right choice when a TV episode has not aired yet, or when the library already holds a copy AND nobody asked for this download), or change_category (hand the download to the client's post-import category for tools like Unpackerr). Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

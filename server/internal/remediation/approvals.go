@@ -152,6 +152,11 @@ func (s *Service) approveAction(actor approvalActor, actionID int64) (*AgentActi
 		return nil, fmt.Errorf("proposal no longer matches its issue: %w", err)
 	}
 
+	paramsToRun, verr = s.normalizeLiveAction(act.IssueID, ActionKind(act.Kind), paramsToRun)
+	if verr != nil {
+		return nil, fmt.Errorf("could not verify the proposed replacement search: %w", verr)
+	}
+
 	// Atomically persist the exact approved params and claim the execution.
 	// The original proposal params remain immutable for audit.
 	cas, err := s.db.Exec(
@@ -219,7 +224,30 @@ func (s *Service) approveAction(actor approvalActor, actionID int64) (*AgentActi
 	targetDownloadID := s.issueDownloadIdentity(act.IssueID)
 
 	// Replay the approved action against the arr. This is the ONLY mutation path.
-	resultText, execErr := s.executor.Execute(context.Background(), act.IssueID, ActionKind(act.Kind), paramsToRun, act.CreatedAt)
+	resultText, execErr := s.executor.Execute(context.Background(), act.IssueID, ActionKind(act.Kind), paramsToRun, act.CreatedAt, func(action string) error {
+		// The shared helper calls this after its final live date check and
+		// BEFORE DELETE. Persist a downgrade even if the process dies during
+		// the network round-trip; the original proposal remains immutable.
+		var p RemediateQueueParams
+		if err := json.Unmarshal(paramsToRun, &p); err != nil {
+			return err
+		}
+		p.Action = action
+		effective, err := canonicalJSON(p)
+		if err != nil {
+			return err
+		}
+		res, err := s.db.Exec(`UPDATE agent_actions SET approved_params=? WHERE id=? AND status='executing'
+			AND EXISTS (SELECT 1 FROM issues WHERE id=agent_actions.issue_id AND closed_at IS NULL)`, string(effective), actionID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return fmt.Errorf("action is no longer authorized for execution")
+		}
+		paramsToRun = effective
+		return nil
+	})
 	resultText = secrets.RedactText(resultText)
 
 	// The resume transcript must attribute the decision truthfully: the model

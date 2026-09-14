@@ -1143,6 +1143,7 @@ func sonarrQueueSignal(item sonarr.DetailedQueueItem) arr.QueueObservation {
 		Media:            media,
 		Signal: arr.QueueSignal{
 			Status:                item.Status,
+			EpisodeAirsAt:         item.AirTimeAtSnapshot(),
 			TrackedDownloadStatus: item.TrackedDownloadStatus,
 			TrackedDownloadState:  item.TrackedDownloadState,
 			ErrorMessage:          item.ErrorMessage,

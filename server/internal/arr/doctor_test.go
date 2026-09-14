@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // msg is a shorthand for building a single-line status message group.
@@ -540,5 +541,25 @@ func TestDiagnoseKeepsTheSearchWhenAnImportIsStillWorthTrying(t *testing.T) {
 	}
 	if strings.Contains(got.Transparency, "already have a copy") {
 		t.Fatalf("multi-option verdict gained the abandon copy: %q", got.Transparency)
+	}
+}
+
+func TestUnairedDiagnosisOnlySuppressesReplacement(t *testing.T) {
+	future := time.Now().UTC().Add(time.Hour)
+	past := time.Now().UTC().Add(-time.Hour)
+	sig := QueueSignal{TrackedDownloadStatus: "error", ErrorMessage: "Download failed"}
+	before := Diagnose(sig)
+	sig.EpisodeAirsAt = &future
+	d := Diagnose(sig)
+	if d.Problem != before.Problem || d.Severity != before.Severity || !slices.Equal(d.SuggestedActions, []string{ActionBlocklistOnly}) {
+		t.Fatalf("unaired adjustment changed diagnosis or allowed search: %+v", d)
+	}
+	sig.EpisodeAirsAt = &past
+	if d := Diagnose(sig); !slices.Equal(d.SuggestedActions, before.SuggestedActions) {
+		t.Fatalf("future adjustment modified shared classifier rules: %+v", d)
+	}
+	sig.EpisodeAirsAt = nil
+	if d := Diagnose(sig); !slices.Equal(d.SuggestedActions, before.SuggestedActions) {
+		t.Fatalf("unknown date was treated as unaired: %+v", d)
 	}
 }

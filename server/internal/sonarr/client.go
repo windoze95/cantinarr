@@ -557,13 +557,14 @@ type SeriesContext struct {
 
 // EpisodeContext is the lean episode object embedded in queue/history records.
 type EpisodeContext struct {
-	ID            int    `json:"id"`
-	SeriesID      int    `json:"seriesId"`
-	SeasonNumber  int    `json:"seasonNumber"`
-	EpisodeNumber int    `json:"episodeNumber"`
-	EpisodeFileID *int   `json:"episodeFileId"`
-	HasFile       *bool  `json:"hasFile"`
-	Title         string `json:"title"`
+	ID            int        `json:"id"`
+	SeriesID      int        `json:"seriesId"`
+	SeasonNumber  int        `json:"seasonNumber"`
+	EpisodeNumber int        `json:"episodeNumber"`
+	EpisodeFileID *int       `json:"episodeFileId"`
+	HasFile       *bool      `json:"hasFile"`
+	Title         string     `json:"title"`
+	AirDateUtc    *time.Time `json:"airDateUtc,omitempty"`
 }
 
 type DetailedQueueItem struct {
@@ -590,6 +591,16 @@ type DetailedQueueItem struct {
 	} `json:"statusMessages"`
 	Series  *SeriesContext  `json:"series,omitempty"`
 	Episode *EpisodeContext `json:"episode,omitempty"`
+}
+
+// AirTimeAtSnapshot exposes a date only for a consistently identified episode.
+func (item DetailedQueueItem) AirTimeAtSnapshot() *time.Time {
+	if item.SeriesID <= 0 || item.EpisodeID <= 0 || item.Episode == nil ||
+		item.Episode.ID != item.EpisodeID || item.Episode.SeriesID != item.SeriesID ||
+		item.Episode.SeasonNumber < 0 || item.Episode.EpisodeNumber <= 0 {
+		return nil
+	}
+	return item.Episode.AirDateUtc
 }
 
 // FileIDAtSnapshot returns the exact embedded episode's file ID only when
