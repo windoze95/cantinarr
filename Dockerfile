@@ -3,10 +3,15 @@ FROM --platform=$BUILDPLATFORM ghcr.io/cirruslabs/flutter:stable AS flutter-buil
 # The base image's stable SDK can lag the stable SDK installed by GitHub Actions.
 # Use the same checked-in version as CI and the store builds before resolving pub.
 COPY app/.flutter-version /tmp/cantinarr-flutter-version
-RUN git -C "$FLUTTER_ROOT" fetch --depth=1 origin \
-        "refs/tags/$(cat /tmp/cantinarr-flutter-version)" \
-    && git -C "$FLUTTER_ROOT" checkout --detach --force FETCH_HEAD \
-    && flutter --version
+# Keep the tag locally: Flutter derives its version from Git tags, not just HEAD.
+RUN cantinarr_flutter_version="$(cat /tmp/cantinarr-flutter-version)" \
+    && git -C "$FLUTTER_ROOT" fetch --depth=1 origin \
+        "refs/tags/$cantinarr_flutter_version:refs/tags/$cantinarr_flutter_version" \
+    && git -C "$FLUTTER_ROOT" checkout --detach --force "refs/tags/$cantinarr_flutter_version" \
+    && rm -f "$FLUTTER_ROOT/version" "$FLUTTER_ROOT/bin/cache/flutter.version.json" \
+    && flutter --version --machine > /tmp/cantinarr-flutter-sdk.json \
+    && cat /tmp/cantinarr-flutter-sdk.json \
+    && grep -Fq "\"frameworkVersion\": \"$cantinarr_flutter_version\"" /tmp/cantinarr-flutter-sdk.json
 ARG CANTINARR_E2E_WEB_SEMANTICS=false
 # Build number for the web bundle, shown in Settings → About. Without it the
 # bundle reports pubspec's placeholder (`+1`) and every self-hosted deployment

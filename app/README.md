@@ -230,7 +230,9 @@ Dependency versions and package hashes are committed in `pubspec.lock`. CI, Dock
 with `--no-pub` so later commands reuse the verified dependencies. CI, Docker, and
 store builds read their SDK version from `.flutter-version`; local builds need
 that SDK too. Docker checks out that SDK tag because its base image's `stable`
-tag can lag the SDK used by CI. When changing
+tag can lag the SDK used by CI. The release tag is retained in the SDK checkout;
+inherited version metadata is regenerated and the reported version must match
+the pin before dependencies are installed. When changing
 `pubspec.yaml`, run `flutter pub get`; for an intentional package upgrade, run
 `flutter pub upgrade <package>`. Review and commit the resulting lockfile changes
 in the same PR. When upgrading Flutter, update `.flutter-version` and regenerate
