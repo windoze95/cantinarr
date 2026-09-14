@@ -78,13 +78,18 @@ jobs:
         with:
           xcode-version: latest-stable
 
+      - name: Read Flutter version
+        id: flutter-version
+        run: echo "version=$(cat .flutter-version)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
           channel: stable
 
       - name: Install dependencies
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Import distribution certificate
         env:
@@ -152,7 +157,7 @@ jobs:
 
       - name: Build IPA
         run: |
-          flutter build ipa \
+          flutter build ipa --no-pub \
             --build-number=${{ steps.build_number.outputs.build_number }} \
             --build-name=${{ steps.build_number.outputs.version }} \
             --export-options-plist=ios/ExportOptions.plist

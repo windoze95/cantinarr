@@ -158,10 +158,10 @@ cantinarr          # serves everything on 8585 (CANTINARR_PORT overrides)
 cd server
 go run ./cmd/server
 
-# App (requires Flutter stable, Dart SDK 3.4+)
+# App (requires the Flutter version in app/.flutter-version and its bundled Dart SDK)
 cd app
-flutter pub get
-flutter run
+flutter pub get --enforce-lockfile
+flutter run --no-pub
 ```
 
 `make` builds the full stack (Flutter web → embedded in the Go binary).

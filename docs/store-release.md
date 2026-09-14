@@ -5,6 +5,11 @@ console setup each store needs. CI automates everything that can be automated; t
 human steps are listed explicitly. Versioning is shared: bump `version:` in `app/pubspec.yaml`
 for a user-facing version change — build numbers/version codes are computed per store by CI.
 
+Both store pipelines use the SDK in `app/.flutter-version`, install the committed `app/pubspec.lock` with
+`flutter pub get --enforce-lockfile` and build with `--no-pub`. Dependency or package
+hash drift fails the install instead of changing the versions being shipped.
+SDK version and lockfile changes also trigger the Android build-only PR check.
+
 ## Android (Google Play)
 
 ### Pipeline

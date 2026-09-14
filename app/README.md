@@ -215,21 +215,35 @@ OIDC routes: `/oidc/start`, `/oidc/return`, `/settings/oidc` (admin), `/settings
 ## Getting Started
 
 ### Prerequisites
-- Flutter (stable channel), Dart SDK 3.4+
+- The Flutter SDK version in [`.flutter-version`](.flutter-version) and its bundled Dart SDK
 - A running [Cantinarr server](../server/)
 
 ### Run the app
 ```bash
 cd app
-flutter pub get
-flutter run
+flutter pub get --enforce-lockfile
+flutter run --no-pub
 ```
+
+Dependency versions and package hashes are committed in `pubspec.lock`. CI, Docker,
+`make`, and the store pipelines enforce that lockfile, then analyze, test, or build
+with `--no-pub` so later commands reuse the verified dependencies. CI, Docker, and
+store builds read their SDK version from `.flutter-version`; local builds need
+that SDK too. Docker checks out that SDK tag because its base image's `stable`
+tag can lag the SDK used by CI. The release tag is retained in the SDK checkout;
+inherited version metadata is regenerated and the reported version must match
+the pin before dependencies are installed. When changing
+`pubspec.yaml`, run `flutter pub get`; for an intentional package upgrade, run
+`flutter pub upgrade <package>`. Review and commit the resulting lockfile changes
+in the same PR. When upgrading Flutter, update `.flutter-version` and regenerate
+the lockfile with that SDK in the same PR.
 
 Native iOS passkeys require iOS 16+, the Associated Domains entitlement for the server domain (`webcredentials:your.domain`), and the server publishing an AASA file with the app's `TeamID.BundleID`. Push requires a push-gateway-enabled server, plus the APNs entitlement (production) on iOS or a registered Firebase Android app (`google-services.json`, with FCM enabled on the gateway) on Android; Android 13+ additionally prompts for the notification runtime permission on first sign-in. See the [server README](../server/README.md#configuration) for the deployment env vars.
 
 ### Build for web (embedded in server)
 ```bash
-flutter build web --release
+flutter pub get --enforce-lockfile
+flutter build web --release --no-pub
 # Output in build/web/ -- copied into the Go binary during the Docker build (or `make`)
 ```
 
@@ -337,7 +351,7 @@ The router guard redirects unauthenticated users to `/login`, remembers safe int
 ## Platforms & CI
 
 - **iOS**, **Android**, and **web** are the shipping targets. Web is built in CI and embedded in the server image; iOS auto-deploys to TestFlight on `main` (manual signing via repo secrets); Android auto-deploys the same signed AAB to Google Play open testing (`beta`) and closed testing (`alpha`) on `main`, keeping existing closed testers updated during the transition (upload-keystore signing via repo secrets — see [docs/store-release.md](../docs/store-release.md)). macOS/Windows/Linux directories are unbuilt scaffolding.
-- CI runs `flutter analyze --no-fatal-infos`, `flutter test`, and `flutter build web --release` on every PR.
+- CI runs `flutter pub get --enforce-lockfile`, followed by `flutter analyze --no-fatal-infos`, `flutter test`, and `flutter build web --release` with `--no-pub` on every PR. Android build-only PR checks also run when `.flutter-version` or `pubspec.lock` changes.
 - Store listing copy, graphics, and screenshots live in `android/fastlane` + `ios/fastlane` and sync to both consoles on merge (`storelisting.yml`). Screenshots are generated from the demo-data harness `test/preview/screenshot_main.dart` via `tool/screenshots/` — see [docs/store-release.md](../docs/store-release.md).
 
 ## License
