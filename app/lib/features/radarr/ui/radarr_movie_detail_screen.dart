@@ -311,6 +311,7 @@ class _RadarrMovieDetailScreenState
           style: TextStyle(color: AppTheme.textSecondary, fontSize: 13));
     }
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: _history.map((h) => _HistoryTile(record: h)).toList(),
     );
   }
