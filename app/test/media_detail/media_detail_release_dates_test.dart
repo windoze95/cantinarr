@@ -8,6 +8,7 @@ import 'package:cantinarr/core/network/websocket_client.dart';
 import 'package:cantinarr/core/providers/realtime_provider.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/discover/data/tmdb_models.dart';
+import 'package:cantinarr/features/media_detail/logic/media_detail_provider.dart';
 import 'package:cantinarr/features/media_detail/ui/media_detail_screen.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -60,12 +61,45 @@ void main() {
           authProvider.overrideWith(() => _FakeAuthNotifier(_singleLibraryState())),
           backendClientProvider.overrideWithValue(dio),
           realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
+          mediaDetailClockProvider.overrideWithValue(() => DateTime(2026, 9, 13)),
         ],
         child: MaterialApp.router(routerConfig: router),
       ),
     );
     await tester.pumpAndSettle();
   }
+
+  testWidgets('the requested date uses the same US schedule when Radarr differs',
+      (tester) async {
+    await pumpDetail(
+      tester,
+      adapter: _DetailAdapter(
+        status: 'requested',
+        radarrReleases: {'in_cinemas': '2026-10-07'},
+        releaseDates: {
+          'results': [
+            {
+              'iso_3166_1': 'FR',
+              'release_dates': [
+                {'type': 3, 'release_date': '2026-10-07T00:00:00.000Z'},
+              ],
+            },
+            {
+              'iso_3166_1': 'US',
+              'release_dates': [
+                {'type': 3, 'release_date': '2026-10-09T00:00:00.000Z'},
+              ],
+            },
+          ],
+        },
+      ),
+    );
+
+    expect(find.text('In cinemas Oct 9'), findsOneWidget);
+    expect(find.text('Oct 9, 2026'), findsOneWidget);
+    expect(find.text('US'), findsOneWidget);
+    expect(find.textContaining('Oct 7'), findsNothing);
+  });
 
   testWidgets(
       'US release dates render as three labeled, formatted milestone rows',
@@ -104,7 +138,10 @@ void main() {
     await pumpDetail(
       tester,
       locale: const Locale('en', 'GB'),
-      adapter: _DetailAdapter(releaseDates: {
+      adapter: _DetailAdapter(status: 'requested', radarrReleases: {
+        'in_cinemas': '2094-02-01',
+        'digital': '2094-04-01',
+      }, releaseDates: {
         'results': [
           {
             'iso_3166_1': 'US',
@@ -127,6 +164,9 @@ void main() {
     expect(find.text('US'), findsNothing);
     expect(find.text('Digital'), findsOneWidget);
     expect(find.text('Mar 1, 2094'), findsOneWidget);
+    expect(find.text('Digital Mar 1, 2094'), findsOneWidget);
+    expect(find.textContaining('Apr 1'), findsNothing);
+    expect(find.textContaining('Feb 1'), findsNothing);
     expect(find.text('In cinemas'), findsNothing);
   });
 
@@ -136,7 +176,7 @@ void main() {
     await pumpDetail(
       tester,
       locale: const Locale('en', 'GB'),
-      adapter: _DetailAdapter(releaseDates: {
+      adapter: _DetailAdapter(status: 'unavailable', releaseDates: {
         'results': [
           {
             'iso_3166_1': 'GB',
@@ -161,13 +201,36 @@ void main() {
     expect(find.text('GB'), findsNothing);
     expect(find.text('In cinemas'), findsOneWidget);
     expect(find.text('Feb 1, 2094'), findsOneWidget);
+    expect(find.text('In cinemas Feb 1, 2094'), findsOneWidget);
   });
 
-  testWidgets('no release_dates key means the section is absent entirely',
+  testWidgets('missing regional dates cannot fall back to an unscoped Radarr date',
       (tester) async {
-    await pumpDetail(tester, adapter: _DetailAdapter(releaseDates: null));
+    await pumpDetail(tester, adapter: _DetailAdapter(
+      status: 'requested',
+      radarrReleases: {'in_cinemas': '2094-10-07'},
+      releaseDates: null,
+    ));
 
     expect(find.text('Release dates'), findsNothing);
+    expect(find.textContaining('In cinemas'), findsNothing);
+  });
+
+  testWidgets('an available movie keeps the schedule but hides upcoming dates beneath status',
+      (tester) async {
+    await pumpDetail(tester, adapter: _DetailAdapter(releaseDates: {
+      'results': [
+        {
+          'iso_3166_1': 'US',
+          'release_dates': [
+            {'type': 3, 'release_date': '2094-10-09T00:00:00.000Z'},
+          ],
+        },
+      ],
+    }));
+
+    expect(find.text('Oct 9, 2094'), findsOneWidget);
+    expect(find.text('In cinemas Oct 9, 2094'), findsNothing);
   });
 }
 
@@ -201,8 +264,14 @@ class _FakeAuthNotifier extends AuthNotifier {
 /// not yet added the append (or is serving a cached pre-change body).
 class _DetailAdapter implements HttpClientAdapter {
   final Map<String, dynamic>? releaseDates;
+  final String status;
+  final Map<String, String>? radarrReleases;
 
-  _DetailAdapter({required this.releaseDates});
+  _DetailAdapter({
+    required this.releaseDates,
+    this.status = 'available',
+    this.radarrReleases,
+  });
 
   @override
   Future<ResponseBody> fetch(
@@ -213,7 +282,11 @@ class _DetailAdapter implements HttpClientAdapter {
     final path = options.path;
     final Object body;
     if (path.endsWith('/status')) {
-      body = {'status': 'available', 'seasons': <dynamic>[]};
+      body = {
+        'status': status,
+        'seasons': <dynamic>[],
+        if (radarrReleases != null) 'releases': radarrReleases,
+      };
     } else if (path.endsWith('/recommendations') || path.endsWith('/similar')) {
       body = {'results': <dynamic>[]};
     } else if (path.contains('/api/media/movie/')) {

@@ -1,12 +1,25 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:cantinarr/features/discover/data/tmdb_models.dart';
+import 'package:cantinarr/features/media_detail/logic/release_schedule.dart';
 import 'package:cantinarr/features/media_detail/logic/release_window.dart';
 import 'package:cantinarr/features/request/data/request_service.dart';
 
 /// The reference "now" every case is written against.
 final _today = DateTime(2026, 6, 20);
 
-MovieReleaseDates _dates({DateTime? cinemas, DateTime? digital}) =>
-    MovieReleaseDates(inCinemas: cinemas, digital: digital);
+ReleaseSchedule? _dates({
+  DateTime? limited,
+  DateTime? cinemas,
+  DateTime? digital,
+  DateTime? disc,
+}) => resolveReleaseSchedule([
+      TmdbReleaseDateRegion(countryCode: 'US', entries: [
+        if (limited != null) TmdbReleaseDateEntry(type: 2, date: limited),
+        if (cinemas != null) TmdbReleaseDateEntry(type: 3, date: cinemas),
+        if (digital != null) TmdbReleaseDateEntry(type: 4, date: digital),
+        if (disc != null) TmdbReleaseDateEntry(type: 5, date: disc),
+      ]),
+    ], now: _today);
 
 List<String> _labels(List<PendingRelease> pending) =>
     pending.map((r) => r.label).toList();
@@ -70,7 +83,7 @@ void main() {
 
     test('no dates at all yields nothing', () {
       final pending = pendingReleases(
-        MovieReleaseDates.none,
+        null,
         status: RequestStatus.requested,
         now: _today,
       );
@@ -95,6 +108,28 @@ void main() {
         now: _today,
       );
       expect(_labels(pending), ['In cinemas']);
+    });
+
+    test('limited and wide cinema dates keep the full schedule labels; disc stays in the full list', () {
+      final pending = pendingReleases(
+        _dates(
+          limited: DateTime(2026, 7, 1),
+          cinemas: DateTime(2026, 7, 3),
+          digital: DateTime(2026, 9, 12),
+          disc: DateTime(2026, 10, 1),
+        ),
+        status: RequestStatus.requested,
+        now: _today,
+      );
+      expect(_labels(pending), ['In cinemas (limited)', 'In cinemas', 'Digital']);
+    });
+
+    test('a region with only a disc date has no pending cinema or digital line', () {
+      expect(pendingReleases(
+        _dates(disc: DateTime(2026, 10, 1)),
+        status: RequestStatus.requested,
+        now: _today,
+      ), isEmpty);
     });
   });
 
