@@ -1,7 +1,11 @@
 name: Cleanup PR Docker Image
 
 on:
-  pull_request:
+  # Fork pull_request runs receive a read-only token, even after the PR closes.
+  # Cleanup needs the base repository's package write permission. Keep this
+  # metadata-only: no checkout or execution of PR code; only its numeric PR
+  # number selects the preview tag in the fixed package below.
+  pull_request_target:
     types: [closed]
 
 jobs:
