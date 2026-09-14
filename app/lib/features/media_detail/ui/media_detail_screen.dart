@@ -422,6 +422,14 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
         final facts = state.facts(now: now);
         final tvDate = state.tvDetail == null ? null
             : upcomingTVDateLabel(state.tvDetail!, now: now);
+        // Resolve once so the status line and full schedule use the same
+        // country's dates. The widget locale is always en_US in this app.
+        final movieSchedule = resolveReleaseSchedule(
+          state.movieDetail?.releaseDates ?? const [],
+          preferredRegion: watchRegionFor(WidgetsBinding
+              .instance.platformDispatcher.locale.countryCode),
+          now: now,
+        );
         return Scaffold(
           body: CustomScrollView(
             slivers: [
@@ -510,9 +518,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                         _DateStatusLine(label: tvDate),
                                       if (widget.mediaType == MediaType.movie)
                                         _PendingReleaseLine(
-                                          releases:
-                                              _requestNotifier.state.releases,
+                                          schedule: movieSchedule,
                                           status: _requestNotifier.state.status,
+                                          now: now,
                                         ),
                                       // One chip per granted library when the
                                       // user holds more than one (HD vs 4K):
@@ -818,24 +826,14 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                             ),
                           ],
 
-                          // Release dates: TMDB-backed cinema/digital/disc
-                          // schedule for any movie, library or not. See D-02
-                          // in the plan — this is deliberately separate from
-                          // _PendingReleaseLine in the request dock above.
-                          // The region is the device's, read the way the
-                          // browse screen reads it: a widget-level locale
-                          // here is always en_US.
+                          // Full regional schedule, including past dates and
+                          // disc releases omitted from the status line.
                           if (state.movieDetail != null)
                             Padding(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 16),
                               child: _ReleaseDatesSection(
-                                regions: state.movieDetail!.releaseDates,
-                                deviceRegion: watchRegionFor(WidgetsBinding
-                                    .instance
-                                    .platformDispatcher
-                                    .locale
-                                    .countryCode),
+                                schedule: movieSchedule,
                               ),
                             ),
 
@@ -1612,23 +1610,13 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
 /// payload, matching the shrink-to-nothing discipline `_PendingReleaseLine`
 /// already uses below: the page never asserts a schedule it does not have.
 class _ReleaseDatesSection extends StatelessWidget {
-  final List<TmdbReleaseDateRegion> regions;
+  final ReleaseSchedule? schedule;
 
-  /// The device's country, tried first; `resolveReleaseSchedule` falls
-  /// back from it the same way whatever it is.
-  final String deviceRegion;
-
-  const _ReleaseDatesSection({
-    required this.regions,
-    required this.deviceRegion,
-  });
+  const _ReleaseDatesSection({required this.schedule});
 
   @override
   Widget build(BuildContext context) {
-    final schedule = resolveReleaseSchedule(
-      regions,
-      preferredRegion: deviceRegion,
-    );
+    final schedule = this.schedule;
     if (schedule == null) return const SizedBox.shrink();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1704,16 +1692,21 @@ class _ReleaseDatesSection extends StatelessWidget {
 /// ahead, so the request dock keeps its current shape for the overwhelmingly
 /// common case of an already-released title.
 class _PendingReleaseLine extends StatelessWidget {
-  final MovieReleaseDates releases;
+  final ReleaseSchedule? schedule;
   final RequestStatus status;
+  final DateTime now;
 
-  const _PendingReleaseLine({required this.releases, required this.status});
+  const _PendingReleaseLine({
+    required this.schedule,
+    required this.status,
+    required this.now,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final pending = pendingReleases(releases, status: status);
+    final pending = pendingReleases(schedule, status: status, now: now);
     if (pending.isEmpty) return const SizedBox.shrink();
-    return _DateStatusLine(label: formatPendingReleases(pending));
+    return _DateStatusLine(label: formatPendingReleases(pending, now: now));
   }
 }
 
