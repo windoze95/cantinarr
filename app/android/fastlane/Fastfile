@@ -77,8 +77,13 @@ platform :android do
       package_name: PACKAGE_NAME, track: "production", json_key: ENV["PLAY_JSON_KEY_PATH"],
     )
     UI.user_error!("A newer production build already exists") if production.any? { |n| n > code }
-    if production.include?(code)
-      UI.message("Version code #{code} is already in production; nothing to do")
+    # A present version code may still be draft, halted, or partly rolled out.
+    # Only an already-completed release makes a publish retry a no-op.
+    completed = production.include?(code) && Supply::Reader.new.track_meta&.releases.to_a.any? do |release|
+      release.status == "completed" && release.version_codes.to_a.map(&:to_i).include?(code)
+    end
+    if completed
+      UI.message("Version code #{code} is already completed in production; nothing to do")
     else
       upload_to_play_store(
         package_name: PACKAGE_NAME,

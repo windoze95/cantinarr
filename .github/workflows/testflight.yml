@@ -20,6 +20,7 @@ on:
       - ".github/workflows/testflight.yml"
       - ".github/workflows/prepare-mobile.yml"
       - "scripts/release_control.py"
+      - "scripts/testflight_distribute.py"
   workflow_call:
     inputs:
       preview_pr:

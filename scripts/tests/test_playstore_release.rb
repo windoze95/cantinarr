@@ -57,6 +57,10 @@ class PlayReleaseTest < Minitest::Test
       tracks(name).flat_map(&:releases).flat_map(&:version_codes).map(&:to_i)
     end
 
+    def get_edit_track(name)
+      tracks(name).first
+    end
+
     def abort_current_edit
       @edit = nil
     end
@@ -249,6 +253,18 @@ class PlayReleaseTest < Minitest::Test
     promote_to_production
     assert_empty @play.update_attempts
     assert_equal 0, @play.bundle_uploads
+  end
+
+  %w[draft halted inProgress].each do |status|
+    define_method("test_production_publish_completes_an_existing_#{status}_release") do
+      @play.published["alpha"] = @play.release(VERSION_CODE)
+      @play.published["production"] = @play.release(VERSION_CODE)
+      @play.published["production"].releases.first.status = status
+      promote_to_production
+      assert_release("production", status: "completed")
+      assert_equal ["production"], @play.update_attempts
+      assert_equal 0, @play.bundle_uploads
+    end
   end
 
   def test_old_release_cannot_replace_newer_production
