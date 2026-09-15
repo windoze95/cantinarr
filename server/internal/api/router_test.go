@@ -284,7 +284,7 @@ func TestConfigHandlerFailsClosedWhenUserDefaultsUnavailable(t *testing.T) {
 	}))
 	rec := httptest.NewRecorder()
 
-	configHandler(&config.Config{}, store, creds, nil, remediationSvc)(rec, req)
+	configHandler(&config.Config{}, store, creds, nil, remediationSvc, nil)(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
@@ -319,7 +319,7 @@ func TestConfigHandlerReportsMediaDownloadCapabilityWithoutExposingRoots(t *test
 	}))
 	rec := httptest.NewRecorder()
 
-	configHandler(&config.Config{MediaDownloadRoots: []string{rootSentinel}}, store, creds, nil, remediationSvc)(rec, req)
+	configHandler(&config.Config{MediaDownloadRoots: []string{rootSentinel}}, store, creds, nil, remediationSvc, nil)(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -355,7 +355,7 @@ func TestConfigHandlerAdvertisesVersionFloor(t *testing.T) {
 	}))
 	rec := httptest.NewRecorder()
 
-	configHandler(&config.Config{}, store, creds, nil, remediationSvc)(rec, req)
+	configHandler(&config.Config{}, store, creds, nil, remediationSvc, nil)(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -506,7 +506,7 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 				Role:   tt.role,
 			}))
 			rec := httptest.NewRecorder()
-			configHandler(cfg, store, creds, nil, remediationSvc)(rec, req)
+			configHandler(cfg, store, creds, nil, remediationSvc, nil)(rec, req)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 			}
@@ -527,9 +527,15 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			}
 			assertExactMapKeys(t, payload,
 				"server_name", "version", "min_app_version", "services", "instances", "issues_enabled", "allow_reporting",
-				"plex_access_requestable",
+				"plex_access_requestable", "media_account_management", "admin_catalog_browsing", "hidden_discover_tabs", "apple_tv_remote", "tv_match_corrections", "request_quotas",
 			)
 
+			if string(payload["apple_tv_remote"]) != "false" {
+				t.Fatal("unwired TV handler advertised support")
+			}
+			if string(payload["admin_catalog_browsing"]) != "true" {
+				t.Fatal("missing admin catalog capability")
+			}
 			var services map[string]bool
 			if err := json.Unmarshal(payload["services"], &services); err != nil {
 				t.Fatalf("decode services: %v", err)
@@ -683,7 +689,7 @@ func requestConfig(
 	req = req.WithContext(context.WithValue(req.Context(), auth.ClaimsKey, claims))
 	rec := httptest.NewRecorder()
 
-	configHandler(&config.Config{}, store, creds, nil, remediationSvc)(rec, req)
+	configHandler(&config.Config{}, store, creds, nil, remediationSvc, nil)(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)

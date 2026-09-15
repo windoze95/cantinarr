@@ -13,6 +13,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/musicdiscovery"
 	requestsvc "github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
@@ -69,7 +70,7 @@ func TestMusicRequesterToolWiring(t *testing.T) {
 	callCtx := CallContext{UserID: uid, Role: auth.RoleUser, DeviceID: "device-1", Reauthorize: true}
 
 	search, err := server.ExecuteTool(context.Background(), "search_music",
-		json.RawMessage(`{"query":"example"}`), callCtx)
+		json.RawMessage(`{"query":"example","catalog":"library"}`), callCtx)
 	if err != nil {
 		t.Fatalf("search_music: %v", err)
 	}
@@ -87,6 +88,13 @@ func TestMusicRequesterToolWiring(t *testing.T) {
 	}
 	if strings.Contains(string(searchJSON), "/MediaCover/") {
 		t.Fatalf("an arr-relative cover path reached the carousel: %s", searchJSON)
+	}
+
+	catalog := &unifiedMusicCatalog{}
+	service.MusicCatalog = catalog
+	unified, err := server.ExecuteTool(context.Background(), "search_music", json.RawMessage(`{"query":"example"}`), callCtx)
+	if err != nil || !catalog.singles || !strings.Contains(unified.Text, `"foreign_album_id":"fa-1"`) || !strings.Contains(unified.Text, `"release_type":"Single"`) {
+		t.Fatalf("default music search: %+v %v", unified, err)
 	}
 
 	display, err := server.ExecuteTool(context.Background(), "display_media",
@@ -151,11 +159,24 @@ func TestSearchMusicWithoutAccessSaysSo(t *testing.T) {
 	callCtx := CallContext{UserID: uid, Role: auth.RoleUser, DeviceID: "device-1", Reauthorize: true}
 
 	out, err := server.ExecuteTool(context.Background(), "search_music",
-		json.RawMessage(`{"query":"anything"}`), callCtx)
+		json.RawMessage(`{"query":"anything","catalog":"library"}`), callCtx)
 	if err != nil {
 		t.Fatalf("search_music: %v", err)
 	}
 	if !strings.Contains(out.Text, "Music is not available for this account") {
 		t.Fatalf("no-access text = %q", out.Text)
 	}
+}
+
+type unifiedMusicCatalog struct {
+	musicdiscovery.Catalog
+	singles bool
+}
+
+func (c *unifiedMusicCatalog) Search(_ context.Context, _ string, _ int, singles ...bool) ([]byte, error) {
+	c.singles = len(singles) > 0 && singles[0]
+	return []byte(`{"page":1,"results":[{"foreign_id":"fa-1","title":"Example Album","release_type":"Single"}]}`), nil
+}
+func (c *unifiedMusicCatalog) Album(context.Context, string) ([]byte, error) {
+	return nil, fmt.Errorf("no public metadata in this fixture")
 }

@@ -64,12 +64,12 @@ func TestMusicRequestRejectsBlankForeignIDAndFormats(t *testing.T) {
 	uid, _ := res.LastInsertId()
 	svc := NewService(database, nil, nil, nil)
 
-	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "music", ForeignID: " \t ", Title: "Blue"}); err == nil || err.Error() != "foreign_id is required for music requests" {
+	if _, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "music", ForeignID: " \t ", Title: "Blue"}); err == nil || err.Error() != "foreign_id is required for music requests" {
 		t.Fatalf("blank foreign_id error = %v", err)
 	}
 	// Music has no format axis; a client sending one is confused and must
 	// hear so rather than have the value silently dropped.
-	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-1", Title: "Blue", BookFormat: "ebook"}); err == nil || !strings.Contains(err.Error(), "no book_format") {
+	if _, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-1", Title: "Blue", BookFormat: "ebook"}); err == nil || !strings.Contains(err.Error(), "no book_format") {
 		t.Fatalf("book_format on music error = %v", err)
 	}
 }
@@ -149,7 +149,7 @@ func TestMusicRequestCompleteAlbumIsAvailableWithoutMutation(t *testing.T) {
 	t.Cleanup(server.Close)
 	svc, uid, instID := newLidarrMusicTestService(t, server.URL)
 
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-1", Title: "Blue Album"})
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-1", Title: "Blue Album"})
 	if err != nil {
 		t.Fatalf("CreateMediaRequest error = %v", err)
 	}
@@ -167,7 +167,7 @@ func TestMusicRequestMonitorsUnmonitoredRecordInPlace(t *testing.T) {
 	t.Cleanup(server.Close)
 	svc, uid, _ := newLidarrMusicTestService(t, server.URL)
 
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-1", Title: "Blue Album"})
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-1", Title: "Blue Album"})
 	if err != nil {
 		t.Fatalf("CreateMediaRequest error = %v", err)
 	}
@@ -191,7 +191,7 @@ func TestMusicRequestPartialAlbumReadsPartial(t *testing.T) {
 	t.Cleanup(server.Close)
 	svc, uid, _ := newLidarrMusicTestService(t, server.URL)
 
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-1", Title: "Blue Album"})
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-1", Title: "Blue Album"})
 	if err != nil {
 		t.Fatalf("CreateMediaRequest error = %v", err)
 	}
@@ -217,7 +217,7 @@ func TestMusicRequestAddsNewAlbumWithRootFolderDefaults(t *testing.T) {
 	t.Cleanup(server.Close)
 	svc, uid, _ := newLidarrMusicTestService(t, server.URL)
 
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-1", Title: "Blue Album"})
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-1", Title: "Blue Album"})
 	if err != nil {
 		t.Fatalf("CreateMediaRequest error = %v", err)
 	}
@@ -283,7 +283,7 @@ func TestMusicAddSkipsNoneMetadataProfile(t *testing.T) {
 	t.Cleanup(server.Close)
 	svc, uid, _ := newLidarrMusicTestService(t, server.URL)
 
-	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-3", Title: "OK Computer"}); err != nil {
+	if _, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-3", Title: "OK Computer"}); err != nil {
 		t.Fatalf("CreateMediaRequest error = %v", err)
 	}
 	if len(fake.addCalls) != 1 {
@@ -305,33 +305,18 @@ func TestMusicRequestParksWhenMetadataUnresolved(t *testing.T) {
 	fake := &fakeLidarr{albums: `[]`, lookupByTerm: map[string]string{}}
 	server := httptest.NewServer(fake.handler(t))
 	t.Cleanup(server.Close)
-	svc, uid, instID := newLidarrMusicTestService(t, server.URL)
+	svc, uid, _ := newLidarrMusicTestService(t, server.URL)
 
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-unknown", Title: "Ghost Album", SearchTerm: "ghost album"})
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-unknown", Title: "Ghost Album", SearchTerm: "ghost album"})
 	if err != nil {
 		t.Fatalf("CreateMediaRequest error = %v", err)
 	}
-	if resp.Status != StatusPending || resp.Message != musicParkedMessage {
-		t.Fatalf("resp = %+v", resp)
+
+	if len(resp.Delivery) != 1 || resp.Delivery[0].State != "attention" || resp.Delivery[0].Code != "metadata_unresolved" {
+		t.Fatalf("unresolved album not retained: %+v", resp)
 	}
-	// The parked row records that its add already ran and failed, so the
-	// approval queue can say so instead of inviting a blind Approve.
-	pending, err := svc.ListPending()
-	if err != nil {
-		t.Fatalf("ListPending error = %v", err)
-	}
-	if len(pending) != 1 {
-		t.Fatalf("pending = %+v", pending)
-	}
-	row := pending[0]
-	if row.MediaType != "music" || row.ForeignID != "mb-unknown" || row.InstanceID != instID {
-		t.Fatalf("pending row = %+v", row)
-	}
-	if row.AddFailureReason != bookAddFailureMetadataUnresolved {
-		t.Fatalf("add failure = %q", row.AddFailureReason)
-	}
-	if row.BookFormat != "" {
-		t.Fatalf("music row grew a book_format %q", row.BookFormat)
+	if count, err := svc.PendingCount(); err != nil || count != 0 {
+		t.Fatalf("delivery failure entered approval count: %d %v", count, err)
 	}
 }
 
@@ -351,7 +336,7 @@ func TestMusicApprovalReplaysAddAndStampsRecordID(t *testing.T) {
 	if err := svc.SetGlobalSettings(GlobalSettings{RequireApproval: true, DefaultSeasonScope: SeasonScopeAll}); err != nil {
 		t.Fatalf("SetGlobalSettings: %v", err)
 	}
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-2", Title: "Pinkerton"})
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-2", Title: "Pinkerton"})
 	if err != nil {
 		t.Fatalf("create error = %v", err)
 	}
@@ -366,7 +351,7 @@ func TestMusicApprovalReplaysAddAndStampsRecordID(t *testing.T) {
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending = %+v, %v", pending, err)
 	}
-	approved, err := svc.ApproveRequest(0, pending[0].ID, nil)
+	approved, err := svc.ApproveRequest(createTestAdmin(t, svc), pending[0].ID, nil)
 	if err != nil {
 		t.Fatalf("ApproveRequest error = %v", err)
 	}
@@ -392,7 +377,7 @@ func TestMusicApprovalReplaysAddAndStampsRecordID(t *testing.T) {
 	}
 }
 
-func TestMusicApprovalRequiredCreateShortCircuitsOnLiveTruth(t *testing.T) {
+func TestMusicApprovalWorkerReconcilesOwnedRelease(t *testing.T) {
 	fake := &fakeLidarr{albums: `[{"id":7,"title":"Blue Album","foreignAlbumId":"mb-1","monitored":true,"statistics":{"trackFileCount":10,"trackCount":10}}]`}
 	server := httptest.NewServer(fake.handler(t))
 	t.Cleanup(server.Close)
@@ -401,12 +386,12 @@ func TestMusicApprovalRequiredCreateShortCircuitsOnLiveTruth(t *testing.T) {
 	if err := svc.SetGlobalSettings(GlobalSettings{RequireApproval: true, DefaultSeasonScope: SeasonScopeAll}); err != nil {
 		t.Fatalf("SetGlobalSettings: %v", err)
 	}
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-1", Title: "Blue Album"})
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-1", Title: "Blue Album"})
 	if err != nil {
 		t.Fatalf("create error = %v", err)
 	}
 	if resp.Status != StatusAvailable {
-		t.Fatalf("status = %q, want available (no pending row for an owned album)", resp.Status)
+		t.Fatalf("status = %q, want available after the worker reconciles an owned album", resp.Status)
 	}
 	if n, _ := svc.PendingCount(); n != 0 {
 		t.Fatalf("pending count = %d", n)
@@ -477,7 +462,7 @@ func TestMusicRequestDeniedWithoutGrant(t *testing.T) {
 		t.Fatalf("create user: %v", err)
 	}
 	strangerID, _ := res.LastInsertId()
-	if _, err := svc.CreateMediaRequest(strangerID, &CreateRequest{MediaType: "music", ForeignID: "mb-1", Title: "Blue Album"}); err == nil || !strings.Contains(err.Error(), "not configured for you") {
+	if _, err := svc.createAndDispatchForTest(strangerID, &CreateRequest{MediaType: "music", ForeignID: "mb-1", Title: "Blue Album"}); err == nil || !strings.Contains(err.Error(), "not configured for you") {
 		t.Fatalf("ungranted create error = %v", err)
 	}
 }
@@ -488,7 +473,7 @@ func TestMusicRequestExplicitForeignInstanceForbidden(t *testing.T) {
 	t.Cleanup(server.Close)
 	svc, uid, _ := newLidarrMusicTestService(t, server.URL)
 
-	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-1", Title: "Blue Album", InstanceID: "someone-elses"}); !errors.Is(err, ErrLidarrInstanceForbidden) {
+	if _, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-1", Title: "Blue Album", InstanceID: "someone-elses"}); !errors.Is(err, ErrLidarrInstanceForbidden) {
 		t.Fatalf("foreign instance error = %v, want ErrLidarrInstanceForbidden", err)
 	}
 }
@@ -552,5 +537,27 @@ func TestSearchAlbumsForUserWithoutAccessFailsClosed(t *testing.T) {
 
 	if _, err := svc.SearchAlbumsForUser(uid, "anything"); !errors.Is(err, ErrNoLidarrAccess) {
 		t.Fatalf("err = %v, want ErrNoLidarrAccess", err)
+	}
+}
+
+func TestMusicNativeSingleFollowsExactProviderAliasBeforeNewAdd(t *testing.T) {
+	fake := &fakeLidarr{albums: `[]`, lookupByTerm: map[string]string{
+		"lidarr:old-id": `[{"title":"Single","foreignAlbumId":"canonical-id","albumType":"Single","artist":{"artistName":"Artist","foreignArtistId":"artist-id"}}]`,
+	}, addResponse: `{"id":77,"title":"Single","foreignAlbumId":"canonical-id","monitored":true}`}
+	server := httptest.NewServer(fake.handler(t))
+	defer server.Close()
+	svc, uid, id := newLidarrMusicTestService(t, server.URL)
+	out, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "music", ForeignID: "old-id", Title: "Single", InstanceID: id})
+	if err != nil || out.CanonicalForeignID != "canonical-id" || len(fake.addCalls) != 1 {
+		t.Fatalf("alias delivery %+v %v adds=%v", out, err, fake.addCalls)
+	}
+	var payload map[string]any
+	json.Unmarshal([]byte(fake.addCalls[0]), &payload)
+	if payload["foreignAlbumId"] != "canonical-id" {
+		t.Fatalf("single identity/type lost: %v", payload)
+	}
+	saved, err := svc.DeliveryStatus(uid, "music", "old-id", id, nil, false)
+	if err != nil || saved.RequestID != out.RequestID || saved.CanonicalForeignID != "canonical-id" {
+		t.Fatalf("original identity lost: %+v %v", saved, err)
 	}
 }

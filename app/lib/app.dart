@@ -75,69 +75,6 @@ String normalizeServer(String value) {
       .toString();
 }
 
-/// Requester-facing copy for realtime approval decisions. Book decisions are
-/// scoped to the concrete formats in the event so a partial result never
-/// claims that the whole title was approved or denied.
-@visibleForTesting
-String requestDecisionSnackText(Map<String, dynamic> data) {
-  final approved = data['decision'] == 'approved';
-  final rawTitle = (data['title'] as String?)?.trim();
-  final title = rawTitle == null || rawTitle.isEmpty
-      ? 'Your request'
-      : rawTitle;
-  final reason = (data['reason'] as String?)?.trim();
-  final bookScope = data['media_type'] == 'book'
-      ? _bookDecisionScope(data, approved: approved)
-      : null;
-  final text = bookScope == null
-      ? (approved ? 'Approved: $title' : 'Denied: $title')
-      : '$bookScope ${approved ? 'approved' : 'denied'}: $title';
-  return !approved && reason != null && reason.isNotEmpty
-      ? '$text — $reason'
-      : text;
-}
-
-String? _bookDecisionScope(
-  Map<String, dynamic> data, {
-  required bool approved,
-}) {
-  final rawFormats = data['book_formats'];
-  final formats = <String>{};
-  if (rawFormats is Map) {
-    for (final entry in rawFormats.entries) {
-      final format = entry.key.toString();
-      final status = entry.value.toString();
-      final belongsToDecision = approved
-          ? const {
-              'available',
-              'downloading',
-              'requested',
-              'partial',
-            }.contains(status)
-          : status == 'denied';
-      if (belongsToDecision &&
-          (format == 'ebook' || format == 'audiobook')) {
-        formats.add(format);
-      }
-    }
-  }
-  if (formats.isEmpty) {
-    switch (data['book_format']?.toString()) {
-      case 'ebook':
-        formats.add('ebook');
-      case 'audiobook':
-        formats.add('audiobook');
-      case 'both':
-        formats.addAll(const ['ebook', 'audiobook']);
-    }
-  }
-  if (formats.isEmpty) return null;
-  return [
-    if (formats.contains('ebook')) 'eBook',
-    if (formats.contains('audiobook')) 'Audiobook',
-  ].join(' + ');
-}
-
 class CantinarrApp extends ConsumerStatefulWidget {
   const CantinarrApp({super.key});
 
@@ -195,12 +132,38 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
 
   void _handleLink(Uri uri) {
     if (uri.scheme != 'cantinarr') return;
+    if (uri.host == 'oidc') {
+      _openOIDCReturn(uri);
+      return;
+    }
     if (uri.host == 'connect') {
       _handleConnectLink(uri);
       return;
     }
     if (uri.host == 'passkeys') {
       _openPasskeyCreate(uri);
+    }
+  }
+
+  Future<void> _openOIDCReturn(Uri uri) async {
+    await ref.read(authProvider.future);
+    if (!mounted) return;
+    try {
+      final purpose = await ref.read(authProvider.notifier).finishSSO(uri);
+      if (!mounted || purpose.isEmpty) return;
+      final target = purpose == 'test' ? '/settings/oidc'
+          : purpose == 'link' ? '/settings/sso-account' : '/dashboard/movies';
+      ref.read(appRouterProvider).go(Uri(path: target, queryParameters: {
+        if (purpose != 'login') 'verified': uri.queryParameters['flow'] ?? '',
+      }).toString());
+      if (purpose != 'login') {
+        _scaffoldMessengerKey.currentState?.showSnackBar(SnackBar(content: Text(
+          purpose == 'test' ? 'Test sign-in succeeded. No account was created or linked.' : 'Single sign-on identity linked.')));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _scaffoldMessengerKey.currentState?.showSnackBar(SnackBar(content: Text(
+        ref.read(authProvider).valueOrNull?.error ?? 'Sign-in could not be completed. Please try again.')));
     }
   }
 
@@ -256,7 +219,7 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
 
     final switched =
         await ref.read(authProvider.notifier).switchServer(server, token);
-    if (!switched) {
+    if (switched == ServerSwitchResult.rejected) {
       _scaffoldMessengerKey.currentState?.showSnackBar(SnackBar(
         content: Text(
           'Could not connect with that link. It may have expired. '
@@ -292,22 +255,6 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
     WidgetsBinding.instance.removeObserver(this);
     _linkSubscription?.cancel();
     super.dispose();
-  }
-
-  /// Shows an in-app toast for an approval decision pushed over the socket.
-  void _showDecisionSnack(WsEvent event) {
-    final messenger = _scaffoldMessengerKey.currentState;
-    if (messenger == null) return;
-    final data = event.data;
-    final approved = data['decision'] == 'approved';
-    final text = requestDecisionSnackText(data);
-    messenger
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: approved ? AppTheme.available : AppTheme.error,
-        content: Text(text, style: const TextStyle(color: AppTheme.background)),
-      ));
   }
 
   /// Shows an admin notice when a standing auto-approval rule pauses itself
@@ -369,16 +316,6 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
   Widget build(BuildContext context) {
     final authState = ref.watch(authProvider);
 
-    // Surface approval decisions pushed over the socket as a toast (unless the
-    // user muted them). Registered before any early return so the listen stays
-    // unconditional across rebuilds.
-    ref.listen(requestDecisionEventsProvider, (_, next) {
-      final event = next.valueOrNull;
-      if (event == null) return;
-      if (!ref.read(requestNotificationsEnabledProvider)) return;
-      _showDecisionSnack(event);
-    });
-
     // Surface the auto-dispatch circuit-breaker notice to admins.
     ref.listen(autodispatchDisabledProvider, (_, next) {
       if (next.valueOrNull == null) return;
@@ -399,19 +336,9 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
       _showAutoApprovalPausedSnack(event);
     });
 
-    // Show blank screen while restoring session to prevent login flash
-    if (authState.isLoading) {
-      return MaterialApp(
-        title: 'Cantinarr',
-        theme: AppTheme.dark,
-        debugShowCheckedModeBanner: false,
-        builder: (context, child) => AppAmbientBackground(
-          child: child ?? const SizedBox.shrink(),
-        ),
-        home: const Scaffold(),
-      );
-    }
-
+    // Install the router on the first frame so a browser OIDC return survives
+    // session restoration. A temporary MaterialApp with a home Navigator
+    // consumes the initial URL and replaces it with "/" before GoRouter starts.
     final router = ref.watch(appRouterProvider);
     return MaterialApp.router(
       title: 'Cantinarr',
@@ -420,9 +347,13 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
       scaffoldMessengerKey: _scaffoldMessengerKey,
       routerConfig: router,
       builder: (context, child) => AppAmbientBackground(
-        child: _UpdateBanner(
-          child: _ReconnectingBanner(child: child ?? const SizedBox.shrink()),
-        ),
+        // Keep the same blank restore screen without replacing the router.
+        child: authState.isLoading
+            ? const Scaffold()
+            : _UpdateBanner(
+                child: _ReconnectingBanner(
+                    child: child ?? const SizedBox.shrink()),
+              ),
       ),
     );
   }

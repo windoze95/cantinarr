@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1203,5 +1205,654 @@ func TestTransmissionHistoryCompletedOnly(t *testing.T) {
 	if items[1].Name != "older-done" || items[1].Status != "seeding" ||
 		items[1].Error != "" || items[1].Category != "linux" {
 		t.Errorf("item[1] = %+v", items[1])
+	}
+}
+
+// --- Deluge fake ---
+
+type delugeRPC struct {
+	Method string            `json:"method"`
+	Params []json.RawMessage `json:"params"`
+}
+
+// delugeFake is a Deluge web UI already connected to its daemon: it issues
+// a session cookie on auth.login, refuses calls without it, and answers the
+// daemon methods with canned JSON.
+type delugeFake struct {
+	t        *testing.T
+	torrents string // JSON object for core.get_torrents_status
+	status   string // JSON object for core.get_session_status
+
+	mu    sync.Mutex
+	calls []delugeRPC
+}
+
+const delugeSessionID = "fake-deluge-session"
+
+func (f *delugeFake) handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json" {
+			f.t.Errorf("deluge path = %s, want /json", r.URL.Path)
+		}
+		var call delugeRPC
+		if err := json.NewDecoder(r.Body).Decode(&call); err != nil {
+			f.t.Errorf("deluge decode request: %v", err)
+		}
+		f.mu.Lock()
+		f.calls = append(f.calls, call)
+		torrents, status := f.torrents, f.status
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if call.Method == "auth.login" {
+			http.SetCookie(w, &http.Cookie{Name: "_session_id", Value: delugeSessionID, Path: "/"})
+			_, _ = io.WriteString(w, `{"result":true,"error":null,"id":1}`)
+			return
+		}
+		if cookie, err := r.Cookie("_session_id"); err != nil || cookie.Value != delugeSessionID {
+			_, _ = io.WriteString(w, `{"result":null,"error":{"message":"Not authenticated","code":1},"id":1}`)
+			return
+		}
+		switch call.Method {
+		case "web.connected":
+			_, _ = io.WriteString(w, `{"result":true,"error":null,"id":1}`)
+		case "core.get_torrents_status":
+			if torrents == "" {
+				torrents = "{}"
+			}
+			_, _ = io.WriteString(w, `{"result":`+torrents+`,"error":null,"id":1}`)
+		case "core.get_session_status":
+			if status == "" {
+				status = "{}"
+			}
+			_, _ = io.WriteString(w, `{"result":`+status+`,"error":null,"id":1}`)
+		case "core.remove_torrent":
+			_, _ = io.WriteString(w, `{"result":true,"error":null,"id":1}`)
+		default: // core.pause_torrent, core.resume_torrent
+			_, _ = io.WriteString(w, `{"result":null,"error":null,"id":1}`)
+		}
+	}
+}
+
+func (f *delugeFake) callsOf(method string) []delugeRPC {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []delugeRPC
+	for _, c := range f.calls {
+		if c.Method == method {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// delugeHashes decodes the single list parameter of a pause/resume call.
+func delugeHashes(t *testing.T, call delugeRPC) []string {
+	t.Helper()
+	if len(call.Params) != 1 {
+		t.Fatalf("%s params = %d, want exactly one (the hash list)", call.Method, len(call.Params))
+	}
+	var hashes []string
+	if err := json.Unmarshal(call.Params[0], &hashes); err != nil {
+		t.Fatalf("%s param is not a list: %s", call.Method, call.Params[0])
+	}
+	return hashes
+}
+
+func TestSnapshotDelugeNormalization(t *testing.T) {
+	fake := &delugeFake{
+		t: t,
+		torrents: `{
+			"deadbeef01": {"name":"Fedora","state":"Downloading","progress":75.0,"total_size":1000000,"total_done":750000,"download_payload_rate":250000,"eta":12,"is_finished":false,"message":"OK","time_added":1752500000.0,"label":"linux"},
+			"deadbeef02": {"name":"Done","state":"Seeding","progress":100.0,"total_size":5000,"total_done":5000,"download_payload_rate":0,"eta":0,"is_finished":true,"message":"OK","time_added":1752500000.0,"completed_time":1752600000},
+			"deadbeef03": {"name":"Paused","state":"Paused","progress":0.0,"total_size":800,"total_done":0,"download_payload_rate":0,"eta":-1,"is_finished":false,"message":"","time_added":1752500001.0}
+		}`,
+		status: `{"payload_download_rate":314159.0,"payload_upload_rate":0}`,
+	}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "deluge", srv.URL, "", "", "deluge-pass")
+
+	view, err := Snapshot(e.registry, inst)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if view.SpeedBPS != 314159 {
+		t.Errorf("SpeedBPS = %d, want 314159", view.SpeedBPS)
+	}
+	// Finished torrents belong to /history, not the queue.
+	if len(view.Items) != 2 {
+		t.Fatalf("items = %d, want 2 (finished torrent must be excluded)", len(view.Items))
+	}
+	got := view.Items[0]
+	want := QueueItem{
+		ID:            "deadbeef01",
+		Name:          "Fedora",
+		SizeBytes:     1000000,
+		SizeLeftBytes: 250000,
+		Progress:      75,
+		SpeedBPS:      250000,
+		ETASeconds:    12,
+		Status:        "Downloading", // Deluge's own state name
+		Category:      "linux",       // Label plugin label
+	}
+	if got != want {
+		t.Errorf("item[0] = %+v, want %+v", got, want)
+	}
+	paused := view.Items[1]
+	if paused.Status != "Paused" || paused.ETASeconds != 0 || paused.Category != "" || paused.SizeLeftBytes != 800 {
+		t.Errorf("paused item = %+v, want status Paused, ETA 0 (negative sentinel), empty category, 800 left", paused)
+	}
+	if view.Paused {
+		t.Error("Paused = true, want false while one torrent downloads")
+	}
+	// Login happened once and every daemon call carried the session.
+	if logins := fake.callsOf("auth.login"); len(logins) != 1 {
+		t.Errorf("auth.login calls = %d, want 1", len(logins))
+	}
+	if statusCalls := fake.callsOf("core.get_torrents_status"); len(statusCalls) != 1 {
+		t.Errorf("core.get_torrents_status calls = %d, want 1", len(statusCalls))
+	}
+}
+
+func TestSnapshotDelugeAllPausedMarksQueuePaused(t *testing.T) {
+	fake := &delugeFake{
+		t: t,
+		torrents: `{
+			"deadbeef03": {"name":"Paused","state":"Paused","progress":0.0,"total_size":800,"total_done":0,"download_payload_rate":0,"eta":0,"is_finished":false,"message":"","time_added":1752500001.0}
+		}`,
+		status: `{"payload_download_rate":0,"payload_upload_rate":0}`,
+	}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "deluge", srv.URL, "", "", "deluge-pass")
+
+	view, err := Snapshot(e.registry, inst)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if !view.Paused {
+		t.Error("Paused = false, want true when every queued torrent is paused")
+	}
+
+	// A Queued torrent is Deluge scheduling it, not a user pause.
+	fake.mu.Lock()
+	fake.torrents = `{
+		"deadbeef03": {"name":"Paused","state":"Paused","progress":0.0,"total_size":800,"total_done":0,"is_finished":false},
+		"deadbeef04": {"name":"Queued","state":"Queued","progress":0.0,"total_size":800,"total_done":0,"is_finished":false}
+	}`
+	fake.mu.Unlock()
+	view, err = Snapshot(e.registry, inst)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if view.Paused {
+		t.Error("Paused = true, want false while a torrent is Queued")
+	}
+}
+
+func TestSnapshotDelugeEmptyQueue(t *testing.T) {
+	fake := &delugeFake{t: t, torrents: `{}`, status: `{"payload_download_rate":0}`}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "deluge", srv.URL, "", "", "deluge-pass")
+	rec := e.do(t, "GET", "/downloads/"+inst.ID+"/queue")
+	view := decodeView(t, rec)
+	if view.Items == nil || len(view.Items) != 0 || view.Paused {
+		t.Errorf("view = %+v, want an empty, unpaused items list (never null)", view)
+	}
+	if !strings.Contains(rec.Body.String(), `"items":[]`) {
+		t.Errorf("body = %s, want items serialized as []", rec.Body.String())
+	}
+}
+
+func TestDelugeItemActions(t *testing.T) {
+	fake := &delugeFake{t: t}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "deluge", srv.URL, "", "", "deluge-pass")
+	base := "/downloads/" + inst.ID
+
+	rec := e.do(t, "POST", base+"/queue/deadbeef01/pause")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("pause status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	pauses := fake.callsOf("core.pause_torrent")
+	if len(pauses) != 1 {
+		t.Fatalf("core.pause_torrent calls = %d, want 1", len(pauses))
+	}
+	if hashes := delugeHashes(t, pauses[0]); len(hashes) != 1 || hashes[0] != "deadbeef01" {
+		t.Errorf("core.pause_torrent hashes = %v, want [deadbeef01]", hashes)
+	}
+
+	rec = e.do(t, "POST", base+"/queue/deadbeef01/resume")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("resume status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	resumes := fake.callsOf("core.resume_torrent")
+	if len(resumes) != 1 {
+		t.Fatalf("core.resume_torrent calls = %d, want 1", len(resumes))
+	}
+	if hashes := delugeHashes(t, resumes[0]); len(hashes) != 1 || hashes[0] != "deadbeef01" {
+		t.Errorf("core.resume_torrent hashes = %v, want [deadbeef01]", hashes)
+	}
+
+	rec = e.do(t, "DELETE", base+"/queue/deadbeef01")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	removes := fake.callsOf("core.remove_torrent")
+	if len(removes) != 1 || len(removes[0].Params) != 2 ||
+		string(removes[0].Params[0]) != `"deadbeef01"` || string(removes[0].Params[1]) != `false` {
+		t.Fatalf("core.remove_torrent calls = %+v, want one call [deadbeef01, false]", removes)
+	}
+
+	rec = e.do(t, "DELETE", base+"/queue/deadbeef01?deleteData=true")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete-with-data status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	removes = fake.callsOf("core.remove_torrent")
+	if len(removes) != 2 || string(removes[1].Params[1]) != `true` {
+		t.Fatalf("core.remove_torrent calls = %+v, want a second call with remove_data true", removes)
+	}
+}
+
+// TestDelugeQueueActionsOnlyTouchUnfinishedTorrents pins the same guardrail
+// Transmission has: pause/resume-all never reaches seeding torrents, and an
+// empty visible queue sends nothing (Deluge would read an empty list as
+// "every torrent").
+func TestDelugeQueueActionsOnlyTouchUnfinishedTorrents(t *testing.T) {
+	fake := &delugeFake{t: t, torrents: `{
+		"incomplete-1": {"name":"A","state":"Downloading","progress":50.0,"total_size":10,"total_done":5,"is_finished":false},
+		"seeding-1": {"name":"B","state":"Seeding","progress":100.0,"total_size":10,"total_done":10,"is_finished":true,"completed_time":1752600000}
+	}`, status: `{"payload_download_rate":0}`}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "deluge", srv.URL, "", "", "deluge-pass")
+	base := "/downloads/" + inst.ID
+
+	rec := e.do(t, "POST", base+"/pause")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("pause-all status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	pauses := fake.callsOf("core.pause_torrent")
+	if len(pauses) != 1 {
+		t.Fatalf("core.pause_torrent calls = %d, want 1", len(pauses))
+	}
+	if hashes := delugeHashes(t, pauses[0]); len(hashes) != 1 || hashes[0] != "incomplete-1" {
+		t.Fatalf("core.pause_torrent hashes = %v, want only the unfinished torrent", hashes)
+	}
+
+	rec = e.do(t, "POST", base+"/resume")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("resume-all status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	resumes := fake.callsOf("core.resume_torrent")
+	if len(resumes) != 1 {
+		t.Fatalf("core.resume_torrent calls = %d, want 1", len(resumes))
+	}
+	if hashes := delugeHashes(t, resumes[0]); len(hashes) != 1 || hashes[0] != "incomplete-1" {
+		t.Fatalf("core.resume_torrent hashes = %v, want only the unfinished torrent", hashes)
+	}
+
+	// Everything finished: pause-all succeeds without issuing any pause.
+	fake.mu.Lock()
+	fake.torrents = `{
+		"seeding-1": {"name":"B","state":"Seeding","progress":100.0,"total_size":10,"total_done":10,"is_finished":true}
+	}`
+	fake.mu.Unlock()
+	rec = e.do(t, "POST", base+"/pause")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("pause-all (empty queue) status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := len(fake.callsOf("core.pause_torrent")); got != 1 {
+		t.Fatalf("core.pause_torrent calls = %d, want still 1 (no pause of every torrent)", got)
+	}
+}
+
+func TestDelugeHistoryFinishedOnly(t *testing.T) {
+	fake := &delugeFake{t: t, torrents: `{
+		"h1": {"name":"incomplete","state":"Downloading","progress":50.0,"total_size":10,"total_done":5,"is_finished":false,"time_added":1752700000.0},
+		"h2": {"name":"older-done","state":"Seeding","progress":100.0,"total_size":100,"total_done":100,"is_finished":true,"message":"OK","time_added":1752300000.0,"completed_time":1752400000,"label":"linux"},
+		"h3": {"name":"newer-done","state":"Error","progress":100.0,"total_size":200,"total_done":200,"is_finished":true,"message":"No data found","time_added":1752300000.0,"completed_time":1752600000},
+		"h4": {"name":"legacy-done","state":"Seeding","progress":100.0,"total_size":300,"total_done":300,"is_finished":true,"message":"OK","time_added":1752500000.0}
+	}`, status: `{"payload_download_rate":0}`}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "deluge", srv.URL, "", "", "deluge-pass")
+
+	items := decodeHistory(t, e.do(t, "GET", "/downloads/"+inst.ID+"/history"))
+	if len(items) != 3 {
+		t.Fatalf("items = %d, want 3 (incomplete excluded)", len(items))
+	}
+	got := items[0]
+	if got.Name != "newer-done" || got.Status != "Error" || got.Error != "No data found" ||
+		got.CompletedAt != time.Unix(1752600000, 0).UTC().Format(time.RFC3339) {
+		t.Errorf("item[0] = %+v", got)
+	}
+	// Deluge 1.3 reports no completed_time; the time added orders it instead.
+	if items[1].Name != "legacy-done" || items[1].CompletedAt != time.Unix(1752500000, 0).UTC().Format(time.RFC3339) {
+		t.Errorf("item[1] = %+v, want legacy-done dated by time_added", items[1])
+	}
+	if items[2].Name != "older-done" || items[2].Status != "Seeding" ||
+		items[2].Error != "" || items[2].Category != "linux" {
+		t.Errorf("item[2] = %+v", items[2])
+	}
+
+	limited := decodeHistory(t, e.do(t, "GET", "/downloads/"+inst.ID+"/history?limit=1"))
+	if len(limited) != 1 || limited[0].Name != "newer-done" {
+		t.Errorf("limited = %+v, want only newer-done", limited)
+	}
+}
+
+// TestSnapshotDelugeErrorTorrentStaysQueued pins the is_finished rule: Deluge
+// reports progress 100 for any torrent in the Error state, so an unfinished
+// failed download must still show in the queue, never slip into history.
+func TestSnapshotDelugeErrorTorrentStaysQueued(t *testing.T) {
+	fake := &delugeFake{t: t, torrents: `{
+		"failed-1": {"name":"Failed","state":"Error","progress":100.0,"total_size":1000,"total_done":10,"is_finished":false,"message":"Tracker: file not found","time_added":1752500000.0}
+	}`, status: `{"payload_download_rate":0}`}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "deluge", srv.URL, "", "", "deluge-pass")
+
+	view, err := Snapshot(e.registry, inst)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Items) != 1 || view.Items[0].Status != "Error" || view.Items[0].SizeLeftBytes != 990 || view.Items[0].Progress != 1 {
+		t.Fatalf("items = %+v, want the errored torrent queued with status Error, 990 bytes left, and progress 1 from its bytes", view.Items)
+	}
+	if view.Paused {
+		t.Error("Paused = true, want false: an errored torrent is not a user pause")
+	}
+	items := decodeHistory(t, e.do(t, "GET", "/downloads/"+inst.ID+"/history"))
+	if len(items) != 0 {
+		t.Errorf("history = %+v, want empty", items)
+	}
+}
+
+// --- ruTorrent fake ---
+
+var rtMethodRe = regexp.MustCompile(`<methodName>([^<]+)</methodName>`)
+
+// rtFake serves ruTorrent's httprpc endpoint: raw XML-RPC reads with canned
+// rTorrent answers, and the form command protocol. rows is the XML of the
+// d.multicall2 result rows.
+type rtFake struct {
+	t        *testing.T
+	rows     string
+	rate     int64
+	commands string // body answered to form commands
+
+	mu     sync.Mutex
+	bodies []string // every XML-RPC request body, in order
+	forms  []string // every form command body, in order
+}
+
+func rtRow(hash, name, label string, size, left, rate int64, open, active, state, complete, hashing int, message string, finished int64, addtime string) string {
+	return `<value><array><data>` +
+		`<value><string>` + hash + `</string></value><value><string>` + name + `</string></value><value><string>` + label + `</string></value>` +
+		`<value><i8>` + strconv.FormatInt(size, 10) + `</i8></value><value><i8>` + strconv.FormatInt(left, 10) + `</i8></value>` +
+		`<value><i8>` + strconv.FormatInt(size-left, 10) + `</i8></value><value><i8>` + strconv.FormatInt(rate, 10) + `</i8></value>` +
+		`<value><i8>` + strconv.Itoa(open) + `</i8></value><value><i8>` + strconv.Itoa(active) + `</i8></value><value><i8>` + strconv.Itoa(state) + `</i8></value>` +
+		`<value><i8>` + strconv.Itoa(complete) + `</i8></value><value><i8>` + strconv.Itoa(hashing) + `</i8></value>` +
+		`<value><string>` + message + `</string></value><value><i8>` + strconv.FormatInt(finished, 10) + `</i8></value><value><string>` + addtime + `</string></value>` +
+		`</data></array></value>`
+}
+
+func (f *rtFake) handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.URL.Path != "/plugins/httprpc/action.php" {
+			f.t.Errorf("rutorrent path = %s, want the httprpc endpoint", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Content-Type") == "application/x-www-form-urlencoded" {
+			f.mu.Lock()
+			f.forms = append(f.forms, string(body))
+			answer := f.commands
+			f.mu.Unlock()
+			if answer == "" {
+				answer = "[0]"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, answer)
+			return
+		}
+		f.mu.Lock()
+		f.bodies = append(f.bodies, string(body))
+		rows, rate := f.rows, f.rate
+		f.mu.Unlock()
+		method := ""
+		if m := rtMethodRe.FindStringSubmatch(string(body)); m != nil {
+			method = m[1]
+		}
+		w.Header().Set("Content-Type", "text/xml")
+		switch method {
+		case "system.client_version":
+			_, _ = io.WriteString(w, `<?xml version="1.0"?><methodResponse><params><param><value><string>0.16.21</string></value></param></params></methodResponse>`)
+		case "throttle.global_down.rate":
+			_, _ = io.WriteString(w, `<?xml version="1.0"?><methodResponse><params><param><value><i8>`+strconv.FormatInt(rate, 10)+`</i8></value></param></params></methodResponse>`)
+		case "d.multicall2":
+			_, _ = io.WriteString(w, `<?xml version="1.0"?><methodResponse><params><param><value><array><data>`+rows+`</data></array></value></param></params></methodResponse>`)
+		default:
+			_, _ = io.WriteString(w, `<?xml version="1.0"?><methodResponse><fault><value><struct><member><name>faultCode</name><value><i4>-507</i4></value></member><member><name>faultString</name><value><string>Command "`+method+`" is not allowed for untrusted connections.</string></value></member></struct></value></fault></methodResponse>`)
+		}
+	}
+}
+
+// methods lists the XML-RPC methods called, in order.
+func (f *rtFake) methods() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, b := range f.bodies {
+		if m := rtMethodRe.FindStringSubmatch(b); m != nil {
+			out = append(out, m[1])
+		}
+	}
+	return out
+}
+
+func (f *rtFake) formsSeen() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.forms...)
+}
+
+func TestSnapshotRutorrentNormalization(t *testing.T) {
+	fake := &rtFake{t: t, rate: 314159, rows: strings.Join([]string{
+		rtRow("AAA1", "Fedora", "linux", 1000000, 250000, 250000, 1, 1, 1, 0, 0, "", 0, "1752500000\n"),
+		rtRow("BBB2", "Done", "", 5000, 0, 0, 1, 1, 1, 1, 0, "", 1752600000, "1752500000\n"),
+		rtRow("CCC3", "Paused", "", 800, 800, 0, 1, 0, 1, 0, 0, "", 0, ""),
+		rtRow("DDD4", "Stopped", "", 900, 900, 0, 1, 0, 0, 0, 0, "", 0, ""),
+		rtRow("EEE5", "Closed", "", 700, 700, 0, 0, 0, 1, 0, 0, "", 0, ""),
+		rtRow("FFF6", "Checking", "", 600, 600, 0, 1, 1, 1, 0, 1, "", 0, ""),
+	}, "")}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "rutorrent", srv.URL, "", "", "")
+
+	view, err := Snapshot(e.registry, inst)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if view.SpeedBPS != 314159 {
+		t.Errorf("SpeedBPS = %d, want 314159", view.SpeedBPS)
+	}
+	if len(view.Items) != 5 {
+		t.Fatalf("items = %d, want 5 (finished download must be excluded)", len(view.Items))
+	}
+	got := view.Items[0]
+	want := QueueItem{
+		ID:            "AAA1",
+		Name:          "Fedora",
+		SizeBytes:     1000000,
+		SizeLeftBytes: 250000,
+		Progress:      75,
+		SpeedBPS:      250000,
+		ETASeconds:    1, // 250000 bytes left at 250000 B/s
+		Status:        "downloading",
+		Category:      "linux",
+	}
+	if got != want {
+		t.Errorf("item[0] = %+v, want %+v", got, want)
+	}
+	statuses := map[string]string{}
+	for _, item := range view.Items {
+		statuses[item.Name] = item.Status
+	}
+	wantStatuses := map[string]string{"Fedora": "downloading", "Paused": "paused", "Stopped": "stopped", "Closed": "stopped", "Checking": "checking"}
+	for name, status := range wantStatuses {
+		if statuses[name] != status {
+			t.Errorf("status of %s = %q, want %q", name, statuses[name], status)
+		}
+	}
+	if view.Paused {
+		t.Error("Paused = true, want false while a download is active")
+	}
+	if got := fake.methods(); strings.Join(got, ",") != "d.multicall2,throttle.global_down.rate" {
+		t.Errorf("methods = %v, want the multicall then the global rate", got)
+	}
+}
+
+func TestSnapshotRutorrentAllHaltedMarksQueuePaused(t *testing.T) {
+	fake := &rtFake{t: t, rows: rtRow("CCC3", "Paused", "", 800, 800, 0, 1, 0, 1, 0, 0, "", 0, "") +
+		rtRow("DDD4", "Stopped", "", 900, 900, 0, 1, 0, 0, 0, 0, "", 0, "")}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "rutorrent", srv.URL, "", "", "")
+	view, err := Snapshot(e.registry, inst)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if !view.Paused {
+		t.Error("Paused = false, want true when every unfinished download is paused or stopped")
+	}
+}
+
+func TestRutorrentItemActions(t *testing.T) {
+	fake := &rtFake{t: t}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "rutorrent", srv.URL, "", "", "")
+	base := "/downloads/" + inst.ID
+
+	if rec := e.do(t, "POST", base+"/queue/AAA1/pause"); rec.Code != http.StatusNoContent {
+		t.Fatalf("pause status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	if rec := e.do(t, "POST", base+"/queue/AAA1/resume"); rec.Code != http.StatusNoContent {
+		t.Fatalf("resume status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	if rec := e.do(t, "DELETE", base+"/queue/AAA1"); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	if rec := e.do(t, "DELETE", base+"/queue/AAA1?deleteData=true"); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete-with-data status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	want := []string{"hash=AAA1&mode=pause", "hash=AAA1&mode=start", "hash=AAA1&mode=remove", "hash=AAA1&mode=removewithdata&v=1"}
+	if got := fake.formsSeen(); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("form commands =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if n := len(fake.methods()); n != 0 {
+		t.Errorf("XML-RPC calls = %d, want 0: mutations must ride ruTorrent's trusted form commands", n)
+	}
+
+	// ruTorrent keeps the torrent when it cannot work out the files.
+	fake.mu.Lock()
+	fake.commands = "false"
+	fake.mu.Unlock()
+	rec := e.do(t, "DELETE", base+"/queue/AAA1?deleteData=true")
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "kept the torrent") {
+		t.Fatalf("delete-with-data on a refusing erasedata = %d %s, want 502 explaining the torrent was kept", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRutorrentQueueActionsOnlyTouchUnfinishedDownloads pins the guardrail:
+// pause/resume-all list the unfinished downloads and send exactly those,
+// never the seeding one, and send nothing when none is unfinished.
+func TestRutorrentQueueActionsOnlyTouchUnfinishedDownloads(t *testing.T) {
+	fake := &rtFake{t: t, rows: rtRow("INC1", "A", "", 10, 5, 0, 1, 1, 1, 0, 0, "", 0, "") +
+		rtRow("INC2", "B", "", 10, 5, 0, 1, 0, 0, 0, 0, "", 0, "") +
+		rtRow("SEED1", "C", "", 10, 0, 0, 1, 1, 1, 1, 0, "", 1752600000, "")}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "rutorrent", srv.URL, "", "", "")
+	base := "/downloads/" + inst.ID
+
+	if rec := e.do(t, "POST", base+"/pause"); rec.Code != http.StatusNoContent {
+		t.Fatalf("pause-all status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	if rec := e.do(t, "POST", base+"/resume"); rec.Code != http.StatusNoContent {
+		t.Fatalf("resume-all status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	want := []string{"hash=INC1&hash=INC2&mode=pause", "hash=INC1&hash=INC2&mode=start"}
+	if got := fake.formsSeen(); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("form commands =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+
+	fake.mu.Lock()
+	fake.rows = rtRow("SEED1", "C", "", 10, 0, 0, 1, 1, 1, 1, 0, "", 1752600000, "")
+	fake.mu.Unlock()
+	if rec := e.do(t, "POST", base+"/pause"); rec.Code != http.StatusNoContent {
+		t.Fatalf("pause-all (nothing unfinished) status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := len(fake.formsSeen()); got != 2 {
+		t.Errorf("form commands = %d, want still 2 (nothing sent for an all-finished list)", got)
+	}
+}
+
+func TestRutorrentHistoryCompletedOnly(t *testing.T) {
+	fake := &rtFake{t: t, rows: strings.Join([]string{
+		rtRow("H1", "incomplete", "", 10, 5, 0, 1, 1, 1, 0, 0, "", 0, ""),
+		rtRow("H2", "older-done", "linux", 100, 0, 0, 1, 1, 1, 1, 0, "Tracker: [Timeout was reached]", 1752400000, ""),
+		rtRow("H3", "newer-done", "", 200, 0, 0, 1, 0, 0, 1, 0, "Hash check on download completion found bad chunks", 1752600000, ""),
+		rtRow("H4", "loaded-complete", "", 300, 0, 0, 1, 1, 1, 1, 0, "", 0, "1752500000\n"),
+	}, "")}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "rutorrent", srv.URL, "", "", "")
+
+	items := decodeHistory(t, e.do(t, "GET", "/downloads/"+inst.ID+"/history"))
+	if len(items) != 3 {
+		t.Fatalf("items = %d, want 3 (incomplete excluded)", len(items))
+	}
+	if items[0].Name != "newer-done" || items[0].Status != "stopped" || items[0].Error != "Hash check on download completion found bad chunks" ||
+		items[0].CompletedAt != time.Unix(1752600000, 0).UTC().Format(time.RFC3339) {
+		t.Errorf("item[0] = %+v", items[0])
+	}
+	// A download that was complete when loaded has no finished stamp; its
+	// add time orders it instead.
+	if items[1].Name != "loaded-complete" || items[1].CompletedAt != time.Unix(1752500000, 0).UTC().Format(time.RFC3339) {
+		t.Errorf("item[1] = %+v", items[1])
+	}
+	// Tracker chatter is not an error.
+	if items[2].Name != "older-done" || items[2].Status != "seeding" || items[2].Error != "" || items[2].Category != "linux" {
+		t.Errorf("item[2] = %+v", items[2])
 	}
 }

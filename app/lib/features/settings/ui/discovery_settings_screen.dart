@@ -5,7 +5,9 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/settings_highlight.dart';
 import '../../../core/widgets/status_pill.dart';
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../discover/logic/discovery_access.dart';
 import '../data/credentials_service.dart';
 import '../data/discovery_settings_service.dart';
 import '../settings_anchors.dart';
@@ -30,6 +32,14 @@ class _DiscoverySettingsScreenState
   late final DiscoverySettingsService _service;
   late final CredentialsService _credentialsService;
 
+  final _draft = SettingsDraft();
+  Object get _draftValues => [
+        _edited?.source,
+        _edited?.englishOnly,
+        _edited?.hiddenWhenUnconfigured,
+        _tmdbController.text,
+        _traktIdController.text,
+      ];
   DiscoverySettings? _edited;
   CredentialsStatus? _credentials;
   bool _isLoading = true;
@@ -79,6 +89,7 @@ class _DiscoverySettingsScreenState
       setState(() {
         _edited = results[0] as DiscoverySettings;
         _credentials = results[1] as CredentialsStatus;
+        _draft.markSaved(_draftValues);
         _isLoading = false;
       });
     } catch (e) {
@@ -113,12 +124,19 @@ class _DiscoverySettingsScreenState
       }
       final saved = await _service.update(edited);
       if (!mounted) return;
+      _edited = saved;
+      _draft.markSaved(_draftValues);
       final refreshed = creds.isEmpty ? null : await _reloadAfterCreds();
       if (!mounted) return;
       setState(() {
         _edited = refreshed ?? saved;
+        _draft.markSaved(_draftValues);
         _saving = false;
       });
+      try {
+        await ref.read(authProvider.notifier).refreshConfig();
+      } catch (_) {}
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Saved')),
       );
@@ -187,7 +205,13 @@ class _DiscoverySettingsScreenState
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+        hasChanges: () => _draft.hasChanges(_draftValues),
+        isSaving: _saving,
+        child: _buildPage(context),
+      );
+
+  Widget _buildPage(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Discover')),
       body: CenteredContent(
@@ -279,8 +303,11 @@ class _DiscoverySettingsScreenState
           padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
           child: Text(
             'These settings shape the headline row on the Movies and TV tabs, '
-            'and the recommendation rows throughout the app. Search is never '
-            'filtered.',
+            'and movie and TV recommendation rows. Search is never filtered. '
+            'Books use Open Library, and music uses ListenBrainz and MusicBrainz, '
+            'with no extra account or API key. These source and English-only '
+            'settings do not apply to books or music. Admins can browse before '
+            'connecting a service; requests and book/music search need a connection.',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
@@ -302,11 +329,40 @@ class _DiscoverySettingsScreenState
             ),
             subtitle: const Text(
               'Hides titles whose original language is not English from the '
-              'discovery and recommendation rows. Search still finds everything.',
+              'movie and TV discovery and recommendation rows. Search still finds everything.',
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ),
         ),
+        const _SectionLabel('Discover tabs'),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Text(
+              'These choices affect everyone on this server. A hidden tab '
+              'returns automatically when its service is connected. If the service '
+              'is removed, the tab is hidden again. Access permissions stay the same.'),
+        ),
+        if (edited.hiddenWhenUnconfigured == null)
+          const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(discoverVisibilityUpdateMessage)),
+        for (final tab in discoverCatalogs)
+          SettingsHighlight(
+            anchorId: SettingsAnchors.discoveryTabAnchors[tab.mediaType]!,
+            highlightId: widget.highlightId,
+            child: SwitchListTile(
+              title: Text(
+                  "Hide ${tab.label} when ${tab.serviceName} isn't connected"),
+              value: edited.hiddenWhenUnconfigured?[tab.mediaType] ?? false,
+              onChanged: edited.hiddenWhenUnconfigured == null || _saving
+                  ? null
+                  : (value) => setState(
+                      () => _edited = edited.copyWith(hiddenWhenUnconfigured: {
+                            ...edited.hiddenWhenUnconfigured!,
+                            tab.mediaType: value,
+                          })),
+            ),
+          ),
         const _SectionLabel('Credentials'),
         // Trakt leads: it is the credential that unlocks a source, while
         // TMDB is an optional override of the built-in key.

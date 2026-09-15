@@ -16,6 +16,7 @@ import (
 // and records the query it was asked, plus /System/Info for the server id.
 type fakeLibrary struct {
 	t       *testing.T
+	user    func(http.ResponseWriter, *http.Request)
 	items   []map[string]any
 	status  int
 	echo    bool // write the request back in the error body
@@ -27,6 +28,7 @@ func (f *fakeLibrary) handler() http.Handler {
 	mux.HandleFunc("/System/Info", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(f.t, w, map[string]any{"Id": "server-1", "ServerName": "Home", "Version": "10.11.11"})
 	})
+	mux.HandleFunc("/Users/", f.serveUser)
 	mux.HandleFunc("/Items", func(w http.ResponseWriter, r *http.Request) {
 		f.queries = append(f.queries, r.URL.Query())
 		if f.status != 0 {
@@ -43,6 +45,14 @@ func (f *fakeLibrary) handler() http.Handler {
 		w.WriteHeader(http.StatusTeapot)
 	})
 	return mux
+}
+
+func (f *fakeLibrary) serveUser(w http.ResponseWriter, r *http.Request) {
+	if f.user != nil {
+		f.user(w, r)
+		return
+	}
+	writeJSON(f.t, w, map[string]any{"Id": strings.TrimPrefix(r.URL.Path, "/Users/"), "Policy": map[string]any{"IsDisabled": false, "EnabledFolders": []string{"movies"}}})
 }
 
 func item(id string, ids map[string]any) map[string]any {

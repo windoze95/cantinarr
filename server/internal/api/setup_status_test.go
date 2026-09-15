@@ -1,12 +1,19 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/windoze95/cantinarr-server/internal/config"
+	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
+	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
 )
 
@@ -23,20 +30,12 @@ func TestBuildSetupItemsNothingConfigured(t *testing.T) {
 			t.Errorf("item missing display fields: %+v", item)
 		}
 	}
-	// Essentials lead the list so the wizard shows them first.
-	for i, key := range []string{"radarr", "sonarr", "tmdb"} {
-		if items[i].Key != key {
-			t.Errorf("items[%d] = %s, want %s", i, items[i].Key, key)
-		}
-		if items[i].Optional {
-			t.Errorf("%s must not be optional", key)
-		}
-	}
-	for _, item := range items[3:] {
+	for _, item := range items {
 		if !item.Optional {
-			t.Errorf("%s should be optional", item.Key)
+			t.Errorf("%s must advertise skip support", item.Key)
 		}
 	}
+
 }
 
 func TestBuildSetupItemsMapsFacts(t *testing.T) {
@@ -177,76 +176,122 @@ func TestRemediationSetupItemWarnsWhenProviderless(t *testing.T) {
 	}
 }
 
-// TestSetupSkipsStampOnlyOptionalItems pins the skip contract end to end: the
-// write path refuses essentials and unknown keys, the read path stamps
-// skipped only onto optional items, and a skip stored against an essential
-// (a hand-edited or downgraded database) is ignored rather than silencing it.
-func TestSetupSkipsStampOnlyOptionalItems(t *testing.T) {
-	database, err := db.Open(":memory:")
+func TestSetupSkipsPersistForEveryItem(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cantinarr.db")
+	database, err := db.Open(path)
 	if err != nil {
-		t.Fatalf("db.Open: %v", err)
+		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x31}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
 	settings := serversettings.NewService(database, nil)
-	handler := setupSkipHandler(settings)
-
+	if _, err := settings.SetExternalURL("https://cantinarr.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.SetDiscovery(serversettings.DiscoverySourceTMDBTrending, false); err != nil {
+		t.Fatal(err)
+	}
 	put := func(body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPut, "/api/admin/setup-status/skips", strings.NewReader(body))
-		handler(rec, req)
+		setupSkipHandler(settings)(rec, httptest.NewRequest(http.MethodPut, "/api/admin/setup-status/skips", strings.NewReader(body)))
 		return rec
 	}
-
-	if rec := put(`{"key":"music","skipped":true}`); rec.Code != http.StatusOK {
-		t.Fatalf("skip music = %d, body %s", rec.Code, rec.Body.String())
+	for _, item := range buildSetupItems(setupFacts{}) {
+		body, _ := json.Marshal(map[string]any{"key": item.Key, "skipped": true})
+		if rec := put(string(body)); rec.Code != http.StatusOK {
+			t.Fatalf("skip %s = %d: %s", item.Key, rec.Code, rec.Body.String())
+		}
 	}
-	// Essentials can never be acknowledged away: the alarm is about
-	// capability, not tidiness.
-	if rec := put(`{"key":"radarr","skipped":true}`); rec.Code != http.StatusBadRequest {
-		t.Fatalf("skip radarr = %d, want 400", rec.Code)
-	}
-	if rec := put(`{"key":"flux-capacitor","skipped":true}`); rec.Code != http.StatusBadRequest {
-		t.Fatalf("skip unknown key = %d, want 400", rec.Code)
-	}
-
-	// Force an essential into the stored set the way a downgrade could, and
-	// prove the read path ignores it.
-	if _, err := settings.SetSetupItemSkipped("radarr", true); err != nil {
-		t.Fatalf("force-store essential skip: %v", err)
-	}
-
-	stored := settings.Get().SetupSkippedItems
-	skipSet := map[string]bool{}
-	for _, key := range stored {
-		skipSet[key] = true
-	}
-	if !skipSet["music"] {
-		t.Fatalf("stored skips = %v, want music present", stored)
-	}
-	items := buildSetupItems(setupFacts{})
-	for i := range items {
-		items[i].Skipped = items[i].Optional && skipSet[items[i].Key]
-	}
-	for _, item := range items {
-		switch item.Key {
-		case "music":
-			if !item.Skipped {
-				t.Error("music did not read back skipped")
-			}
-		case "radarr":
-			if item.Skipped {
-				t.Error("an essential read back skipped — a stored skip must never silence capability")
-			}
+	for _, body := range []string{`{"key":"unknown","skipped":true}`, `{`} {
+		if rec := put(body); rec.Code != http.StatusBadRequest {
+			t.Fatalf("invalid write = %d", rec.Code)
 		}
 	}
 
-	// Un-skip is the reversal the checklist offers in place.
-	if rec := put(`{"key":"music","skipped":false}`); rec.Code != http.StatusOK {
-		t.Fatalf("unskip music = %d", rec.Code)
+	// Reopen the database, not just the settings service, to prove persistence.
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
 	}
-	for _, key := range settings.Get().SetupSkippedItems {
-		if key == "music" {
-			t.Fatal("music still stored after unskip")
+	database, err = db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings = serversettings.NewService(database, nil)
+	stored := settings.Get()
+	if stored.ExternalURL != "https://cantinarr.example.com" || stored.DiscoverySource != serversettings.DiscoverySourceTMDBTrending || stored.DiscoveryEnglishOnly {
+		t.Fatalf("skips changed unrelated preferences: %+v", stored)
+	}
+	store := instance.NewStore(database, cipher)
+	creds := credentials.NewRegistry(database, cipher)
+	get := func() []setupItem {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		setupStatusHandler(&config.Config{}, store, creds, nil, settings, nil)(rec, httptest.NewRequest(http.MethodGet, "/api/admin/setup-status", nil))
+		var response struct {
+			Items []setupItem `json:"items"`
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET status = %d: %s", rec.Code, rec.Body.String())
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		return response.Items
+	}
+	items := get()
+	if len(items) != 14 {
+		t.Fatalf("read %d items", len(items))
+	}
+	for _, item := range items {
+		if !item.Optional || !item.Skipped {
+			t.Errorf("skip not restored for %s: %+v", item.Key, item)
+		}
+		if item.Key == "radarr" && item.Configured {
+			t.Error("skipping configured Radarr")
+		}
+	}
+
+	// An existing but unreachable instance is still configured, even if skipped.
+	if err := store.Create(&instance.Instance{ServiceType: "radarr", Name: "Offline movies", URL: "http://127.0.0.1:1", APIKey: "test-key"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range get() {
+		if item.Key == "radarr" && (!item.Configured || !item.Skipped) {
+			t.Errorf("configured skipped Radarr = %+v", item)
+		}
+	}
+	if rec := put(`{"key":"radarr","skipped":false}`); rec.Code != http.StatusOK {
+		t.Fatalf("restore = %d", rec.Code)
+	}
+	for _, item := range get() {
+		if item.Skipped != (item.Key != "radarr") {
+			t.Errorf("restoring Radarr changed %s: %+v", item.Key, item)
+		}
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if rec := put(`{"key":"push","skipped":true}`); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("failed save = %d", rec.Code)
+	}
+}
+
+func TestSetupSkipWritesRequireAdmin(t *testing.T) {
+	h := newRBACRouterHarness(t, false)
+	for _, tc := range []struct {
+		token string
+		want  int
+	}{
+		{"", http.StatusUnauthorized},
+		{h.requesterToken, http.StatusForbidden},
+		{h.adminToken, http.StatusOK},
+	} {
+		rec := serveRBACRequestWithBody(h.router, http.MethodPut, "/api/admin/setup-status/skips", tc.token, `{"key":"radarr","skipped":true}`)
+		if rec.Code != tc.want {
+			t.Errorf("write = %d, want %d: %s", rec.Code, tc.want, rec.Body.String())
 		}
 	}
 }

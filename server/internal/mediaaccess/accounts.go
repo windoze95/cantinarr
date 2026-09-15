@@ -18,11 +18,13 @@ type accountRow struct {
 	RemoteUserID       string
 	RemoteUsername     string
 	CreatedByCantinarr bool
+	ManageAccess       bool
+	AccessSyncPending  bool
 	CreatedAt          time.Time
 	DisabledAt         sql.NullTime
 }
 
-const accountColumns = "user_id, instance_id, remote_user_id, remote_username, created_by_cantinarr, created_at, disabled_at"
+const accountColumns = "user_id, instance_id, remote_user_id, remote_username, created_by_cantinarr, manage_access, access_sync_pending, created_at, disabled_at"
 
 var (
 	errAccountConflict = errors.New("account row already exists")
@@ -34,7 +36,7 @@ func scanAccount(scanner interface{ Scan(dest ...any) error }) (accountRow, erro
 	var row accountRow
 	if err := scanner.Scan(
 		&row.UserID, &row.InstanceID, &row.RemoteUserID, &row.RemoteUsername,
-		&row.CreatedByCantinarr, &row.CreatedAt, &row.DisabledAt,
+		&row.CreatedByCantinarr, &row.ManageAccess, &row.AccessSyncPending, &row.CreatedAt, &row.DisabledAt,
 	); err != nil {
 		return accountRow{}, err
 	}
@@ -81,7 +83,8 @@ func (s *Service) listAccountsForUser(userID int64) ([]accountRow, error) {
 func (s *Service) listAccounts() ([]Account, error) {
 	rows, err := s.db.Query(
 		`SELECT a.user_id, a.instance_id, si.name, si.service_type, a.remote_user_id, a.remote_username,
-		        a.created_by_cantinarr, a.created_at, a.disabled_at
+		        a.created_by_cantinarr, a.manage_access, a.access_sync_pending, a.created_at, a.disabled_at,
+		        EXISTS(SELECT 1 FROM user_instance_grants g WHERE g.user_id=a.user_id AND g.instance_id=a.instance_id)
 		 FROM user_media_server_accounts a
 		 JOIN service_instances si ON si.id = a.instance_id
 		 ORDER BY a.user_id, si.sort_order, si.name, si.id`,
@@ -96,11 +99,12 @@ func (s *Service) listAccounts() ([]Account, error) {
 		var disabledAt sql.NullTime
 		if err := rows.Scan(
 			&a.UserID, &a.InstanceID, &a.InstanceName, &a.ServiceType, &a.RemoteUserID, &a.Username,
-			&a.CreatedByCantinarr, &a.CreatedAt, &disabledAt,
+			&a.CreatedByCantinarr, &a.ManageAccess, &a.AccessSyncPending, &a.CreatedAt, &disabledAt, &a.Granted,
 		); err != nil {
 			return nil, fmt.Errorf("scan media server account: %w", err)
 		}
 		a.Disabled = disabledAt.Valid
+		a.AccessSyncPending = a.ManageAccess && (a.AccessSyncPending || a.Disabled == a.Granted)
 		out = append(out, a)
 	}
 	return out, rows.Err()
@@ -112,20 +116,25 @@ func (s *Service) listAccounts() ([]Account, error) {
 // rolls the remote account back. Conflicts are classified so the service can
 // answer precisely without parsing SQLite text at every call site.
 func (s *Service) insertAccount(row accountRow, requireGrant bool) (inserted bool, err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
 	var res sql.Result
 	if requireGrant {
-		res, err = s.db.Exec(
-			`INSERT INTO user_media_server_accounts (user_id, instance_id, remote_user_id, remote_username, created_by_cantinarr)
-			 SELECT ?, ?, ?, ?, ?
+		res, err = tx.Exec(
+			`INSERT INTO user_media_server_accounts (user_id, instance_id, remote_user_id, remote_username, created_by_cantinarr, manage_access, access_sync_pending)
+			 SELECT ?, ?, ?, ?, ?, ?, ?
 			 WHERE EXISTS (SELECT 1 FROM user_instance_grants WHERE user_id = ? AND instance_id = ?)`,
-			row.UserID, row.InstanceID, row.RemoteUserID, row.RemoteUsername, row.CreatedByCantinarr,
+			row.UserID, row.InstanceID, row.RemoteUserID, row.RemoteUsername, row.CreatedByCantinarr, row.ManageAccess, row.AccessSyncPending,
 			row.UserID, row.InstanceID,
 		)
 	} else {
-		res, err = s.db.Exec(
-			`INSERT INTO user_media_server_accounts (user_id, instance_id, remote_user_id, remote_username, created_by_cantinarr)
-			 VALUES (?, ?, ?, ?, ?)`,
-			row.UserID, row.InstanceID, row.RemoteUserID, row.RemoteUsername, row.CreatedByCantinarr,
+		res, err = tx.Exec(
+			`INSERT INTO user_media_server_accounts (user_id, instance_id, remote_user_id, remote_username, created_by_cantinarr, manage_access, access_sync_pending)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			row.UserID, row.InstanceID, row.RemoteUserID, row.RemoteUsername, row.CreatedByCantinarr, row.ManageAccess, row.AccessSyncPending,
 		)
 	}
 	if err != nil {
@@ -141,7 +150,12 @@ func (s *Service) insertAccount(row accountRow, requireGrant bool) (inserted boo
 		return false, fmt.Errorf("insert media server account: %w", err)
 	}
 	n, _ := res.RowsAffected()
-	return n == 1, nil
+	if n == 1 {
+		if _, err := tx.Exec("DELETE FROM user_media_server_unlinks WHERE user_id = ? AND instance_id = ?", row.UserID, row.InstanceID); err != nil {
+			return false, err
+		}
+	}
+	return n == 1, tx.Commit()
 }
 
 func (s *Service) setDisabledAt(userID int64, instanceID string, disabled bool) error {
@@ -150,7 +164,7 @@ func (s *Service) setDisabledAt(userID int64, instanceID string, disabled bool) 
 		stamp = time.Now().UTC()
 	}
 	if _, err := s.db.Exec(
-		"UPDATE user_media_server_accounts SET disabled_at = ? WHERE user_id = ? AND instance_id = ?",
+		"UPDATE user_media_server_accounts SET disabled_at = ?, access_sync_pending = 0 WHERE user_id = ? AND instance_id = ?",
 		stamp, userID, instanceID,
 	); err != nil {
 		return fmt.Errorf("stamp media server account: %w", err)
@@ -182,8 +196,12 @@ func (s *Service) listDriftedAccountUsers() ([]int64, error) {
 		 FROM user_media_server_accounts a
 		 LEFT JOIN user_instance_grants g
 		   ON g.user_id = a.user_id AND g.instance_id = a.instance_id
-		 WHERE (g.instance_id IS NULL AND a.disabled_at IS NULL)
-		    OR (g.instance_id IS NOT NULL AND a.disabled_at IS NOT NULL)
+		 WHERE a.manage_access = 1 AND (a.access_sync_pending = 1
+         OR (g.instance_id IS NOT NULL AND EXISTS(SELECT 1 FROM user_media_library_policies p
+             WHERE p.user_id=a.user_id AND p.instance_id=a.instance_id
+             AND p.remote_user_id=a.remote_user_id AND p.sync_pending=1))
+		    OR (g.instance_id IS NULL AND a.disabled_at IS NULL)
+		    OR (g.instance_id IS NOT NULL AND a.disabled_at IS NOT NULL))
 		 ORDER BY a.user_id`,
 	)
 	if err != nil {
@@ -207,7 +225,7 @@ func (s *Service) listDriftedAccountUsers() ([]int64, error) {
 func (s *Service) listAccountsCreatedOn(instanceID string) ([]accountRow, error) {
 	rows, err := s.db.Query(
 		"SELECT "+accountColumns+
-			" FROM user_media_server_accounts WHERE instance_id = ? AND created_by_cantinarr = 1 ORDER BY user_id",
+			" FROM user_media_server_accounts WHERE instance_id = ? AND created_by_cantinarr = 1 AND manage_access = 1 ORDER BY user_id",
 		instanceID,
 	)
 	if err != nil {
@@ -280,7 +298,8 @@ func (s *Service) listUninvitedGrantedUsers() ([]int64, error) {
 		 JOIN service_instances si ON si.id = g.instance_id
 		 LEFT JOIN user_media_server_accounts a
 		   ON a.user_id = g.user_id AND a.instance_id = g.instance_id
-		 WHERE u.plex_email != '' AND a.instance_id IS NULL AND si.service_type IN (`+mediaServerTypePlaceholders()+`)
+		 WHERE u.plex_email != '' AND a.instance_id IS NULL
+		 AND NOT EXISTS (SELECT 1 FROM user_media_server_unlinks x WHERE x.user_id=g.user_id AND x.instance_id=g.instance_id) AND si.service_type IN (`+mediaServerTypePlaceholders()+`)
 		 ORDER BY g.user_id`,
 		mediaServerTypeArgs()...,
 	)

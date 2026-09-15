@@ -7,15 +7,11 @@ platform :android do
   lane :next_build_number do
     codes = []
     %w[internal alpha beta production].each do |track|
-      begin
-        codes += google_play_track_version_codes(
-          package_name: PACKAGE_NAME,
-          track: track,
-          json_key: ENV["PLAY_JSON_KEY_PATH"],
-        )
-      rescue => e
-        UI.message("Track #{track}: #{e.message.to_s.lines.first&.strip} (skipping)")
-      end
+      codes += google_play_track_version_codes(
+        package_name: PACKAGE_NAME,
+        track: track,
+        json_key: ENV["PLAY_JSON_KEY_PATH"],
+      )
     end
     next_build = (codes.max || 0) + 1
 
@@ -23,12 +19,24 @@ platform :android do
     File.write(ENV['GITHUB_OUTPUT'], "build_number=#{next_build}\n", mode: "a") if ENV['GITHUB_OUTPUT']
   end
 
-  desc "Upload the release AAB to Play"
+  desc "Publish the same AAB to Play open and closed testing by default"
   lane :beta do
+    target = ENV["PLAY_TRACK"] || "both"
+    unless %w[both beta alpha internal].include?(target)
+      UI.user_error!("PLAY_TRACK must be both, beta, alpha, or internal")
+    end
+    version_code = ENV["PLAY_VERSION_CODE"].to_s
+    owner_candidate = ENV["PLAY_OWNER_CANDIDATE"] == "true"
+    UI.user_error!("Owner candidates must also reach both public testing tracks") if owner_candidate && target != "both"
+    if target == "both" && !version_code.match?(/\A[1-9][0-9]*\z/)
+      UI.user_error!("PLAY_VERSION_CODE must be the positive version code built into the AAB")
+    end
+    release_status = ENV["PLAY_RELEASE_STATUS"] || "completed"
+
     upload_to_play_store(
       package_name: PACKAGE_NAME,
-      track: ENV["PLAY_TRACK"] || "alpha",
-      release_status: ENV["PLAY_RELEASE_STATUS"] || "completed",
+      track: target == "both" ? "alpha" : target,
+      release_status: release_status,
       aab: "../build/app/outputs/bundle/release/app-release.aab",
       json_key: ENV["PLAY_JSON_KEY_PATH"],
       skip_upload_metadata: true,
@@ -36,13 +44,64 @@ platform :android do
       skip_upload_images: true,
       skip_upload_screenshots: true,
     )
+
+    destinations = target == "both" ? ["beta"] : []
+    destinations << "internal" if owner_candidate
+    destinations.each do |destination|
+      # Copy this run's release, including its notes, without uploading the AAB again.
+      # Keep the existing closed testers supplied while the open beta grows.
+      upload_to_play_store(
+        package_name: PACKAGE_NAME,
+        track: "alpha",
+        track_promote_to: destination,
+        version_code: version_code.to_i,
+        release_status: release_status,
+        track_promote_release_status: release_status,
+        json_key: ENV["PLAY_JSON_KEY_PATH"],
+        skip_upload_aab: true,
+        skip_upload_apk: true,
+        skip_upload_metadata: true,
+        skip_upload_changelogs: true,
+        skip_upload_images: true,
+        skip_upload_screenshots: true,
+      )
+    end
+  end
+
+  desc "Promote the exact tested version code to production without rebuilding"
+  lane :release do
+    value = ENV["PLAY_VERSION_CODE"].to_s
+    UI.user_error!("PLAY_VERSION_CODE must identify the exact tested build") unless value.match?(/\A[1-9][0-9]*\z/)
+    code = value.to_i
+    production = google_play_track_version_codes(
+      package_name: PACKAGE_NAME, track: "production", json_key: ENV["PLAY_JSON_KEY_PATH"],
+    )
+    UI.user_error!("A newer production build already exists") if production.any? { |n| n > code }
+    # A present version code may still be draft, halted, or partly rolled out.
+    # Only an already-completed release makes a publish retry a no-op.
+    completed = production.include?(code) && Supply::Reader.new.track_meta&.releases.to_a.any? do |release|
+      release.status == "completed" && release.version_codes.to_a.map(&:to_i).include?(code)
+    end
+    if completed
+      UI.message("Version code #{code} is already completed in production; nothing to do")
+    else
+      upload_to_play_store(
+        package_name: PACKAGE_NAME,
+        track: "alpha", track_promote_to: "production", version_code: code,
+        release_status: "completed", track_promote_release_status: "completed",
+        json_key: ENV["PLAY_JSON_KEY_PATH"],
+        skip_upload_aab: true, skip_upload_apk: true,
+        skip_upload_metadata: true, skip_upload_changelogs: true,
+        skip_upload_images: true, skip_upload_screenshots: true,
+      )
+    end
   end
 
   desc "Push the Play listing (copy + graphics), no binary"
   lane :listing do
     upload_to_play_store(
       package_name: PACKAGE_NAME,
-      track: ENV["PLAY_TRACK"] || "alpha",
+      track: ENV["PLAY_TRACK"] || "beta",
       json_key: ENV["PLAY_JSON_KEY_PATH"],
       skip_upload_aab: true,
       skip_upload_apk: true,

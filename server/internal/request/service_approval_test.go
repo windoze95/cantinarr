@@ -9,6 +9,7 @@ import (
 type recordingNotifier struct {
 	userEvents  []notifierEvent
 	adminEvents []notifierEvent
+	quotaEvents []notifierEvent
 }
 
 type notifierEvent struct {
@@ -18,10 +19,18 @@ type notifierEvent struct {
 }
 
 func (r *recordingNotifier) NotifyUser(userID int64, eventType string, data map[string]interface{}) {
+	if eventType == "request_quota_changed" {
+		r.quotaEvents = append(r.quotaEvents, notifierEvent{userID: userID, eventType: eventType, data: data})
+		return
+	}
 	r.userEvents = append(r.userEvents, notifierEvent{userID: userID, eventType: eventType, data: data})
 }
 
 func (r *recordingNotifier) NotifyAdmins(eventType string, data map[string]interface{}) {
+	if eventType == "request_quota_changed" {
+		r.quotaEvents = append(r.quotaEvents, notifierEvent{eventType: eventType, data: data})
+		return
+	}
 	r.adminEvents = append(r.adminEvents, notifierEvent{eventType: eventType, data: data})
 }
 
@@ -129,15 +138,16 @@ func TestCreateMediaRequestPendingDedupe(t *testing.T) {
 	}
 }
 
-// TestCreateTVRequestPendingCachesTvdbID: a pending TV request stores the
-// supplied TVDB id mapping so status checks resolve while it waits, and the
-// resolved season scope rides along for the approval queue.
-func TestCreateTVRequestPendingCachesTvdbID(t *testing.T) {
-	s, uid := newHistoryTestService(t, "", "", "")
+// Pending requests retain a verified server target and the source scope.
+func TestCreateTVRequestPendingCachesVerifiedTvdbID(t *testing.T) {
+	f := &fakeSonarrTV{lookupJSON: `[{"title":"Andor","tvdbId":121361,"year":2022,"seasons":[{"seasonNumber":1}]}]`}
+	srv := newFakeSonarrServer(t, f)
+	s, uid := newHistoryTestService(t, "", srv.URL, "")
+	installTVFixture(t, s, f, 1399)
 	requireApproval(t, s)
 
 	resp, err := s.CreateMediaRequest(uid, &CreateRequest{
-		TmdbID: 1399, TvdbID: 121361, MediaType: "tv", Title: "Andor",
+		TmdbID: 1399, TvdbID: 999999, MediaType: "tv", Title: "Andor",
 	})
 	if err != nil {
 		t.Fatalf("CreateMediaRequest: %v", err)
@@ -217,10 +227,16 @@ func TestApproveRequestPerformsArrAdd(t *testing.T) {
 			status, title, approvedBy, decidedAt)
 	}
 
-	if len(rec.userEvents) != 1 {
+	decisions := []notifierEvent{}
+	for _, event := range rec.userEvents {
+		if event.eventType == "request_decision" {
+			decisions = append(decisions, event)
+		}
+	}
+	if len(decisions) != 1 {
 		t.Fatalf("user events = %+v, want exactly one decision", rec.userEvents)
 	}
-	ev := rec.userEvents[0]
+	ev := decisions[0]
 	if ev.userID != uid || ev.eventType != "request_decision" {
 		t.Errorf("event = %+v, want request_decision to the requester", ev)
 	}
@@ -281,6 +297,7 @@ func TestApproveRequestSeasonScopeOverrideReplacesExplicitSeasons(t *testing.T) 
 	srv := newFakeSonarrServer(t, f)
 
 	s, uid := newHistoryTestService(t, "", srv.URL, "")
+	installTVFixture(t, s, f, 1399)
 	requireApproval(t, s)
 	adminID := createTestAdmin(t, s)
 
@@ -306,12 +323,10 @@ func TestApproveRequestSeasonScopeOverrideReplacesExplicitSeasons(t *testing.T) 
 	}
 
 	addOptions, _ := f.addBody["addOptions"].(map[string]any)
-	if addOptions["monitor"] != "firstSeason" {
-		t.Errorf("addOptions.monitor = %v, want firstSeason (override replaces the explicit list)", addOptions["monitor"])
+	if addOptions["monitor"] != nil {
+		t.Errorf("addOptions.monitor = %v, want explicit source-season flags", addOptions["monitor"])
 	}
-	if _, present := f.addBody["seasons"]; present {
-		t.Errorf("seasons = %v, want omitted once the explicit list is overridden", f.addBody["seasons"])
-	}
+	assertAddedTVSeasons(t, f, 1)
 	var storedScope string
 	if err := s.db.QueryRow("SELECT season_scope FROM request_log WHERE id = ?", pending[0].ID).Scan(&storedScope); err != nil {
 		t.Fatalf("read season_scope: %v", err)
@@ -387,10 +402,16 @@ func TestDenyRequest(t *testing.T) {
 		t.Errorf("denied row = %s/%q by %d, want denied/library full by admin", status, reason, approvedBy)
 	}
 
-	if len(rec.userEvents) != 1 {
+	decisions := []notifierEvent{}
+	for _, event := range rec.userEvents {
+		if event.eventType == "request_decision" {
+			decisions = append(decisions, event)
+		}
+	}
+	if len(decisions) != 1 {
 		t.Fatalf("user events = %+v, want exactly one decision", rec.userEvents)
 	}
-	ev := rec.userEvents[0]
+	ev := decisions[0]
 	if ev.userID != uid || ev.data["decision"] != "denied" || ev.data["reason"] != "library full" {
 		t.Errorf("event = %+v, want denied with the reason", ev)
 	}

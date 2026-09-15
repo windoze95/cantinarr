@@ -72,8 +72,9 @@ const catchUpHistoryPageSize = 200
 // same as a batch over restoredAlertCap.
 var errImportBacklogOverflow = errors.New("import history window overflow")
 
-// downloadClientTypes are the service types polled for downloads_queue events.
-var downloadClientTypes = []string{"sabnzbd", "qbittorrent", "nzbget", "transmission"}
+// downloadClientTypes are the service types polled for downloads_queue
+// events: every client the downloads package serves.
+var downloadClientTypes = downloads.DownloadClientTypes()
 
 // Event represents a WebSocket event sent to clients.
 type Event struct {
@@ -145,7 +146,8 @@ type Hub struct {
 
 	// content pushes new-movie/new-episode/new-book notifications to opted-in
 	// users when a download completes. nil when push is not configured.
-	content ContentNotifier
+	content   ContentNotifier
+	tvImports sonarr.ImportResolver
 
 	// opener receives stuck/blocked downloads for auto-dispatch. nil (the zero
 	// value) disables the whole auto-dispatch path: the poll loop then skips the
@@ -168,6 +170,9 @@ type Hub struct {
 	// the diff can be re-checked for staleness while it is deferred. An entry is
 	// cleared as soon as that first diff is resolved.
 	restoredWitness map[string]time.Time
+	// Older Sonarr snapshots cannot prove which corrected story was already
+	// announced. Their first resume accepts only imports observed after boot.
+	legacySonarrSince map[string]time.Time
 
 	// lastPollAt records when each arr instance's queue was last successfully
 	// polled and resolved. A gap of queueResumeAfter or more means completions
@@ -219,6 +224,7 @@ func NewHub(authService *auth.Service, registry *instance.Registry, store *insta
 		downloadsErrLogged: make(map[string]bool),
 		witness:            newQueueWitness(database),
 		restoredWitness:    make(map[string]time.Time),
+		legacySonarrSince:  make(map[string]time.Time),
 		lastPollAt:         make(map[string]time.Time),
 	}
 }
@@ -506,6 +512,9 @@ func (h *Hub) restoreQueueWitness() {
 				h.prevRadarrQueue[instanceID] = seeded
 			} else {
 				h.prevSonarrQueue[instanceID] = seeded
+				if !row.tvImports {
+					h.legacySonarrSince[instanceID] = time.Now()
+				}
 			}
 		case "chaptarr", "lidarr":
 			seeded := make(map[int]struct{}, len(row.ids))
@@ -752,76 +761,6 @@ func radarrUpgradeDeletesSince(client *radarr.Client, since time.Time) map[int]i
 	return counts
 }
 
-// sonarrImportsSince is the Sonarr analogue of radarrImportsSince, collapsing
-// per-episode-file import records to their distinct series ids so a season
-// pack imported during the gap becomes one alert, not twenty.
-//
-// Upgrade proof pairs per EPISODE, not per series: a series moves to the
-// upgraded list only when every import record it produced in the window is
-// matched by a delete-for-upgrade of the same episode. One unproven import —
-// including one whose episode id the record doesn't carry — keeps the whole
-// series a broadcast, because "one new episode plus three upgrades" is news.
-func sonarrImportsSince(client *sonarr.Client, since time.Time) (fresh, upgraded []int, err error) {
-	records, complete, err := client.GetImportHistorySince(since, catchUpHistoryPageSize)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !complete {
-		return nil, nil, errImportBacklogOverflow
-	}
-	// series id → episode id → import-record count. Episode id 0 buckets the
-	// records that carry none; they can never be proven upgrades.
-	imports := make(map[int]map[int]int, len(records))
-	var ids []int
-	for _, rec := range records {
-		if !strings.EqualFold(rec.EventType, "downloadFolderImported") {
-			continue
-		}
-		seriesID := rec.SeriesID
-		if seriesID <= 0 && rec.Series != nil {
-			seriesID = rec.Series.ID
-		}
-		if seriesID <= 0 && rec.Episode != nil {
-			seriesID = rec.Episode.SeriesID
-		}
-		if seriesID <= 0 {
-			continue
-		}
-		episodeID := rec.EpisodeID
-		if episodeID <= 0 && rec.Episode != nil {
-			episodeID = rec.Episode.ID
-		}
-		if episodeID < 0 {
-			episodeID = 0
-		}
-		if imports[seriesID] == nil {
-			imports[seriesID] = make(map[int]int)
-			ids = append(ids, seriesID)
-		}
-		imports[seriesID][episodeID]++
-	}
-	sort.Ints(ids)
-	if len(ids) == 0 {
-		return nil, nil, nil
-	}
-	deletes := sonarrUpgradeDeletesSince(client, since)
-	for _, id := range ids {
-		allUpgrades := true
-		for episodeID, n := range imports[id] {
-			if episodeID <= 0 || deletes[episodeID] < n {
-				allUpgrades = false
-				break
-			}
-		}
-		if allUpgrades {
-			upgraded = append(upgraded, id)
-		} else {
-			fresh = append(fresh, id)
-		}
-	}
-	return fresh, upgraded, nil
-}
-
 // sonarrUpgradeDeletesSince counts the window's delete-for-upgrade records per
 // episode, failing open exactly like radarrUpgradeDeletesSince.
 func sonarrUpgradeDeletesSince(client *sonarr.Client, since time.Time) map[int]int {
@@ -988,10 +927,14 @@ func lidarrUpgradeDeletesSince(client *lidarr.Client, since time.Time) map[int]i
 // is logged and swallowed: degrading to in-memory-only behavior is right, but
 // suppressing the alerts this poll already found is not.
 func (h *Hub) saveQueueWitness(instanceID, serviceType string, ids []int) {
+	h.saveQueueWitnessAt(instanceID, serviceType, ids, time.Now())
+}
+
+func (h *Hub) saveQueueWitnessAt(instanceID, serviceType string, ids []int, observedAt time.Time) {
 	if h.witness == nil {
 		return
 	}
-	if err := h.witness.save(instanceID, serviceType, ids, time.Now()); err != nil {
+	if err := h.witness.save(instanceID, serviceType, ids, observedAt); err != nil {
 		log.Printf("websocket: persist queue witness (%s): %v", instanceID, err)
 	}
 }
@@ -1200,6 +1143,7 @@ func sonarrQueueSignal(item sonarr.DetailedQueueItem) arr.QueueObservation {
 		Media:            media,
 		Signal: arr.QueueSignal{
 			Status:                item.Status,
+			EpisodeAirsAt:         item.AirTimeAtSnapshot(),
 			TrackedDownloadStatus: item.TrackedDownloadStatus,
 			TrackedDownloadState:  item.TrackedDownloadState,
 			ErrorMessage:          item.ErrorMessage,
@@ -1646,6 +1590,7 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 }
 
 func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
+	pollStarted := time.Now()
 	queue, err := client.GetQueue()
 	if err != nil {
 		log.Printf("websocket: poll sonarr queue (%s): %v", instanceID, err)
@@ -1698,9 +1643,7 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 		sort.Ints(departed)
 	}
 
-	announce, upgraded, hold := h.resolveAnnouncements(instanceID, departed, func(since time.Time) (fresh, upgrades []int, err error) {
-		return sonarrImportsSince(client, since)
-	})
+	announce, refreshed, hold := h.resolveSonarrAnnouncements(instanceID, client, currentQueue, departed)
 	if hold {
 		h.noteArrQueueComposition(instanceID, "sonarr", tuples)
 		h.autoDispatchSonarr(instanceID, client)
@@ -1709,12 +1652,12 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 
 	// Persist before announcing — see pollChaptarrInstance.
 	h.prevSonarrQueue[instanceID] = currentQueue
-	h.saveQueueWitness(instanceID, "sonarr", progressKeys(currentQueue))
-	h.lastPollAt[instanceID] = time.Now()
+	h.saveQueueWitnessAt(instanceID, "sonarr", progressKeys(currentQueue), pollStarted)
+	h.lastPollAt[instanceID] = pollStarted
+	delete(h.legacySonarrSince, instanceID)
 
-	// Upgrades pass the same live availability recomputation as broadcasts;
-	// only the audience differs (admins opted into content_upgraded).
-	announceSeries := func(seriesID int, upgrade bool) {
+	// Library refresh is independent of title-specific notification resolution.
+	refreshSeries := func(seriesID int) {
 		series, err := client.GetSeries(seriesID)
 		if err != nil {
 			log.Printf("websocket: get completed sonarr series %d: %v", seriesID, err)
@@ -1745,20 +1688,18 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 				"instance_id": instanceID,
 			},
 		})
-		if h.content == nil {
-			return
-		}
-		if upgrade {
-			h.content.NotifyUpgradedEpisode(series.Title, series.TmdbID, instanceID)
-		} else {
-			h.content.NotifyNewEpisode(series.Title, series.TmdbID, instanceID)
-		}
 	}
-	for _, seriesID := range announce {
-		announceSeries(seriesID, false)
+	for _, seriesID := range refreshed {
+		refreshSeries(seriesID)
 	}
-	for _, seriesID := range upgraded {
-		announceSeries(seriesID, true)
+	if h.content != nil {
+		for _, title := range announce {
+			if title.Upgrade {
+				h.content.NotifyUpgradedEpisode(title.Title, title.TmdbID, instanceID)
+			} else {
+				h.content.NotifyNewEpisode(title.Title, title.TmdbID, instanceID)
+			}
+		}
 	}
 
 	h.noteArrQueueComposition(instanceID, "sonarr", tuples)

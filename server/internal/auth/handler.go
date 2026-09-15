@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -21,8 +22,9 @@ type AccessRequestHook func(userID int64, username string)
 // happen once they are gone (switching off their media-server accounts). It
 // returns the commit step, which the handler runs only after the delete
 // succeeded — the delete can still refuse (self-delete, last admin), and a
-// refused delete must leave the user untouched everywhere.
-type UserDeleteHook func(userID int64) (committed func())
+// refused delete must leave the user untouched everywhere. The second closure
+// releases the snapshot lock and must run on both commit and abort.
+type UserDeleteHook func(userID int64) (committed func(), release func())
 
 type Handler struct {
 	service           *Service
@@ -81,6 +83,10 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.service.Login(req.Username, req.Password, req.DeviceName, req.HardwareID)
 	if err != nil {
+		if errors.Is(err, ErrSSORequired) {
+			oidcHTTPError(w, err)
+			return
+		}
 		if errors.Is(err, ErrInvalidCredentials) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 			return
@@ -181,6 +187,8 @@ func (h *Handler) HandleRedeemConnectToken(w http.ResponseWriter, r *http.Reques
 	resp, err := h.service.RedeemConnectToken(req.Token, req.DeviceName, req.HardwareID)
 	if err != nil {
 		switch {
+		case errors.Is(err, ErrSSORequired):
+			writeJSON(w, http.StatusOK, map[string]any{"sso_required": true, "continuation": "/api/auth/oidc/begin"})
 		case errors.Is(err, ErrTokenNotFound):
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "connect token not found"})
 		case errors.Is(err, ErrTokenRedeemed):
@@ -365,7 +373,11 @@ func (h *Handler) HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	// nothing is touched until the delete has actually gone through.
 	var committed func()
 	if h.userDeleteHook != nil {
-		committed = h.userDeleteHook(userID)
+		var release func()
+		committed, release = h.userDeleteHook(userID)
+		if release != nil {
+			defer release()
+		}
 	}
 
 	if err := h.service.DeleteUser(claims.UserID, userID); err != nil {
@@ -394,6 +406,22 @@ func (h *Handler) AuthStatus(w http.ResponseWriter, r *http.Request) {
 		WebAuthnAvailable: isSecureContext(r),
 		NativePasskeys:    h.service.nativePasskeyStatusFromRequest(r),
 	}
+	plex, plexErr := h.service.plexConfiguration()
+	if plexErr == nil {
+		resp.PlexAvailable = plex.Enabled
+	}
+	c, err := h.service.oidcConfiguration()
+	if err != nil {
+		resp.SSOError = err.Error()
+	} else {
+		resp.SSOAvailable = c.Enabled
+		resp.SSOOnly = c.Enabled && c.SSOOnly
+		resp.SSOProvider = c.Label
+		if c.Enabled {
+			resp.SSOOrigin = strings.TrimSuffix(c.CallbackURL, "/api/auth/oidc/callback")
+		}
+	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -450,6 +478,7 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		"role":             user.Role,
 		"permissions":      user.Permissions,
 		"has_password":     user.PasswordHash != "",
+		"sso_linked":       user.SSOLinked,
 		"password_enabled": user.PasswordEnabled,
 		"passkey_enabled":  user.PasskeyEnabled,
 		"plex_email":       user.PlexEmail,

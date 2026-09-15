@@ -1,3 +1,4 @@
+import '../../request/ui/request_allowance_screen.dart';
 import 'dart:async';
 
 import 'package:dio/dio.dart';
@@ -7,6 +8,7 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../data/content_policy_service.dart';
 import '../data/request_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -42,6 +44,24 @@ class _UserRequestSettingsScreenState
   late final RequestSettingsService _service;
   late final ContentPolicyService _policyService;
 
+  final _draft = SettingsDraft();
+  Object get _draftValues => [
+        _requireApproval,
+        _allowSeasonChoice,
+        _seasonScope,
+        _allowQualityChoice,
+        _qualityRadarr,
+        _qualitySonarr,
+        {
+          for (final key in (_defaultInstances.keys.toList()..sort()))
+            if (_defaultInstances[key] != null) key: _defaultInstances[key]
+        },
+        {
+          for (final key in (_instanceGrants.keys.toList()..sort()))
+            if (_instanceGrants[key]!.isNotEmpty)
+              key: _instanceGrants[key]!.toList()..sort()
+        },
+      ];
   bool _isLoading = true;
   String? _error;
   bool _saving = false;
@@ -108,7 +128,9 @@ class _UserRequestSettingsScreenState
     // account) are read from the response first.
     if (e is DioException) {
       final data = e.response?.data;
-      if (data is Map && data['error'] is String) return data['error'] as String;
+      if (data is Map && data['error'] is String) {
+        return data['error'] as String;
+      }
     }
     final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
     return m != null ? m.group(1)! : 'Something went wrong';
@@ -140,6 +162,7 @@ class _UserRequestSettingsScreenState
         _instanceGrants = {
           for (final entry in grants.entries) entry.key: Set.of(entry.value),
         };
+        _draft.markSaved(_draftValues);
         _isLoading = false;
       });
     } catch (e) {
@@ -320,7 +343,10 @@ class _UserRequestSettingsScreenState
       };
       await _service.updateUserInstanceGrants(widget.userId, grants);
       if (!mounted) return;
-      setState(() => _saving = false);
+      setState(() {
+        _draft.markSaved(_draftValues);
+        _saving = false;
+      });
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('Saved')));
     } catch (e) {
@@ -332,7 +358,15 @@ class _UserRequestSettingsScreenState
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+        hasChanges: () =>
+            _draft.hasChanges(_draftValues) ||
+            (!_kidsLoading && !_policyUnreadable && _kidsDirty),
+        isSaving: _saving,
+        child: _buildPage(context),
+      );
+
+  Widget _buildPage(BuildContext context) {
     // Subscribe to the auth state: the instance sections are derived from the
     // connection's instance list, and a read alone would freeze this screen
     // on whatever had loaded at first build.
@@ -370,6 +404,8 @@ class _UserRequestSettingsScreenState
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
         ..._buildKidsSection(),
+        Padding(padding: const EdgeInsets.all(16), child: RequestAllowanceSection(userId: widget.userId, username: widget.username)),
+
         const Padding(
           padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: Text(
@@ -874,10 +910,16 @@ class _UserRequestSettingsScreenState
         return 'NZBGet';
       case 'transmission':
         return 'Transmission';
+      case 'deluge':
+        return 'Deluge';
+      case 'rutorrent':
+        return 'ruTorrent';
       case 'tautulli':
         return 'Tautulli';
       case 'tracearr':
         return 'Tracearr';
+      case 'audiobookshelf':
+        return 'Audiobookshelf';
       case 'jellyfin':
         return 'Jellyfin';
       case 'emby':

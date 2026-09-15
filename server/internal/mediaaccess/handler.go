@@ -10,7 +10,9 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/appletv"
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/mediaserver"
 )
 
@@ -24,19 +26,29 @@ const (
 // Handler serves the user-facing and admin media-server account routes.
 // Every error body is fixed text: nothing a media server says is echoed.
 type Handler struct {
-	svc    *Service
-	logger *slog.Logger
+	appleTV        *appletv.Handler
+	configChanged  func()
+	listeningBooks ListeningBooks
+	svc            *Service
+	logger         *slog.Logger
 	// externalURL is the admin-configured external address, read per call;
 	// an import's connect links prefer it over the address the admin's own
 	// app sent, exactly as the connect-token route does.
-	externalURL func() string
+	externalURL   func() string
+	watchPolicies *contentpolicy.Service
+	watchMetadata contentpolicy.RawGetterSource
 }
+
+func (h *Handler) SetAppleTV(handler *appletv.Handler) { h.appleTV = handler }
+func (h *Handler) AppleTV() *appletv.Handler           { return h.appleTV }
 
 // SetExternalURLSource wires the external address an import's connect links
 // are built on. Wired late by main, like the auth handler's.
 func (h *Handler) SetExternalURLSource(fn func() string) {
 	h.externalURL = fn
 }
+
+func (h *Handler) SetConfigChangedObserver(fn func()) { h.configChanged = fn }
 
 // NewHandler creates the handler.
 func NewHandler(svc *Service, logger *slog.Logger) *Handler {
@@ -73,9 +85,10 @@ const maxWatchTitleLength = 256
 // Watch answers GET /api/media-servers/watch?media_type=movie|tv&tmdb_id=
 // &tvdb_id=&year=&title=: where the caller can watch that title on the media
 // servers they hold a linked account on, one entry per server with a state
-// (found with the item's page at the sign-in address, missing, or
-// unreachable). An empty list means no server was eligible to ask.
+// (found with the item's page, missing, unreachable, or unverified). Plex
+// also offers a generic fallback. An empty list means no server was eligible.
 func (h *Handler) Watch(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
@@ -98,9 +111,13 @@ func (h *Handler) Watch(w http.ResponseWriter, r *http.Request) {
 	if len(title) > maxWatchTitleLength {
 		title = title[:maxWatchTitleLength]
 	}
-	links, err := h.svc.WatchLinks(r.Context(), claims.UserID, mediaserver.ItemQuery{
+	query, allowed := h.authorizeWatch(w, r, mediaserver.ItemQuery{
 		MediaType: mediaType, TMDBID: tmdbID, TVDBID: tvdbID, Year: year, Title: title,
 	})
+	if !allowed {
+		return
+	}
+	links, err := h.svc.WatchLinks(r.Context(), claims.UserID, query)
 	if err != nil {
 		h.logger.Error("mediaaccess: watch links", "err", err, "user_id", claims.UserID)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "temporarily unavailable, retry shortly"})
@@ -181,6 +198,8 @@ func (h *Handler) requestInvite(w http.ResponseWriter, r *http.Request, userID i
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "that email already has access through another account; ask your admin", "code": "name_taken"})
 	case errors.Is(err, ErrWrongKind):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "this server takes a password, not an email", "code": "wrong_kind"})
+	case errors.Is(err, ErrProtectedAccount):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the server owner is protected; ask your admin to unlink the account first", "code": "protected_account"})
 	default:
 		h.writeCreateError(w, err, userID, instanceID)
 	}
@@ -248,7 +267,7 @@ func (h *Handler) PlexSignInBegin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
-	start, err := h.svc.PlexSignInBegin(r.Context(), claims.UserID)
+	start, err := h.svc.PlexSignInBegin(r.Context(), claims.UserID, claims)
 	if err != nil {
 		h.logger.Warn("mediaaccess: plex sign-in begin", "err", err, "user_id", claims.UserID)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "could not reach plex.tv"})
@@ -312,7 +331,7 @@ func (h *Handler) writeCreateError(w http.ResponseWriter, err error, userID int6
 
 // ListAccounts answers GET /api/admin/media-servers/accounts.
 func (h *Handler) ListAccounts(w http.ResponseWriter, r *http.Request) {
-	accounts, err := h.svc.ListAccounts()
+	accounts, err := h.svc.ListAccounts(r.Context())
 	if err != nil {
 		h.logger.Error("mediaaccess: list accounts", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list accounts"})
@@ -376,6 +395,7 @@ func (h *Handler) LinkAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		RemoteUserID string `json:"remote_user_id"`
+		ManageAccess bool   `json:"manage_access"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -386,7 +406,7 @@ func (h *Handler) LinkAccount(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "remote_user_id required"})
 		return
 	}
-	account, err := h.svc.LinkAccount(r.Context(), userID, instanceID, body.RemoteUserID)
+	account, err := h.svc.LinkAccount(r.Context(), userID, instanceID, body.RemoteUserID, body.ManageAccess)
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, account)
@@ -425,6 +445,7 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		RemoteUserIDs []string `json:"remote_user_ids"`
 		ServerURL     string   `json:"server_url"`
+		ManageAccess  bool     `json:"manage_access"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -448,7 +469,7 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "server_url required"})
 		return
 	}
-	results, err := h.svc.ImportAccounts(r.Context(), claims.UserID, instanceID, serverURL, body.RemoteUserIDs)
+	results, err := h.svc.ImportAccounts(r.Context(), claims.UserID, instanceID, serverURL, body.RemoteUserIDs, body.ManageAccess)
 	switch {
 	case err == nil:
 		if results == nil {
@@ -468,6 +489,39 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 	default:
 		h.logger.Error("mediaaccess: import", "err", err, "instance_id", instanceID)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to import accounts"})
+	}
+}
+
+// SetManagement changes who controls remote access, independently of the grant.
+func (h *Handler) SetManagement(w http.ResponseWriter, r *http.Request) {
+	userID, instanceID, ok := userAndInstance(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		ManageAccess *bool `json:"manage_access"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil || body.ManageAccess == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "manage_access must be a boolean"})
+		return
+	}
+	account, err := h.svc.SetManagement(r.Context(), userID, instanceID, *body.ManageAccess)
+	w.Header().Set("Cache-Control", "no-store")
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, account)
+	case errors.Is(err, ErrNoAccount), errors.Is(err, ErrInstanceNotFound), errors.Is(err, ErrRemoteUserNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "linked account not found"})
+	case errors.Is(err, ErrProtectedAccount):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "administrator and owner accounts are never managed", "code": "protected_account"})
+	case errors.Is(err, ErrUpstream):
+		h.logger.Warn("mediaaccess: change management", "err", err, "user_id", userID, "instance_id", instanceID)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "could not verify the media account; management was not changed"})
+	default:
+		h.logger.Error("mediaaccess: change management", "err", err, "user_id", userID, "instance_id", instanceID)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not change account management"})
 	}
 }
 

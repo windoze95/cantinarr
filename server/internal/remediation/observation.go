@@ -1258,7 +1258,9 @@ func (s *Service) closeObservedRecovery(issueID int64, wasPromoted bool, kind st
 		kind = ResolutionArrStateCleared
 	}
 	resolution := arrStateClearedResolution
-	if kind == ResolutionRemovedNoReplacement {
+	if kind == ResolutionRemovedWaitingForAir {
+		resolution = removedWaitingForAirResolution
+	} else if kind == ResolutionRemovedNoReplacement {
 		resolution = removedNoReplacementResolution
 	} else {
 		var mediaType string
@@ -2145,6 +2147,13 @@ func (s *Service) exactRecoveryGuard(issue *Issue) (arrRecoveryProbe, error) {
 	// re-promoted a fresh run on every settle, forever (issue 859). Callers of
 	// this guard have already established the exact queue scope is absent.
 	if issue.Source == SourceAuto {
+		waiting, err := s.unairedQueueRemovalProven(issue)
+		if err != nil {
+			return arrRecoveryProbe{}, err
+		}
+		if waiting {
+			return arrRecoveryProbe{completed: true, resolutionKind: ResolutionRemovedWaitingForAir}, nil
+		}
 		removed, err := s.bookRemoveWithoutReplacementProven(issue)
 		if err != nil {
 			return arrRecoveryProbe{}, err
@@ -2681,7 +2690,7 @@ func sonarrObservation(item sonarr.DetailedQueueItem) arr.QueueObservation {
 		Status: item.Status, TrackedDownloadStatus: item.TrackedDownloadStatus,
 		TrackedDownloadState: item.TrackedDownloadState, ErrorMessage: item.ErrorMessage,
 		StatusMessages: messages, Protocol: item.Protocol, Size: item.Size, SizeLeft: item.Sizeleft,
-		MediaFileID: item.FileIDAtSnapshot(),
+		MediaFileID: item.FileIDAtSnapshot(), EpisodeAirsAt: item.AirTimeAtSnapshot(),
 	}
 	return arr.QueueObservation{DownloadID: item.DownloadID, AddedAt: item.Added, FileIDAtSnapshot: item.FileIDAtSnapshot(), Media: media, Signal: signal, Diagnosis: arr.Diagnose(signal)}
 }

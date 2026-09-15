@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../chaptarr/logic/book_publication.dart';
 
 import '../../../core/layout/adaptive.dart';
 import '../../../core/providers/instance_provider.dart';
@@ -53,7 +54,8 @@ class RequesterSeriesDetailScreen extends ConsumerWidget {
           loading: () => const Center(
             child: CircularProgressIndicator(color: AppTheme.accent),
           ),
-          error: (error, _) => _SeriesError(message: _seriesErrorMessage(error)),
+          error: (error, _) =>
+              _SeriesError(message: _seriesErrorMessage(error)),
           data: (data) => _SeriesBody(detail: data, instanceId: pinned),
         ),
       ),
@@ -224,7 +226,7 @@ class _SeriesBookTile extends ConsumerWidget {
     final fid = title.foreignBookId.trim();
     final subtitle = <String>[
       if (title.author.isNotEmpty) title.author,
-      if (title.year > 0) '${title.year}',
+      if (title.year > 0) bookPublicationYearLabel(title.year),
       if (status?.subtitle != null) status!.subtitle!,
     ].join(' · ');
 
@@ -302,7 +304,7 @@ class _SeriesBookTile extends ConsumerWidget {
           ? null
           : () => context.push(
                 '/detail/book/${Uri.encodeComponent(fid)}'
-                '?title=${Uri.encodeQueryComponent(title.title)}'
+                '?source=chaptarr&title=${Uri.encodeQueryComponent(title.title)}'
                 '${instanceId == null ? '' : '&instance_id=${Uri.encodeQueryComponent(instanceId!)}'}',
               ),
     );

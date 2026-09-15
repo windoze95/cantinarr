@@ -9,8 +9,8 @@ import '../logic/season_label.dart';
 
 /// Interactive per-season request table (Overseerr-style): one row per season
 /// with a checkbox, "Season N" (with its first-air year when TMDB knows one),
-/// an "x/y eps" availability count, and a status badge. Already-available
-/// seasons are shown checked + disabled. Quick All / First / Latest chips
+/// an "x/y eps" availability count, and a status badge. Available, requested,
+/// downloading and pending seasons are checked + disabled. All / First / Latest
 /// bulk-select. Submitting sends the chosen season numbers to the request
 /// service.
 ///
@@ -59,9 +59,48 @@ class SeasonTable extends StatefulWidget {
 }
 
 class _SeasonTableState extends State<SeasonTable> {
-  /// Season numbers the user has selected to request (excludes already-available
-  /// seasons, which are implicitly "checked" but not actionable).
+  /// Only actionable seasons belong to the selection, never accepted work.
   final Set<int> _selected = {};
+  bool _submitting = false;
+  String? _selectionInstanceId;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectionInstanceId = widget.notifier.instanceId;
+    widget.notifier.addListener(_syncSelection);
+  }
+
+  @override
+  void didUpdateWidget(covariant SeasonTable oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.notifier != widget.notifier) {
+      oldWidget.notifier.removeListener(_syncSelection);
+      widget.notifier.addListener(_syncSelection);
+      _selected.clear();
+    }
+    _syncSelection();
+  }
+
+  @override
+  void dispose() {
+    widget.notifier.removeListener(_syncSelection);
+    super.dispose();
+  }
+
+  // ListenableBuilder rebuilds after this listener reconciles the selection.
+  void _syncSelection() {
+    if (_selectionInstanceId != widget.notifier.instanceId) {
+      _selectionInstanceId = widget.notifier.instanceId;
+      _selected.clear();
+    }
+    _selected.retainAll(_selectableNumbers);
+  }
+
+  bool get _busy => _submitting ||
+      widget.notifier.state.isRequesting ||
+      widget.notifier.state.isCheckingStatus ||
+      !widget.notifier.state.hasStatus;
 
   List<Season> get _realSeasons =>
       widget.seasons.where((s) => s.seasonNumber > 0).toList()
@@ -72,11 +111,28 @@ class _SeasonTableState extends State<SeasonTable> {
         for (final s in widget.notifier.state.seasons) s.seasonNumber: s,
       };
 
-  bool _isAvailable(int seasonNumber) =>
-      _statusBySeason[seasonNumber]?.isAvailable ?? false;
+  RequestSeasonStatus _statusFor(int seasonNumber) {
+    final state = widget.notifier.state;
+    // Pending approval covers the title; the API may omit its season rows.
+    if (state.status == RequestStatus.pending) {
+      return RequestSeasonStatus(
+          seasonNumber: seasonNumber, status: RequestStatus.pending);
+    }
+    return _statusBySeason[seasonNumber] ?? RequestSeasonStatus(
+      seasonNumber: seasonNumber,
+      // A title without a breakdown must not turn accepted work into missing
+      // seasons. With a breakdown, a newly announced season may still be new.
+      status: state.seasons.isEmpty && state.status != RequestStatus.partial
+          ? state.status
+          : RequestStatus.unavailable,
+    );
+  }
+
+  bool _canRequestSeason(int seasonNumber) =>
+      widget.canRequest && _statusFor(seasonNumber).isRequestable;
 
   void _toggle(int seasonNumber, bool? value) {
-    if (_isAvailable(seasonNumber)) return; // can't re-request an available one
+    if (_busy || !_canRequestSeason(seasonNumber)) return;
     setState(() {
       if (value ?? false) {
         _selected.add(seasonNumber);
@@ -86,17 +142,21 @@ class _SeasonTableState extends State<SeasonTable> {
     });
   }
 
-  /// Selectable (not-yet-available) season numbers.
+  /// Selectable season numbers, shared by every selection and submit path.
   List<int> get _selectableNumbers => _realSeasons
       .map((s) => s.seasonNumber)
-      .where((n) => !_isAvailable(n))
+      .where(_canRequestSeason)
       .toList();
 
-  void _selectAll() => setState(() => _selected
-    ..clear()
-    ..addAll(_selectableNumbers));
+  void _selectAll() {
+    if (_busy) return;
+    setState(() => _selected
+      ..clear()
+      ..addAll(_selectableNumbers));
+  }
 
   void _selectFirst() {
+    if (_busy) return;
     final first =
         _selectableNumbers.isNotEmpty ? _selectableNumbers.first : null;
     setState(() {
@@ -106,6 +166,7 @@ class _SeasonTableState extends State<SeasonTable> {
   }
 
   void _selectLatest() {
+    if (_busy) return;
     final latest =
         _selectableNumbers.isNotEmpty ? _selectableNumbers.last : null;
     setState(() {
@@ -115,19 +176,37 @@ class _SeasonTableState extends State<SeasonTable> {
   }
 
   Future<void> _submit() async {
+    if (_busy) return;
+    _syncSelection();
     if (_selected.isEmpty) return;
     final seasons = _selected.toList()..sort();
-    await widget.notifier.request(
-      title: widget.title,
-      tvdbId: widget.tvdbId,
-      seasons: seasons,
-    );
-    if (!mounted) return;
-    if (widget.notifier.state.error == null) widget.onRequested?.call();
-    // Clear the local selection; the request button + badges reflect the new
-    // state from the refreshed status.
-    setState(() => _selected.clear());
-    await widget.notifier.checkStatus();
+    final notifier = widget.notifier;
+    final instanceId = notifier.instanceId;
+    setState(() => _submitting = true);
+    try {
+      final accepted = await notifier.request(
+        title: widget.title,
+        tvdbId: widget.tvdbId,
+        seasons: seasons,
+      );
+      if (!mounted || notifier != widget.notifier ||
+          instanceId != notifier.instanceId) {
+        return;
+      }
+      if (!accepted) {
+        final quotaMessage = notifier.state.quotaMessage;
+        if (quotaMessage != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(quotaMessage)),
+          );
+        }
+        return;
+      }
+      widget.onRequested?.call();
+      setState(() => _selected.clear());
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
   }
 
   @override
@@ -137,7 +216,7 @@ class _SeasonTableState extends State<SeasonTable> {
       builder: (context, _) {
         final seasons = _realSeasons;
         final hasSelectable =
-            widget.canRequest && _selectableNumbers.isNotEmpty;
+            widget.notifier.state.hasStatus && _selectableNumbers.isNotEmpty;
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Column(
@@ -147,9 +226,9 @@ class _SeasonTableState extends State<SeasonTable> {
                 Wrap(
                   spacing: 8,
                   children: [
-                    _QuickChip(label: 'All', onTap: _selectAll),
-                    _QuickChip(label: 'First', onTap: _selectFirst),
-                    _QuickChip(label: 'Latest', onTap: _selectLatest),
+                    _QuickChip(label: 'All', onTap: _busy ? null : _selectAll),
+                    _QuickChip(label: 'First', onTap: _busy ? null : _selectFirst),
+                    _QuickChip(label: 'Latest', onTap: _busy ? null : _selectLatest),
                   ],
                 ),
                 const SizedBox(height: 8),
@@ -167,10 +246,11 @@ class _SeasonTableState extends State<SeasonTable> {
                         const Divider(height: 1, color: AppTheme.border),
                       _SeasonRow(
                         season: seasons[i],
-                        status: _statusBySeason[seasons[i].seasonNumber],
+                        status: _statusFor(seasons[i].seasonNumber),
                         selected: _selected.contains(seasons[i].seasonNumber),
-                        available: _isAvailable(seasons[i].seasonNumber),
-                        selectable: widget.canRequest,
+                        showCheckbox: widget.canRequest,
+                        enabled: !_busy &&
+                            _canRequestSeason(seasons[i].seasonNumber),
                         onChanged: (v) => _toggle(seasons[i].seasonNumber, v),
                         downloadInstanceId: widget.downloadInstanceId,
                         downloadChoices: widget.downloadChoicesBySeason[
@@ -186,11 +266,10 @@ class _SeasonTableState extends State<SeasonTable> {
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
-                    onPressed: (_selected.isEmpty ||
-                            widget.notifier.state.isRequesting)
+                    onPressed: (_selected.isEmpty || _busy)
                         ? null
                         : _submit,
-                    icon: widget.notifier.state.isRequesting
+                    icon: _busy
                         ? const SizedBox(
                             width: 16,
                             height: 16,
@@ -227,10 +306,10 @@ class _SeasonTableState extends State<SeasonTable> {
 
 class _SeasonRow extends StatelessWidget {
   final Season season;
-  final RequestSeasonStatus? status;
+  final RequestSeasonStatus status;
   final bool selected;
-  final bool available;
-  final bool selectable;
+  final bool showCheckbox;
+  final bool enabled;
   final ValueChanged<bool?> onChanged;
   final String? downloadInstanceId;
   final List<MediaDownloadChoice> downloadChoices;
@@ -239,8 +318,8 @@ class _SeasonRow extends StatelessWidget {
     required this.season,
     required this.status,
     required this.selected,
-    required this.available,
-    required this.selectable,
+    required this.showCheckbox,
+    required this.enabled,
     required this.onChanged,
     required this.downloadInstanceId,
     required this.downloadChoices,
@@ -248,19 +327,17 @@ class _SeasonRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // An available season is shown checked + disabled; otherwise it follows the
-    // user's selection.
-    final checked = available || selected;
+    final checked = !status.isRequestable || selected;
     return InkWell(
-      onTap: (!selectable || available) ? null : () => onChanged(!selected),
+      onTap: enabled ? () => onChanged(!selected) : null,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: Row(
           children: [
-            if (selectable)
+            if (showCheckbox)
               Checkbox(
                 value: checked,
-                onChanged: available ? null : onChanged,
+                onChanged: enabled ? onChanged : null,
                 activeColor: AppTheme.accent,
                 checkColor: AppTheme.onAccent,
                 side: const BorderSide(color: AppTheme.textSecondary),
@@ -276,9 +353,9 @@ class _SeasonRow extends StatelessWidget {
                     style: const TextStyle(
                         color: AppTheme.textPrimary, fontSize: 14),
                   ),
-                  if (status != null && status!.episodeCount > 0)
+                  if (status.episodeCount > 0)
                     Text(
-                      '${status!.episodesLabel} eps',
+                      '${status.episodesLabel} eps',
                       style: const TextStyle(
                           color: AppTheme.textSecondary, fontSize: 12),
                     )
@@ -291,7 +368,7 @@ class _SeasonRow extends StatelessWidget {
                 ],
               ),
             ),
-            _SeasonStatusBadge(status: status?.status),
+            _SeasonStatusBadge(status: status.status),
             if (downloadInstanceId != null && downloadChoices.isNotEmpty) ...[
               const SizedBox(width: 4),
               MediaDownloadChoiceButton(
@@ -341,7 +418,7 @@ class _SeasonStatusBadge extends StatelessWidget {
 
 class _QuickChip extends StatelessWidget {
   final String label;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   const _QuickChip({required this.label, required this.onTap});
 
   @override

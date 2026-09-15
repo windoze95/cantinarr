@@ -1,6 +1,6 @@
 // Package mediaaccess provisions and tracks user access on media servers
-// (Jellyfin, Emby, Plex). Eligibility is the instance grant: a granted user
-// creates their own account — or, on an invite server, asks for their share
+// (Jellyfin, Emby, Plex, Audiobookshelf). Eligibility is the instance grant:
+// a granted user creates their own account — or, on an invite server, asks for their share
 // — a revoked grant switches the access off, and a returning grant switches
 // it back on. Cantinarr never stores the password it hands an account server
 // and never deletes an account it did not just create.
@@ -12,10 +12,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mediaserver"
 	"github.com/windoze95/cantinarr-server/internal/plex"
@@ -34,9 +36,9 @@ type Notifier interface {
 }
 
 const (
-	// eventInviteSent tells a user their invite went out (push category
-	// plex_invite_sent: "check your email").
-	eventInviteSent = "plex_invite_sent"
+	// eventMediaServerAccess tells the recipient how to start using a newly
+	// granted account server or a Plex share Cantinarr just sent.
+	eventMediaServerAccess = "media_server_access"
 	// eventAccessRequest tells admins a user shared a Plex email (push
 	// category plex_access_request); invite_state says whether anything is
 	// left for them to do.
@@ -60,6 +62,8 @@ var (
 	ErrRemoteUserNotFound  = errors.New("remote user not found")
 	ErrRemoteAlreadyLinked = errors.New("remote account is already linked to another user")
 	ErrNoAccount           = errors.New("no linked account")
+	ErrProtectedAccount    = errors.New("administrator accounts cannot be managed")
+	ErrAutoLinkSuppressed  = errors.New("automatic linking was disabled")
 	// ErrBadCredentials and ErrAccountRefused are the media server's answers
 	// to a person's own username and password: wrong (or no such name), and
 	// an account it will not sign in right now.
@@ -105,14 +109,16 @@ const (
 
 // Service owns the user_media_server_accounts table and every remote action.
 type Service struct {
+	plexAuth  *auth.Service
 	db        *sql.DB
 	store     *instance.Store
 	providers ProviderFactory
 	notifier  Notifier
 	logger    *slog.Logger
 
-	mu    sync.Mutex
-	locks map[string]*sync.Mutex
+	mu        sync.Mutex
+	locks     map[string]*sync.Mutex
+	userLocks map[int64]*sync.RWMutex
 	// sweepMu serializes drift sweeps so a slow pass cannot overlap the next
 	// tick and reconcile the same user twice at once.
 	sweepMu sync.Mutex
@@ -137,13 +143,14 @@ func NewService(db *sql.DB, store *instance.Store, providers ProviderFactory, lo
 	return &Service{
 		db: db, store: store, providers: providers, logger: logger,
 		locks:       map[string]*sync.Mutex{},
+		userLocks:   map[int64]*sync.RWMutex{},
 		background:  func(fn func()) { go fn() },
 		signIns:     newPlexSignIns(),
 		plexBaseURL: plex.BaseURL,
 	}
 }
 
-// SetNotifier installs the push/WS fan-out; nil keeps invites silent. Wired
+// SetNotifier installs the push/WS fan-out; nil keeps access alerts silent. Wired
 // late by main because the composite needs the WebSocket hub.
 func (s *Service) SetNotifier(n Notifier) {
 	s.notifier = n
@@ -151,8 +158,10 @@ func (s *Service) SetNotifier(n Notifier) {
 
 // AccountView is a user's own account on one server as the guide shows it.
 type AccountView struct {
-	Username string `json:"username"`
-	Disabled bool   `json:"disabled"`
+	ManageAccess      bool   `json:"manage_access"`
+	AccessSyncPending bool   `json:"access_sync_pending"`
+	Username          string `json:"username"`
+	Disabled          bool   `json:"disabled"`
 	// Pending is an invite the person has not accepted yet (invite servers).
 	Pending bool `json:"pending"`
 	// Administrator marks an account Cantinarr records and never changes: a
@@ -165,17 +174,19 @@ type AccountView struct {
 }
 
 // ServerView is one media server a user is granted, with their account
-// state. It carries the admin-typed public address and nothing else about
-// the instance.
+// state, admin-typed public address, and resolved listening app choices.
+// Connection addresses and credentials stay on the server.
 type ServerView struct {
 	InstanceID  string `json:"instance_id"`
 	ServiceType string `json:"service_type"`
 	Name        string `json:"name"`
 	// Kind says how access works here: "account" (create one with a
 	// password) or "invite" (share an email, accept the invite).
-	Kind          string       `json:"kind"`
-	PublicAddress string       `json:"public_address"`
-	Account       *AccountView `json:"account"`
+	Kind          string                  `json:"kind"`
+	PublicAddress string                  `json:"public_address"`
+	Account       *AccountView            `json:"account"`
+	ListeningApps *instance.ListeningApps `json:"listening_apps,omitempty"`
+	VideoApps     *instance.VideoApps     `json:"video_apps,omitempty"`
 	// ExistingAccount reports that the server confirmed an account named
 	// like this Cantinarr user (case-insensitively, the rule the server
 	// applies to a new name) that no Cantinarr user is linked to, while the
@@ -183,12 +194,14 @@ type ServerView struct {
 	// leads with signing in to link it. False is "no match confirmed", which
 	// covers absence and an unreachable server alike; nothing ever claims
 	// absence from it. Account servers only.
-	ExistingAccount bool `json:"existing_account"`
+	ExistingAccount    bool `json:"existing_account"`
+	AutoLinkSuppressed bool `json:"auto_link_suppressed"`
 }
 
 // CreatedAccount is what a user gets back after creating their account,
 // asking for their invite, or linking an account that is already theirs.
 type CreatedAccount struct {
+	ManageAccess  bool   `json:"manage_access"`
 	Username      string `json:"username"`
 	PublicAddress string `json:"public_address"`
 	Pending       bool   `json:"pending"`
@@ -198,6 +211,13 @@ type CreatedAccount struct {
 // Account is an admin-facing row: which Cantinarr user is which remote
 // account on which server.
 type Account struct {
+	Pending            bool      `json:"pending"` // Live invitation state; meaningful only when Verified.
+	ManageAccess       bool      `json:"manage_access"`
+	Granted            bool      `json:"granted"`
+	AccessSyncPending  bool      `json:"access_sync_pending"`
+	Administrator      bool      `json:"administrator"`
+	Verified           bool      `json:"verified"`
+	PlexIdentityError  string    `json:"plex_identity_error,omitempty"`
 	UserID             int64     `json:"user_id"`
 	InstanceID         string    `json:"instance_id"`
 	InstanceName       string    `json:"instance_name"`
@@ -210,6 +230,8 @@ type Account struct {
 }
 
 func (s *Service) lock(userID int64, instanceID string) func() {
+	userLock := s.userLock(userID)
+	userLock.RLock()
 	key := fmt.Sprintf("%d:%s", userID, instanceID)
 	s.mu.Lock()
 	l := s.locks[key]
@@ -219,7 +241,7 @@ func (s *Service) lock(userID int64, instanceID string) func() {
 	}
 	s.mu.Unlock()
 	l.Lock()
-	return l.Unlock
+	return func() { l.Unlock(); userLock.RUnlock() }
 }
 
 // grantedMediaServers returns the media-server instance ids a user holds a
@@ -271,6 +293,8 @@ func (s *Service) ListForUser(ctx context.Context, userID int64) ([]ServerView, 
 		return nil, fmt.Errorf("load user: %w", err)
 	}
 	views := make([]ServerView, 0, len(ids))
+	var preferences *instance.ListeningApps
+	var videoPreferences videoAppPreferences
 	// A pending check is either the linked account to confirm (row set) or,
 	// on an account server with no linked account, the look for one already
 	// named like the user.
@@ -292,14 +316,41 @@ func (s *Service) ListForUser(ctx context.Context, userID int64) ([]ServerView, 
 		if err != nil {
 			return nil, err
 		}
+		suppressed, err := s.autoLinkSuppressed(userID, id)
+		if err != nil {
+			return nil, err
+		}
 		kind := s.kindOf(inst)
 		views = append(views, ServerView{
-			InstanceID:    inst.ID,
-			ServiceType:   inst.ServiceType,
-			Name:          inst.Name,
-			Kind:          string(kind),
-			PublicAddress: inst.MediaServerConfig.PublicAddress,
+			AutoLinkSuppressed: suppressed,
+			InstanceID:         inst.ID,
+			ServiceType:        inst.ServiceType,
+			Name:               inst.Name,
+			Kind:               string(kind),
+			PublicAddress:      inst.MediaServerConfig.PublicAddress,
 		})
+		if instance.IsVideoServerType(inst.ServiceType) {
+			if videoPreferences == nil {
+				var err error
+				videoPreferences, err = s.videoAppPreferences(userID)
+				if err != nil {
+					return nil, err
+				}
+			}
+			apps := videoPreferences[inst.ServiceType].WithDefaults(inst.MediaServerConfig.VideoApps)
+			views[len(views)-1].VideoApps = &apps
+		}
+		if inst.ServiceType == "audiobookshelf" {
+			if preferences == nil {
+				apps, err := s.listeningAppPreferences(userID)
+				if err != nil {
+					return nil, err
+				}
+				preferences = &apps
+			}
+			apps := preferences.WithDefaults(inst.MediaServerConfig.ListeningApps)
+			views[len(views)-1].ListeningApps = &apps
+		}
 		switch {
 		case row != nil:
 			checks = append(checks, pending{index: len(views) - 1, inst: inst, row: row})
@@ -371,7 +422,7 @@ func (s *Service) existingAccount(ctx context.Context, inst *instance.Instance, 
 // absence and reads as no account; an unreachable server falls back to the
 // stored row with verified=false.
 func (s *Service) verifyAccount(ctx context.Context, inst *instance.Instance, row *accountRow) *AccountView {
-	stored := &AccountView{Username: row.RemoteUsername, Disabled: row.DisabledAt.Valid, Verified: false}
+	stored := &AccountView{ManageAccess: row.ManageAccess, AccessSyncPending: row.ManageAccess && (row.AccessSyncPending || row.DisabledAt.Valid), Username: row.RemoteUsername, Disabled: row.DisabledAt.Valid, Verified: false}
 	provider, err := s.providers(inst)
 	if err != nil {
 		return stored
@@ -387,7 +438,7 @@ func (s *Service) verifyAccount(ctx context.Context, inst *instance.Instance, ro
 		s.logger.Warn("mediaaccess: could not confirm account", "err", err, "user_id", row.UserID, "instance_id", inst.ID)
 		return stored
 	}
-	return &AccountView{Username: live.Name, Disabled: live.IsDisabled, Pending: live.Pending, Administrator: live.IsAdministrator, Verified: true}
+	return &AccountView{ManageAccess: row.ManageAccess && !live.IsAdministrator, AccessSyncPending: row.ManageAccess && !live.IsAdministrator && (row.AccessSyncPending || row.DisabledAt.Valid), Username: live.Name, Disabled: live.IsDisabled, Pending: live.Pending, Administrator: live.IsAdministrator, Verified: true}
 }
 
 // Watch-link states: what the media server answered about one title.
@@ -399,27 +450,30 @@ const (
 	WatchMissing = "missing"
 	// WatchUnreachable: no answer (blindness); never read as absence.
 	WatchUnreachable = "unreachable"
+	// WatchUnverified: no unique title match was established. This includes
+	// accounts not yet linked, pending shares, and bounded/ambiguous searches.
+	WatchUnverified = "unverified"
 )
 
 // WatchLink is where one title can be watched on one of the user's media
 // servers, as the server answered just now. URL is the item's page at the
-// admin-typed public address, set only when found.
+// admin-typed public address (Plex: hosted Plex Web), set only when found.
+// FallbackURL is a generic sign-in shortcut, never evidence of availability.
 type WatchLink struct {
-	InstanceID  string `json:"instance_id"`
-	Name        string `json:"name"`
-	ServiceType string `json:"service_type"`
-	State       string `json:"state"`
-	URL         string `json:"url,omitempty"`
+	InstanceID  string             `json:"instance_id"`
+	Name        string             `json:"name"`
+	ServiceType string             `json:"service_type"`
+	State       string             `json:"state"`
+	URL         string             `json:"url,omitempty"`
+	FallbackURL string             `json:"fallback_url,omitempty"`
+	VideoApps   instance.VideoApps `json:"video_apps"`
 }
 
 // WatchLinks looks a title up on every media server the user can watch on:
-// a granted account server with a sign-in address whose client can find
-// items, where the user holds a live linked account. Each lookup runs as
-// that account, so the server applies its library access, concurrently and
-// bounded. Servers without a public address are omitted (nothing there is
-// client-reachable), invite servers are not looked up (Plex is reached only
-// through plex.tv), and every remaining server answers with a state, so an
-// absent link is never mistaken for a server that could not answer.
+// a granted server with a sign-in address. Exact lookups require a linked
+// account and apply its live library access, concurrently and bounded.
+// Plex also offers a generic shortcut when an exact lookup is unavailable.
+// Every result states whether a title was found, absent, or not verified.
 func (s *Service) WatchLinks(ctx context.Context, userID int64, q mediaserver.ItemQuery) ([]WatchLink, error) {
 	ids, err := s.grantedMediaServers(userID)
 	if err != nil {
@@ -436,27 +490,34 @@ func (s *Service) WatchLinks(ctx context.Context, userID int64, q mediaserver.It
 		if err != nil {
 			return nil, err
 		}
-		if inst == nil || !instance.IsMediaServerType(inst.ServiceType) || inst.MediaServerConfig.PublicAddress == "" {
+		if inst == nil || !instance.IsMediaServerType(inst.ServiceType) || inst.MediaServerConfigInvalid || inst.MediaServerConfig.PublicAddress == "" {
 			continue
 		}
 		provider, err := s.providers(inst)
-		if err != nil || mediaserver.KindOf(provider) != mediaserver.KindAccount {
+		if err != nil {
 			continue
 		}
 		finder, ok := provider.(mediaserver.ItemFinder)
-		if !ok {
+		if !ok && inst.ServiceType != "plex" {
 			continue
 		}
 		row, err := s.getAccount(userID, id)
 		if err != nil {
 			return nil, err
 		}
-		if row == nil || row.DisabledAt.Valid {
+		if row == nil && inst.ServiceType != "plex" {
 			continue
 		}
 		targets = append(targets, target{inst: inst, row: row, finder: finder})
 	}
 
+	var preferences videoAppPreferences
+	if len(targets) > 0 {
+		preferences, err = s.videoAppPreferences(userID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	links := make([]WatchLink, len(targets))
 	var wg sync.WaitGroup
 	for i, t := range targets {
@@ -464,10 +525,45 @@ func (s *Service) WatchLinks(ctx context.Context, userID int64, q mediaserver.It
 		go func(i int, t target) {
 			defer wg.Done()
 			links[i] = s.watchLink(ctx, t.inst, t.row, t.finder, q)
+			links[i].VideoApps = preferences[t.inst.ServiceType].WithDefaults(t.inst.MediaServerConfig.VideoApps)
 		}(i, t)
 	}
 	wg.Wait()
-	return links, nil
+	// Remote reads may outlive grant, identity, or instance changes.
+	granted, err := s.grantedMediaServers(userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]WatchLink, 0, len(links))
+	for i, t := range targets {
+		if !contains(granted, t.inst.ID) {
+			continue
+		}
+		current, err := s.lookupTargetCurrent(userID, t.inst, t.row)
+		if err != nil {
+			return nil, err
+		}
+		if current {
+			out = append(out, links[i])
+		}
+	}
+	return out, nil
+}
+
+// lookupTargetCurrent rejects results obtained under an obsolete account or
+// connection. DisabledAt is history for reconciliation, never live authority;
+// providers establish current access when resolving an exact title link.
+func (s *Service) lookupTargetCurrent(userID int64, before *instance.Instance, account *accountRow) (bool, error) {
+	inst, err := s.store.Get(before.ID)
+	if err != nil {
+		return false, err
+	}
+	row, err := s.getAccount(userID, before.ID)
+	if err != nil {
+		return false, err
+	}
+	return inst != nil && !inst.MediaServerConfigInvalid && inst.ServiceType == before.ServiceType &&
+		inst.URL == before.URL && inst.APIKey == before.APIKey && reflect.DeepEqual(inst.MediaServerConfig, before.MediaServerConfig) && reflect.DeepEqual(row, account), nil
 }
 
 // watchLink is one server's answer for one title. A confirmed absence and an
@@ -475,10 +571,19 @@ func (s *Service) WatchLinks(ctx context.Context, userID int64, q mediaserver.It
 // ids.
 func (s *Service) watchLink(ctx context.Context, inst *instance.Instance, row *accountRow, finder mediaserver.ItemFinder, q mediaserver.ItemQuery) WatchLink {
 	link := WatchLink{InstanceID: inst.ID, Name: inst.Name, ServiceType: inst.ServiceType}
+	if inst.ServiceType == "plex" {
+		link.FallbackURL = inst.MediaServerConfig.PublicAddress
+	}
+	if row == nil || finder == nil {
+		link.State = WatchUnverified
+		return link
+	}
 	ctx, cancel := context.WithTimeout(ctx, watchTimeout)
 	defer cancel()
 	item, err := finder.FindItem(ctx, row.RemoteUserID, q)
 	switch {
+	case errors.Is(err, mediaserver.ErrItemUnverified):
+		link.State = WatchUnverified
 	case errors.Is(err, mediaserver.ErrItemNotFound):
 		link.State = WatchMissing
 	case err != nil:
@@ -486,7 +591,12 @@ func (s *Service) watchLink(ctx context.Context, inst *instance.Instance, row *a
 		link.State = WatchUnreachable
 	default:
 		link.State = WatchFound
-		link.URL = strings.TrimRight(inst.MediaServerConfig.PublicAddress, "/") + item.WebPath
+		base := inst.MediaServerConfig.PublicAddress
+		if inst.ServiceType == "plex" {
+			base = instance.PlexPublicAddress
+		}
+		link.URL = strings.TrimRight(base, "/") + item.WebPath
+		link.FallbackURL = ""
 	}
 	return link
 }
@@ -563,7 +673,11 @@ func (s *Service) CreateAccount(ctx context.Context, userID int64, instanceID, p
 		return CreatedAccount{}, fmt.Errorf("load user: %w", err)
 	}
 
-	remote, err := provider.CreateUser(ctx, username, password, inst.MediaServerConfig.LibraryIDs)
+	libraryIDs, err := s.accountLibraryIDs(userID, inst)
+	if err != nil {
+		return CreatedAccount{}, err
+	}
+	remote, err := provider.CreateUser(ctx, username, password, libraryIDs)
 	switch {
 	case errors.Is(err, mediaserver.ErrInvalidName):
 		return CreatedAccount{}, ErrInvalidName
@@ -575,7 +689,7 @@ func (s *Service) CreateAccount(ctx context.Context, userID int64, instanceID, p
 
 	inserted, err := s.insertAccount(accountRow{
 		UserID: userID, InstanceID: instanceID,
-		RemoteUserID: remote.ID, RemoteUsername: remote.Name, CreatedByCantinarr: true,
+		RemoteUserID: remote.ID, RemoteUsername: remote.Name, CreatedByCantinarr: true, ManageAccess: true,
 	}, true)
 	if err != nil || !inserted {
 		// The grant vanished, the instance was deleted, or a concurrent link
@@ -590,7 +704,7 @@ func (s *Service) CreateAccount(ctx context.Context, userID int64, instanceID, p
 		}
 		return CreatedAccount{}, ErrNotAvailable
 	}
-	return CreatedAccount{Username: remote.Name, PublicAddress: inst.MediaServerConfig.PublicAddress}, nil
+	return CreatedAccount{ManageAccess: true, Username: remote.Name, PublicAddress: inst.MediaServerConfig.PublicAddress}, nil
 }
 
 // RequestInvite is CreateAccount for an invite server: it records the email
@@ -599,10 +713,24 @@ func (s *Service) CreateAccount(ctx context.Context, userID int64, instanceID, p
 // account instead of invited again; an address another Cantinarr user holds
 // is refused. A new address replaces the share Cantinarr sent to the old one.
 func (s *Service) RequestInvite(ctx context.Context, userID int64, instanceID, email string) (CreatedAccount, error) {
+	return s.requestInvite(ctx, userID, instanceID, email, false)
+}
+
+func (s *Service) requestInvite(ctx context.Context, userID int64, instanceID, email string, automatic bool) (CreatedAccount, error) {
 	unlock := s.lock(userID, instanceID)
 	defer unlock()
 	ctx, cancel := context.WithTimeout(ctx, createTimeout)
 	defer cancel()
+
+	if automatic {
+		suppressed, err := s.autoLinkSuppressed(userID, instanceID)
+		if err != nil {
+			return CreatedAccount{}, err
+		}
+		if suppressed {
+			return CreatedAccount{}, ErrAutoLinkSuppressed
+		}
+	}
 
 	inst, provider, err := s.eligibleProvider(userID, instanceID)
 	if err != nil {
@@ -644,8 +772,15 @@ func (s *Service) RequestInvite(ctx context.Context, userID int64, instanceID, e
 		} else {
 			// A new address. The share Cantinarr sent goes with it; one an
 			// admin linked is the admin's to unlink first.
-			if !row.CreatedByCantinarr {
+			if !row.CreatedByCantinarr || !row.ManageAccess {
 				return CreatedAccount{}, ErrAccountExists
+			}
+			live, readErr := provider.GetUser(ctx, row.RemoteUserID)
+			if readErr != nil && !errors.Is(readErr, mediaserver.ErrUserNotFound) {
+				return CreatedAccount{}, fmt.Errorf("%w: %v", ErrUpstream, readErr)
+			}
+			if readErr == nil && live.IsAdministrator {
+				return CreatedAccount{}, ErrProtectedAccount
 			}
 			if err := provider.SetDisabled(ctx, row.RemoteUserID, true); err != nil && !errors.Is(err, mediaserver.ErrUserNotFound) {
 				return CreatedAccount{}, fmt.Errorf("%w: %v", ErrUpstream, err)
@@ -686,7 +821,7 @@ func (s *Service) RequestInvite(ctx context.Context, userID int64, instanceID, e
 
 	inserted, err := s.insertAccount(accountRow{
 		UserID: userID, InstanceID: instanceID,
-		RemoteUserID: email, RemoteUsername: name, CreatedByCantinarr: created,
+		RemoteUserID: email, RemoteUsername: name, CreatedByCantinarr: created, ManageAccess: created && !remote.IsAdministrator,
 	}, true)
 	if err != nil || !inserted {
 		// A conflict means another row owns this share — it is theirs, not
@@ -703,12 +838,10 @@ func (s *Service) RequestInvite(ctx context.Context, userID int64, instanceID, e
 		}
 		return CreatedAccount{}, ErrNotAvailable
 	}
-	// "Check your email" only when there is an email to check: plex.tv
-	// accepts a share at once for an account still connected to the owner.
-	if created && remote.Pending {
-		s.notifyUser(userID, eventInviteSent)
+	if created {
+		s.notifyShare(userID, inst, remote.Pending)
 	}
-	return CreatedAccount{Username: name, PublicAddress: inst.MediaServerConfig.PublicAddress, Pending: remote.Pending}, nil
+	return CreatedAccount{ManageAccess: created && !remote.IsAdministrator, Username: name, PublicAddress: inst.MediaServerConfig.PublicAddress, Pending: remote.Pending}, nil
 }
 
 // LinkOwnAccount links an existing account on a granted account server to
@@ -803,16 +936,43 @@ func (s *Service) rollbackCreate(ctx context.Context, provider mediaserver.Provi
 	}
 }
 
-func (s *Service) notifyUser(userID int64, eventType string) {
+// OnGrantAdded runs after a new grant commits, including an admin account link.
+// Account servers require the user to create/link an account in the guide.
+// Plex notifies only after a successful share, so a grant and its automatic
+// invite cannot send duplicate alerts or claim an invitation that failed.
+func (s *Service) OnGrantAdded(userID int64, instanceID string) {
+	inst, provider, err := s.eligibleProvider(userID, instanceID)
+	if err != nil || mediaserver.KindOf(provider) != mediaserver.KindAccount {
+		return
+	}
+	s.notifyAccess(userID, inst, "granted")
+}
+
+func (s *Service) notifyShare(userID int64, inst *instance.Instance, pending bool) {
+	state := "ready"
+	if pending {
+		state = "invite_pending"
+	}
+	s.notifyAccess(userID, inst, state)
+}
+
+func (s *Service) notifyAccess(userID int64, inst *instance.Instance, state string) {
 	if s.notifier == nil {
 		return
 	}
-	s.notifier.NotifyUser(userID, eventType, map[string]interface{}{})
+	s.notifier.NotifyUser(userID, eventMediaServerAccess, map[string]interface{}{
+		"instance_id": inst.ID, "server_name": inst.Name,
+		"service_type": inst.ServiceType, "access_state": state,
+	})
 }
 
 // ListAccounts returns every linked account for the admin Users screen.
-func (s *Service) ListAccounts() ([]Account, error) {
-	return s.listAccounts()
+func (s *Service) ListAccounts(ctx context.Context) ([]Account, error) {
+	accounts, err := s.listAccounts()
+	if err == nil {
+		s.verifyAdminAccounts(ctx, accounts)
+	}
+	return accounts, err
 }
 
 func (s *Service) mediaServerInstance(instanceID string) (*instance.Instance, error) {
@@ -852,10 +1012,10 @@ func (s *Service) RemoteUsers(ctx context.Context, instanceID string) ([]mediase
 }
 
 // LinkAccount records that a Cantinarr user is an existing remote account,
-// grants them the instance if they lack it, and brings the account's
-// disabled state in line with that grant. The account's libraries are left
+// grants them the instance if they lack it, and optionally adopts access
+// management. Linking alone never writes to the remote account. Libraries stay
 // exactly as the admin configured them on the server.
-func (s *Service) LinkAccount(ctx context.Context, userID int64, instanceID, remoteUserID string) (Account, error) {
+func (s *Service) LinkAccount(ctx context.Context, userID int64, instanceID, remoteUserID string, manage ...bool) (Account, error) {
 	unlock := s.lock(userID, instanceID)
 	defer unlock()
 	ctx, cancel := context.WithTimeout(ctx, createTimeout)
@@ -897,9 +1057,10 @@ func (s *Service) LinkAccount(ctx context.Context, userID int64, instanceID, rem
 		name = remoteID
 	}
 
+	managed := len(manage) > 0 && manage[0] && !remote.IsAdministrator
 	_, err = s.insertAccount(accountRow{
 		UserID: userID, InstanceID: instanceID,
-		RemoteUserID: remoteID, RemoteUsername: name, CreatedByCantinarr: false,
+		RemoteUserID: remoteID, RemoteUsername: name, CreatedByCantinarr: false, ManageAccess: managed, AccessSyncPending: managed,
 	}, false)
 	switch {
 	case errors.Is(err, errAccountConflict):
@@ -923,7 +1084,7 @@ func (s *Service) LinkAccount(ctx context.Context, userID int64, instanceID, rem
 			return Account{}, err
 		}
 	}
-	s.reconcileUser(ctx, userID)
+	s.reconcileAccountLocked(ctx, userID, instanceID)
 
 	accounts, err := s.listAccounts()
 	if err != nil {
@@ -931,6 +1092,16 @@ func (s *Service) LinkAccount(ctx context.Context, userID int64, instanceID, rem
 	}
 	for _, a := range accounts {
 		if a.UserID == userID && a.InstanceID == instanceID {
+			a.Administrator = remote.IsAdministrator
+			a.Verified = true
+			if !managed || a.AccessSyncPending {
+				a.Disabled = remote.IsDisabled
+			}
+			if inst.ServiceType == "plex" && s.plexAuth != nil {
+				if err := s.plexAuth.ConfirmPlexMediaLink(ctx, userID); err != nil {
+					a.PlexIdentityError = err.Error()
+				}
+			}
 			return a, nil
 		}
 	}
@@ -940,14 +1111,31 @@ func (s *Service) LinkAccount(ctx context.Context, userID int64, instanceID, rem
 // UnlinkAccount forgets the row. The remote account and the grant stay as
 // they are: unlinking is "stop managing this", not revocation.
 func (s *Service) UnlinkAccount(userID int64, instanceID string) error {
-	deleted, err := s.deleteAccount(userID, instanceID)
+	unlock := s.lock(userID, instanceID)
+	defer unlock()
+	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
-	if !deleted {
+	defer tx.Rollback()
+	res, err := tx.Exec("DELETE FROM user_media_server_accounts WHERE user_id=? AND instance_id=?", userID, instanceID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return ErrNoAccount
 	}
-	return nil
+	if _, err := tx.Exec("UPDATE user_media_library_policies SET sync_pending=0,remote_user_id='' WHERE user_id=? AND instance_id=?", userID, instanceID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("INSERT OR IGNORE INTO user_media_server_unlinks(user_id,instance_id) VALUES (?,?)", userID, instanceID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // OnGrantsChanged is the instance handler's grant observer: every affected
@@ -1005,6 +1193,8 @@ func (o emailSharedOutcome) adminState() string {
 		return "sent"
 	case o.invites.claimed > 0:
 		return "claimed"
+	case o.invites.suppressed > 0 && o.invites.suppressed == o.granted:
+		return "unlinked"
 	case o.granted > 0:
 		return "sent"
 	}
@@ -1025,6 +1215,8 @@ func (o emailSharedOutcome) userState() string {
 		return "adopted"
 	case o.invites.claimed > 0:
 		return "claimed"
+	case o.invites.suppressed > 0 && o.invites.suppressed == o.granted:
+		return "unlinked"
 	case o.granted > 0:
 		return "adopted"
 	}
@@ -1073,7 +1265,7 @@ func (s *Service) dropSharesToOtherAddresses(ctx context.Context, userID int64, 
 		return
 	}
 	for _, row := range rows {
-		if row.RemoteUserID == email || !row.CreatedByCantinarr {
+		if row.RemoteUserID == email || !row.CreatedByCantinarr || !row.ManageAccess {
 			continue
 		}
 		inst, err := s.store.Get(row.InstanceID)
@@ -1085,6 +1277,16 @@ func (s *Service) dropSharesToOtherAddresses(ctx context.Context, userID int64, 
 			continue
 		}
 		unlock := s.lock(userID, row.InstanceID)
+		current, readErr := s.getAccount(userID, row.InstanceID)
+		if readErr != nil || current == nil || !current.ManageAccess || !current.CreatedByCantinarr || current.RemoteUserID != row.RemoteUserID {
+			unlock()
+			continue
+		}
+		live, liveErr := provider.GetUser(ctx, row.RemoteUserID)
+		if (liveErr != nil && !errors.Is(liveErr, mediaserver.ErrUserNotFound)) || (liveErr == nil && live.IsAdministrator) {
+			unlock()
+			continue
+		}
 		if err := provider.SetDisabled(ctx, row.RemoteUserID, true); err != nil && !errors.Is(err, mediaserver.ErrUserNotFound) {
 			s.logger.Error("mediaaccess: email shared: remove share to previous address", "err", err, "user_id", userID, "instance_id", row.InstanceID)
 			unlock()
@@ -1157,7 +1359,7 @@ func (s *Service) grantedInviteServers(userID int64) ([]*instance.Instance, erro
 // where the user's address belongs to another user's row: nothing can be
 // sent, and the person needs an admin.
 type inviteOutcome struct {
-	sent, adopted, failed, claimed int
+	sent, adopted, failed, claimed, suppressed int
 }
 
 // inviteGranted sends the invites a user is owed: one per granted invite
@@ -1188,7 +1390,7 @@ func (s *Service) inviteGranted(ctx context.Context, userID int64) inviteOutcome
 		if err != nil || row != nil {
 			continue
 		}
-		created, err := s.RequestInvite(ctx, userID, inst.ID, email)
+		created, err := s.requestInvite(ctx, userID, inst.ID, email, true)
 		switch {
 		case err == nil && created.Pending:
 			out.sent++
@@ -1199,6 +1401,8 @@ func (s *Service) inviteGranted(ctx context.Context, userID int64) inviteOutcome
 			// and only an admin can sort out whose it is.
 			out.claimed++
 			s.logger.Info("mediaaccess: invite: nothing to send", "reason", err, "user_id", userID, "instance_id", inst.ID)
+		case errors.Is(err, ErrAutoLinkSuppressed):
+			out.suppressed++
 		case errors.Is(err, ErrAccountExists), errors.Is(err, ErrNotAvailable):
 			// Nothing owed here: the share exists, or the grant went away
 			// meanwhile.
@@ -1285,6 +1489,23 @@ func (s *Service) StartAccountMaintenance(ctx context.Context) {
 // to reach this screen, so a server that answers the list and then refuses
 // the write is the narrow case.
 func (s *Service) OnSharedLibrariesChanged(instanceID string, libraryIDs []string) {
+	if kind, err := s.store.ServiceTypeOf(instanceID); err == nil && kind == "audiobookshelf" {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return
+		}
+		defer tx.Rollback()
+		if err = queueDefaultLibraries(tx, instanceID); err != nil {
+			return
+		}
+		if err = tx.Commit(); err != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), libraryPropagationBudget)
+		defer cancel()
+		s.SweepAccountDrift(ctx)
+		return
+	}
 	inst, err := s.mediaServerInstance(instanceID)
 	if err != nil {
 		s.logger.Error("mediaaccess: shared libraries changed: load instance", "err", err, "instance_id", instanceID)
@@ -1311,14 +1532,29 @@ func (s *Service) OnSharedLibrariesChanged(instanceID string, libraryIDs []strin
 				"instance_id", instanceID, "not_rescoped", len(rows)-i, "of", len(rows))
 			return
 		}
+		unlock := s.lock(row.UserID, instanceID)
+		current, readErr := s.getAccount(row.UserID, instanceID)
+		if readErr != nil || current == nil || !current.ManageAccess || !current.CreatedByCantinarr || current.RemoteUserID != row.RemoteUserID {
+			unlock()
+			continue
+		}
+		live, liveErr := provider.GetUser(ctx, row.RemoteUserID)
+		if liveErr != nil || live.IsAdministrator {
+			if liveErr != nil {
+				s.logger.Warn("mediaaccess: shared libraries changed: cannot verify account", "err", liveErr, "user_id", row.UserID, "instance_id", instanceID)
+			}
+			unlock()
+			continue
+		}
 		if err := provider.SetLibraries(ctx, row.RemoteUserID, libraryIDs); err != nil {
 			s.logger.Error("mediaaccess: shared libraries changed: re-scope account",
 				"err", err, "user_id", row.UserID, "instance_id", instanceID)
 		}
+		unlock()
 	}
 }
 
-// reconcileUser makes each of a user's linked accounts enabled exactly when
+// reconcileUser makes each of a user's managed accounts enabled exactly when
 // the user holds the instance's grant. It compares against the LIVE state,
 // not the row's stamp, so an account an admin re-enabled or disabled on the
 // server side converges too. Failures are logged (ids only) and skipped: a
@@ -1329,55 +1565,74 @@ func (s *Service) reconcileUser(ctx context.Context, userID int64) {
 		s.logger.Error("mediaaccess: reconcile: list accounts", "err", err, "user_id", userID)
 		return
 	}
-	if len(rows) == 0 {
-		return
-	}
-	granted, err := s.grantedMediaServers(userID)
-	if err != nil {
-		s.logger.Error("mediaaccess: reconcile: list grants", "err", err, "user_id", userID)
-		return
-	}
 	for _, row := range rows {
-		inst, err := s.store.Get(row.InstanceID)
-		if err != nil || inst == nil {
-			continue
+		if ctx.Err() != nil {
+			return
 		}
-		provider, err := s.providers(inst)
-		if err != nil {
-			continue
+		unlock := s.lock(userID, row.InstanceID)
+		s.reconcileAccountLocked(ctx, userID, row.InstanceID)
+		unlock()
+	}
+}
+
+// Call only while holding the user/server lock. Reads authority again after
+// acquiring it; stopping management/unlinking fences all outstanding writes.
+func (s *Service) reconcileAccountLocked(ctx context.Context, userID int64, instanceID string) {
+	row, err := s.getAccount(userID, instanceID)
+	if err != nil || row == nil || !row.ManageAccess {
+		return
+	}
+	if err := s.markAccessPending(userID, instanceID); err != nil {
+		s.logger.Error("mediaaccess: reconcile: remember intent", "err", err, "user_id", userID, "instance_id", instanceID)
+		return
+	}
+	inst, err := s.store.Get(instanceID)
+	if err != nil || inst == nil {
+		return
+	}
+	provider, err := s.providers(inst)
+	if err != nil {
+		return
+	}
+	live, err := provider.GetUser(ctx, row.RemoteUserID)
+	granted, grantErr := s.grantedMediaServers(userID)
+	if grantErr != nil {
+		return
+	}
+	wantDisabled := !contains(granted, instanceID)
+	if errors.Is(err, mediaserver.ErrUserNotFound) && mediaserver.KindOf(provider) == mediaserver.KindInvite {
+		row.AccessSyncPending = true
+		s.reconcileMissingShare(ctx, provider, inst, *row, wantDisabled)
+		return
+	}
+	if err != nil {
+		s.logger.Warn("mediaaccess: reconcile: read account", "err", err, "user_id", userID, "instance_id", instanceID)
+		return
+	}
+	if live.IsAdministrator {
+		s.logger.Info("mediaaccess: linked administrator is never managed", "user_id", userID, "instance_id", instanceID)
+		_ = s.cancelLibrarySync(userID, instanceID)
+		// The provider's live answer is authoritative, including promotions
+		// made outside Cantinarr after a link was established.
+		if _, err := s.db.Exec("UPDATE user_media_server_accounts SET manage_access=0, access_sync_pending=0 WHERE user_id=? AND instance_id=?", userID, instanceID); err != nil {
+			s.logger.Error("mediaaccess: protect administrator", "err", err)
 		}
-		wantDisabled := !contains(granted, row.InstanceID)
-		live, err := provider.GetUser(ctx, row.RemoteUserID)
-		if errors.Is(err, mediaserver.ErrUserNotFound) && mediaserver.KindOf(provider) == mediaserver.KindInvite {
-			s.reconcileMissingShare(ctx, provider, inst, row, wantDisabled)
-			continue
+		return
+	}
+	if !wantDisabled {
+		if err := s.syncLibrariesLocked(ctx, inst, row, provider); err != nil {
+			s.logger.Warn("mediaaccess: library change pending", "err", err, "user_id", userID, "instance_id", instanceID)
+			return
 		}
-		if err != nil {
-			s.logger.Warn("mediaaccess: reconcile: read account", "err", err, "user_id", userID, "instance_id", row.InstanceID)
-			continue
+	}
+	if live.IsDisabled != wantDisabled {
+		if err := provider.SetDisabled(ctx, row.RemoteUserID, wantDisabled); err != nil {
+			s.logger.Error("mediaaccess: reconcile: set disabled", "err", err, "user_id", userID, "instance_id", instanceID)
+			return
 		}
-		if live.IsAdministrator {
-			// Never touched on the server. The stamp still follows the
-			// grant, so the drift sweep does not re-read this row forever.
-			if row.DisabledAt.Valid != wantDisabled {
-				if err := s.setDisabledAt(userID, row.InstanceID, wantDisabled); err != nil {
-					s.logger.Error("mediaaccess: reconcile: stamp", "err", err, "user_id", userID, "instance_id", row.InstanceID)
-				}
-			}
-			s.logger.Info("mediaaccess: reconcile: linked account is an administrator; leaving it alone", "user_id", userID, "instance_id", row.InstanceID)
-			continue
-		}
-		if live.IsDisabled != wantDisabled {
-			if err := provider.SetDisabled(ctx, row.RemoteUserID, wantDisabled); err != nil {
-				s.logger.Error("mediaaccess: reconcile: set disabled", "err", err, "user_id", userID, "instance_id", row.InstanceID, "disabled", wantDisabled)
-				continue
-			}
-		}
-		if row.DisabledAt.Valid != wantDisabled {
-			if err := s.setDisabledAt(userID, row.InstanceID, wantDisabled); err != nil {
-				s.logger.Error("mediaaccess: reconcile: stamp", "err", err, "user_id", userID, "instance_id", row.InstanceID)
-			}
-		}
+	}
+	if err := s.setDisabledAt(userID, instanceID, wantDisabled); err != nil {
+		s.logger.Error("mediaaccess: reconcile: stamp", "err", err, "user_id", userID, "instance_id", instanceID)
 	}
 }
 
@@ -1389,7 +1644,7 @@ func (s *Service) reconcileUser(ctx context.Context, userID int64) {
 // and the user can act on, so an unrelated grant write never emails anyone.
 func (s *Service) reconcileMissingShare(ctx context.Context, provider mediaserver.Provider, inst *instance.Instance, row accountRow, wantDisabled bool) {
 	if wantDisabled {
-		if !row.DisabledAt.Valid {
+		if !row.DisabledAt.Valid || row.AccessSyncPending {
 			if err := s.setDisabledAt(row.UserID, row.InstanceID, true); err != nil {
 				s.logger.Error("mediaaccess: reconcile: stamp", "err", err, "user_id", row.UserID, "instance_id", row.InstanceID)
 			}
@@ -1397,6 +1652,8 @@ func (s *Service) reconcileMissingShare(ctx context.Context, provider mediaserve
 		return
 	}
 	if !row.DisabledAt.Valid {
+		// A missing share that Cantinarr did not revoke needs an explicit invite.
+		_, _ = s.db.Exec("UPDATE user_media_server_accounts SET access_sync_pending=0 WHERE user_id=? AND instance_id=?", row.UserID, row.InstanceID)
 		return
 	}
 	remote, err := provider.CreateUser(ctx, row.RemoteUserID, "", inst.MediaServerConfig.LibraryIDs)
@@ -1406,24 +1663,25 @@ func (s *Service) reconcileMissingShare(ctx context.Context, provider mediaserve
 	}
 	if err := s.setDisabledAt(row.UserID, row.InstanceID, false); err != nil {
 		s.logger.Error("mediaaccess: reconcile: stamp", "err", err, "user_id", row.UserID, "instance_id", row.InstanceID)
+		return
 	}
-	// An account plex.tv still knows gets the share back accepted at once;
-	// only a real invite is worth a "check your email".
-	if remote.Pending {
-		s.notifyUser(row.UserID, eventInviteSent)
-	}
+	s.notifyShare(row.UserID, inst, remote.Pending)
 }
 
 // BeforeUserDelete is the auth handler's delete hook. Called before the
 // user is deleted, it snapshots what would need switching off; the returned
 // closure does it and must run only after the delete succeeded (the delete
-// can still refuse: last admin, self-delete). Rows are gone by cascade at
+// can still refuse: last admin, self-delete). The release closure must always
+// run after commit or abort. Rows are gone by cascade at
 // that point, which is fine — the snapshot already holds the remote ids.
-func (s *Service) BeforeUserDelete(userID int64) (committed func()) {
+func (s *Service) BeforeUserDelete(userID int64) (committed func(), release func()) {
+	l := s.userLock(userID)
+	l.Lock()
+	release = l.Unlock
 	rows, err := s.listAccountsForUser(userID)
 	if err != nil {
 		s.logger.Error("mediaaccess: delete hook: list accounts", "err", err, "user_id", userID)
-		return func() {}
+		return func() {}, release
 	}
 	type target struct {
 		inst *instance.Instance
@@ -1431,6 +1689,9 @@ func (s *Service) BeforeUserDelete(userID int64) (committed func()) {
 	}
 	var targets []target
 	for _, row := range rows {
+		if !row.ManageAccess {
+			continue
+		}
 		inst, err := s.store.Get(row.InstanceID)
 		if err != nil || inst == nil {
 			continue
@@ -1458,5 +1719,5 @@ func (s *Service) BeforeUserDelete(userID int64) (committed func()) {
 			}
 			cancel()
 		}
-	}
+	}, release
 }

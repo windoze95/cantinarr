@@ -1,5 +1,17 @@
 # Stage 1: Build Flutter web
 FROM --platform=$BUILDPLATFORM ghcr.io/cirruslabs/flutter:stable AS flutter-builder
+# The base image's stable SDK can lag the stable SDK installed by GitHub Actions.
+# Use the same checked-in version as CI and the store builds before resolving pub.
+COPY app/.flutter-version /tmp/cantinarr-flutter-version
+# Keep the tag locally: Flutter derives its version from Git tags, not just HEAD.
+RUN cantinarr_flutter_version="$(cat /tmp/cantinarr-flutter-version)" \
+    && git -C "$FLUTTER_ROOT" fetch --depth=1 origin \
+        "refs/tags/$cantinarr_flutter_version:refs/tags/$cantinarr_flutter_version" \
+    && git -C "$FLUTTER_ROOT" checkout --detach --force "refs/tags/$cantinarr_flutter_version" \
+    && rm -f "$FLUTTER_ROOT/version" "$FLUTTER_ROOT/bin/cache/flutter.version.json" \
+    && flutter --version --machine > /tmp/cantinarr-flutter-sdk.json \
+    && cat /tmp/cantinarr-flutter-sdk.json \
+    && grep -Fq "\"frameworkVersion\": \"$cantinarr_flutter_version\"" /tmp/cantinarr-flutter-sdk.json
 ARG CANTINARR_E2E_WEB_SEMANTICS=false
 # Build number for the web bundle, shown in Settings → About. Without it the
 # bundle reports pubspec's placeholder (`+1`) and every self-hosted deployment
@@ -7,10 +19,10 @@ ARG CANTINARR_E2E_WEB_SEMANTICS=false
 # (see docker.yml); local builds leave it unset and keep the placeholder.
 ARG APP_BUILD_NUMBER=
 WORKDIR /app
-COPY app/pubspec.yaml ./
-RUN flutter pub get
+COPY app/pubspec.yaml app/pubspec.lock ./
+RUN flutter pub get --enforce-lockfile
 COPY app/ .
-RUN flutter build web --release \
+RUN flutter build web --release --no-pub \
     --dart-define=CANTINARR_E2E_WEB_SEMANTICS=${CANTINARR_E2E_WEB_SEMANTICS} \
     ${APP_BUILD_NUMBER:+--build-number=${APP_BUILD_NUMBER}}
 
@@ -56,13 +68,29 @@ COPY --from=flutter-builder /app/build/web/ ./internal/web/dist/
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags "-X github.com/windoze95/cantinarr-server/internal/version.Version=${VERSION}" -o cantinarr ./cmd/server
 
-# Stage 3: Final image
+# Companion runs in a private stdio worker, with a pinned Python dependency set.
+FROM alpine:3.19 AS appletv-builder
+RUN apk add --no-cache python3 py3-pip libstdc++ build-base python3-dev libffi-dev
+RUN python3 -m venv /opt/cantinarr-appletv
+COPY server/tools/apple_tv/requirements.lock /tmp/apple-tv-requirements.lock
+RUN /opt/cantinarr-appletv/bin/pip install --no-cache-dir --require-hashes -r /tmp/apple-tv-requirements.lock
+# Keep package metadata and bundled license files in the venv. An index lets
+# operators find each distribution's notices without relying on network access.
+COPY server/tools/apple_tv/collect_notices.py /tmp/collect_notices.py
+RUN /opt/cantinarr-appletv/bin/python /tmp/collect_notices.py /apple-tv-notices
+
+# Final image
 FROM alpine:3.19
 # su-exec is what the entrypoint drops privileges with when PUID/PGID are set.
-RUN apk add --no-cache ca-certificates su-exec
+RUN apk add --no-cache ca-certificates su-exec python3 libstdc++
 COPY --from=go-builder /build/cantinarr /usr/local/bin/
 COPY --from=codex-downloader /codex-app-server /usr/local/bin/
 COPY --from=codex-downloader /codex-license/ /usr/share/licenses/codex-app-server/
+COPY --from=appletv-builder /opt/cantinarr-appletv/ /opt/cantinarr-appletv/
+COPY --from=appletv-builder /apple-tv-notices/ /usr/share/licenses/cantinarr-appletv/
+COPY server/tools/apple_tv/cantinarr_appletv.py /usr/lib/cantinarr/apple_tv/cantinarr_appletv.py
+COPY --chmod=0755 server/tools/apple_tv/helper.sh /usr/local/bin/cantinarr-appletv-helper
+RUN cantinarr-appletv-helper --self-test
 # Shared with server/Dockerfile: honours PUID/PGID (own /config, run as that
 # user), otherwise exec's the command untouched, root as before.
 COPY --chmod=0755 server/docker/entrypoint.sh /entrypoint.sh

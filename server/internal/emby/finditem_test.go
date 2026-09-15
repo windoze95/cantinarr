@@ -16,6 +16,7 @@ import (
 // given and records the query it was asked, plus /System/Info.
 type fakeLibrary struct {
 	t       *testing.T
+	user    func(http.ResponseWriter, *http.Request)
 	items   []map[string]any
 	status  int
 	echo    bool
@@ -29,6 +30,10 @@ func (f *fakeLibrary) handler() http.Handler {
 		writeJSON(f.t, w, map[string]any{"Id": "server-1", "ServerName": "Den", "Version": "4.9.5.0"})
 	})
 	mux.HandleFunc("/Users/", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/Items") {
+			f.serveUser(w, r)
+			return
+		}
 		f.paths = append(f.paths, r.URL.Path)
 		f.queries = append(f.queries, r.URL.Query())
 		if f.status != 0 {
@@ -45,6 +50,14 @@ func (f *fakeLibrary) handler() http.Handler {
 		w.WriteHeader(http.StatusTeapot)
 	})
 	return mux
+}
+
+func (f *fakeLibrary) serveUser(w http.ResponseWriter, r *http.Request) {
+	if f.user != nil {
+		f.user(w, r)
+		return
+	}
+	writeJSON(f.t, w, map[string]any{"Id": strings.TrimPrefix(r.URL.Path, "/Users/"), "Policy": map[string]any{"IsDisabled": false, "EnabledFolders": []string{"movies"}}})
 }
 
 func item(id any, ids map[string]any) map[string]any {

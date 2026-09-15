@@ -29,6 +29,9 @@ type fakeProvider struct {
 	createErr      error  // CreateUser fails with this before creating anything
 	onCreate       func() // runs inside CreateUser, after the remote account exists
 	creates        int
+	disables       int
+	setErr         error
+	beforeSet      func()
 	deletes        int
 	gets           int
 	libraryWrites  []libraryWrite
@@ -186,11 +189,18 @@ func (f *fakeProvider) SetLibraries(_ context.Context, id string, libraryIDs []s
 }
 
 func (f *fakeProvider) SetDisabled(_ context.Context, id string, disabled bool) error {
+	if f.beforeSet != nil {
+		f.beforeSet()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	u := f.users[id]
 	if u == nil {
 		return mediaserver.ErrUserNotFound
+	}
+	f.disables++
+	if f.setErr != nil {
+		return f.setErr
 	}
 	u.IsDisabled = disabled
 	return nil
@@ -240,6 +250,7 @@ func newEnv(t *testing.T) *env {
 	// Invite passes run off the request in production; here they run inline
 	// so a test can assert right after the call that triggered them.
 	e.svc.background = func(fn func()) { fn() }
+	e.store.SetGrantAddedObserver(e.svc.OnGrantAdded)
 	return e
 }
 
@@ -486,7 +497,7 @@ func TestListForUserVerifiedAndBlindStates(t *testing.T) {
 	for _, pair := range []struct {
 		inst, remote string
 	}{{okServer, fineID}, {deadServer, "remote-dead"}, {goneServer, "remote-gone"}} {
-		if _, err := e.svc.insertAccount(accountRow{UserID: alice, InstanceID: pair.inst, RemoteUserID: pair.remote, RemoteUsername: "alice", CreatedByCantinarr: true}, false); err != nil {
+		if _, err := e.svc.insertAccount(accountRow{UserID: alice, InstanceID: pair.inst, RemoteUserID: pair.remote, RemoteUsername: "alice", CreatedByCantinarr: true, ManageAccess: true}, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -612,19 +623,18 @@ func TestReconcileDisablesOnRevokeAndEnablesOnRegrant(t *testing.T) {
 		t.Fatal("returned grant did not re-enable the account")
 	}
 
-	// A linked administrator is never touched on the server; its row still
-	// follows the grant, so the drift sweep has nothing to retry.
+	// A legacy managed administrator is protected and becomes linked-only.
 	bob := e.user("bob")
 	adminID := e.provider.addUser("bob", true, false)
-	if _, err := e.svc.insertAccount(accountRow{UserID: bob, InstanceID: jf, RemoteUserID: adminID, RemoteUsername: "bob"}, false); err != nil {
+	if _, err := e.svc.insertAccount(accountRow{UserID: bob, InstanceID: jf, RemoteUserID: adminID, RemoteUsername: "bob", ManageAccess: true}, false); err != nil {
 		t.Fatal(err)
 	}
 	e.svc.OnGrantsChanged([]int64{bob})
 	if e.provider.user(adminID).IsDisabled {
 		t.Fatal("reconcile disabled an administrator account")
 	}
-	if !e.row(bob, jf).DisabledAt.Valid {
-		t.Fatal("an ungranted administrator row was not stamped")
+	if e.row(bob, jf).ManageAccess || e.row(bob, jf).AccessSyncPending {
+		t.Fatal("administrator remained managed or pending")
 	}
 	if !strings.Contains(e.logs.String(), "administrator") {
 		t.Fatal("skipping an administrator was not logged")
@@ -708,13 +718,13 @@ func TestLinkAccountAcceptsAdministratorsAndRefusesDuplicateRemote(t *testing.T)
 	}
 }
 
-func TestLinkAccountGrantsAndEnables(t *testing.T) {
+func TestLinkAccountExplicitManagementGrantsAndEnables(t *testing.T) {
 	e := newEnv(t)
 	alice := e.user("alice")
 	jf := e.jellyfin("Home", instance.MediaServerConfig{})
 	remote := e.provider.addUser("alice", false, true)
 
-	account, err := e.svc.LinkAccount(context.Background(), alice, jf, remote)
+	account, err := e.svc.LinkAccount(context.Background(), alice, jf, remote, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -728,7 +738,7 @@ func TestLinkAccountGrantsAndEnables(t *testing.T) {
 	if e.provider.user(remote).IsDisabled {
 		t.Fatal("linking a granted user left the account disabled")
 	}
-	all, err := e.svc.ListAccounts()
+	all, err := e.svc.ListAccounts(context.Background())
 	if err != nil || len(all) != 1 || all[0].UserID != alice {
 		t.Fatalf("ListAccounts = %+v, %v", all, err)
 	}
@@ -770,7 +780,8 @@ func TestBeforeUserDeleteCommitsOnlyAfterDelete(t *testing.T) {
 	}
 	remote := e.row(alice, jf).RemoteUserID
 
-	committed := e.svc.BeforeUserDelete(alice)
+	committed, release := e.svc.BeforeUserDelete(alice)
+	defer release()
 	if e.provider.user(remote).IsDisabled {
 		t.Fatal("prepare must not touch the server (the delete can still refuse)")
 	}

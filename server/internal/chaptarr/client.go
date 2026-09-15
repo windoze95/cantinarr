@@ -17,6 +17,7 @@ import (
 	"time"
 
 	arrcommon "github.com/windoze95/cantinarr-server/internal/arr"
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 	"github.com/windoze95/cantinarr-server/internal/transporterr"
 )
 
@@ -38,10 +39,53 @@ func NewClient(baseURL, apiKey string) *Client {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		httpClient: &http.Client{
+			Transport:     httpx.Internal(),
 			Timeout:       30 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
+}
+
+// WithMutationGuard returns a private client that checks current authority
+// immediately before every write, including follow-up writes after a read.
+func (c *Client) WithMutationGuard(check func() error) *Client {
+	clone := *c
+	httpClient := *c.httpClient
+	httpClient.Transport = mutationGuard{base: c.httpClient.Transport, check: check}
+	clone.httpClient = &httpClient
+	return &clone
+}
+
+// WithContext bounds metadata reads made during responsive request intake.
+func (c *Client) WithContext(ctx context.Context) *Client {
+	clone := *c
+	client := *c.httpClient
+	client.Transport = contextTransport{base: client.Transport, ctx: ctx}
+	clone.httpClient = &client
+	return &clone
+}
+
+type contextTransport struct {
+	base http.RoundTripper
+	ctx  context.Context
+}
+
+func (t contextTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return t.base.RoundTrip(r.Clone(t.ctx))
+}
+
+type mutationGuard struct {
+	base  http.RoundTripper
+	check func() error
+}
+
+func (g mutationGuard) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		if err := g.check(); err != nil {
+			return nil, err
+		}
+	}
+	return g.base.RoundTrip(r)
 }
 
 // Image is a cover/poster reference returned on authors, books, and editions.
@@ -135,32 +179,41 @@ type BookStatistics struct {
 // Edition is one published edition of a book (a specific format/ISBN). Chaptarr
 // models ebooks and audiobooks as distinct editions of the same book.
 type Edition struct {
-	ID               int     `json:"id"`
-	BookID           int     `json:"bookId"`
-	ForeignEditionID string  `json:"foreignEditionId"`
-	TitleSlug        string  `json:"titleSlug"`
-	Title            string  `json:"title"`
-	Format           string  `json:"format"`
-	ASIN             string  `json:"asin"`
-	ISBN13           string  `json:"isbn13"`
-	Overview         string  `json:"overview"`
-	Publisher        string  `json:"publisher"`
-	PageCount        int     `json:"pageCount"`
-	Monitored        bool    `json:"monitored"`
-	ManualAdd        bool    `json:"manualAdd"`
-	IsEbook          *bool   `json:"isEbook,omitempty"`
-	Images           []Image `json:"images"`
+	ID                   int        `json:"id"`
+	BookID               int        `json:"bookId"`
+	ForeignEditionID     string     `json:"foreignEditionId"`
+	GoodreadsEditionID   ProviderID `json:"goodreadsEditionId,omitempty"`
+	OpenLibraryEditionID ProviderID `json:"openLibraryEditionId,omitempty"`
+	HardcoverEditionID   ProviderID `json:"hardcoverEditionId,omitempty"`
+	TitleSlug            string     `json:"titleSlug"`
+	Title                string     `json:"title"`
+	Format               string     `json:"format"`
+	ASIN                 string     `json:"asin"`
+	ISBN13               string     `json:"isbn13"`
+	ISBN10               string     `json:"isbn10,omitempty"`
+	Overview             string     `json:"overview"`
+	Publisher            string     `json:"publisher"`
+	PageCount            int        `json:"pageCount"`
+	Monitored            bool       `json:"monitored"`
+	ManualAdd            bool       `json:"manualAdd"`
+	IsEbook              *bool      `json:"isEbook,omitempty"`
+	Images               []Image    `json:"images"`
 }
 
 type Book struct {
-	ID            int        `json:"id"`
-	Title         string     `json:"title"`
-	AuthorID      int        `json:"authorId"`
-	ForeignBookID string     `json:"foreignBookId"`
-	TitleSlug     string     `json:"titleSlug"`
-	Overview      string     `json:"overview"`
-	ReleaseDate   *time.Time `json:"releaseDate,omitempty"`
-	Monitored     bool       `json:"monitored"`
+	OpenLibraryWorkID ProviderID `json:"openLibraryWorkId,omitempty"`
+	GoodreadsBookID   ProviderID `json:"goodreadsBookId,omitempty"`
+	GoodreadsWorkID   ProviderID `json:"goodreadsWorkId,omitempty"`
+	HardcoverBookID   ProviderID `json:"hardcoverBookId,omitempty"`
+	ID                int        `json:"id"`
+	Title             string     `json:"title"`
+	AuthorID          int        `json:"authorId"`
+	ForeignBookID     string     `json:"foreignBookId"`
+	ForeignEditionID  string     `json:"foreignEditionId,omitempty"`
+	TitleSlug         string     `json:"titleSlug"`
+	Overview          string     `json:"overview"`
+	ReleaseDate       *time.Time `json:"releaseDate,omitempty"`
+	Monitored         bool       `json:"monitored"`
 	// MediaType is the book-level format Chaptarr returns on library books
 	// ("ebook"/"audiobook"); this fork tracks a title's ebook and audiobook as
 	// separate records sharing a foreignBookId, distinguished by this field.
@@ -313,17 +366,22 @@ func (r RootFolder) IsAccessible() bool {
 // constraints on columns the typed struct would drop (notably links and images),
 // so a lossy re-encode fails the add with a SQLite constraint error.
 type LookupResult struct {
-	Title           string            `json:"title"`
-	TitleSlug       string            `json:"titleSlug,omitempty"`
-	AuthorName      string            `json:"authorName"`
-	ForeignAuthorID string            `json:"foreignAuthorId"`
-	ForeignBookID   string            `json:"foreignBookId"`
-	Overview        string            `json:"overview"`
-	Year            int               `json:"year"`
-	Images          []Image           `json:"images"`
-	Author          *Author           `json:"author,omitempty"`
-	RemoteCover     string            `json:"remoteCover,omitempty"`
-	Editions        []json.RawMessage `json:"editions,omitempty"`
+	Title             string            `json:"title"`
+	TitleSlug         string            `json:"titleSlug,omitempty"`
+	AuthorName        string            `json:"authorName"`
+	ForeignAuthorID   string            `json:"foreignAuthorId"`
+	ForeignBookID     string            `json:"foreignBookId"`
+	ForeignEditionID  string            `json:"foreignEditionId,omitempty"`
+	OpenLibraryWorkID ProviderID        `json:"openLibraryWorkId,omitempty"`
+	GoodreadsBookID   ProviderID        `json:"goodreadsBookId,omitempty"`
+	GoodreadsWorkID   ProviderID        `json:"goodreadsWorkId,omitempty"`
+	HardcoverBookID   ProviderID        `json:"hardcoverBookId,omitempty"`
+	Overview          string            `json:"overview"`
+	Year              int               `json:"year"`
+	Images            []Image           `json:"images"`
+	Author            *Author           `json:"author,omitempty"`
+	RemoteCover       string            `json:"remoteCover,omitempty"`
+	Editions          []json.RawMessage `json:"editions,omitempty"`
 }
 
 // AddAuthorRequest mirrors Sonarr's AddSeriesRequest shape for adding an author
@@ -599,12 +657,12 @@ func (c *Client) doWith(client *http.Client, method, path string, body, out any)
 		// the hostname). These errors surface beyond admins — e.g. in request
 		// failures — so summarize them host-free like the status branch below.
 		requestPath, _, _ := strings.Cut(path, "?")
-		return fmt.Errorf("chaptarr %s %s: %s", method, requestPath, transporterr.Summarize(err))
+		return transporterr.Connection(fmt.Sprintf("chaptarr %s %s: ", method, requestPath), err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		requestPath, _, _ := strings.Cut(path, "?")
-		return fmt.Errorf("chaptarr %s %s returned status %d", method, requestPath, resp.StatusCode)
+		return transporterr.HTTP(fmt.Sprintf("chaptarr %s %s returned status %d", method, requestPath, resp.StatusCode), resp)
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
@@ -628,7 +686,7 @@ func (c *Client) doRequestContext(ctx context.Context, method, path string) (*ht
 	if err != nil {
 		// Host-free, like doWith: transport errors embed the full request URL.
 		requestPath, _, _ := strings.Cut(path, "?")
-		return nil, fmt.Errorf("chaptarr %s %s: %s", method, requestPath, transporterr.Summarize(err))
+		return nil, transporterr.Connection(fmt.Sprintf("chaptarr %s %s: ", method, requestPath), err)
 	}
 	return resp, nil
 }
@@ -650,15 +708,31 @@ func (c *Client) LookupAuthor(term string) ([]LookupResult, error) {
 
 // LookupBook searches Chaptarr's metadata for books matching term.
 func (c *Client) LookupBook(term string) ([]LookupResult, error) {
-	resp, err := c.doRequest("GET", "/api/v1/book/lookup?term="+url.QueryEscape(term))
+	return c.LookupBookContext(context.Background(), term)
+}
+
+// LookupBookContext bounds discovery lookups, including time spent waiting
+// for a catalog. A failed or malformed read must never look like no match.
+func (c *Client) LookupBookContext(ctx context.Context, term string) ([]LookupResult, error) {
+	resp, err := c.doRequestContext(ctx, "GET", "/api/v1/book/lookup?term="+url.QueryEscape(term))
 	if err != nil {
 		return nil, fmt.Errorf("chaptarr book lookup: %w", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr book lookup returned status %d", resp.StatusCode), resp)
+	}
 	var results []LookupResult
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20+1))
+	if err != nil || len(data) > 4<<20 {
+		return nil, fmt.Errorf("read chaptarr book lookup")
+	}
+	if err := json.Unmarshal(data, &results); err != nil {
 		return nil, fmt.Errorf("decode chaptarr book lookup: %w", err)
+	}
+	if results == nil {
+		return nil, fmt.Errorf("invalid chaptarr book lookup response")
 	}
 	return results, nil
 }
@@ -711,6 +785,7 @@ func (c *Client) GetBooks(authorID int) ([]Book, error) {
 // libraries big enough to matter.
 func libraryFetchClient() *http.Client {
 	return &http.Client{
+		Transport:     httpx.Internal(),
 		Timeout:       120 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}
@@ -723,6 +798,9 @@ func (c *Client) GetAllBooks() ([]Book, error) {
 	if err := c.doWith(libraryFetchClient(), "GET", "/api/v1/book", nil, &books); err != nil {
 		return nil, fmt.Errorf("chaptarr books: %w", err)
 	}
+	if books == nil {
+		return nil, fmt.Errorf("chaptarr returned an incomplete book list")
+	}
 	return books, nil
 }
 
@@ -730,7 +808,12 @@ func (c *Client) GetAllBooks() ([]Book, error) {
 // exists. Non-2xx responses become host-free errors instead of decoding an
 // error body into a bogus zero-id record.
 func (c *Client) GetBook(id int) (*Book, error) {
-	resp, err := c.doRequest("GET", fmt.Sprintf("/api/v1/book/%d", id))
+	return c.GetBookContext(context.Background(), id)
+}
+
+// GetBookContext is the cancellable single-record read used by listening links.
+func (c *Client) GetBookContext(ctx context.Context, id int) (*Book, error) {
+	resp, err := c.doRequestContext(ctx, "GET", fmt.Sprintf("/api/v1/book/%d", id))
 	if err != nil {
 		return nil, fmt.Errorf("chaptarr get book: %w", err)
 	}
@@ -741,7 +824,7 @@ func (c *Client) GetBook(id int) (*Book, error) {
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("chaptarr GET /api/v1/book/%d returned status %d", id, resp.StatusCode)
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr GET /api/v1/book/%d returned status %d", id, resp.StatusCode), resp)
 	}
 
 	var book Book
@@ -749,6 +832,35 @@ func (c *Client) GetBook(id int) (*Book, error) {
 		return nil, fmt.Errorf("decode chaptarr book: %w", err)
 	}
 	return &book, nil
+}
+
+// GetBookEditionsContext reads editions omitted from Chaptarr's book response.
+// Re-filter by book ID because a fork may ignore the query parameter.
+func (c *Client) GetBookEditionsContext(ctx context.Context, bookID int) ([]Edition, error) {
+	path := fmt.Sprintf("/api/v1/edition?bookId=%d", bookID)
+	resp, err := c.doRequestContext(ctx, http.MethodGet, path)
+	if err != nil {
+		return nil, fmt.Errorf("chaptarr book editions: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr GET /api/v1/edition returned status %d", resp.StatusCode), resp)
+	}
+	var editions []Edition
+	if err := json.NewDecoder(resp.Body).Decode(&editions); err != nil {
+		return nil, fmt.Errorf("decode chaptarr book editions: %w", err)
+	}
+	if editions == nil {
+		return nil, fmt.Errorf("chaptarr returned an incomplete edition list")
+	}
+	matched := editions[:0]
+	for _, edition := range editions {
+		if edition.BookID == bookID {
+			matched = append(matched, edition)
+		}
+	}
+	return matched, nil
 }
 
 // GetBookFiles lists the book files on disk for one author.
@@ -818,7 +930,7 @@ func (c *Client) GetQualityProfilesRawContext(ctx context.Context) ([]json.RawMe
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("chaptarr GET /api/v1/qualityprofile returned status %d", resp.StatusCode)
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr GET /api/v1/qualityprofile returned status %d", resp.StatusCode), resp)
 	}
 	var profiles []json.RawMessage
 	if err := json.NewDecoder(resp.Body).Decode(&profiles); err != nil {
@@ -856,7 +968,7 @@ func (c *Client) GetCustomFormatsRawContext(ctx context.Context) ([]json.RawMess
 		return nil, ErrCustomFormatsNotFound
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("chaptarr GET /api/v1/customformat returned status %d", resp.StatusCode)
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr GET /api/v1/customformat returned status %d", resp.StatusCode), resp)
 	}
 	var formats []json.RawMessage
 	if err := json.NewDecoder(resp.Body).Decode(&formats); err != nil {
@@ -958,7 +1070,7 @@ func (c *Client) AddBook(req AddBookRequest) (*Book, error) {
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		// Host-free, like doWith: transport errors embed the full request URL.
-		return nil, fmt.Errorf("chaptarr add book: chaptarr POST /api/v1/book: %s", transporterr.Summarize(err))
+		return nil, transporterr.Connection("chaptarr add book: chaptarr POST /api/v1/book: ", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -967,7 +1079,7 @@ func (c *Client) AddBook(req AddBookRequest) (*Book, error) {
 				return nil, fmt.Errorf("chaptarr add book: %w", classified)
 			}
 		}
-		return nil, fmt.Errorf("chaptarr add book: chaptarr POST /api/v1/book returned status %d", resp.StatusCode)
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr add book: chaptarr POST /api/v1/book returned status %d", resp.StatusCode), resp)
 	}
 	var book Book
 	if err := json.NewDecoder(resp.Body).Decode(&book); err != nil {
@@ -1072,7 +1184,7 @@ func (c *Client) GetAuthorImportStatus(foreignAuthorID string) (*AuthorImportSta
 		return nil, fmt.Errorf("chaptarr author import status: %w", ErrAuthorProviderAmbiguous)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("chaptarr author import status: chaptarr GET /api/v1/pendingauthorimport/author/exists returned status %d", resp.StatusCode)
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr author import status: chaptarr GET /api/v1/pendingauthorimport/author/exists returned status %d", resp.StatusCode), resp)
 	}
 	var status AuthorImportStatus
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
@@ -1108,7 +1220,7 @@ func (c *Client) GetPendingAuthorImport(pendingID int) (*PendingAuthorImportDeta
 		return nil, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("chaptarr pending author import: chaptarr GET /api/v1/pendingauthorimport returned status %d", resp.StatusCode)
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr pending author import: chaptarr GET /api/v1/pendingauthorimport returned status %d", resp.StatusCode), resp)
 	}
 	var detail PendingAuthorImportDetail
 	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
@@ -1131,7 +1243,7 @@ func (c *Client) CancelPendingAuthorImport(pendingID int) error {
 		return fmt.Errorf("chaptarr cancel pending author import: %w", ErrPendingImportAPIUnavailable)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("chaptarr cancel pending author import: chaptarr DELETE /api/v1/pendingauthorimport returned status %d", resp.StatusCode)
+		return transporterr.HTTP(fmt.Sprintf("chaptarr cancel pending author import: chaptarr DELETE /api/v1/pendingauthorimport returned status %d", resp.StatusCode), resp)
 	}
 	return nil
 }
@@ -1149,7 +1261,7 @@ func (c *Client) RetryPendingAuthorImport(pendingID int) error {
 		return fmt.Errorf("chaptarr retry pending author import: %w", ErrPendingImportAPIUnavailable)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("chaptarr retry pending author import: chaptarr POST /api/v1/pendingauthorimport/retry returned status %d", resp.StatusCode)
+		return transporterr.HTTP(fmt.Sprintf("chaptarr retry pending author import: chaptarr POST /api/v1/pendingauthorimport/retry returned status %d", resp.StatusCode), resp)
 	}
 	return nil
 }
@@ -1342,6 +1454,7 @@ func (c *Client) GetWantedCutoff(page, pageSize int) (*WantedPage, error) {
 // release searches, which query every configured indexer.
 func releaseSearchClient() *http.Client {
 	return &http.Client{
+		Transport:     httpx.Internal(),
 		Timeout:       120 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}
@@ -1599,4 +1712,24 @@ func (c *Client) GetFailedDownloadPolicy() (autoRedownloadFailed bool, err error
 		return false, fmt.Errorf("chaptarr download client config: %w", err)
 	}
 	return config.AutoRedownloadFailed, nil
+}
+
+// GetAllBooksContext is a bounded, complete library read for catalog matching.
+func (c *Client) GetAllBooksContext(ctx context.Context) ([]Book, error) {
+	response, err := c.doRequestContext(ctx, http.MethodGet, "/api/v1/book")
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr book list returned status %d", response.StatusCode), response)
+	}
+	var books []Book
+	if err = json.NewDecoder(io.LimitReader(response.Body, 32<<20)).Decode(&books); err != nil {
+		return nil, fmt.Errorf("invalid library response")
+	}
+	if books == nil {
+		return nil, fmt.Errorf("incomplete library response")
+	}
+	return books, nil
 }

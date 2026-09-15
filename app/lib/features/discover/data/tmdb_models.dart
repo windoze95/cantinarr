@@ -418,6 +418,8 @@ class TVDetail {
   final double? voteAverage;
   final String? firstAirDate;
   final String? status;
+  final TmdbEpisode? nextEpisodeToAir;
+  final TmdbEpisode? lastEpisodeToAir;
   final int? numberOfSeasons;
   final int? numberOfEpisodes;
   final List<Genre> genres;
@@ -449,6 +451,8 @@ class TVDetail {
     this.voteAverage,
     this.firstAirDate,
     this.status,
+    this.nextEpisodeToAir,
+    this.lastEpisodeToAir,
     this.numberOfSeasons,
     this.numberOfEpisodes,
     this.genres = const [],
@@ -472,6 +476,8 @@ class TVDetail {
         voteAverage: (json['vote_average'] as num?)?.toDouble(),
         firstAirDate: json['first_air_date'] as String?,
         status: json['status'] as String?,
+        nextEpisodeToAir: TmdbEpisode.tryParse(json['next_episode_to_air']),
+        lastEpisodeToAir: TmdbEpisode.tryParse(json['last_episode_to_air']),
         numberOfSeasons: json['number_of_seasons'] as int?,
         numberOfEpisodes: json['number_of_episodes'] as int?,
         genres: (json['genres'] as List<dynamic>?)
@@ -508,6 +514,38 @@ class TVDetail {
     if (trailer.isNotEmpty) return trailer.first.key;
     final any = videos.where((v) => v.site?.toLowerCase() == 'youtube');
     return any.isNotEmpty ? any.first.key : null;
+  }
+}
+
+/// The optional next/last episode summary embedded in TMDB's TV detail.
+/// Dates remain calendar-date strings; display policy lives in tv_schedule.
+class TmdbEpisode {
+  final String? airDate;
+  final int? seasonNumber;
+  final int? episodeNumber;
+
+  const TmdbEpisode({this.airDate, this.seasonNumber, this.episodeNumber});
+
+  static TmdbEpisode? tryParse(Object? value) {
+    if (value is! Map<String, dynamic>) return null;
+    final airDate = value['air_date'] is String
+        ? _blankToNull(value['air_date'] as String) : null;
+    final season = value['season_number'];
+    final episode = value['episode_number'];
+    final seasonNumber = season is int && season >= 0 ? season : null;
+    final episodeNumber = episode is int && episode > 0 ? episode : null;
+    final id = value['id'];
+    // An ID alone still explicitly names an episode with an unknown date.
+    // An empty/unknown-shaped object does not establish another episode.
+    if (airDate == null && seasonNumber == null && episodeNumber == null &&
+        !(id is int && id > 0)) {
+      return null;
+    }
+    return TmdbEpisode(
+      airDate: airDate,
+      seasonNumber: seasonNumber,
+      episodeNumber: episodeNumber,
+    );
   }
 }
 

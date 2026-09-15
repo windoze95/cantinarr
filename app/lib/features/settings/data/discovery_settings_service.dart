@@ -54,12 +54,14 @@ class DiscoverySettings {
   final bool englishOnly;
   final List<DiscoverySource> sources;
   final bool traktConfigured;
+  final Map<String, bool>? hiddenWhenUnconfigured;
 
   const DiscoverySettings({
     required this.source,
     required this.englishOnly,
     required this.sources,
     required this.traktConfigured,
+    this.hiddenWhenUnconfigured,
   });
 
   factory DiscoverySettings.fromJson(Map<String, dynamic> json) {
@@ -81,6 +83,8 @@ class DiscoverySettings {
               ),
       ],
       traktConfigured: json['trakt_configured'] as bool? ?? false,
+      hiddenWhenUnconfigured:
+          (json['hidden_when_unconfigured'] as Map?)?.cast<String, bool>(),
     );
   }
 
@@ -88,12 +92,17 @@ class DiscoverySettings {
   bool isSelectable(DiscoverySource source) =>
       !source.requiresTrakt || traktConfigured;
 
-  DiscoverySettings copyWith({String? source, bool? englishOnly}) =>
+  DiscoverySettings copyWith(
+          {String? source,
+          bool? englishOnly,
+          Map<String, bool>? hiddenWhenUnconfigured}) =>
       DiscoverySettings(
         source: source ?? this.source,
         englishOnly: englishOnly ?? this.englishOnly,
         sources: sources,
         traktConfigured: traktConfigured,
+        hiddenWhenUnconfigured:
+            hiddenWhenUnconfigured ?? this.hiddenWhenUnconfigured,
       );
 }
 
@@ -108,12 +117,23 @@ class DiscoverySettingsService {
     return DiscoverySettings.fromJson(resp.data as Map<String, dynamic>);
   }
 
+  /// A footer edits only its own preference; it cannot overwrite other tabs
+  /// or row settings saved by another administrator.
+  Future<DiscoverySettings> setHidden(String mediaType, bool hidden) async {
+    final resp = await _dio.put('/api/admin/discovery-settings', data: {
+      'hidden_when_unconfigured': {mediaType: hidden},
+    });
+    return DiscoverySettings.fromJson(resp.data as Map<String, dynamic>);
+  }
+
   Future<DiscoverySettings> update(DiscoverySettings settings) async {
     final resp = await _dio.put(
       '/api/admin/discovery-settings',
       data: {
         'source': settings.source,
         'english_only': settings.englishOnly,
+        if (settings.hiddenWhenUnconfigured != null)
+          'hidden_when_unconfigured': settings.hiddenWhenUnconfigured,
       },
     );
     return DiscoverySettings.fromJson(resp.data as Map<String, dynamic>);

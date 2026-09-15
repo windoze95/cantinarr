@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -8,12 +7,24 @@ import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
+import '../../../core/network/api_error_message.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../media_access/data/media_access_service.dart';
+import '../../media_access/data/listening_apps.dart';
+import '../../media_access/data/video_apps.dart';
+import '../../media_access/ui/video_app_field.dart';
+import '../../media_access/ui/listening_app_fields.dart';
+import '../../discover/data/trending_books_service.dart';
 import '../data/instance_api_service.dart';
+import '../data/audiobook_library_access.dart';
+import 'audiobook_user_libraries.dart';
+import '../data/hardcover_connection.dart';
+import 'hardcover_connection_dialog.dart';
 import '../logic/arr_path_match.dart';
 import '../logic/plex_invites_provider.dart';
 
@@ -32,6 +43,10 @@ class InstanceEditScreen extends ConsumerStatefulWidget {
   final String? initialUsername;
   final bool initialIsDefault;
 
+  /// A catalog setup link refreshes config after this pushed route closes,
+  /// so a router refresh cannot replace the match while it is being popped.
+  final bool refreshConfigAfterReturn;
+
   /// Opens a NEW instance form with the service-type selector unchosen,
   /// showing this prompt as its disabled placeholder until one is picked.
   /// For the setup checklist's download-client row: it names a category of
@@ -49,6 +64,7 @@ class InstanceEditScreen extends ConsumerStatefulWidget {
     this.initialApiKey,
     this.initialUsername,
     this.initialIsDefault = false,
+    this.refreshConfigAfterReturn = false,
     this.serviceTypePrompt,
   });
 
@@ -59,12 +75,75 @@ class InstanceEditScreen extends ConsumerStatefulWidget {
 }
 
 class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
+  bool get _isAbs => _serviceType == 'audiobookshelf';
+  Map<int, AudiobookLibraryPolicy> _absPolicies = {};
+  final Set<int> _absEditedPolicies = {};
+  List<String> _absSavedDefaultIds = [];
+  String _absSavedPublicAddress = '';
+  ListeningApps? _absSavedListeningApps;
+  bool _absAccessLoaded = false;
+  bool _absSyncPending = false;
+  final _detailsDraft = SettingsDraft();
+  final _mediaDraft = SettingsDraft();
+  final _mappingsDraft = SettingsDraft();
+  final _defaultDraft = SettingsDraft();
+  int? _savedPlexPinId;
+
+  Map<String, Object?> get _detailValues => {
+        'type': _serviceType,
+        'name': _nameController.text,
+        'url': _urlController.text,
+        'apiKey': _apiKeyController.text,
+        'username': _usernameController.text,
+        'password': _passwordController.text,
+        'qbitAuth': _qbitAuth.name,
+      };
+  Object get _mediaValues => [
+        _publicAddressController.text,
+        _selectedLibraryIds.toList()..sort(),
+        _plexMachineId,
+        _plexAutoApprove,
+        _listeningApps?.toJson(),
+        _videoApps?.toJson(),
+      ];
+  Object get _mappingValues => [
+        for (final mapping in _mediaPathMappings)
+          [mapping.arrPath.text, mapping.cantinarrPath.text],
+      ];
+  bool get _hasUnsavedChanges => (_absEditedPolicies.isNotEmpty ||
+      _detailsDraft.hasChanges(_detailValues) ||
+      _defaultDraft.hasChanges(_isDefault) ||
+      _mediaDraft.hasChanges(_mediaValues) ||
+      _mappingsDraft.hasChanges(_mappingValues) ||
+      !_sameSelection(_assignedUserIds, _savedAssignedUserIds) ||
+      (_plexPinId != _savedPlexPinId && _plexAccount.isNotEmpty));
+
+  void _markInstanceSaved() {
+    _detailsDraft.markSaved(_detailValues);
+    _defaultDraft.markSaved(_isDefault);
+    _mediaDraft.markSaved(_mediaValues);
+    _mappingsDraft.markSaved(_mappingValues);
+    _savedPlexPinId = _plexPinId;
+  }
+
+  void _finishEditing() {
+    _markInstanceSaved();
+    _savedAssignedUserIds = Set.of(_assignedUserIds);
+    if (context.canPop()) {
+      context.pop(true);
+    } else {
+      context.go('/settings');
+    }
+  }
+
   late final TextEditingController _nameController;
   late final TextEditingController _urlController;
   late final TextEditingController _apiKeyController;
   late final TextEditingController _usernameController;
   late final TextEditingController _passwordController;
   late final TextEditingController _publicAddressController;
+  ListeningApps? _listeningApps;
+  VideoApps? _videoApps;
   String _serviceType = 'radarr';
   bool _isDefault = false;
   bool _isSaving = false;
@@ -74,6 +153,20 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   bool _isConfiguringWebhook = false;
   String? _webhookResult;
   Color _webhookResultColor = AppTheme.textSecondary;
+
+  // Hardcover section state (Chaptarr, editing only). The token is
+  // write-only: the server reports connected-or-not and never the token, so
+  // the field is always empty on open and cleared again after a save.
+  late final TextEditingController _hardcoverController;
+  bool _hardcoverSupported = false;
+  bool _hardcoverConnected = false;
+  bool _hardcoverOAuthAvailable = false;
+  bool _hardcoverUseToken = false;
+  bool _hardcoverReconnect = false;
+  String _hardcoverMethod = 'none';
+  bool _isSavingHardcover = false;
+  String? _hardcoverResult;
+  Color _hardcoverResultColor = AppTheme.textSecondary;
 
   // Completed-media path mappings belong to this exact arr instance. The
   // deployment roots remain server-owned; this form only routes arr paths into
@@ -106,6 +199,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   // the working selection, and the selection as last saved. A user counts as
   // having access here when either a pin or a grant row names this instance.
   List<UserSummary>? _users;
+  Map<int, MediaServerAccountRow> _mediaAccounts = {};
+  bool _mediaAccountsFailed = false;
+  bool _mediaAccountsLoaded = false;
+  bool get _supportsAccountManagement =>
+      ref.read(authProvider).valueOrNull?.connection?.mediaAccountManagement ??
+      false;
   Map<int, String> _pins = const {};
   Set<int> _assignedUserIds = <int>{};
   Set<int> _savedAssignedUserIds = <int>{};
@@ -154,18 +253,24 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     ('qbittorrent', 'qBittorrent'),
     ('nzbget', 'NZBGet'),
     ('transmission', 'Transmission'),
+    ('deluge', 'Deluge'),
+    ('rutorrent', 'ruTorrent'),
     ('tautulli', 'Tautulli'),
     ('tracearr', 'Tracearr'),
     ('jellyfin', 'Jellyfin'),
     ('emby', 'Emby'),
+    ('audiobookshelf', 'Audiobookshelf'),
     ('plex', 'Plex'),
   ];
 
   /// Types that authenticate with username/password instead of an API key.
-  /// qBittorrent can do either, chosen by the toggle above its fields.
+  /// qBittorrent can do either, chosen by the toggle above its fields;
+  /// Deluge rides the same payload shape with an empty username.
   bool get _usesUserPass =>
       _serviceType == 'nzbget' ||
       _serviceType == 'transmission' ||
+      _serviceType == 'deluge' ||
+      _serviceType == 'rutorrent' ||
       (_serviceType == 'qbittorrent' && _qbitAuth == _QbitAuth.password);
 
   /// Editing a qBittorrent instance onto its other credential shape: the
@@ -176,14 +281,23 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _serviceType == 'qbittorrent' &&
       _qbitAuth != _storedQbitAuth;
 
-  /// Transmission auth is optional (only when the daemon requires it).
-  bool get _credentialsOptional => _serviceType == 'transmission';
+  /// Transmission and ruTorrent auth is optional: Transmission only when
+  /// the daemon requires it, ruTorrent only when its web server sits
+  /// behind HTTP Basic authentication.
+  bool get _credentialsOptional =>
+      _serviceType == 'transmission' || _serviceType == 'rutorrent';
+
+  /// Deluge's web UI has a password and no username, so the form shows one
+  /// field.
+  bool get _passwordOnly => _serviceType == 'deluge';
 
   bool get _isDownloadClient =>
       _serviceType == 'sabnzbd' ||
       _serviceType == 'qbittorrent' ||
       _serviceType == 'nzbget' ||
-      _serviceType == 'transmission';
+      _serviceType == 'transmission' ||
+      _serviceType == 'deluge' ||
+      _serviceType == 'rutorrent';
 
   bool get _supportsWebhook =>
       _serviceType == 'radarr' ||
@@ -261,9 +375,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     return _serviceType;
   }
 
+  late final AuthNotifier _configAuth;
+
   @override
   void initState() {
     super.initState();
+    _configAuth = ref.read(authProvider.notifier)..deferConfigRefresh();
     _nameController = TextEditingController(text: widget.initialName ?? '');
     _urlController = TextEditingController(text: widget.initialUrl ?? '');
     _apiKeyController = TextEditingController(text: widget.initialApiKey ?? '');
@@ -272,6 +389,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     _passwordController = TextEditingController();
     _publicAddressController = TextEditingController()
       ..addListener(_markMediaServerConfigDirty);
+    _hardcoverController = TextEditingController();
     // A prompted new-instance form opens on the selector's disabled
     // placeholder ('') instead of a guessed type; every type-dependent
     // affordance stays hidden until a real one is picked (see
@@ -284,11 +402,20 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _publicAddressController.text = 'https://app.plex.tv';
     }
     _isDefault = widget.initialIsDefault;
-    if (widget.isEditing) _loadDetails();
+    _markInstanceSaved();
+    if (widget.isEditing) {
+      // A direct route may not include the service type. Load it before
+      // choosing the grants/library-assignment endpoint for this editor.
+      _loadDetails().then((_) {
+        if (mounted) _loadDirectory();
+      });
+    } else {
+      _loadDirectory();
+    }
     _loadMediaRoots();
     _loadArrRootFolders();
-    _loadDirectory();
     _loadWebhookStatus();
+    _loadHardcoverStatus();
   }
 
   /// Reads the live instant-updates state so the section says whether the
@@ -327,7 +454,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (code == 404 || code == 405) return;
       // Blindness, not absence: the state could not be read, which is a
       // different answer than "not configured".
-      result = 'Could not check instant updates: ${_errorMessage(e)}';
+      result = 'Could not check instant updates: ${apiErrorMessage(e)}';
     } catch (_) {
       return;
     }
@@ -401,8 +528,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       // await throws, leaking it as an unhandled zone error. Future.wait
       // (eagerError: false) waits for both, throws the first error, and
       // drops the rest — the single catch below stays correct.
-      final results =
-          await Future.wait<Object>([instancesFuture, usersFuture]);
+      final results = await Future.wait<Object>([instancesFuture, usersFuture]);
       final instances = results[0] as List<ServiceInstance>;
       final users = results[1] as List<UserSummary>;
       users.sort((a, b) =>
@@ -415,6 +541,23 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _applyAutoDefault();
       });
       await _loadPins();
+      if (_isMediaServer && widget.isEditing && _supportsAccountManagement) {
+        try {
+          final accounts =
+              await ref.read(mediaAccessServiceProvider).listAccounts();
+          if (!mounted) return;
+          setState(() {
+            _mediaAccounts = {
+              for (final a in accounts)
+                if (a.instanceId == widget.instanceId) a.userId: a
+            };
+            _mediaAccountsFailed = false;
+            _mediaAccountsLoaded = true;
+          });
+        } catch (_) {
+          if (mounted) setState(() => _mediaAccountsFailed = true);
+        }
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() => _userSelectError = 'Could not load users');
@@ -428,6 +571,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   void _applyAutoDefault() {
     if (widget.isEditing || !_instancesLoaded || _grantOnly) return;
     _isDefault = !_instances.any((i) => i.serviceType == _serviceType);
+    _defaultDraft.markSaved(_isDefault);
   }
 
   /// Fetches the per-user pins and access grants for the selected service
@@ -438,6 +582,28 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   /// showing it unchecked would turn the next save into a silent revocation.
   Future<void> _loadPins() async {
     if (!_supportsUserAssignment) return;
+    if (_isAbs && widget.isEditing) {
+      try {
+        final access =
+            await AudiobookLibraryAccessService(ref.read(backendClientProvider))
+                .get(widget.instanceId!);
+        if (!mounted) return;
+        setState(() {
+          _assignedUserIds = access.userIds;
+          _savedAssignedUserIds = Set.of(access.userIds);
+          _absPolicies = access.policies;
+          _absSavedDefaultIds = access.defaultLibraryIds;
+          _absAccessLoaded = true;
+          _userSelectError = null;
+        });
+      } catch (_) {
+        if (mounted) {
+          setState(() => _userSelectError =
+              'Could not load Audiobookshelf library assignments');
+        }
+      }
+      return;
+    }
     String? anchorId = widget.instanceId;
     if (anchorId == null) {
       for (final i in _instances) {
@@ -512,10 +678,21 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           _usernameController.text = details['username'] as String? ?? '';
         }
         _isDefault = details['is_default'] as bool? ?? _isDefault;
+        _defaultDraft.markSaved(_isDefault);
         _storedQbitAuth = details['has_api_key'] == true
             ? _QbitAuth.apiKey
             : _QbitAuth.password;
         _qbitAuth = _storedQbitAuth;
+        // Loading must not count a value typed during the request as saved.
+        _detailsDraft.markSaved({
+          ..._detailValues,
+          'name': details['name'] as String? ?? widget.initialName ?? '',
+          'url': details['url'] as String? ?? widget.initialUrl ?? '',
+          'username':
+              details['username'] as String? ?? widget.initialUsername ?? '',
+          'apiKey': widget.initialApiKey ?? '',
+          'password': '',
+        });
         if (_isMediaServer) {
           final raw = details['media_server_config'];
           final config = raw is Map
@@ -525,6 +702,13 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             _publicAddressController.text = config.publicAddress;
           }
           _selectedLibraryIds = config.libraryIds.toSet();
+          _listeningApps = config.listeningApps;
+          _videoApps = config.videoApps;
+          if (_isAbs) {
+            _absSavedDefaultIds = config.libraryIds;
+            _absSavedPublicAddress = config.publicAddress;
+            _absSavedListeningApps = config.listeningApps;
+          }
           if (_isPlex) {
             _plexLinkedStored = true;
             _plexMachineId = config.machineIdentifier;
@@ -533,6 +717,14 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           // Hydration is not an edit: only a touch after this sends the
           // config back, so an untouched section keeps the server's copy.
           _mediaServerConfigDirty = false;
+          _mediaDraft.markSaved([
+            config.publicAddress,
+            config.libraryIds.toList()..sort(),
+            _isPlex ? config.machineIdentifier : '',
+            _isPlex && config.autoApprove,
+            config.listeningApps?.toJson(),
+            config.videoApps?.toJson(),
+          ]);
         }
         if (details.containsKey('media_path_mappings')) {
           final rawMappings = details['media_path_mappings'] as List? ?? [];
@@ -577,6 +769,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             onChanged: _markMediaMappingsDirty,
           )));
     _mediaMappingsDirty = false;
+    _mappingsDraft.markSaved(_mappingValues);
   }
 
   void _markMediaMappingsDirty() {
@@ -624,7 +817,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _mediaServerLibrariesLoading = false;
         _mediaServerLibrariesError =
             "Couldn't load the libraries this server reports: "
-            '${_errorMessage(e)}';
+            '${apiErrorMessage(e)}';
       });
     }
   }
@@ -674,12 +867,22 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   @override
   void dispose() {
+    // Finish removing the editor before a refresh reparses the route stack.
+    final auth = _configAuth;
+    WidgetsBinding.instance.endOfFrame.then((_) async {
+      try {
+        await auth.resumeConfigRefresh();
+      } catch (_) {
+        // Reconnect/resume retries without turning a saved instance into an error.
+      }
+    });
     _nameController.dispose();
     _urlController.dispose();
     _apiKeyController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
     _publicAddressController.dispose();
+    _hardcoverController.dispose();
     for (final mapping in _mediaPathMappings) {
       mapping.dispose();
     }
@@ -717,8 +920,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       return;
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Could not reach plex.tv. Try again.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not reach plex.tv. Try again.')));
       return;
     }
     // A browser that will not open is not a failed link: the Reopen
@@ -829,7 +1032,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       setState(() {
         _plexServersLoading = false;
         _plexServersError =
-            "Couldn't list the account's servers: ${_errorMessage(e)}";
+            "Couldn't list the account's servers: ${apiErrorMessage(e)}";
       });
     }
   }
@@ -891,12 +1094,23 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       setState(() {
         _isTesting = false;
         _testSucceeded = false;
-        _testResult = _errorMessage(e);
+        _testResult = apiErrorMessage(e);
       });
     }
   }
 
   String? _validate() {
+    if (_isAbs) {
+      if (widget.isEditing && !_absAccessLoaded) {
+        return 'Load the library assignments before saving.';
+      }
+      for (final id in _absEditedPolicies) {
+        final policy = _absPolicies[id]!;
+        if (policy.mode == 'selected' && policy.libraryIds.isEmpty) {
+          return 'Choose at least one library for each individual selection.';
+        }
+      }
+    }
     if (_serviceTypeUnchosen) {
       return 'Choose a service type';
     }
@@ -922,7 +1136,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (address.isNotEmpty &&
           !address.startsWith('http://') &&
           !address.startsWith('https://')) {
-        return 'Sign-in address must start with http:// or https://';
+        return 'Enter an http:// or https:// address for users.';
       }
     }
     // When editing, blank credentials keep the existing ones. Plex's is
@@ -932,49 +1146,14 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     if ((widget.isEditing && !_qbitSwitchingShape) || _isPlex) return null;
     if (_usesUserPass) {
       if (_credentialsOptional) return null;
-      if (_usernameController.text.trim().isEmpty ||
+      if (_passwordOnly) {
+        if (_passwordController.text.isEmpty) return 'Password is required';
+      } else if (_usernameController.text.trim().isEmpty ||
           _passwordController.text.isEmpty) {
         return 'Username and password are required';
       }
     } else if (_apiKeyController.text.trim().isEmpty) {
       return 'API key is required';
-    }
-    return null;
-  }
-
-  String _errorMessage(Object e) {
-    if (e is DioException) {
-      final data = e.response?.data;
-      final responseMessage = _responseErrorMessage(data);
-      if (responseMessage != null) return responseMessage;
-      return e.message ?? e.toString();
-    }
-    return e.toString();
-  }
-
-  /// Several instance handlers use Go's `http.Error`, which labels even a JSON
-  /// error body as text/plain. Dio intentionally leaves that response as a
-  /// string, so decode the small app-owned `{ "error": ... }` envelope here
-  /// before falling back to its generic status-code message.
-  String? _responseErrorMessage(Object? data) {
-    Object? decoded = data;
-    if (data is String) {
-      final text = data.trim();
-      if (text.isEmpty) return null;
-      try {
-        decoded = jsonDecode(text);
-      } catch (_) {
-        // A concise plain-text backend error is still more useful than Dio's
-        // generic validateStatus explanation. Avoid surfacing HTML/proxy pages.
-        if (text.length <= 500 && !text.toLowerCase().contains('<html')) {
-          return text;
-        }
-        return null;
-      }
-    }
-    if (decoded is Map && decoded['error'] is String) {
-      final message = (decoded['error'] as String).trim();
-      return message.isEmpty ? null : message;
     }
     return null;
   }
@@ -1062,26 +1241,28 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                     'Music access through this instance (alongside any other '
                     'Lidarr instance they hold). Unselecting a user removes '
                     'their access.'
-            : _isPlex
-                ? 'Selected users get this server under Watch on Plex, '
-                    'where they sign in with their own Plex account or share '
-                    'its email; the share of the chosen libraries goes out '
-                    'the moment they do. Select yourself too: the account '
-                    'that owns the server is recognised as the owner, never '
-                    'invited. Unselecting a user removes their share; '
-                    'selecting them again shares it again.'
-                : _isMediaServer
-                    ? 'Selected users get this server under Watch on '
-                        '$_serviceLabel, where they create their own account '
-                        'or sign in with one they already have (administrator '
-                        'accounts included, so select yourself too). '
-                        'Unselecting a user turns their account off without '
-                        'deleting it; selecting them again turns it back on. '
-                        'Administrator accounts are never changed.'
-                    : 'Selected users can use this library for requests alongside '
-                    'their default $_serviceLabel library, choosing per '
-                    'request. Unselecting a user removes their access to this '
-                    'library.',
+                : _isMediaServer && _supportsAccountManagement
+                    ? 'Selected users can use this server in Cantinarr and create or link an account. New accounts and shares created by Cantinarr are managed automatically. Grant changes affect server access only for accounts marked Managed by Cantinarr. Linked-only accounts and administrators stay as they are. Change account management in Settings > Users.'
+                    : _isPlex
+                        ? 'Selected users get this server under Watch on Plex, '
+                            'where they sign in with their own Plex account or share '
+                            'its email; the share of the chosen libraries goes out '
+                            'the moment they do. Select yourself too: the account '
+                            'that owns the server is recognised as the owner, never '
+                            'invited. Unselecting a user removes their share; '
+                            'selecting them again shares it again.'
+                        : _isMediaServer
+                            ? 'Selected users get this server under Watch on '
+                                '$_serviceLabel, where they create their own account '
+                                'or sign in with one they already have (administrator '
+                                'accounts included, so select yourself too). '
+                                'Unselecting a user turns their account off without '
+                                'deleting it; selecting them again turns it back on. '
+                                'Administrator accounts are never changed.'
+                            : 'Selected users can use this library for requests alongside '
+                                'their default $_serviceLabel library, choosing per '
+                                'request. Unselecting a user removes their access to this '
+                                'library.',
         style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
       ),
       const SizedBox(height: 8),
@@ -1114,7 +1295,40 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         const Text('No users yet.',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13))
       else
-        ...users.map(_userTile),
+        ...users.expand((user) {
+          final account = _mediaAccounts[user.id];
+          final policy =
+              _absPolicies[user.id] ?? const AudiobookLibraryPolicy();
+          final accountKnown = !widget.isEditing ||
+              (_mediaAccountsLoaded && !_mediaAccountsFailed);
+          return [
+            _userTile(user),
+            if (_isAbs && _assignedUserIds.contains(user.id))
+              AudiobookUserLibraries(
+                key: ValueKey('abs-libraries-${user.id}'),
+                username: user.username,
+                policy: policy,
+                libraries: _mediaServerLibraries ?? const [],
+                defaultLibraryIds: _selectedLibraryIds,
+                enabled: accountKnown &&
+                    (account == null ||
+                        (account.manageAccess && !account.administrator)),
+                unavailableReason: !accountKnown
+                    ? 'Load account management to change libraries.'
+                    : account?.administrator == true
+                        ? 'Administrator accounts cannot be changed here.'
+                        : null,
+                keepExisting: account != null &&
+                    !account.createdByCantinarr &&
+                    !policy.managesLibraries &&
+                    !_absEditedPolicies.contains(user.id),
+                onChanged: (value) => setState(() {
+                  _absPolicies[user.id] = value;
+                  _absEditedPolicies.add(user.id);
+                }),
+              ),
+          ];
+        }),
     ];
   }
 
@@ -1132,11 +1346,22 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       activeColor: AppTheme.accent,
       title: Text(user.username,
           style: const TextStyle(color: AppTheme.textPrimary)),
-      subtitle: defaultElsewhere != null
-          ? Text('Default library: "$defaultElsewhere"',
+      subtitle: _isMediaServer && _supportsAccountManagement
+          ? Text(
+              _mediaAccountsFailed
+                  ? 'Account management could not be loaded'
+                  : !_mediaAccountsLoaded && widget.isEditing
+                      ? 'Loading account management…'
+                      : _mediaAccounts.containsKey(user.id)
+                          ? '${_mediaAccounts[user.id]!.managementLabel} · ${_mediaAccounts[user.id]!.accessLabel}'
+                          : 'No linked account',
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 12))
-          : null,
+          : defaultElsewhere != null
+              ? Text('Default library: "$defaultElsewhere"',
+                  style: const TextStyle(
+                      color: AppTheme.textSecondary, fontSize: 12))
+              : null,
       value: _assignedUserIds.contains(user.id),
       onChanged: (checked) => setState(() {
         if (checked == true) {
@@ -1146,6 +1371,27 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         }
       }),
     );
+  }
+
+  Future<void> _saveAbsAccess(String instanceId) async {
+    final access =
+        await AudiobookLibraryAccessService(ref.read(backendClientProvider))
+            .save(instanceId,
+                userIds: _assignedUserIds,
+                defaultLibraryIds: _selectedLibraryIds,
+                policies: {
+          for (final id in _absEditedPolicies) id: _absPolicies[id]!
+        });
+    if (!mounted) return;
+    setState(() {
+      _absPolicies = access.policies;
+      _absEditedPolicies.clear();
+      _absSavedDefaultIds = access.defaultLibraryIds;
+      _absSavedPublicAddress = _publicAddressController.text.trim();
+      _absSavedListeningApps = _listeningApps;
+      _savedAssignedUserIds = Set.of(access.userIds);
+      _absSyncPending = access.syncPending;
+    });
   }
 
   Future<void> _save() async {
@@ -1170,9 +1416,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _users != null &&
         !_sameSelection(_assignedUserIds, _savedAssignedUserIds);
     final assignedIds = _assignedUserIds.toList()..sort();
-    final mediaPathMappings = _shouldSubmitMediaPathMappings
-        ? _currentMediaPathMappings()
-        : null;
+    final mediaPathMappings =
+        _shouldSubmitMediaPathMappings ? _currentMediaPathMappings() : null;
     // Media-server settings travel whole: always on create, and on edit only
     // when the section was touched, so an unrelated edit never rewrites the
     // stored address or library choice (null = keep).
@@ -1180,7 +1425,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _isMediaServer && (!widget.isEditing || _mediaServerConfigDirty)
             ? MediaServerConfig(
                 publicAddress: _publicAddressController.text.trim(),
-                libraryIds: _selectedLibraryIds.toList(growable: false),
+                libraryIds: _isAbs && widget.isEditing
+                    ? _absSavedDefaultIds
+                    : _selectedLibraryIds.toList(growable: false),
+                listeningApps: _isAbs ? _listeningApps : null,
+                videoApps: VideoApps.serviceTypes.contains(_serviceType) ? _videoApps : null,
                 machineIdentifier: _isPlex ? _plexMachineId : '',
                 autoApprove: _isPlex && _plexAutoApprove,
               )
@@ -1196,19 +1445,30 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       final service = InstanceApiService(backendDio: backendDio);
 
       if (widget.isEditing) {
-        await service.updateInstance(
-          id: widget.instanceId!,
-          name: _nameController.text.trim(),
-          url: _urlController.text.trim(),
-          apiKey: _apiKeyController.text.trim(),
-          username: _usernameController.text.trim(),
-          password: _passwordController.text,
-          isDefault: isDefault,
-          mediaPathMappings: mediaPathMappings,
-          mediaServerConfig: mediaServerConfig,
-          plexLinkPin: plexLinkPin,
-        );
-        if (applyAssignments) {
+        // Library-only edits can be queued even while ABS is unreachable.
+        if (!_isAbs ||
+            _detailsDraft.hasChanges(_detailValues) ||
+            _listeningApps?.ios != _absSavedListeningApps?.ios ||
+            _listeningApps?.android != _absSavedListeningApps?.android ||
+            _publicAddressController.text.trim() != _absSavedPublicAddress) {
+          await service.updateInstance(
+            id: widget.instanceId!,
+            name: _nameController.text.trim(),
+            url: _urlController.text.trim(),
+            apiKey: _apiKeyController.text.trim(),
+            username: _usernameController.text.trim(),
+            password: _passwordController.text,
+            isDefault: isDefault,
+            mediaPathMappings: mediaPathMappings,
+            mediaServerConfig: mediaServerConfig,
+            plexLinkPin: plexLinkPin,
+          );
+        }
+        if (_isAbs) {
+          await _saveAbsAccess(widget.instanceId!);
+        }
+        _markInstanceSaved();
+        if (applyAssignments && !_isAbs) {
           try {
             await service.updateInstanceGrantUsers(
                 widget.instanceId!, assignedIds);
@@ -1220,7 +1480,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                   content: Text('Instance saved, but assigning users '
-                      'failed: ${_errorMessage(e)}')),
+                      'failed: ${apiErrorMessage(e)}')),
             );
             return;
           }
@@ -1228,9 +1488,16 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         await _refreshConfigAfterSave();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Instance updated')),
+            SnackBar(
+                content: Text(_absSyncPending
+                    ? 'Library access saved. Changes are pending; Cantinarr will retry.'
+                    : 'Instance updated')),
           );
-          context.pop(true); // Return true to signal refresh needed
+          if (_absSyncPending) {
+            setState(() => _isSaving = false);
+          } else {
+            _finishEditing();
+          }
         }
         return;
       }
@@ -1245,16 +1512,20 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         isDefault: isDefault,
         mediaPathMappings: mediaPathMappings,
         mediaServerConfig: mediaServerConfig,
-          plexLinkPin: plexLinkPin,
+        plexLinkPin: plexLinkPin,
       );
       // The instance exists now, so a failed assignment must not re-run
       // create: surface it and let the admin retry from the edit screen.
       String? assignmentError;
-      if (applyAssignments) {
+      if (applyAssignments || _isAbs) {
         try {
-          await service.updateInstanceGrantUsers(created.id, assignedIds);
+          if (_isAbs) {
+            await _saveAbsAccess(created.id);
+          } else {
+            await service.updateInstanceGrantUsers(created.id, assignedIds);
+          }
         } catch (e) {
-          assignmentError = _errorMessage(e);
+          assignmentError = apiErrorMessage(e);
         }
       }
       // Instant updates are on by default: install the server-managed webhook
@@ -1269,7 +1540,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           await service.configureWebhook(created.id);
           webhookConfigured = true;
         } catch (e) {
-          webhookError = _errorMessage(e);
+          webhookError = apiErrorMessage(e);
         }
       }
       await _refreshConfigAfterSave();
@@ -1289,18 +1560,19 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                       ? 'Instance created — instant updates configured'
                       : 'Instance created')),
         );
-        context.pop(true); // Return true to signal refresh needed
+        _finishEditing();
       }
     } catch (e) {
       if (!mounted) return;
       setState(() => _isSaving = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to save: ${_errorMessage(e)}')),
+        SnackBar(content: Text('Failed to save: ${apiErrorMessage(e)}')),
       );
     }
   }
 
   Future<void> _refreshConfigAfterSave() async {
+    if (widget.refreshConfigAfterReturn) return;
     final activeBefore = ref.read(instanceProvider);
     if (_isMediaServer) {
       // A grant can settle a waiting Plex user (the share goes out off the
@@ -1315,12 +1587,14 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       final notifier = ref.read(instanceProvider.notifier);
       final radarrId = activeBefore.activeRadarrInstanceId;
       if (radarrId != null &&
-          refreshed.radarrInstances.any((instance) => instance.id == radarrId)) {
+          refreshed.radarrInstances
+              .any((instance) => instance.id == radarrId)) {
         notifier.setActiveRadarrInstance(radarrId);
       }
       final sonarrId = activeBefore.activeSonarrInstanceId;
       if (sonarrId != null &&
-          refreshed.sonarrInstances.any((instance) => instance.id == sonarrId)) {
+          refreshed.sonarrInstances
+              .any((instance) => instance.id == sonarrId)) {
         notifier.setActiveSonarrInstance(sonarrId);
       }
       final chaptarrId = activeBefore.activeChaptarrInstanceId;
@@ -1386,12 +1660,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Instance deleted')),
         );
-        context.pop(true);
+        _finishEditing();
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to delete: ${_errorMessage(e)}')),
+          SnackBar(content: Text('Failed to delete: ${apiErrorMessage(e)}')),
         );
       }
     }
@@ -1418,8 +1692,272 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (!mounted) return;
       setState(() {
         _isConfiguringWebhook = false;
-        _webhookResult = _errorMessage(e);
+        _webhookResult = apiErrorMessage(e);
         _webhookResultColor = AppTheme.error;
+      });
+    }
+  }
+
+  /// Reads whether this Chaptarr instance is connected to Hardcover. The
+  /// server answers connected-or-not from the stored slot and never returns
+  /// the token. Older servers without the route answer 404/405 and the
+  /// section stays hidden.
+  Future<void> _loadHardcoverStatus() async {
+    if (!widget.isEditing || !_isChaptarr) return;
+    try {
+      final status =
+          await InstanceApiService(backendDio: ref.read(backendClientProvider))
+              .hardcoverStatus(widget.instanceId!);
+      if (!mounted || !status.supported) return;
+      setState(() {
+        _hardcoverSupported = true;
+        _hardcoverConnected = status.configured;
+        _hardcoverOAuthAvailable = status.oauthAvailable;
+        _hardcoverReconnect = status.reconnectRequired;
+        _hardcoverMethod = status.method;
+      });
+    } catch (_) {
+      // Unknown is not worth a section: an older server, or a read that
+      // failed, must not render as "not connected".
+    }
+  }
+
+  Future<void> _connectHardcover() async {
+    final id = widget.instanceId;
+    if (id == null) return;
+    final service =
+        InstanceApiService(backendDio: ref.read(backendClientProvider));
+    setState(() {
+      _isSavingHardcover = true;
+      _hardcoverResult = null;
+    });
+    try {
+      final flow = await showDialog<HardcoverDeviceFlow>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) =>
+            HardcoverConnectionDialog(service: service, instanceId: id),
+      );
+      if (!mounted) return;
+      // Cancellation can race a successful server commit. Always read status
+      // again, including when the dialog returned without a connection.
+      final status = await service.hardcoverStatus(id);
+      if (!mounted) return;
+      ref.invalidate(trendingBooksForInstanceProvider(id));
+      setState(() {
+        _hardcoverConnected = status.configured;
+        _hardcoverMethod = status.method;
+        _hardcoverReconnect = status.reconnectRequired;
+        _hardcoverResult =
+            flow?.status == 'connected' ? 'Hardcover is connected.' : null;
+        _hardcoverResultColor = AppTheme.available;
+      });
+      if (flow?.status == 'connected' &&
+          status.connectionId == flow!.connectionId) {
+        await _offerHardcoverForOtherInstances(service, '',
+            connectionId: flow.connectionId);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _hardcoverResult = apiErrorMessage(e);
+          _hardcoverResultColor = AppTheme.error;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _isSavingHardcover = false);
+    }
+  }
+
+  Future<void> _saveHardcoverToken() async {
+    final id = widget.instanceId;
+    if (id == null) return;
+    final token = _hardcoverController.text.trim();
+    if (token.isEmpty) {
+      setState(() {
+        _hardcoverResult = 'Paste the API token from Hardcover first.';
+        _hardcoverResultColor = AppTheme.error;
+      });
+      return;
+    }
+    setState(() {
+      _isSavingHardcover = true;
+      _hardcoverResult = null;
+    });
+    try {
+      final service = InstanceApiService(
+        backendDio: ref.read(backendClientProvider),
+      );
+      final status = await service.saveHardcoverToken(id, token);
+      if (!mounted) return;
+      ref.invalidate(trendingBooksForInstanceProvider(id));
+      _hardcoverController.clear();
+      setState(() {
+        _hardcoverConnected = status.configured;
+        _hardcoverMethod = status.method;
+        _hardcoverReconnect = status.reconnectRequired;
+        _hardcoverResult = 'Hardcover is connected.';
+        _hardcoverResultColor = AppTheme.available;
+      });
+      if (status.configured) {
+        await _offerHardcoverForOtherInstances(service, token);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _hardcoverResult = apiErrorMessage(e);
+        _hardcoverResultColor = AppTheme.error;
+      });
+    } finally {
+      if (mounted) setState(() => _isSavingHardcover = false);
+    }
+  }
+
+  Future<void> _offerHardcoverForOtherInstances(
+    InstanceApiService service,
+    String token, {
+    String? connectionId,
+  }) async {
+    // Re-read the directory after saving: an instance may have been added or
+    // removed while the editor was open. Only the instances named in the
+    // confirmation receive the connection. OAuth uses explicit revisions;
+    // API tokens use the existing write-only endpoint.
+    final List<ServiceInstance> instances;
+    try {
+      instances = await service.listInstances();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _hardcoverResult = 'Hardcover is connected to this instance, but the '
+            'other instances could not be loaded. ${apiErrorMessage(e)}';
+        _hardcoverResultColor = AppTheme.error;
+      });
+      return;
+    }
+    if (!mounted) return;
+    final others = instances
+        .where(
+          (instance) =>
+              instance.serviceType == 'chaptarr' &&
+              instance.id != widget.instanceId,
+        )
+        .toList(growable: false);
+    if (others.isEmpty) return;
+    final revisions = <String, int>{};
+    final failures = <String>[];
+    if (connectionId != null) {
+      for (final instance in others) {
+        try {
+          revisions[instance.id] =
+              (await service.hardcoverStatus(instance.id)).revision;
+        } catch (e) {
+          failures.add('${instance.name}: ${apiErrorMessage(e)}');
+        }
+      }
+    }
+    if (!mounted) return;
+    setState(() => _isSavingHardcover = false);
+    final applyToAll = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        scrollable: true,
+        title: const Text('Use Hardcover for all Chaptarr instances?'),
+        content: Text(
+          'Also use this ${connectionId == null ? 'token' : 'connection'} for:\n\n'
+          '${others.map((instance) => '• ${instance.name}').join('\n')}\n\n'
+          'Any Hardcover connections already set for these instances will be '
+          'replaced.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Only this instance'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Apply to all'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || applyToAll != true) return;
+    setState(() {
+      _isSavingHardcover = true;
+      _hardcoverResult =
+          'Connecting Hardcover to the other Chaptarr instances…';
+    });
+    if (connectionId != null) {
+      if (revisions.isNotEmpty) {
+        final results = await service.applyHardcoverConnection(
+            widget.instanceId!, connectionId, revisions);
+        for (final instance
+            in others.where((item) => revisions.containsKey(item.id))) {
+          final matches =
+              results.where((result) => result.instanceId == instance.id);
+          if (matches.length == 1 && matches.single.applied) {
+            if (mounted) {
+              ref.invalidate(trendingBooksForInstanceProvider(instance.id));
+            }
+          } else {
+            failures.add(
+                '${instance.name}: ${matches.length == 1 ? matches.single.error : 'No result was returned. Try again.'}');
+          }
+        }
+      }
+    } else {
+      // Older servers still accept write-only API tokens one instance at a time.
+      for (final instance in others) {
+        try {
+          await service.saveHardcoverToken(instance.id, token);
+          if (mounted) {
+            ref.invalidate(trendingBooksForInstanceProvider(instance.id));
+          }
+        } catch (e) {
+          failures.add('${instance.name}: ${apiErrorMessage(e)}');
+        }
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _hardcoverResult = failures.isEmpty
+          ? 'Hardcover is connected to all ${others.length + 1} '
+              'Chaptarr instances.'
+          : '${connectionId == null ? 'Token saved' : 'Connected'} for ${others.length + 1 - failures.length} of '
+              '${others.length + 1} Chaptarr instances. Could not update:\n'
+              '${failures.join('\n')}\n'
+              'Open those instances to try again.';
+      _hardcoverResultColor =
+          failures.isEmpty ? AppTheme.available : AppTheme.error;
+    });
+  }
+
+  Future<void> _clearHardcoverToken() async {
+    final id = widget.instanceId;
+    if (id == null) return;
+    setState(() {
+      _isSavingHardcover = true;
+      _hardcoverResult = null;
+    });
+    try {
+      await InstanceApiService(backendDio: ref.read(backendClientProvider))
+          .clearHardcoverToken(id);
+      if (!mounted) return;
+      ref.invalidate(trendingBooksForInstanceProvider(id));
+      setState(() {
+        _isSavingHardcover = false;
+        _hardcoverConnected = false;
+        _hardcoverMethod = 'none';
+        _hardcoverReconnect = false;
+        _hardcoverUseToken = false;
+        _hardcoverResult = 'Hardcover is disconnected.';
+        _hardcoverResultColor = AppTheme.textSecondary;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isSavingHardcover = false;
+        _hardcoverResult = apiErrorMessage(e);
+        _hardcoverResultColor = AppTheme.error;
       });
     }
   }
@@ -1445,10 +1983,16 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'http://nzbget:6789';
       case 'transmission':
         return 'http://transmission:9091';
+      case 'deluge':
+        return 'http://deluge:8112';
+      case 'rutorrent':
+        return 'http://rutorrent:8080';
       case 'tautulli':
         return 'http://tautulli:8181';
       case 'tracearr':
         return 'http://tracearr:3000';
+      case 'audiobookshelf':
+        return 'http://audiobookshelf:80';
       case 'jellyfin':
         return 'http://jellyfin:8096';
       case 'emby':
@@ -1465,6 +2009,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'e.g. Tautulli';
       case 'tracearr':
         return 'e.g. Tracearr';
+      case 'audiobookshelf':
+        return 'e.g. Home Audiobookshelf';
       case 'jellyfin':
         return 'e.g. Home Jellyfin';
       case 'emby':
@@ -1535,6 +2081,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'Your Chaptarr API key';
       case 'lidarr':
         return 'Your Lidarr API key';
+      case 'audiobookshelf':
+        return 'Your Audiobookshelf administrator API key';
       case 'jellyfin':
         return 'Your Jellyfin API key (Dashboard > API Keys)';
       case 'emby':
@@ -1642,8 +2190,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 ),
               ),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
                 decoration: BoxDecoration(
                   color: (linked ? AppTheme.available : AppTheme.textSecondary)
                       .withValues(alpha: 0.12),
@@ -1675,7 +2222,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                   child: Text(
                     'Waiting for approval. Sign in on the plex.tv page that '
                     'just opened and approve the link.',
-                    style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                    style:
+                        TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                   ),
                 ),
               ],
@@ -1816,9 +2364,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       child: Text(
         selectedCount == 0 ? 'All' : '$selectedCount selected',
         style: TextStyle(
-          color: selectedCount == 0
-              ? AppTheme.textSecondary
-              : AppTheme.accent,
+          color: selectedCount == 0 ? AppTheme.textSecondary : AppTheme.accent,
           fontSize: 11,
           fontWeight: FontWeight.w700,
         ),
@@ -1840,10 +2386,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               ),
             ),
             const SizedBox(width: 12),
-            const Expanded(
+            Expanded(
               child: Text(
-                'Shared libraries',
-                style: TextStyle(
+                _isAbs ? 'Default libraries' : 'Shared libraries',
+                style: const TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
@@ -1896,8 +2442,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         children: [
           LayoutBuilder(
             builder: (context, constraints) {
-              final largeText =
-                  MediaQuery.textScalerOf(context).scale(1) > 1.3;
+              final largeText = MediaQuery.textScalerOf(context).scale(1) > 1.3;
               if (constraints.maxWidth < 300 || largeText) {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1912,12 +2457,14 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             },
           ),
           const SizedBox(height: 10),
-          const Text(
-            'Optional. Choose which libraries these accounts can see. '
-            'Changing it updates the accounts Cantinarr created here; '
-            'accounts you linked keep what they have. With nothing chosen, '
-            'every library is shared, including ones you add later.',
-            style: TextStyle(
+          Text(
+            _isAbs
+                ? 'Choose the default libraries for accounts Cantinarr creates. Select different libraries under each user below. Individual selections stay unchanged when this default changes. With nothing chosen, the default includes every library, including ones added later.'
+                : 'Optional. Choose which libraries these accounts can see. '
+                    'Changing it updates accounts Cantinarr created here and still manages; '
+                    'accounts you linked keep what they have. With nothing chosen, '
+                    'every library is shared, including ones you add later.',
+            style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 12,
               height: 1.4,
@@ -1950,8 +2497,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           else if (libraries == null)
             const _MediaMappingNotice(
               icon: Icons.wifi_tethering,
-              message:
-                  'Test the connection to load the libraries this server '
+              message: 'Test the connection to load the libraries this server '
                   'reports.',
             )
           else ...[
@@ -1999,9 +2545,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             : '$mappingCount '
                 '${mappingCount == 1 ? 'mapping' : 'mappings'}',
         style: TextStyle(
-          color: mappingCount == 0
-              ? AppTheme.textSecondary
-              : AppTheme.accent,
+          color: mappingCount == 0 ? AppTheme.textSecondary : AppTheme.accent,
           fontSize: 11,
           fontWeight: FontWeight.w700,
         ),
@@ -2048,8 +2592,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         children: [
           LayoutBuilder(
             builder: (context, constraints) {
-              final largeText =
-                  MediaQuery.textScalerOf(context).scale(1) > 1.3;
+              final largeText = MediaQuery.textScalerOf(context).scale(1) > 1.3;
               if (constraints.maxWidth < 300 || largeText) {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2381,7 +2924,13 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+        hasChanges: () => _hasUnsavedChanges,
+        isSaving: _isSaving,
+        child: _buildPage(context),
+      );
+
+  Widget _buildPage(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.isEditing ? 'Edit Instance' : 'Add Instance'),
@@ -2432,7 +2981,15 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 if (value == null) return;
                 setState(() {
                   _serviceType = value;
+                  _absPolicies = {};
+                  _absEditedPolicies.clear();
+                  _absAccessLoaded = false;
                   _testResult = null;
+                  // A username typed under another type has no field on
+                  // a password-only type, so it must not ride into the
+                  // save the way the qBittorrent toggle drops hidden
+                  // fields.
+                  if (_passwordOnly) _usernameController.clear();
                   // The selection and pins belong to the previous type.
                   _pins = const {};
                   _assignedUserIds = <int>{};
@@ -2493,11 +3050,13 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           // shape (API key vs username/password), so the prompted form shows
           // nothing here until one is picked.
           //
-          // NZBGet and Transmission authenticate with username/password;
-          // qBittorrent with either that or, on 5.2 and newer, an API key,
-          // chosen by the toggle; Plex links a plex.tv account with a PIN;
-          // everything else uses an API key. Credentials are write-only:
-          // when editing, blank keeps the existing value.
+          // NZBGet authenticates with username/password, and so do
+          // Transmission and ruTorrent, optionally, since either may run
+          // with authentication off; Deluge with only its web UI password;
+          // qBittorrent with either username/password or, on 5.2 and newer,
+          // an API key, chosen by the toggle; Plex links a plex.tv account
+          // with a PIN; everything else uses an API key. Credentials are
+          // write-only: when editing, blank keeps the existing value.
           if (_serviceType == 'qbittorrent') ...[
             _buildQbitAuthToggle(),
             const SizedBox(height: 16),
@@ -2507,28 +3066,35 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           else if (_isPlex)
             _buildPlexAccountSection()
           else if (_usesUserPass) ...[
-            TextField(
-              controller: _usernameController,
-              decoration: InputDecoration(
-                labelText:
-                    _credentialsOptional ? 'Username (optional)' : 'Username',
-                hintText: _credentialsOptional
-                    ? 'Only if authentication is enabled'
-                    : 'Web UI username',
+            if (!_passwordOnly) ...[
+              TextField(
+                controller: _usernameController,
+                decoration: InputDecoration(
+                  labelText:
+                      _credentialsOptional ? 'Username (optional)' : 'Username',
+                  hintText: _credentialsOptional
+                      ? 'Only if authentication is enabled'
+                      : 'Web UI username',
+                ),
+                autocorrect: false,
               ),
-              autocorrect: false,
-            ),
-            const SizedBox(height: 16),
+              const SizedBox(height: 16),
+            ],
             TextField(
               controller: _passwordController,
               decoration: InputDecoration(
-                labelText:
-                    _credentialsOptional ? 'Password (optional)' : 'Password',
+                labelText: _passwordOnly
+                    ? 'Web UI password'
+                    : (_credentialsOptional
+                        ? 'Password (optional)'
+                        : 'Password'),
                 hintText: widget.isEditing && !_qbitSwitchingShape
                     ? 'Leave blank to keep existing'
-                    : (_credentialsOptional
-                        ? 'Only if authentication is enabled'
-                        : 'Web UI password'),
+                    : (_passwordOnly
+                        ? "The password Deluge's web UI asks for"
+                        : _credentialsOptional
+                            ? 'Only if authentication is enabled'
+                            : 'Web UI password'),
               ),
               obscureText: true,
             ),
@@ -2541,25 +3107,77 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               ),
               obscureText: true,
             ),
-          // Media servers: where users are told to sign in (handed to them
-          // verbatim, so only an address the admin typed is ever shown) and
-          // which libraries a new account may see.
+          // User links use an address the admin chose explicitly, either
+          // entered here or copied from the connection URL.
           if (_isMediaServer) ...[
             const SizedBox(height: 16),
             TextField(
               controller: _publicAddressController,
               decoration: InputDecoration(
-                labelText: 'Sign-in address (optional)',
+                labelText: 'Address users open',
                 hintText: 'https://$_serviceType.example.com',
-                helperText: 'What your users open to sign in. Shown to them '
-                    'in the app. Leave blank and they will need to ask you.',
-                helperMaxLines: 3,
+                helper: Text('The address users can reach in a browser or app. '
+                    'Used for sign-in and Open / '
+                    '${_serviceType == 'audiobookshelf' ? 'Listen' : 'Watch'} '
+                    'links. Leave blank to hide those links.'),
               ),
               keyboardType: TextInputType.url,
               autocorrect: false,
             ),
+            if (!_isPlex)
+              ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _urlController,
+                builder: (context, value, _) => Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: value.text.trim().isEmpty
+                        ? null
+                        : () =>
+                            _publicAddressController.text = value.text.trim(),
+                    icon: const Icon(Icons.copy),
+                    label: const Text('Use same URL'),
+                  ),
+                ),
+              ),
             const SizedBox(height: 24),
             _buildSharedLibrariesSection(),
+            if (VideoApps.serviceTypes.contains(_serviceType)) ...[
+              const SizedBox(height: 24),
+              Text('Default video app',
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              const Text('Used on iPhone and iPad unless a user chooses their '
+                  'own app in Settings → Account → Video apps. Android uses '
+                  'the service’s app; web and desktop use the browser.'),
+              const SizedBox(height: 16),
+              VideoAppField(
+                serviceType: _serviceType,
+                value: _videoApps ?? const VideoApps(),
+                inheritDefaults: false,
+                onChanged: (value) => setState(() {
+                  _videoApps = value;
+                  _mediaServerConfigDirty = true;
+                }),
+              ),
+            ],
+            if (_serviceType == 'audiobookshelf') ...[
+              const SizedBox(height: 24),
+              Text('Default listening apps',
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              const Text('Used unless a user chooses their own apps in '
+                  'Settings → Account → Listening apps. Web and desktop open Audiobookshelf '
+                  'in the browser.'),
+              const SizedBox(height: 16),
+              ListeningAppFields(
+                value: _listeningApps ?? const ListeningApps(),
+                inheritDefaults: false,
+                onChanged: (value) => setState(() {
+                  _listeningApps = value;
+                  _mediaServerConfigDirty = true;
+                }),
+              ),
+            ],
             if (_isPlex) ...[
               const SizedBox(height: 16),
               _buildPlexAutoApproveTile(),
@@ -2638,6 +3256,99 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 : Text(widget.isEditing ? 'Save Changes' : 'Add Instance'),
           ),
 
+          // Hardcover (Chaptarr, editing only). The token is verified by the
+          // server and stored encrypted there; it is never read back.
+          if (widget.isEditing && _isChaptarr && _hardcoverSupported) ...[
+            const SizedBox(height: 32),
+            const Text('Hardcover',
+                style: TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Text(
+              _hardcoverReconnect
+                  ? 'Hardcover needs you to sign in again. Reconnect to refresh trending books.'
+                  : _hardcoverConnected
+                      ? 'Hardcover is connected ${_hardcoverMethod == 'oauth' ? 'with OAuth' : 'with an API token'}. You can replace this connection or disconnect it.'
+                      : 'Connect Hardcover to show trending books in Cantinarr. Chaptarr manages its own metadata connection.',
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            if (!_hardcoverOAuthAvailable || _hardcoverUseToken) ...[
+              TextField(
+                controller: _hardcoverController,
+                enabled: !_isSavingHardcover,
+                obscureText: true,
+                enableSuggestions: false,
+                autocorrect: false,
+                decoration: InputDecoration(
+                  labelText: 'Hardcover API token',
+                  hintText: _hardcoverConnected
+                      ? 'Connected — paste a token to replace it'
+                      : 'Paste the token from Hardcover',
+                  helperText:
+                      'Hardcover → Settings → API. Allow public catalog reads.',
+                  helperMaxLines: 3,
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              OutlinedButton.icon(
+                onPressed: _isSavingHardcover
+                    ? null
+                    : _hardcoverOAuthAvailable && !_hardcoverUseToken
+                        ? _connectHardcover
+                        : _saveHardcoverToken,
+                icon: _isSavingHardcover
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: AppTheme.accent))
+                    : const Icon(Icons.link),
+                label: Text(_hardcoverOAuthAvailable && !_hardcoverUseToken
+                    ? _hardcoverReconnect
+                        ? 'Reconnect Hardcover'
+                        : _hardcoverConnected
+                            ? 'Replace Hardcover connection'
+                            : 'Connect Hardcover'
+                    : _hardcoverConnected
+                        ? 'Replace Hardcover token'
+                        : 'Connect Hardcover'),
+              ),
+              if (_hardcoverConnected)
+                TextButton(
+                    onPressed: _isSavingHardcover ? null : _clearHardcoverToken,
+                    child: const Text('Disconnect')),
+            ]),
+            if (_hardcoverOAuthAvailable)
+              Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    onPressed: _isSavingHardcover
+                        ? null
+                        : () => setState(
+                            () => _hardcoverUseToken = !_hardcoverUseToken),
+                    child: Text(_hardcoverUseToken
+                        ? 'Sign in with Hardcover instead'
+                        : 'Use an API token instead'),
+                  )),
+            if (_hardcoverResult != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _hardcoverResult!,
+                style: TextStyle(
+                  color: _hardcoverResultColor,
+                  fontSize: 12,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ],
+
           // Webhook setup (source instances, editing only). Cantinarr installs
           // its own Connect record; the callback credential never reaches the
           // app or clipboard.
@@ -2698,8 +3409,7 @@ class _MediaPathMappingFields {
     String arrPath = '',
     String cantinarrPath = '',
     required VoidCallback onChanged,
-  })
-      : arrPath = TextEditingController(text: arrPath),
+  })  : arrPath = TextEditingController(text: arrPath),
         cantinarrPath = TextEditingController(text: cantinarrPath) {
     this.arrPath.addListener(onChanged);
     this.cantinarrPath.addListener(onChanged);

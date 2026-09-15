@@ -3,17 +3,24 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
 import '../data/media_access_service.dart';
+import '../../auth/logic/auth_provider.dart';
+
+class MediaServerLinkChoice {
+  final RemoteMediaServerUser account;
+  final bool? manageAccess;
+  const MediaServerLinkChoice(this.account, this.manageAccess);
+}
 
 /// Opens the admin picker for an existing account on a media server. Resolves
 /// to the chosen account, or null when dismissed.
-Future<RemoteMediaServerUser?> showMediaServerLinkSheet(
+Future<MediaServerLinkChoice?> showMediaServerLinkSheet(
   BuildContext context, {
   required String instanceId,
   required String instanceName,
   required String serviceType,
   required String username,
 }) =>
-    showAppSheet<RemoteMediaServerUser>(
+    showAppSheet<MediaServerLinkChoice>(
       context,
       builder: (_) => MediaServerLinkSheet(
         instanceId: instanceId,
@@ -49,6 +56,7 @@ class MediaServerLinkSheet extends ConsumerStatefulWidget {
 class _MediaServerLinkSheetState extends ConsumerState<MediaServerLinkSheet> {
   List<RemoteMediaServerUser>? _users;
   bool _failed = false;
+  bool _manageAccess = false;
 
   @override
   void initState() {
@@ -75,6 +83,12 @@ class _MediaServerLinkSheetState extends ConsumerState<MediaServerLinkSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final supportsManagement = ref
+            .watch(authProvider)
+            .valueOrNull
+            ?.connection
+            ?.mediaAccountManagement ??
+        false;
     final name = widget.instanceName;
     final product = mediaServerTypeLabel(widget.serviceType);
     final users = _users;
@@ -90,25 +104,48 @@ class _MediaServerLinkSheetState extends ConsumerState<MediaServerLinkSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Link a $product account',
-            style: const TextStyle(
-              color: AppTheme.textPrimary,
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Link ${widget.serviceType == 'emby' || widget.serviceType == 'audiobookshelf' ? 'an' : 'a'} $product account',
+                  style: const TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              IconButton(
+                onPressed: users == null && !_failed ? null : _load,
+                icon: const Icon(Icons.refresh),
+                tooltip: 'Refresh accounts',
+              ),
+            ],
           ),
           const SizedBox(height: AppTheme.spaceSm),
           Text(
             'Pick the account on $name that belongs to ${widget.username}. '
-            "Linking only records the connection; the account itself isn't "
-            'changed.',
+            'Linking gives this user access to $name in Cantinarr. '
+            '${supportsManagement ? 'The account on $name stays as it is unless you choose to manage its access.' : 'This server manages linked accounts: granting access enables them, and removing access disables them.'}',
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 14,
               height: 1.4,
             ),
           ),
+          if (supportsManagement)
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _manageAccess,
+              onChanged: (value) =>
+                  setState(() => _manageAccess = value == true),
+              title:
+                  const Text('Manage this account’s access through Cantinarr'),
+              subtitle: const Text(
+                  'Enables the account now. Removing its Cantinarr grant or deleting this user will turn off its server access. Existing libraries stay the same. Administrators are protected.'),
+              controlAffinity: ListTileControlAffinity.leading,
+            ),
           const SizedBox(height: AppTheme.spaceLg),
           if (_failed)
             Row(
@@ -157,8 +194,16 @@ class _MediaServerLinkSheetState extends ConsumerState<MediaServerLinkSheet> {
                         ? const Text('Turned off on the server',
                             style: TextStyle(
                                 color: AppTheme.unavailable, fontSize: 12))
-                        : null,
-                onTap: () => Navigator.of(context).pop(user),
+                        : user.pending
+                            ? const Text('Awaiting Plex acceptance',
+                                style: TextStyle(
+                                    color: AppTheme.warning, fontSize: 12))
+                            : null,
+                onTap: () => Navigator.of(context).pop(MediaServerLinkChoice(
+                    user,
+                    supportsManagement
+                        ? _manageAccess && !user.isAdministrator
+                        : null)),
               ),
           const SizedBox(height: AppTheme.spaceMd),
           const Text(

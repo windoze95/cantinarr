@@ -54,6 +54,9 @@ type LibraryTitle struct {
 	// ForeignBookID lets the app request the missing format of an owned book: the
 	// request carries it back and the backend completes the existing record.
 	ForeignBookID string `json:"foreign_book_id"`
+	// IdentityKeys are validated, typed provider work/edition IDs and ISBNs.
+	// They link availability without collapsing distinct native records.
+	IdentityKeys []string `json:"identity_keys,omitempty"`
 	// StatusKnown is false when Chaptarr returned an exact canonical record whose
 	// format cannot be classified. The row and canonical ID remain in the digest
 	// so clients can map search identity, but must not offer a request for it.
@@ -72,6 +75,9 @@ type LibraryTitle struct {
 // search results as already-owned. Titles is always a non-nil slice.
 type BookLibraryDigest struct {
 	Titles []LibraryTitle `json:"titles"`
+	// Nil means authors could not be read; [] means the complete read was empty.
+	// This list is uncapped, unlike the Authors browse shelf.
+	Authors []LibraryAuthor `json:"authors"`
 }
 
 // reduceLibrary collapses a flat Chaptarr library into one entry per title.
@@ -133,6 +139,7 @@ func reduceLibrary(books []chaptarr.Book) BookLibraryDigest {
 		if g.title.ForeignBookID == "" {
 			g.title.ForeignBookID = book.ForeignBookID
 		}
+		g.title.IdentityKeys = chaptarr.UniqueIdentityKeys(append(g.title.IdentityKeys, book.IdentityKeys()...))
 		// First record in the group that states a series wins; a later record
 		// simply not repeating it is not a claim that there is none — the two
 		// records are the same work. Guarded on the parsed name, not the raw
@@ -352,6 +359,7 @@ func (s *Service) GetBookLibraryDigestForInstance(userID int64, requestedInstanc
 	// response, so an upstream host in an error string can never surface here.
 	if authors, err := client.GetAllAuthors(); err == nil {
 		stampAuthorsFromLibrary(digest.Titles, books, authors)
+		digest.Authors = buildLibraryAuthors(authors, books)
 	}
 
 	if s.libraryCache != nil {

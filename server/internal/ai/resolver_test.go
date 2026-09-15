@@ -351,13 +351,18 @@ func TestResolveAISharedCarriesBaseURLPersonalDoesNot(t *testing.T) {
 	if err := registry.SetSetting(credentials.KeyLocalOpenAIBaseURL, "http://llm-host:8080/v1"); err != nil {
 		t.Fatal(err)
 	}
+	// The endpoint's transport class travels with the endpoint: both shared
+	// paths must carry it, including the server-owned remediation one.
+	if err := registry.SetSetting(credentials.KeyLocalOpenAIUseProxy, "true"); err != nil {
+		t.Fatal(err)
+	}
 
 	resolved := h.resolveAI(context.Background(), userID)
-	if !resolved.Available || resolved.Source != aiSourceShared || resolved.BaseURL != "http://llm-host:8080/v1" {
+	if !resolved.Available || resolved.Source != aiSourceShared || resolved.BaseURL != "http://llm-host:8080/v1" || !resolved.UseProxy {
 		t.Fatalf("shared resolution = %#v", resolved)
 	}
 	sharedOnly := h.resolveSharedAI(context.Background())
-	if !sharedOnly.Available || sharedOnly.BaseURL != "http://llm-host:8080/v1" {
+	if !sharedOnly.Available || sharedOnly.BaseURL != "http://llm-host:8080/v1" || !sharedOnly.UseProxy {
 		t.Fatalf("shared-only resolution = %#v", sharedOnly)
 	}
 
@@ -370,7 +375,7 @@ func TestResolveAISharedCarriesBaseURLPersonalDoesNot(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolved = h.resolveAI(context.Background(), userID)
-	if !resolved.Available || resolved.Source != aiSourcePersonal || resolved.BaseURL != "" {
+	if !resolved.Available || resolved.Source != aiSourcePersonal || resolved.BaseURL != "" || resolved.UseProxy {
 		t.Fatalf("personal resolution = %#v", resolved)
 	}
 }

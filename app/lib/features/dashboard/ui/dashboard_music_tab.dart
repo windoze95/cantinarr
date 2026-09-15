@@ -4,13 +4,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
+import '../../discover/logic/music_browse_query.dart';
+import '../../discover/logic/discovery_access.dart';
+import '../../discover/ui/music_discovery_row.dart';
 import '../data/music_artists_service.dart';
 import '../data/music_library_service.dart';
 import '../data/recent_albums_service.dart';
 import 'library_artists_row.dart';
 import 'recently_added_albums_row.dart';
 
-/// Dashboard Music tab: the browse rows only (Recently Added, Artists).
+/// Dashboard Music tab: public discovery followed by live library rows.
 /// Lidarr album/artist search lives in the shell toolbar
 /// (`shellMusicSearchProvider` / `MusicSearchResultsView`) — the shell overlay
 /// covers this tab's body while a search is active, so these rows never hide
@@ -24,6 +27,7 @@ class DashboardMusicTab extends ConsumerStatefulWidget {
 
 class _DashboardMusicTabState extends ConsumerState<DashboardMusicTab>
     with WidgetsBindingObserver {
+  String _period = 'this_week';
   @override
   void initState() {
     super.initState();
@@ -69,12 +73,32 @@ class _DashboardMusicTabState extends ConsumerState<DashboardMusicTab>
         });
       },
     );
-    return const SingleChildScrollView(
+    final access = ref.watch(discoveryAccessProvider);
+    final instanceId = access.activeId('lidarr');
+    return SingleChildScrollView(
+      key: const PageStorageKey('dashboard-music'),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          RecentlyAddedAlbumsRow(),
-          LibraryArtistsRow(),
+          if (access.needsUpdate(instanceId))
+            const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text(adminCatalogUpdateMessage)),
+          if (access.canBrowse('lidarr', instanceId)) ...[
+            MusicDiscoveryRow(
+              query: MusicBrowseQuery(
+                  feed: 'popular', instanceId: instanceId, period: _period),
+              onPeriodChanged: (period) => setState(() => _period = period),
+            ),
+            MusicDiscoveryRow(
+                query: MusicBrowseQuery(
+                    feed: 'new-releases', instanceId: instanceId)),
+            MusicGenreStrip(instanceId: instanceId),
+          ],
+          if (instanceId != null) ...const [
+            RecentlyAddedAlbumsRow(),
+            LibraryArtistsRow(),
+          ],
         ],
       ),
     );

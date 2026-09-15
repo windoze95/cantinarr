@@ -29,7 +29,11 @@ type resolvedAI struct {
 	// ReasoningEffort is the admin-pinned shared openai reasoning effort,
 	// with the same shared-only scoping as BaseURL. Empty means auto.
 	ReasoningEffort string
-	Account         codexapp.AccountRef
+	// UseProxy says the shared local endpoint is an internet host, so its
+	// turns ride the proxied transport class. Shared-only like BaseURL:
+	// personal resolutions leave it false.
+	UseProxy bool
+	Account  codexapp.AccountRef
 }
 
 func (h *Handler) resolveAI(ctx context.Context, userID int64) resolvedAI {
@@ -104,6 +108,7 @@ func (h *Handler) resolveAI(ctx context.Context, userID int64) resolvedAI {
 		Model:           shared.Config.Model,
 		BaseURL:         shared.BaseURL,
 		ReasoningEffort: shared.ReasoningEffort,
+		UseProxy:        shared.UseProxy,
 		Account:         codexapp.SharedAccount(),
 	}
 	if err != nil {
@@ -171,6 +176,7 @@ func (h *Handler) resolveSharedAI(ctx context.Context) resolvedAI {
 		Model:           shared.Config.Model,
 		BaseURL:         shared.BaseURL,
 		ReasoningEffort: shared.ReasoningEffort,
+		UseProxy:        shared.UseProxy,
 		Account:         codexapp.SharedAccount(),
 	}
 	if err != nil {

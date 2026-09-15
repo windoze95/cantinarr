@@ -1,9 +1,9 @@
 /// Service types that are media servers: places users sign in to watch, as
 /// opposed to the arrs and download clients Cantinarr drives. Access to one
 /// is grant-only, so an instance of these types is listed for a requester only
-/// when an admin granted it. Jellyfin and Emby hold accounts Cantinarr
+/// when an admin granted it. Jellyfin, Emby, and Audiobookshelf hold accounts Cantinarr
 /// creates; Plex holds shares Cantinarr sends to the user's Plex email.
-const mediaServerServiceTypes = {'jellyfin', 'emby', 'plex'};
+const mediaServerServiceTypes = {'jellyfin', 'emby', 'plex', 'audiobookshelf'};
 
 /// Service types that watch a media server's playback: Tautulli (Plex) and
 /// Tracearr (Plex, Jellyfin, Emby). Admin-only infrastructure with a global
@@ -74,6 +74,24 @@ class BackendConnection {
   /// email their invite should go to and have their admin told.
   final bool plexAccessRequestable;
 
+  /// External book/music metadata can be browsed by admins before setup.
+  final bool adminCatalogBrowsing;
+
+  /// Supports linking accounts independently from managing their access.
+  final bool mediaAccountManagement;
+
+  /// Server supports paired Apple TV handoffs.
+  final bool appleTvRemote;
+  final bool tvMatchCorrections;
+  final bool requestQuotas;
+
+  /// Null means the server predates Discover visibility preferences.
+  final List<String>? hiddenDiscoverTabs;
+
+  /// Only a successful config read can establish that a service is absent.
+  /// An offline session snapshot does not qualify for setup controls.
+  final bool configConfirmed;
+
   const BackendConnection({
     required this.serverUrl,
     required this.accessToken,
@@ -86,6 +104,13 @@ class BackendConnection {
     this.issuesEnabled = false,
     this.allowReporting = false,
     this.plexAccessRequestable = false,
+    this.adminCatalogBrowsing = false,
+    this.mediaAccountManagement = false,
+    this.appleTvRemote = false,
+    this.tvMatchCorrections = false,
+    this.requestQuotas = false,
+    this.hiddenDiscoverTabs,
+    this.configConfirmed = false,
   });
 
   BackendConnection copyWith({
@@ -100,6 +125,14 @@ class BackendConnection {
     bool? issuesEnabled,
     bool? allowReporting,
     bool? plexAccessRequestable,
+    bool? adminCatalogBrowsing,
+    bool? mediaAccountManagement,
+    bool? appleTvRemote,
+    bool? tvMatchCorrections,
+    bool? requestQuotas,
+    List<String>? hiddenDiscoverTabs,
+    bool clearHiddenDiscoverTabs = false,
+    bool? configConfirmed,
   }) =>
       BackendConnection(
         serverUrl: serverUrl ?? this.serverUrl,
@@ -108,6 +141,16 @@ class BackendConnection {
         serverName: serverName ?? this.serverName,
         serverVersion: serverVersion ?? this.serverVersion,
         minAppVersion: minAppVersion ?? this.minAppVersion,
+        adminCatalogBrowsing: adminCatalogBrowsing ?? this.adminCatalogBrowsing,
+        appleTvRemote: appleTvRemote ?? this.appleTvRemote,
+        tvMatchCorrections: tvMatchCorrections ?? this.tvMatchCorrections,
+        requestQuotas: requestQuotas ?? this.requestQuotas,
+        mediaAccountManagement:
+            mediaAccountManagement ?? this.mediaAccountManagement,
+        hiddenDiscoverTabs: clearHiddenDiscoverTabs
+            ? null
+            : hiddenDiscoverTabs ?? this.hiddenDiscoverTabs,
+        configConfirmed: configConfirmed ?? this.configConfirmed,
         services: services ?? this.services,
         instances: instances ?? this.instances,
         issuesEnabled: issuesEnabled ?? this.issuesEnabled,
@@ -137,12 +180,13 @@ class BackendConnection {
       instances.where((i) => i.serviceType == 'lidarr').toList();
 
   /// Get all download client instances, usenet clients (SABnzbd, NZBGet)
-  /// before torrent clients (qBittorrent, Transmission); the server's order
-  /// is preserved within each group. Every download-client menu and the
-  /// aggregate "All" view list clients in this order.
+  /// before torrent clients (qBittorrent, Transmission, Deluge, ruTorrent);
+  /// the server's order is preserved within each group. Every
+  /// download-client menu and the aggregate "All" view list clients in this
+  /// order.
   List<ServiceInstance> get downloadInstances {
     const usenet = {'sabnzbd', 'nzbget'};
-    const torrent = {'qbittorrent', 'transmission'};
+    const torrent = {'qbittorrent', 'transmission', 'deluge', 'rutorrent'};
     return [
       ...instances.where((i) => usenet.contains(i.serviceType)),
       ...instances.where((i) => torrent.contains(i.serviceType)),

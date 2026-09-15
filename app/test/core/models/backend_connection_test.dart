@@ -82,6 +82,7 @@ void main() {
       instances: [
         ServiceInstance(
             id: 'qbittorrent-a', serviceType: 'qbittorrent', name: 'qBit'),
+        ServiceInstance(id: 'deluge-a', serviceType: 'deluge', name: 'Deluge'),
         ServiceInstance(
             id: 'qbittorrent-b',
             serviceType: 'qbittorrent',
@@ -91,14 +92,18 @@ void main() {
         ServiceInstance(
             id: 'transmission-a', serviceType: 'transmission', name: 'Trans'),
         ServiceInstance(id: 'nzbget-a', serviceType: 'nzbget', name: 'NZBGet'),
+        ServiceInstance(
+            id: 'rutorrent-a', serviceType: 'rutorrent', name: 'ruTorrent'),
       ],
     );
 
-    // Usenet group first, then torrents; server order kept within each group.
+    // Usenet group first, then torrents; server order kept within each group,
+    // so Deluge stays between the two qBittorrent instances and ruTorrent,
+    // last on the server, closes the torrent group.
     expect(
       connection.downloadInstances.map((i) => i.id).toList(),
-      ['sabnzbd-a', 'nzbget-a', 'qbittorrent-a', 'qbittorrent-b',
-          'transmission-a'],
+      ['sabnzbd-a', 'nzbget-a', 'qbittorrent-a', 'deluge-a', 'qbittorrent-b',
+          'transmission-a', 'rutorrent-a'],
     );
   });
 
@@ -115,13 +120,15 @@ void main() {
         ServiceInstance(id: 'tracearr-a', serviceType: 'tracearr', name: 'TR'),
         ServiceInstance(id: 'jf-b', serviceType: 'jellyfin', name: 'Cabin'),
         ServiceInstance(id: 'em-a', serviceType: 'emby', name: 'Den Emby'),
+        ServiceInstance(id: 'abs-a', serviceType: 'audiobookshelf', name: 'Books'),
       ],
     );
 
-    expect(mediaServerServiceTypes, containsAll(['jellyfin', 'emby', 'plex']));
+    expect(mediaServerServiceTypes,
+        containsAll(['jellyfin', 'emby', 'plex', 'audiobookshelf']));
     expect(
       connection.mediaServerInstances.map((i) => i.id).toList(),
-      ['jf-a', 'jf-b', 'em-a'],
+      ['jf-a', 'jf-b', 'em-a', 'abs-a'],
     );
     // A media server is neither a library nor a download client, and a
     // watch-history provider is not a media server.

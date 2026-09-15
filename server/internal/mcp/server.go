@@ -432,7 +432,7 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 	case "search_books":
 		return s.searchBooks(input, callCtx.UserID)
 	case "search_music":
-		return s.searchMusic(input, callCtx.UserID)
+		return s.searchMusic(input, callCtx.UserID, ctx)
 	case "display_media":
 		return s.displayMedia(ctx, input, callCtx.UserID, policy)
 	case "get_queue":

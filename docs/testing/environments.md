@@ -32,7 +32,10 @@ exactly this on a disposable droplet), each with only its own locally
 generated API key or local username/password:
 
 - Radarr, Sonarr, Chaptarr — local API key from each service's own settings
-- SABnzbd, NZBGet, qBittorrent, Transmission — local key or local credentials
+- Hardcover — the one third-party account books can use, and only for the
+  Trending Books row: approve Cantinarr’s catalog-only OAuth device code from
+  the Chaptarr instance editor, or paste an API token with public catalog access
+- SABnzbd, NZBGet, qBittorrent, Transmission, Deluge, ruTorrent — local key or local credentials
 - Tautulli — local API key (meaningful data needs a Plex server feeding it)
 - Tracearr — public API key from its Settings > General (needs a Plex, Jellyfin, or Emby server feeding it; the jf-lab compose runs the all-in-one `supervised` image against the lab Jellyfin)
 - Jellyfin — local API key minted under Dashboard > API Keys; the whole
@@ -49,9 +52,10 @@ generated API key or local username/password:
 Only these need a real account, and only for live verification — never for
 the suites:
 
-- **plex.tv** — the whole Plex integration (PIN link, server/library
-  listing, invites) is plex.tv-side; it needs a real Plex account owning a
-  claimed Plex Media Server.
+- **Plex** — PIN linking, server/library listing, and invitations need a
+  real plex.tv account owning a claimed Plex Media Server. Exact watch links
+  also need a reachable direct server connection, matched movie/show metadata,
+  and an accepted recipient share to prove that recipient's library access.
 - **TMDB** — discovery/search needs a v4 read token from a free
   themoviedb.org account.
 - **Trakt** (optional) — a Trakt account plus a registered app for the

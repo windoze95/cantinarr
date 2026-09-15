@@ -1,4 +1,6 @@
 import '../../discover/data/tmdb_models.dart';
+import 'release_schedule.dart';
+import 'tv_schedule.dart';
 
 /// One line of a title page's Details section: a short label and the value
 /// TMDB knows for it. Lines exist only for what is known, so a title with
@@ -52,9 +54,15 @@ List<TitleFact> movieFacts(MovieDetail detail) {
 /// The Details lines for a show. Status always earns a line when TMDB has
 /// one: whether a show is still returning, ended, or canceled is the first
 /// thing a viewer wants to know about it.
-List<TitleFact> tvFacts(TVDetail detail) => [
+List<TitleFact> tvFacts(TVDetail detail, {DateTime? now}) => [
       if (_present(detail.status) case final status?)
         TitleFact('Status', status),
+      if (tvPremiereDate(detail) case final date?)
+        TitleFact(
+          date.isBefore(tvCalendarDay(now ?? DateTime.now()))
+              ? 'First aired' : 'Premiere',
+          formatReleaseDate(date),
+        ),
       if (joinNames(detail.createdBy.map((c) => c.name)) case final names?)
         TitleFact('Created by', names),
       if (joinNames(detail.networks.map((n) => n.name).whereType<String>())

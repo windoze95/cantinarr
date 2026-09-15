@@ -7,10 +7,12 @@ import (
 	"sync"
 
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/deluge"
 	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/nzbget"
 	"github.com/windoze95/cantinarr-server/internal/qbittorrent"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
+	"github.com/windoze95/cantinarr-server/internal/rutorrent"
 	"github.com/windoze95/cantinarr-server/internal/sabnzbd"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 	"github.com/windoze95/cantinarr-server/internal/transmission"
@@ -29,6 +31,8 @@ type Registry struct {
 	qbittorrentClients  map[string]*qbittorrent.Client
 	nzbgetClients       map[string]*nzbget.Client
 	transmissionClients map[string]*transmission.Client
+	delugeClients       map[string]*deluge.Client
+	rutorrentClients    map[string]*rutorrent.Client
 	// watchHistoryProviders holds Tautulli and Tracearr providers; a
 	// Tracearr provider carries a stats cache, which InvalidateClient drops
 	// with it whenever the instance is edited.
@@ -47,6 +51,8 @@ func NewRegistry(store *Store) *Registry {
 		qbittorrentClients:  make(map[string]*qbittorrent.Client),
 		nzbgetClients:       make(map[string]*nzbget.Client),
 		transmissionClients: make(map[string]*transmission.Client),
+		delugeClients:       make(map[string]*deluge.Client),
+		rutorrentClients:    make(map[string]*rutorrent.Client),
 
 		watchHistoryProviders: make(map[string]watchhistory.Provider),
 	}
@@ -375,6 +381,52 @@ func (r *Registry) GetTransmissionClient(instanceID string) (*transmission.Clien
 	return client, nil
 }
 
+// GetDelugeClient returns a cached or new Deluge client for the given instance ID.
+func (r *Registry) GetDelugeClient(instanceID string) (*deluge.Client, error) {
+	r.mu.RLock()
+	if client, ok := r.delugeClients[instanceID]; ok {
+		r.mu.RUnlock()
+		return client, nil
+	}
+	r.mu.RUnlock()
+
+	inst, err := r.getInstanceOfType(instanceID, "deluge")
+	if err != nil {
+		return nil, err
+	}
+
+	client := deluge.NewClient(inst.URL, inst.Password)
+
+	r.mu.Lock()
+	r.delugeClients[instanceID] = client
+	r.mu.Unlock()
+
+	return client, nil
+}
+
+// GetRutorrentClient returns a cached or new ruTorrent client for the given instance ID.
+func (r *Registry) GetRutorrentClient(instanceID string) (*rutorrent.Client, error) {
+	r.mu.RLock()
+	if client, ok := r.rutorrentClients[instanceID]; ok {
+		r.mu.RUnlock()
+		return client, nil
+	}
+	r.mu.RUnlock()
+
+	inst, err := r.getInstanceOfType(instanceID, "rutorrent")
+	if err != nil {
+		return nil, err
+	}
+
+	client := rutorrent.NewClient(inst.URL, inst.Username, inst.Password)
+
+	r.mu.Lock()
+	r.rutorrentClients[instanceID] = client
+	r.mu.Unlock()
+
+	return client, nil
+}
+
 // GetDefaultRadarrClient returns the client for the default Radarr instance.
 func (r *Registry) GetDefaultRadarrClient() (*radarr.Client, string, error) {
 	inst, err := r.store.GetDefault("radarr")
@@ -450,6 +502,32 @@ func (r *Registry) GetDefaultTransmissionClient() (*transmission.Client, string,
 		return nil, "", nil
 	}
 	client, err := r.GetTransmissionClient(inst.ID)
+	return client, inst.ID, err
+}
+
+// GetDefaultDelugeClient returns the client for the default Deluge instance.
+func (r *Registry) GetDefaultDelugeClient() (*deluge.Client, string, error) {
+	inst, err := r.store.GetDefault("deluge")
+	if err != nil {
+		return nil, "", fmt.Errorf("get default deluge: %w", err)
+	}
+	if inst == nil {
+		return nil, "", nil
+	}
+	client, err := r.GetDelugeClient(inst.ID)
+	return client, inst.ID, err
+}
+
+// GetDefaultRutorrentClient returns the client for the default ruTorrent instance.
+func (r *Registry) GetDefaultRutorrentClient() (*rutorrent.Client, string, error) {
+	inst, err := r.store.GetDefault("rutorrent")
+	if err != nil {
+		return nil, "", fmt.Errorf("get default rutorrent: %w", err)
+	}
+	if inst == nil {
+		return nil, "", nil
+	}
+	client, err := r.GetRutorrentClient(inst.ID)
 	return client, inst.ID, err
 }
 
@@ -574,6 +652,8 @@ func (r *Registry) InvalidateClient(instanceID string) {
 	delete(r.qbittorrentClients, instanceID)
 	delete(r.nzbgetClients, instanceID)
 	delete(r.transmissionClients, instanceID)
+	delete(r.delugeClients, instanceID)
+	delete(r.rutorrentClients, instanceID)
 	delete(r.watchHistoryProviders, instanceID)
 	r.mu.Unlock()
 }

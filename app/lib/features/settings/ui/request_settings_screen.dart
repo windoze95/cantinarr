@@ -1,12 +1,16 @@
+import '../../request/ui/request_allowance_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/settings_highlight.dart';
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../data/request_settings_service.dart';
 import '../settings_anchors.dart';
 import '../../request/data/request_service.dart';
+import '../../request/data/tv_match_service.dart';
+import 'package:go_router/go_router.dart';
 
 /// Admin screen for editing the global media-request defaults.
 class RequestSettingsScreen extends ConsumerStatefulWidget {
@@ -23,6 +27,7 @@ class RequestSettingsScreen extends ConsumerStatefulWidget {
 class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
   late final RequestSettingsService _service;
 
+  final _draft = SettingsDraft();
   AdminRequestSettings? _admin;
   GlobalRequestSettings? _edited;
   bool _isLoading = true;
@@ -56,6 +61,7 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
       setState(() {
         _admin = admin;
         _edited = admin.settings;
+        _draft.markSaved(_edited!.toJson());
         _isLoading = false;
       });
     } catch (e) {
@@ -77,6 +83,7 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
       setState(() {
         _admin = admin;
         _edited = admin.settings;
+        _draft.markSaved(_edited!.toJson());
         _saving = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -92,7 +99,16 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+        hasChanges: () =>
+            _edited != null &&
+            _admin != null &&
+            _draft.hasChanges(_edited!.toJson()),
+        isSaving: _saving,
+        child: _buildPage(context),
+      );
+
+  Widget _buildPage(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Request Defaults')),
       body: CenteredContent(
@@ -135,6 +151,7 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
+        const Padding(padding: EdgeInsets.all(16), child: RequestAllowanceSection(editDefaults: true)),
         const _SectionLabel('Approval'),
         SettingsHighlight(
           anchorId: SettingsAnchors.requestsRequireApproval,
@@ -155,6 +172,12 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
           ),
         ),
         const _SectionLabel('Seasons'),
+        if (ref.watch(tvMatchesAllowedProvider)) ListTile(
+          leading: const Icon(Icons.rule), title: const Text('TV matches'),
+          subtitle: const Text('Correct series and season matching, and review affected requests.'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => context.push('/settings/tv-matches'),
+        ),
         SettingsHighlight(
           anchorId: SettingsAnchors.requestsSeasonChoice,
           highlightId: widget.highlightId,

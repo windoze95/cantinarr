@@ -50,6 +50,13 @@ const (
 	// KeyLocalOpenAIReasoningEffort mirrors KeyOpenAIReasoningEffort for the
 	// local provider.
 	KeyLocalOpenAIReasoningEffort = "local_openai_reasoning_effort"
+	// KeyLocalOpenAIUseProxy marks the local provider's endpoint as an
+	// internet host, so its turns ride httpx.External() and honour the
+	// admin's outbound proxy. Off by default because the endpoint is usually
+	// a LAN box, and the class cannot be guessed from the URL: split-horizon
+	// DNS and Tailscale both hand out names an address test reads wrong.
+	// Plain setting, same shared-only scoping as KeyLocalOpenAIBaseURL.
+	KeyLocalOpenAIUseProxy = "local_openai_use_proxy"
 )
 
 // AIReasoningEfforts is the closed set of admin-settable shared openai
@@ -127,6 +134,11 @@ type AIProviderOption struct {
 	// pinned reasoning effort, with the same app-side gating: no flag, no
 	// field.
 	SupportsReasoningEffort bool `json:"supports_reasoning_effort,omitempty"`
+	// SupportsProxyOptIn marks providers whose shared profile can declare
+	// its endpoint internet-bound, with the same app-side gating: no flag,
+	// no control. Only the local provider has an admin-typed endpoint whose
+	// transport class is therefore not knowable up front.
+	SupportsProxyOptIn bool `json:"supports_proxy_opt_in,omitempty"`
 	// SharedOnly marks providers that exist only as the admin-configured
 	// shared profile. They are filtered out of personal settings payloads
 	// and rejected as personal selections: their endpoints can name
@@ -214,6 +226,7 @@ var AIProviders = []AIProviderOption{
 		CredentialKey:           KeyLocalOpenAIKey,
 		SupportsBaseURL:         true,
 		SupportsReasoningEffort: true,
+		SupportsProxyOptIn:      true,
 		SharedOnly:              true,
 		// No catalog on purpose: local model IDs are whatever the server
 		// hosts, so the app offers only the custom-model field.
@@ -506,6 +519,15 @@ func (r *Registry) AIHealthCheckEnabled() bool {
 		return true
 	}
 	enabled, err := strconv.ParseBool(raw)
+	return err == nil && enabled
+}
+
+// LocalOpenAIUseProxy reports whether the local provider's endpoint is
+// declared internet-bound. Defaults off: an absent row means the endpoint is
+// on the server's own network, which is where these endpoints usually live
+// and what every install before this setting assumed.
+func (r *Registry) LocalOpenAIUseProxy() bool {
+	enabled, err := strconv.ParseBool(strings.TrimSpace(r.GetSetting(KeyLocalOpenAIUseProxy)))
 	return err == nil && enabled
 }
 

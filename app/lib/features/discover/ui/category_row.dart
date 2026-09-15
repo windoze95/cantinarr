@@ -6,6 +6,7 @@ import '../../../core/widgets/section_header.dart';
 import '../../../core/widgets/see_all_button.dart';
 import '../data/tmdb_models.dart';
 import '../logic/search_library_status.dart';
+import 'catalog_status_builder.dart';
 
 /// A titled horizontal row of media items (e.g. "Trending Now").
 class CategoryRow extends StatelessWidget {
@@ -26,6 +27,7 @@ class CategoryRow extends StatelessWidget {
   /// jank D-02 ("row never grows height") was written to eliminate for the
   /// *later* badge-arrival transition.
   final bool isTvRow;
+  final bool resolveTVStatus;
 
   /// Availability badge data keyed by (media type, TMDB id). Defaults to
   /// empty so every existing call site keeps compiling and a row not yet fed
@@ -42,6 +44,7 @@ class CategoryRow extends StatelessWidget {
     required this.items,
     required this.isLoading,
     required this.isTvRow,
+    this.resolveTVStatus = false,
     this.onLoadMore,
     this.libraryStatus = const {},
     this.onSeeAll,
@@ -57,9 +60,7 @@ class CategoryRow extends StatelessWidget {
     // for their own MediaCard rows (MediaCard.subtitleRowExtraHeight /
     // MediaCard.plainRowExtraHeight), so all three call sites can never
     // silently drift apart.
-    final rowExtra = isTvRow
-        ? MediaCard.subtitleRowExtraHeight
-        : MediaCard.plainRowExtraHeight;
+    final rowExtra = MediaCard.rowExtraHeight(context, withSubtitle: isTvRow);
 
     return Padding(
       padding: const EdgeInsets.only(top: 20),
@@ -85,8 +86,11 @@ class CategoryRow extends StatelessWidget {
             height: cardWidth * 1.5 + rowExtra,
             onItemAppear: onLoadMore,
             itemBuilder: (item) {
-              final status = libraryStatus[(item.mediaType, item.id)];
-              return MediaCard(
+              return CatalogStatusBuilder(
+                item: item,
+                resolveTVStatus: resolveTVStatus,
+                legacyStatus: libraryStatus[(item.mediaType, item.id)],
+                builder: (status) => MediaCard(
                 id: item.id,
                 title: item.title,
                 posterPath: item.posterPath,
@@ -97,6 +101,7 @@ class CategoryRow extends StatelessWidget {
                 width: cardWidth,
                 onTap: () => context.push(
                   '/detail/${item.mediaType.name}/${item.id}',
+                ),
                 ),
               );
             },

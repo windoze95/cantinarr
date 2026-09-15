@@ -8,9 +8,10 @@ import '../../../core/widgets/status_pill.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../settings/data/setup_status_service.dart';
 import '../../settings/logic/setup_status_provider.dart';
+import '../../settings/settings_anchors.dart';
 
-/// Live, resumable setup checklist for admins. Every step deep-links to the
-/// real settings screen for that feature and progress is re-derived from
+/// Live, resumable setup checklist for admins. Known destinations deep-link
+/// to the real settings screen and progress is re-derived from
 /// actual configuration on return — a step is "done" because the thing
 /// exists, not because a wizard said next. Items the server adds in future
 /// versions render automatically (unknown keys get a generic row).
@@ -22,6 +23,8 @@ class SetupWizardScreen extends ConsumerStatefulWidget {
 }
 
 class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
+  String? _savingKey;
+
   @override
   void initState() {
     super.initState();
@@ -52,8 +55,10 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return '/settings/discovery';
       case 'remediation':
         return '/settings/ai-remediation';
+      case 'push':
+        return '/settings?highlight=${SettingsAnchors.rootNotifications}';
       default:
-        return null; // push = server env var; unknown keys = newer server
+        return null; // unknown keys = newer server
     }
   }
 
@@ -123,7 +128,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     await context.push(route, extra: extra);
     // Re-derive on return: whatever the admin just configured (or didn't)
     // is reflected immediately.
-    ref.read(setupStatusProvider.notifier).refresh();
+    if (mounted) ref.read(setupStatusProvider.notifier).refresh();
   }
 
   /// Records or clears one skip, then re-derives so every surface — the
@@ -131,15 +136,19 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   /// same breath. Failures are named; a tap that silently changed nothing
   /// would read as the checklist ignoring the admin.
   Future<void> _setSkipped(SetupItem item, bool skipped) async {
+    if (_savingKey != null) return;
+    setState(() => _savingKey = item.key);
     try {
       await ref.read(setupStatusServiceProvider).setSkipped(item.key, skipped);
-      await ref.read(setupStatusProvider.notifier).refresh();
+      if (mounted) await ref.read(setupStatusProvider.notifier).refresh();
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(skipped
               ? 'Could not skip "${item.title}". Try again.'
               : 'Could not restore "${item.title}". Try again.')));
+    } finally {
+      if (mounted) setState(() => _savingKey = null);
     }
   }
 
@@ -174,14 +183,6 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   }
 
   Widget _buildChecklist(SetupStatus status) {
-    final essentials =
-        status.items.where((i) => !i.optional).toList(growable: false);
-    final optional =
-        status.items.where((i) => i.optional).toList(growable: false);
-    final progress = status.effectiveTotal == 0
-        ? 0.0
-        : status.configured / status.effectiveTotal;
-
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
@@ -191,7 +192,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '${status.configured} of ${status.effectiveTotal} features configured',
+                status.summary,
                 style: const TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 18,
@@ -202,39 +203,25 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
               ClipRRect(
                 borderRadius: BorderRadius.circular(4),
                 child: LinearProgressIndicator(
-                  value: progress,
+                  value: status.progress,
                   minHeight: 6,
                   backgroundColor: AppTheme.border,
-                  color: AppTheme.accent,
+                  color:
+                      status.isComplete ? AppTheme.available : AppTheme.accent,
                 ),
               ),
               const SizedBox(height: 12),
               const Text(
-                'Each step opens the real settings screen, and progress '
-                'reflects what\'s actually configured — come back anytime, '
-                'nothing here is one-shot.',
+                'Set up the features you want. Skip anything you don\'t use; '
+                'you can restore it later. Skips apply to everyone on this server.',
                 style: TextStyle(
                     color: AppTheme.textSecondary, fontSize: 13, height: 1.4),
               ),
             ],
           ),
         ),
-        _SectionHeader(
-          title: 'Essentials',
-          remaining: essentials.where((i) => !i.configured).length,
-        ),
-        ...essentials.map((i) => _buildItem(i, urgent: status.isUrgent(i))),
-        if (optional.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          _SectionHeader(
-            title: 'Nice to have',
-            // Skipped rows are acknowledged, not outstanding: they must not
-            // hold the section (or any other surface) at "N left" forever.
-            remaining:
-                optional.where((i) => !i.configured && !i.skipped).length,
-          ),
-          ...optional.map((i) => _buildItem(i, urgent: status.isUrgent(i))),
-        ],
+        _SectionHeader(title: 'Features', remaining: status.remaining),
+        ...status.items.map(_buildItem),
         const SizedBox(height: 8),
         const Divider(color: AppTheme.border),
         SwitchListTile(
@@ -247,7 +234,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
               style: TextStyle(
                   color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),
           subtitle: const Text(
-              'Show this checklist in the menu while features remain unconfigured',
+              'Show this checklist while items remain to set up or skip',
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
         ),
         const SizedBox(height: 24),
@@ -255,81 +242,95 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     );
   }
 
-  /// One checklist row. The weight goes to what is unfinished: a done row dims
-  /// to a receipt, while an outstanding one keeps full-strength copy and ends
-  /// in a labelled "Set up" chip rather than the same chevron every navigable
-  /// row in the app carries. A chevron only says "this goes somewhere"; the
-  /// admin came here to find what still wants doing, and that has to be
-  /// markable by scanning the edge of the list instead of reading twelve
-  /// descriptions. [urgent] is reserved for rows the server cannot work
-  /// without — see [SetupStatus.isUrgent].
-  Widget _buildItem(SetupItem item, {required bool urgent}) {
+  /// Configured and skipped rows recede; every other row offers a skip,
+  /// including informational rows without a settings destination.
+  Widget _buildItem(SetupItem item) {
     final route = _routeFor(item.key);
-    final actionColor = urgent ? AppTheme.danger : AppTheme.accent;
     final dismissed = item.dismissed;
-    // An unconfigured row with nowhere to go (push is a server env var, and
-    // unknown keys come from newer servers) gets no chip: there is no action
-    // here to offer. Its full-strength title still reads as outstanding.
-    //
-    // A skippable row pairs the Set up chip with a Skip one, so an admin who
-    // deliberately doesn't run this feature can acknowledge it instead of
-    // wearing its count forever. A skipped row dims to a receipt like a
-    // configured one, keeps its tap-through (setting it up later needs no
-    // un-skip first), and its "Skipped" chip is the undo.
-    final Widget? trailing;
-    if (item.configured) {
-      trailing =
-          const Icon(Icons.check_circle, color: AppTheme.available, size: 20);
+    final canSkip = item.optional;
+    final saving = _savingKey == item.key;
+    final actions = <Widget>[];
+    if (saving) {
+      actions.add(const SizedBox.square(
+        dimension: 18,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      ));
+    } else if (item.configured) {
+      actions.add(
+          const Icon(Icons.check_circle, color: AppTheme.available, size: 20));
     } else if (dismissed) {
-      trailing = InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: () => _setSkipped(item, false),
-        child: const Tooltip(
-          message: 'Restore to the checklist',
-          child: StatusPill(text: 'Skipped', color: AppTheme.textSecondary),
-        ),
-      );
-    } else if (route != null) {
-      trailing = Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (item.optional) ...[
-            InkWell(
-              borderRadius: BorderRadius.circular(12),
-              onTap: () => _setSkipped(item, true),
-              child: const Tooltip(
-                message: 'Acknowledge and stop counting this',
-                child:
-                    StatusPill(text: 'Skip', color: AppTheme.textSecondary),
-              ),
-            ),
-            const SizedBox(width: 6),
-          ],
-          StatusPill(text: 'Set up', color: actionColor),
-        ],
-      );
+      actions.add(_skipAction(item, restore: true));
     } else {
-      trailing = null;
+      actions.add(_skipAction(item));
+      if (route != null) {
+        actions.add(const StatusPill(text: 'Set up', color: AppTheme.accent));
+      }
     }
-    return ListTile(
-      leading: Icon(_iconFor(item.key),
-          color: item.configured
-              ? AppTheme.available
-              : dismissed
-                  ? AppTheme.textSecondary
-                  : actionColor),
-      title: Text(item.title,
-          style: TextStyle(
-              color: item.configured || dismissed
-                  ? AppTheme.textSecondary
-                  : AppTheme.textPrimary,
-              fontWeight: FontWeight.w500)),
-      subtitle: Text(item.description,
-          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-      trailing: trailing,
-      onTap: route != null
-          ? () => _openItem(route, extra: _extraFor(item.key))
-          : null,
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final actionsBelow = constraints.maxWidth < 420 ||
+          MediaQuery.textScalerOf(context).scale(14) > 18;
+      final actionWidgets = Wrap(spacing: 6, runSpacing: 6, children: actions);
+      return ListTile(
+        leading: Icon(_iconFor(item.key),
+            color: item.configured
+                ? AppTheme.available
+                : dismissed
+                    ? AppTheme.textSecondary
+                    : AppTheme.accent),
+        title: Text(item.title,
+            style: TextStyle(
+                color: item.configured || dismissed
+                    ? AppTheme.textSecondary
+                    : AppTheme.textPrimary,
+                fontWeight: FontWeight.w500)),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(item.description,
+                style: const TextStyle(
+                    color: AppTheme.textSecondary, fontSize: 13)),
+            if (!canSkip && !item.configured && !dismissed)
+              const Text('Update the server to skip this item.',
+                  style:
+                      TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+            if (actionsBelow) ...[
+              const SizedBox(height: 8),
+              actionWidgets,
+            ],
+          ],
+        ),
+        trailing: actionsBelow ? null : actionWidgets,
+        onTap: route != null
+            ? () => _openItem(route, extra: _extraFor(item.key))
+            : null,
+      );
+    });
+  }
+
+  Widget _skipAction(SetupItem item, {bool restore = false}) {
+    final enabled = _savingKey == null && (restore || item.optional);
+    final label = restore ? 'Skipped' : 'Skip';
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      child: Tooltip(
+        message: restore
+            ? 'Restore to the checklist'
+            : item.optional
+                ? 'Skip this feature for everyone on the server'
+                : 'Update the server to skip this item.',
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          // Absorb a disabled tap so it cannot open the parent settings row.
+          onTap: enabled ? () => _setSkipped(item, !restore) : () {},
+          excludeFromSemantics: !enabled,
+          canRequestFocus: enabled,
+          child: StatusPill(
+              text: label,
+              color: enabled ? AppTheme.textSecondary : AppTheme.textMuted),
+        ),
+      ),
     );
   }
 }

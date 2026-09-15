@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/widgets/status_pill.dart';
+import 'package:cantinarr/core/widgets/unsaved_changes_guard.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/settings/settings_anchors.dart';
 import 'package:cantinarr/features/settings/ui/discovery_settings_screen.dart';
@@ -28,6 +29,7 @@ class _DiscoverAdapter implements HttpClientAdapter {
   final bool traktUsingBuiltin;
 
   bool get _traktAvailable => traktConfigured || traktUsingBuiltin;
+  bool failSaves = false;
   Map<String, dynamic>? lastDiscoveryUpdate;
   Map<String, dynamic>? lastCredentialsUpdate;
 
@@ -39,6 +41,7 @@ class _DiscoverAdapter implements HttpClientAdapter {
   ) async {
     final path = options.uri.path;
     if (options.method == 'PUT' && requestStream != null) {
+      if (failSaves) return ResponseBody.fromString('{}', 503);
       final bytes = await requestStream.expand((chunk) => chunk).toList();
       final body = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
       if (path == '/api/admin/credentials') {
@@ -69,6 +72,9 @@ class _DiscoverAdapter implements HttpClientAdapter {
         'english_only': true,
         'sources': ['tmdb_trending', 'trakt_trending', 'tmdb_popular'],
         'trakt_configured': _traktAvailable,
+        'hidden_when_unconfigured':
+            lastDiscoveryUpdate?['hidden_when_unconfigured'] ??
+                {'movie': false, 'tv': false, 'book': false, 'music': false},
       };
 
   ResponseBody _json(Map<String, dynamic> body) => ResponseBody.fromString(
@@ -128,6 +134,81 @@ Finder _sourceTile(String label) => find.ancestor(
     );
 
 void main() {
+  testWidgets('Discover tab switches participate in Save and unsaved changes',
+      (t) async {
+    final adapter = await _pumpScreen(t,
+        traktConfigured: true, highlightId: SettingsAnchors.discoveryHideBooks);
+    bool dirty() => t
+        .widget<UnsavedChangesGuard>(find.byType(UnsavedChangesGuard))
+        .hasChanges();
+    expect(dirty(), isFalse);
+    final books = find.widgetWithText(
+        SwitchListTile, "Hide Books when Chaptarr isn't connected");
+    await t.ensureVisible(books);
+    await t.tap(books);
+    await t.pumpAndSettle();
+    expect(dirty(), isTrue);
+    final save = find.byKey(const Key('discovery-save'));
+    await t.ensureVisible(save);
+    await t.tap(save);
+    await t.pumpAndSettle();
+    expect(adapter.lastDiscoveryUpdate?['hidden_when_unconfigured'],
+        {'movie': false, 'tv': false, 'book': true, 'music': false});
+    expect(dirty(), isFalse);
+  });
+
+  testWidgets('only unsaved edits warn, including after a failed save',
+      (tester) async {
+    final adapter = await _pumpScreen(tester, traktConfigured: true);
+    bool dirty() => tester
+        .widget<UnsavedChangesGuard>(find.byType(UnsavedChangesGuard))
+        .hasChanges();
+    expect(dirty(), isFalse);
+    await tester.tap(find.widgetWithText(
+        SwitchListTile, 'Only show English-language titles'));
+    await tester.pumpAndSettle();
+    expect(dirty(), isTrue);
+    await tester.tap(find.widgetWithText(
+        SwitchListTile, 'Only show English-language titles'));
+    await tester.pumpAndSettle();
+    expect(dirty(), isFalse);
+    await tester.tap(find.text('All-time popular (TMDB)'));
+    await tester.pumpAndSettle();
+    expect(dirty(), isTrue);
+    final save = find.byKey(const Key('discovery-save'));
+    await tester.scrollUntilVisible(save, 120,
+        scrollable: find.byType(Scrollable).first);
+    await tester.ensureVisible(save);
+    await tester.pumpAndSettle();
+    adapter.failSaves = true;
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(dirty(), isTrue,
+        reason: 'a failed write must not clear the warning');
+    adapter.failSaves = false;
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(dirty(), isFalse);
+  });
+
+  testWidgets('typing an unsaved credential is detected without a page rebuild',
+      (tester) async {
+    await _pumpScreen(tester, traktConfigured: false);
+    final field = find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.hintText == 'Trakt client ID');
+    await tester.scrollUntilVisible(field, 120,
+        scrollable: find.byType(Scrollable).first);
+    await tester.enterText(field, 'draft-key');
+    final guard =
+        tester.widget<UnsavedChangesGuard>(find.byType(UnsavedChangesGuard));
+    expect(guard.hasChanges(), isTrue);
+    await tester.enterText(field, '');
+    expect(guard.hasChanges(), isFalse);
+  });
+
   testWidgets('marks the Trakt feed as the recommended row source',
       (tester) async {
     await _pumpScreen(tester, traktConfigured: true);
@@ -146,8 +227,15 @@ void main() {
     // admin cannot tell what the rows are showing.
     final trakt = tester.widget<ListTile>(_sourceTile('Trending now (Trakt)'));
     expect((trakt.leading as Icon).icon, Icons.radio_button_checked);
-    expect(find.byType(SwitchListTile), findsOneWidget);
-    expect(tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+    expect(
+        find.widgetWithText(
+            SwitchListTile, 'Only show English-language titles'),
+        findsOneWidget);
+    expect(
+        tester
+            .widget<SwitchListTile>(find.widgetWithText(
+                SwitchListTile, 'Only show English-language titles'))
+            .value,
         isTrue,
         reason: 'non-English titles are hidden by default');
   });
@@ -173,7 +261,8 @@ void main() {
 
     await tester.tap(find.text('All-time popular (TMDB)'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byType(SwitchListTile));
+    await tester.tap(find.widgetWithText(
+        SwitchListTile, 'Only show English-language titles'));
     await tester.pumpAndSettle();
 
     final save = find.byKey(const Key('discovery-save'));

@@ -9,12 +9,12 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// Normalization of the server URL a user TYPES on the connect screen.
 ///
-/// This is `AuthNotifier._normalizeUrl`, observed through the URLs the
+/// This is `normalizeServerUrl`, observed through the URLs the
 /// notifier hands to its [AuthService] — it is NOT `normalizeServer` in
 /// app.dart, which only canonicalizes URLs for same-server comparison and is
 /// already covered by test/app_deep_links_test.dart (PR #224). The entry
 /// path differs: it never lowercases (the URL is used verbatim as the base
-/// URL) and it strips at most ONE trailing slash.
+/// URL) and it strips trailing slashes.
 ///
 /// Also covers the scheme fallback in `checkServer`: a bare address is probed
 /// over https first and retried over http only when https failed at the
@@ -123,7 +123,7 @@ void main() {
         .read(authProvider.notifier)
         .connectWithToken('media.example.com/', 'tok');
     expect(h.service.redeemUrls, ['https://media.example.com'],
-        reason: 'checkServer and the credential flows share _normalizeUrl');
+        reason: 'checkServer and the credential flows share normalizeServerUrl');
   });
 
   group('scheme fallback', () {

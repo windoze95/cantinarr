@@ -144,6 +144,14 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('notification tap routing', () {
+    for (final event in ['issue_closed', 'issue_question', 'issue_fix_confirm']) {
+      test('$event opens its report', () async {
+        final h = _Harness();
+        await _emitNativeCall('onNotificationTap',
+            {'type': event, 'issue_id': 17});
+        expect(h.router.pushed, ['/issues/17']);
+      });
+    }
     const directRoutes = {
       'request_pending': '/approvals',
       'agent_action_pending': '/agent-actions',
@@ -152,6 +160,7 @@ void main() {
       // not this particular proposal is still pending on arrival.
       'profile_change_pending': '/settings/profile-approvals',
       'plex_access_request': '/settings/users',
+      'media_server_access': '/media-servers',
       'plex_invite_sent': '/media-servers',
       'remediation_autodispatch_disabled': '/settings/ai-remediation',
     };
@@ -164,7 +173,12 @@ void main() {
       });
     }
 
-    for (final type in const ['request_decision', 'new_movie', 'new_episode']) {
+    for (final type in const [
+      'request_auto_approved',
+      'request_decision',
+      'new_movie',
+      'new_episode'
+    ]) {
       test('$type opens the media detail page', () async {
         final h = _Harness();
         await _emitNativeCall('onNotificationTap', {
@@ -185,6 +199,29 @@ void main() {
       });
       expect(h.router.pushed, ['/detail/tv/7']);
     });
+
+    for (final type in ['new_episode', 'content_upgraded', 'request_decision']) {
+      test('$type opens the corrected story in its importing TV library', () async {
+        final h = _Harness();
+        await _emitNativeCall('onNotificationTap', {
+          'type': type, 'tmdb_id': '225634', 'media_type': 'tv',
+          'instance_id': ' tv & 4k ',
+        });
+        expect(h.router.pushed,
+            ['/detail/tv/225634?instance_id=tv+%26+4k']);
+      });
+    }
+
+    for (final instanceId in [null, '', '  ', 123]) {
+      test('legacy TV library value $instanceId keeps the default destination', () async {
+        final h = _Harness();
+        await _emitNativeCall('onNotificationTap', {
+          'type': 'new_episode', 'tmdb_id': 286801, 'media_type': 'tv',
+          'instance_id': instanceId,
+        });
+        expect(h.router.pushed, ['/detail/tv/286801']);
+      });
+    }
 
     test('missing or unknown media_type falls back to movie', () async {
       final h = _Harness();
@@ -234,7 +271,7 @@ void main() {
         'media_type': 'book',
         'foreign_id': '29749107',
       });
-      expect(h.router.pushed, ['/detail/book/29749107']);
+      expect(h.router.pushed, ['/detail/book/29749107?source=chaptarr']);
     });
 
     test('a book payload title rides along as an encoded query parameter',
@@ -249,7 +286,7 @@ void main() {
         'foreign_id': '29749107',
         'title': 'Dune Messiah',
       });
-      expect(h.router.pushed, ['/detail/book/29749107?title=Dune%20Messiah']);
+      expect(h.router.pushed, ['/detail/book/29749107?source=chaptarr&title=Dune%20Messiah']);
     });
 
     test('a book decision pins its Chaptarr instance in the detail link',
@@ -265,7 +302,7 @@ void main() {
       });
       expect(
         h.router.pushed,
-        ['/detail/book/29749107?title=Flock&instance_id=books-two'],
+        ['/detail/book/29749107?source=chaptarr&title=Flock&instance_id=books-two'],
       );
     });
 
@@ -285,8 +322,8 @@ void main() {
       expect(
         h.router.pushed,
         [
-          '/detail/book/29749107'
-              '?title=Ahsoka%20(Star%20Wars)&instance_id=books-a'
+          '/detail/book/29749107?source=chaptarr'
+              '&title=Ahsoka%20(Star%20Wars)&instance_id=books-a'
         ],
       );
     });

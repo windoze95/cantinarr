@@ -3,6 +3,8 @@ package request
 import (
 	"encoding/json"
 	"errors"
+	"github.com/windoze95/cantinarr-server/internal/bookdiscovery"
+	"github.com/windoze95/cantinarr-server/internal/musicdiscovery"
 	"io"
 	"log"
 	"net/http"
@@ -34,6 +36,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.MediaType == "book" && req.CatalogRef != nil {
+		bookdiscovery.WriteRetired(w)
+		return
+	}
 	if req.MediaType == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "media_type required"})
 		return
@@ -44,7 +50,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		req.ForeignID = strings.TrimSpace(req.ForeignID)
 		req.Title = strings.TrimSpace(req.Title)
 		req.SearchTerm = strings.TrimSpace(req.SearchTerm)
-		if req.ForeignID == "" {
+		if req.ForeignID == "" && req.CatalogRef == nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required for book requests"})
 			return
 		}
@@ -60,7 +66,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		req.ForeignID = strings.TrimSpace(req.ForeignID)
 		req.Title = strings.TrimSpace(req.Title)
 		req.SearchTerm = strings.TrimSpace(req.SearchTerm)
-		if req.ForeignID == "" {
+		if req.ForeignID == "" && req.CatalogRef == nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required for music requests"})
 			return
 		}
@@ -79,6 +85,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.service.CreateMediaRequest(claims.UserID, &req)
 	if err != nil {
+		if writeQuotaError(w, err) {
+			return
+		}
 		// Service errors are host-free by construction, so the one line that
 		// makes a failed create diagnosable from the container log is safe.
 		log.Printf("request: create %s request failed: %v", req.MediaType, err)
@@ -108,7 +117,15 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		mediaType = "movie" // default
 	}
 
-	resp, err := h.service.GetUserStatus(claims.UserID, tmdbID, mediaType, r.URL.Query().Get("instance_id"))
+	includeInstances := true
+	if raw := r.URL.Query().Get("include_instance_statuses"); raw != "" {
+		includeInstances, err = strconv.ParseBool(raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid include_instance_statuses"})
+			return
+		}
+	}
+	resp, err := h.service.getUserStatus(claims.UserID, tmdbID, mediaType, r.URL.Query().Get("instance_id"), includeInstances)
 	if err != nil {
 		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
@@ -130,7 +147,7 @@ func (h *Handler) GetBookStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required"})
 		return
 	}
-	resp, err := h.service.GetUserBookStatusForInstance(claims.UserID, foreignID, r.URL.Query().Get("instance_id"))
+	resp, err := h.service.GetUserBookStatusForInstance(claims.UserID, foreignID, r.URL.Query().Get("instance_id"), r.URL.Query().Get("title"), r.URL.Query().Get("q"))
 	if err != nil {
 		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
@@ -294,7 +311,7 @@ func (h *Handler) GetMusicStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required"})
 		return
 	}
-	resp, err := h.service.GetUserMusicStatusForInstance(claims.UserID, foreignID, r.URL.Query().Get("instance_id"))
+	resp, err := h.service.GetUserMusicStatusForInstance(claims.UserID, foreignID, r.URL.Query().Get("instance_id"), r.URL.Query().Get("include_saved") != "false")
 	if err != nil {
 		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
@@ -312,7 +329,7 @@ func (h *Handler) GetMusicLibrary(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
-	digest, err := h.service.GetMusicLibraryDigestForInstance(claims.UserID, r.URL.Query().Get("instance_id"))
+	digest, err := h.service.GetMusicLibraryDigestForInstance(claims.UserID, r.URL.Query().Get("instance_id"), r.Context())
 	if err != nil {
 		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
@@ -392,7 +409,18 @@ func (h *Handler) GetMusicArtist(w http.ResponseWriter, r *http.Request) {
 }
 
 func requestErrorStatus(err error) int {
+	var tvError *tvMatchError
+	if errors.As(err, &tvError) {
+		if tvError.code == "tv_metadata_unavailable" {
+			return http.StatusServiceUnavailable
+		}
+		return http.StatusConflict
+	}
 	switch {
+	case errors.Is(err, ErrTVMatchAdmin):
+		return http.StatusForbidden
+	case errors.Is(err, ErrTVMatchStale):
+		return http.StatusConflict
 	case errors.Is(err, ErrChaptarrInstanceForbidden), errors.Is(err, ErrLidarrInstanceForbidden), errors.Is(err, ErrArrInstanceForbidden):
 		return http.StatusForbidden
 	case errors.Is(err, ErrChaptarrInstanceInvalid), errors.Is(err, ErrLidarrInstanceInvalid), errors.Is(err, ErrArrInstanceInvalid):
@@ -503,6 +531,13 @@ func (h *Handler) Approve(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.service.ApproveRequest(claims.UserID, id, &override)
 	if err != nil {
+		if writeQuotaError(w, err) {
+			return
+		}
+		if errors.Is(err, bookdiscovery.ErrRetired) {
+			bookdiscovery.WriteRetired(w)
+			return
+		}
 		log.Printf("request: approve request %d failed: %v", id, err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -625,4 +660,76 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+func (h *Handler) MusicCatalog() musicdiscovery.Catalog {
+	if h == nil {
+		return nil
+	}
+	return h.service.MusicCatalog
+}
+
+func (h *Handler) GetDelivery(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+		return
+	}
+	q := r.URL.Query()
+	if raw := q.Get("request_id"); raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || id < 1 {
+			writeJSON(w, 400, map[string]string{"error": "invalid request id"})
+			return
+		}
+		out, err := h.service.DeliveryByID(claims.UserID, id, q.Get("include_live") != "false")
+		if err != nil {
+			writeJSON(w, 403, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, out)
+		return
+	}
+	var ref *CatalogRef
+	if q.Get("catalog_provider") != "" {
+		ref = &CatalogRef{Provider: q.Get("catalog_provider"), ID: q.Get("catalog_id")}
+	}
+	out, err := h.service.DeliveryStatus(claims.UserID, q.Get("media_type"), q.Get("foreign_id"), q.Get("instance_id"), ref, q.Get("include_live") != "false")
+	if err != nil {
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, out)
+}
+
+func (h *Handler) UpdateDelivery(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id < 1 {
+		writeJSON(w, 400, map[string]string{"error": "invalid request id"})
+		return
+	}
+	var body struct {
+		Action    string `json:"action"`
+		Format    string `json:"book_format"`
+		ForeignID string `json:"foreign_id"`
+	}
+	if json.NewDecoder(r.Body).Decode(&body) != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid delivery action"})
+		return
+	}
+	out, err := h.service.DeliveryAction(r.Context(), claims.UserID, id, body.Action, body.ForeignID, body.Format)
+	if errors.Is(err, bookdiscovery.ErrRetired) {
+		bookdiscovery.WriteRetired(w)
+		return
+	}
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, out)
 }

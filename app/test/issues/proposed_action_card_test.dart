@@ -309,6 +309,69 @@ Future<void> _pump(
 }
 
 void main() {
+  testWidgets('executed summary uses the actual approved queue action',
+      (tester) async {
+    final action = AgentAction.fromJson({
+      'id': 18,
+      'issue_id': 5,
+      'kind': 'remediate_queue',
+      'params': {
+        'media_type': 'tv',
+        'queue_id': 41,
+        'action': 'blocklist_search',
+      },
+      'approved_params': {
+        'media_type': 'tv',
+        'queue_id': 41,
+        'action': 'blocklist_only',
+      },
+      'status': 'executed',
+      'result_text': 'Replacement search was suppressed because the episode has not aired.',
+      'issue_status': 'recovering',
+      'issue_title': 'The Show',
+    });
+    await _pump(tester,
+        auth: _adminState, service: _FakeIssuesService(), action: action);
+    expect(
+        find.text('Remove and blocklist this release without searching for a replacement'),
+        findsOneWidget);
+    expect(find.textContaining('let the service replace it'), findsNothing);
+  });
+
+  testWidgets('blocklist only does not assume an existing library copy',
+      (tester) async {
+    final action = AgentAction.fromJson({
+      'id': 17,
+      'issue_id': 5,
+      'kind': 'remediate_queue',
+      'params': {
+        'media_type': 'tv',
+        'queue_id': 41,
+        'action': 'blocklist_only',
+      },
+      'rationale': 'The mismatched download targets an unaired episode.',
+      'status': 'proposed',
+      'can_decide': true,
+      'issue_status': 'awaiting_approval',
+      'issue_title': 'The Show',
+      'issue_media_type': 'tv',
+      'instance_id': 'sonarr-living-room',
+      'instance_name': 'Living Room TV',
+      'instance_service_type': 'sonarr',
+    });
+    await _pump(tester,
+        auth: _adminState, service: _FakeIssuesService(), action: action);
+    expect(
+        find.text('Remove and blocklist this release without searching for a replacement'),
+        findsOneWidget);
+    expect(find.textContaining('already have a copy'), findsNothing);
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('without searching for a replacement.'),
+        findsOneWidget);
+    expect(find.textContaining('copy already in your library'), findsNothing);
+  });
+
   testWidgets('renders kind, params, and rationale as passive data',
       (tester) async {
     await _pump(

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/featured_media_hero.dart';
 import '../../../core/widgets/horizontal_item_row.dart';
@@ -49,6 +50,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       ref.read(tvDiscoverProvider.notifier).bootstrap();
       _loadLibraryPreview();
     });
@@ -136,6 +138,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
   }
 
   Future<void> _onRefresh() async {
+    ref.read(libraryRefreshTickProvider.notifier).state++;
     await Future.wait([
       ref.read(tvDiscoverProvider.notifier).bootstrap(),
       _loadLibraryPreview(),
@@ -189,6 +192,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
             items: discover.featured.skip(1).toList(growable: false),
             isLoading: discover.isLoadingFeatured,
             isTvRow: true,
+            resolveTVStatus: true,
             libraryStatus: libraryStatus,
             onSeeAll: discover.featuredSource.isEmpty
                 ? null
@@ -202,6 +206,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
               items: discover.onTheAir,
               isLoading: discover.isLoadingOnTheAir,
               isTvRow: true,
+              resolveTVStatus: true,
               libraryStatus: libraryStatus,
               onLoadMore: (_) => discoverNotifier.loadMoreOnTheAir(),
               onSeeAll: () => _seeAll(BrowseFeed.onTheAir, 'Airing This Week'),
@@ -212,6 +217,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
               items: discover.topRated,
               isLoading: discover.isLoadingTopRated,
               isTvRow: true,
+              resolveTVStatus: true,
               libraryStatus: libraryStatus,
               onLoadMore: (_) => discoverNotifier.loadMoreTopRated(),
               onSeeAll: () => _seeAll(BrowseFeed.topRated, 'Top Rated'),
@@ -222,6 +228,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
               items: discover.upcoming,
               isLoading: discover.isLoadingUpcoming,
               isTvRow: true,
+              resolveTVStatus: true,
               libraryStatus: libraryStatus,
               onLoadMore: (_) => discoverNotifier.loadMoreUpcoming(),
               onSeeAll: () => _seeAll(BrowseFeed.upcoming, 'Coming Soon'),
@@ -232,6 +239,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
               items: discover.anticipated,
               isLoading: discover.isLoadingAnticipated,
               isTvRow: true,
+              resolveTVStatus: true,
               libraryStatus: libraryStatus,
               onLoadMore: (_) => discoverNotifier.loadMoreAnticipated(),
               onSeeAll: () =>
@@ -292,7 +300,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
           HorizontalItemRow<SonarrSeries>(
             items: items,
             isLoading: _isLoadingLibrary,
-            height: cardWidth * 1.5 + MediaCard.subtitleRowExtraHeight,
+            height: cardWidth * 1.5 + MediaCard.rowExtraHeight(context, withSubtitle: true),
             itemBuilder: (series) => MediaCard(
               id: series.id,
               title: series.title,

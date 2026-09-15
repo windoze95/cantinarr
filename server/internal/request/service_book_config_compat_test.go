@@ -256,7 +256,7 @@ func TestApproveNewAudiobookUsesChaptarr0720PerFormatConfiguration(t *testing.T)
 	requireApproval(t, svc)
 	adminID := createTestAdmin(t, svc)
 
-	created, err := svc.CreateMediaRequest(requesterID, &CreateRequest{
+	created, err := svc.createAndDispatchForTest(requesterID, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "hc:work-1001",
 		Title:      "The Clockwork Orchard",
@@ -273,7 +273,7 @@ func TestApproveNewAudiobookUsesChaptarr0720PerFormatConfiguration(t *testing.T)
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("ListPending = %+v err=%v, want one request", pending, err)
 	}
-	approved, err := svc.ApproveRequest(adminID, pending[0].ID, nil)
+	approved, err := svc.approveAndDispatchForTest(adminID, pending[0].ID, nil)
 	if err != nil {
 		t.Fatalf("ApproveRequest: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestApproveAudiobookBesideExistingEbookUsesPerFormatAuthorConfiguration(t *
 	requireApproval(t, svc)
 	adminID := createTestAdmin(t, svc)
 
-	if _, err := svc.CreateMediaRequest(requesterID, &CreateRequest{
+	if _, err := svc.createAndDispatchForTest(requesterID, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "hc:work-1001",
 		Title:      "The Clockwork Orchard",
@@ -383,7 +383,7 @@ func TestApproveAudiobookBesideExistingEbookUsesPerFormatAuthorConfiguration(t *
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("ListPending = %+v err=%v, want one audiobook request", pending, err)
 	}
-	approved, err := svc.ApproveRequest(adminID, pending[0].ID, nil)
+	approved, err := svc.approveAndDispatchForTest(adminID, pending[0].ID, nil)
 	if err != nil {
 		t.Fatalf("ApproveRequest: %v", err)
 	}

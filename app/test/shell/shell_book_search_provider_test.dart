@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
@@ -11,6 +12,52 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('new queries cancel both old lookups and discard late results', (t) async {
+    final adapter = _HeldLookupAdapter();
+    final container = await _makeContainer(adapter: adapter);
+    addTearDown(container.dispose);
+    final search = container.read(shellBookSearchProvider.notifier);
+    search.updateSearch('old');
+    await t.pump(const Duration(milliseconds: 450));
+    expect(adapter.pending.keys, containsAll(['old/book', 'old/author']));
+    search.updateSearch('new');
+    await t.pump(const Duration(milliseconds: 450));
+    expect(adapter.cancelled, containsAll(['old/book', 'old/author']));
+    adapter.complete('old/book', _twoBooks);
+    adapter.complete('new/book', [_twoBooks.last]);
+    await t.pump(const Duration(milliseconds: 100));
+    final state = container.read(shellBookSearchProvider);
+    expect(state.results.single.foreignBookId, 'book-2');
+    expect(state.authorsLoading, isTrue);
+    search.reset();
+    await t.pump();
+  });
+
+  testWidgets('ten-second deadline cancels sockets without discarding returned books', (t) async {
+    final adapter = _HeldLookupAdapter();
+    final container = await _makeContainer(adapter: adapter);
+    addTearDown(container.dispose);
+    final search = container.read(shellBookSearchProvider.notifier);
+    search.updateSearch('title');
+    await t.pump(const Duration(milliseconds: 450));
+    adapter.complete('title/book', _twoBooks);
+    await t.pump(const Duration(milliseconds: 100));
+    expect(container.read(shellBookSearchProvider).results, hasLength(2));
+    await t.pump(const Duration(seconds: 10));
+    expect(adapter.cancelled, contains('title/author'));
+    final state = container.read(shellBookSearchProvider);
+    expect(state.authorsLoading, isFalse);
+    expect(state.authorsUnavailable, isTrue);
+    expect(state.results, hasLength(2));
+    expect(state.error, isNull);
+    search.updateSearch('stalled');
+    await t.pump(const Duration(milliseconds: 450));
+    await t.pump(const Duration(seconds: 10));
+    expect(container.read(shellBookSearchProvider).isLoadingSearch, isFalse);
+    expect(container.read(shellBookSearchProvider).error, BookSearchError.requestFailed);
+    search.reset();
+    await t.pump();
+  });
   test('no active Chaptarr instance short-circuits before any request',
       () async {
     final adapter = _LookupAdapter();
@@ -334,4 +381,21 @@ class _LookupAdapter implements HttpClientAdapter {
 
   @override
   void close({bool force = false}) {}
+}
+
+class _HeldLookupAdapter extends _LookupAdapter {
+  final pending = <String, Completer<ResponseBody>>{};
+  final cancelled = <String>{};
+  @override
+  Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? stream, Future<void>? cancelFuture) {
+    final kind = options.path.contains('/author/') ? 'author' : 'book';
+    final key = '${options.queryParameters['term']}/$kind';
+    final response = Completer<ResponseBody>();
+    pending[key] = response;
+    cancelFuture?.then((_) => cancelled.add(key));
+    return response.future;
+  }
+  void complete(String key, Object body) => pending[key]!.complete(
+      ResponseBody.fromString(jsonEncode(body), 200,
+          headers: {'content-type': ['application/json']}));
 }

@@ -263,3 +263,34 @@ func TestGetUserDecodesTheAccountAndSignOutRemovesTheDevice(t *testing.T) {
 		t.Fatal("a refused sign-out was reported as done")
 	}
 }
+
+func TestSignOutFallsBackWhenDeviceListingOrDeletionFails(t *testing.T) {
+	for _, failure := range []string{"listing", "deletion"} {
+		t.Run(failure, func(t *testing.T) {
+			var revoked atomic.Int32
+			client := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method + " " + r.URL.Path {
+				case "GET /devices.xml":
+					if failure == "listing" {
+						w.WriteHeader(503)
+						return
+					}
+					w.Header().Set("Content-Type", "application/xml")
+					w.Write([]byte(`<MediaContainer><Device id="91" clientIdentifier="client-id"/></MediaContainer>`))
+				case "DELETE /devices/91.xml":
+					w.WriteHeader(503)
+				case "DELETE /api/v2/users/signout":
+					revoked.Add(1)
+					w.WriteHeader(204)
+				default:
+					t.Error("unexpected cleanup request", r.URL.Path)
+					w.WriteHeader(404)
+				}
+			}))
+			removed, err := client.SignOut(context.Background(), "client-id", "temporary-token")
+			if err != nil || removed || revoked.Load() != 1 {
+				t.Fatalf("fallback removed=%v revoked=%d err=%v", removed, revoked.Load(), err)
+			}
+		})
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	arrcommon "github.com/windoze95/cantinarr-server/internal/arr"
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 	"github.com/windoze95/cantinarr-server/internal/transporterr"
 )
 
@@ -33,10 +34,35 @@ func NewClient(baseURL, apiKey string) *Client {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		httpClient: &http.Client{
+			Transport:     httpx.Internal(),
 			Timeout:       30 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
+}
+
+// WithMutationGuard returns a private client that checks every write, including
+// monitoring, searches and AddMovie, immediately before it leaves the server.
+func (c *Client) WithMutationGuard(check func() error) *Client {
+	clone := *c
+	client := *c.httpClient
+	client.Transport = mutationGuard{base: client.Transport, check: check}
+	clone.httpClient = &client
+	return &clone
+}
+
+type mutationGuard struct {
+	base  http.RoundTripper
+	check func() error
+}
+
+func (g mutationGuard) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		if err := g.check(); err != nil {
+			return nil, err
+		}
+	}
+	return g.base.RoundTrip(r)
 }
 
 type Movie struct {
@@ -259,15 +285,20 @@ func (c *Client) GetMovieByTMDB(tmdbID int) (*Movie, error) {
 		return nil, fmt.Errorf("radarr get movie: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("radarr GET /api/v3/movie returned status %d", resp.StatusCode)
+	}
 
 	var movies []Movie
 	if err := json.NewDecoder(resp.Body).Decode(&movies); err != nil {
 		return nil, fmt.Errorf("decode radarr movie: %w", err)
 	}
-	if len(movies) == 0 {
-		return nil, nil
+	for _, movie := range movies {
+		if movie.TmdbID == tmdbID {
+			return &movie, nil
+		}
 	}
-	return &movies[0], nil
+	return nil, nil
 }
 
 func (c *Client) GetQualityProfiles() ([]QualityProfile, error) {
@@ -786,6 +817,7 @@ type Release struct {
 // queries can take well over the normal timeout, so a longer one is used.
 func (c *Client) SearchReleases(movieID int) ([]Release, error) {
 	searchClient := &http.Client{
+		Transport:     httpx.Internal(),
 		Timeout:       120 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}
@@ -850,6 +882,7 @@ func (c *Client) TriggerRssSync() error {
 // libraries big enough to matter.
 func libraryFetchClient() *http.Client {
 	return &http.Client{
+		Transport:     httpx.Internal(),
 		Timeout:       120 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}

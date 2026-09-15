@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../discover/data/music_discovery_service.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../config_changes/ui/config_change_receipt_card.dart';
+import '../../discover/data/music_models.dart';
 import '../data/ai_models.dart';
 
 /// A single chat message bubble with optional media result cards.
@@ -355,23 +358,43 @@ class _MediaResultCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final mediaType = item.mediaType ?? 'movie';
     final isBook = mediaType == 'book';
+    final isMusic = mediaType == 'music';
+    final isCatalog = isBook || isMusic;
     // Books carry an absolute external cover URL; movies/TV carry a TMDB
     // poster path. Never build a TMDB URL for a book (its foreign id is not a
     // TMDB id) and never dereference anything but the server-vetted URLs.
     final directPoster = item.posterUrl?.trim() ?? '';
     final imageUrl = directPoster.isNotEmpty
         ? directPoster
-        : (isBook ? null : AppConfig.tmdbPoster(item.posterPath, width: 342));
+        : (isCatalog
+            ? null
+            : AppConfig.tmdbPoster(item.posterPath, width: 342));
     final foreignId = item.foreignId?.trim() ?? '';
-    final String? route = isBook
+    final String? route = isCatalog
         ? (foreignId.isEmpty
             ? null
-            : '/detail/book/${Uri.encodeComponent(foreignId)}'
-                '?title=${Uri.encodeComponent(item.title)}')
+            : Uri.parse(
+                    '/detail/${isBook ? 'book' : 'album'}/${Uri.encodeComponent(foreignId)}')
+                .replace(queryParameters: {
+                'title': item.title,
+                if (item.instanceId != null) 'instance_id': item.instanceId!,
+                if (item.catalogProvider != null)
+                  'source': item.catalogProvider!
+                else if (isBook)
+                  'source': 'chaptarr',
+              }).toString())
         : '/detail/$mediaType/${item.id}';
 
     return GestureDetector(
-      onTap: route == null ? null : () => context.push(route),
+      onTap: route == null
+          ? null
+          : () => context.push(route,
+              extra: isMusic && item.catalogProvider == 'musicbrainz'
+                  ? MusicAlbum(
+                      foreignId: foreignId,
+                      title: item.title,
+                      artist: item.overview ?? '')
+                  : null),
       child: SizedBox(
         width: 120,
         child: Column(
@@ -385,12 +408,35 @@ class _MediaResultCard extends StatelessWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    CachedImage(
-                      url: !isBook && item.posterPath == null ? null : imageUrl,
-                      fit: BoxFit.cover,
-                      icon: isBook ? Icons.menu_book : Icons.movie_outlined,
-                      iconSize: 28,
-                    ),
+                    if (isMusic &&
+                        directPoster.startsWith('/api/discover/music/artwork/'))
+                      Consumer(builder: (context, ref, child) {
+                        final source = musicArtworkSource(
+                            ref,
+                            MusicAlbum(
+                                foreignId: foreignId,
+                                title: item.title,
+                                artist: '',
+                                artwork: directPoster),
+                            item.instanceId);
+                        return CachedImage(
+                            url: source?.url,
+                            headers: source?.headers,
+                            fit: BoxFit.cover,
+                            icon: Icons.album,
+                            iconSize: 28);
+                      })
+                    else
+                      CachedImage(
+                        url: imageUrl,
+                        fit: BoxFit.cover,
+                        icon: isBook
+                            ? Icons.menu_book
+                            : isMusic
+                                ? Icons.album
+                                : Icons.movie_outlined,
+                        iconSize: 28,
+                      ),
                     // Rating badge
                     if (item.voteAverage != null && item.voteAverage! > 0)
                       Positioned(

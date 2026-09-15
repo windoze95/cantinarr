@@ -1,0 +1,40 @@
+name: Test a PR on my phone
+run-name: Phone preview PR ${{ inputs.pr_number }} at ${{ inputs.reviewed_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Open PR to test (dispatch from main)'
+        required: true
+        type: string
+      reviewed_sha:
+        description: 'Full PR head SHA you reviewed; changes require a new dispatch'
+        required: true
+        type: string
+      platform:
+        type: choice
+        description: 'Phone platforms'
+        options: [both, ios, android]
+        default: both
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  ios:
+    if: inputs.platform == 'both' || inputs.platform == 'ios'
+    uses: ./.github/workflows/testflight.yml
+    with:
+      preview_pr: ${{ inputs.pr_number }}
+      reviewed_sha: ${{ inputs.reviewed_sha }}
+    secrets: inherit
+  android:
+    if: inputs.platform == 'both' || inputs.platform == 'android'
+    uses: ./.github/workflows/playstore.yml
+    with:
+      preview_pr: ${{ inputs.pr_number }}
+      reviewed_sha: ${{ inputs.reviewed_sha }}
+    secrets: inherit

@@ -16,6 +16,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 )
 
 // ErrAlreadyShared reports that the invited account already has access to the
@@ -46,6 +48,7 @@ const BaseURL = "https://plex.tv"
 func NewClientAt(baseURL string) *Client {
 	return &Client{
 		http: &http.Client{
+			Transport:     httpx.External(),
 			Timeout:       15 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
@@ -57,9 +60,11 @@ func NewClientAt(baseURL string) *Client {
 // Pin is a plex.tv link PIN. AuthToken stays empty until the admin approves
 // the link in their browser.
 type Pin struct {
-	ID        int64  `json:"id"`
-	Code      string `json:"code"`
-	AuthToken string `json:"authToken"`
+	ID        int64     `json:"id"`
+	Code      string    `json:"code"`
+	AuthToken string    `json:"authToken"`
+	ExpiresIn int64     `json:"expiresIn"`
+	ExpiresAt time.Time `json:"expiresAt"`
 }
 
 // Account identifies a plex.tv account: the one an instance links (the
@@ -108,6 +113,23 @@ func (c *Client) CheckPin(ctx context.Context, clientID string, id int64) (*Pin,
 	return &pin, nil
 }
 
+// CheckPinCode uses the strong PIN secret as documented by Plex.
+func (c *Client) CheckPinCode(ctx context.Context, clientID string, id int64, code string) (*Pin, error) {
+	var pin Pin
+	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/api/v2/pins/%d?code=%s", id, url.QueryEscape(code)), clientID, "", nil, &pin); err != nil {
+		return nil, err
+	}
+	return &pin, nil
+}
+func IsUnauthorized(err error) bool {
+	var e *apiError
+	return errors.As(err, &e) && e.status == http.StatusUnauthorized
+}
+func IsNotFound(err error) bool {
+	var e *apiError
+	return errors.As(err, &e) && e.status == http.StatusNotFound
+}
+
 // AuthURL is the page the admin opens to approve the PIN. Always the real
 // plex.tv app, never baseURL: it is user-facing, not an API call.
 func (c *Client) AuthURL(clientID, code string) string {
@@ -145,11 +167,11 @@ func (c *Client) SignOut(ctx context.Context, clientID, token string) (removedDe
 	for {
 		id, found, err := c.findDevice(ctx, clientID, token)
 		if err != nil {
-			return false, fmt.Errorf("sign out: list devices: %w", err)
+			return false, c.revokeToken(ctx, clientID, token)
 		}
 		if found {
 			if err := c.doXML(ctx, http.MethodDelete, fmt.Sprintf("/devices/%d.xml", id), clientID, token, nil); err != nil {
-				return false, fmt.Errorf("sign out: remove device: %w", err)
+				return false, c.revokeToken(ctx, clientID, token)
 			}
 			return true, nil
 		}
@@ -162,10 +184,13 @@ func (c *Client) SignOut(ctx context.Context, clientID, token string) (removedDe
 		case <-time.After(signOutDevicePoll):
 		}
 	}
+	return false, c.revokeToken(ctx, clientID, token)
+}
+func (c *Client) revokeToken(ctx context.Context, clientID, token string) error {
 	if err := c.doJSON(ctx, http.MethodDelete, "/api/v2/users/signout", clientID, token, nil, nil); err != nil {
-		return false, fmt.Errorf("sign out: %w", err)
+		return fmt.Errorf("sign out: %w", err)
 	}
-	return false, nil
+	return nil
 }
 
 // signOutDeviceWait bounds how long SignOut waits for plex.tv to list the
@@ -314,7 +339,7 @@ func (c *Client) doJSON(ctx context.Context, method, path, clientID, token strin
 	}
 
 	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(out); err != nil {
 			return fmt.Errorf("decode response: %w", err)
 		}
 	}

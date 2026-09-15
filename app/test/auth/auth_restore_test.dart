@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
@@ -76,8 +77,166 @@ void main() {
     return container;
   }
 
+  test(
+      'hidden tabs survive restore, live refresh, persistence, and an older server',
+      () async {
+    final storage = snapshotStorage();
+    final snapshot = jsonDecode(storage[StorageKeys.sessionConnection]!)
+        as Map<String, dynamic>;
+    snapshot['hidden_discover_tabs'] = ['movie'];
+    storage[StorageKeys.sessionConnection] = jsonEncode(snapshot);
+    final fake = _FakeAuthService(
+        refreshResult: freshResp,
+        config: const ServerConfig(
+            serverName: 'Home',
+            services: AvailableServices(),
+            hiddenDiscoverTabs: ['book', 'music']));
+    final container = makeContainer(storage, fake);
+    final optimistic = await container.read(authProvider.future);
+    expect(optimistic.connection!.hiddenDiscoverTabs, ['movie']);
+    expect(optimistic.connection!.configConfirmed, isFalse);
+    await _pumpUntil(
+        () => !container.read(authProvider).valueOrNull!.isReconnecting);
+    final conn = container.read(authProvider).requireValue.connection!;
+    expect(conn.hiddenDiscoverTabs, ['book', 'music']);
+    expect(conn.configConfirmed, isTrue);
+    expect(
+        jsonDecode(
+            storage[StorageKeys.sessionConnection]!)['hidden_discover_tabs'],
+        ['book', 'music']);
+    fake.config = config; // An older server omits the new field.
+    await container.read(authProvider.notifier).refreshConfig();
+    expect(
+        container
+            .read(authProvider)
+            .requireValue
+            .connection!
+            .hiddenDiscoverTabs,
+        isNull);
+    expect(
+        jsonDecode(storage[StorageKeys.sessionConnection]!)
+            .containsKey('hidden_discover_tabs'),
+        isFalse);
+  });
+
+  test(
+      'configuration refreshes defer during setup, including an in-flight read',
+      () async {
+    final fake = _FakeAuthService(refreshResult: freshResp, config: config);
+    final container = makeContainer(tokensOnlyStorage(), fake);
+    await container.read(authProvider.future);
+    final auth = container.read(authProvider.notifier);
+    final before = fake.configReads;
+    auth.deferConfigRefresh();
+    await auth.refreshConfig();
+    await auth.refreshConfig();
+    expect(fake.configReads, before);
+    fake.config = const ServerConfig(
+        serverName: 'Home',
+        services: AvailableServices(),
+        hiddenDiscoverTabs: ['movie']);
+    await auth.resumeConfigRefresh();
+    expect(fake.configReads, before + 1);
+    expect(
+        container
+            .read(authProvider)
+            .requireValue
+            .connection!
+            .hiddenDiscoverTabs,
+        ['movie']);
+
+    final pending = Completer<ServerConfig>();
+    fake.configFuture = pending.future;
+    final refresh = auth.refreshConfig();
+    auth.deferConfigRefresh();
+    pending.complete(const ServerConfig(
+        serverName: 'Home',
+        services: AvailableServices(),
+        hiddenDiscoverTabs: ['tv']));
+    await refresh;
+    expect(
+        container
+            .read(authProvider)
+            .requireValue
+            .connection!
+            .hiddenDiscoverTabs,
+        ['movie'],
+        reason:
+            'a response arriving while setup is open must not change routes');
+    fake.configFuture = null;
+    fake.config = const ServerConfig(
+        serverName: 'Home',
+        services: AvailableServices(),
+        hiddenDiscoverTabs: []);
+    await auth.resumeConfigRefresh();
+    expect(
+        container
+            .read(authProvider)
+            .requireValue
+            .connection!
+            .hiddenDiscoverTabs,
+        isEmpty);
+  });
+
+  test('config refresh preserves tokens renewed while the request is in flight',
+      () async {
+    final fake = _FakeAuthService(refreshResult: freshResp, config: config);
+    final container = makeContainer(tokensOnlyStorage(), fake);
+    await container.read(authProvider.future);
+    final pending = Completer<ServerConfig>();
+    fake.configFuture = pending.future;
+    final auth = container.read(authProvider.notifier);
+    final refresh = auth.refreshConfig();
+    await auth.updateTokens('newer-access', 'newer-refresh');
+    pending.complete(config);
+    await refresh;
+    expect(container.read(authProvider).requireValue.connection!.accessToken,
+        'newer-access');
+    expect(container.read(authProvider).requireValue.connection!.refreshToken,
+        'newer-refresh');
+  });
+
   group('with a cached snapshot (optimistic restore)', () {
-    test('opens authenticated + reconnecting, then upgrades to fresh on '
+    test('admin catalog capability survives restore and follows config refresh',
+        () async {
+      final storage = snapshotStorage();
+      final snapshot = jsonDecode(storage[StorageKeys.sessionConnection]!)
+          as Map<String, dynamic>;
+      snapshot['admin_catalog_browsing'] = true;
+      storage[StorageKeys.sessionConnection] = jsonEncode(snapshot);
+      final fake = _FakeAuthService(refreshResult: freshResp, config: config);
+      final container = makeContainer(storage, fake);
+      final optimistic = await container.read(authProvider.future);
+      expect(optimistic.connection!.adminCatalogBrowsing, isTrue);
+      await _pumpUntil(
+          () => !container.read(authProvider).valueOrNull!.isReconnecting);
+      expect(
+          container
+              .read(authProvider)
+              .valueOrNull!
+              .connection!
+              .adminCatalogBrowsing,
+          isFalse,
+          reason: 'an older server must clear the cached capability');
+      fake.config = const ServerConfig(
+          serverName: 'Home',
+          services: AvailableServices(),
+          adminCatalogBrowsing: true);
+      await container.read(authProvider.notifier).refreshConfig();
+      expect(
+          container
+              .read(authProvider)
+              .valueOrNull!
+              .connection!
+              .adminCatalogBrowsing,
+          isTrue);
+      final saved = jsonDecode(storage[StorageKeys.sessionConnection]!)
+          as Map<String, dynamic>;
+      expect(saved['admin_catalog_browsing'], isTrue);
+      expect((saved['services'] as Map)['chaptarr'], isFalse);
+    });
+    test(
+        'opens authenticated + reconnecting, then upgrades to fresh on '
         'successful validation', () async {
       final storage = snapshotStorage();
       final container = makeContainer(
@@ -105,7 +264,8 @@ void main() {
       expect(storage[StorageKeys.refreshToken], 'new-refresh');
     });
 
-    test('keeps the session (reconnecting) and retains tokens on a transport '
+    test(
+        'keeps the session (reconnecting) and retains tokens on a transport '
         'failure', () async {
       final storage = snapshotStorage();
       final fake = _FakeAuthService(refreshError: connectionError);
@@ -117,7 +277,8 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 30));
 
       final s = container.read(authProvider).valueOrNull!;
-      expect(s.isAuthenticated, isTrue, reason: 'must not log out while offline');
+      expect(s.isAuthenticated, isTrue,
+          reason: 'must not log out while offline');
       expect(s.isReconnecting, isTrue);
       expect(storage[StorageKeys.refreshToken], 'old-refresh',
           reason: 'tokens must survive a transport failure');
@@ -136,7 +297,8 @@ void main() {
         return s != null && !s.isAuthenticated;
       });
 
-      expect(container.read(authProvider).valueOrNull!.isAuthenticated, isFalse);
+      expect(
+          container.read(authProvider).valueOrNull!.isAuthenticated, isFalse);
       expect(storage[StorageKeys.refreshToken], isNull);
       expect(storage[StorageKeys.jwt], isNull);
       expect(storage[StorageKeys.sessionUser], isNull,
@@ -157,14 +319,15 @@ void main() {
       expect(state.isReconnecting, isFalse);
       expect(storage[StorageKeys.jwt], 'new-access');
       expect(storage[StorageKeys.sessionUser], isNotNull,
-          reason: 'a snapshot should be written so the next launch is seamless');
+          reason:
+              'a snapshot should be written so the next launch is seamless');
     });
 
     test('stays unauthenticated but RETAINS tokens on a transport failure',
         () async {
       final storage = tokensOnlyStorage();
-      final container =
-          makeContainer(storage, _FakeAuthService(refreshError: connectionError));
+      final container = makeContainer(
+          storage, _FakeAuthService(refreshError: connectionError));
 
       final state = await container.read(authProvider.future);
       expect(state.isAuthenticated, isFalse);
@@ -182,7 +345,8 @@ void main() {
       expect(storage[StorageKeys.refreshToken], isNull);
     });
 
-    test('enters the app degraded (not login) when config fails after a '
+    test(
+        'enters the app degraded (not login) when config fails after a '
         'successful refresh', () async {
       final storage = tokensOnlyStorage();
       final container = makeContainer(
@@ -225,8 +389,8 @@ void main() {
       );
 
       await container.read(authProvider.future);
-      await _pumpUntil(() =>
-          storage[StorageKeys.jwt] == 'new-access'); // refresh persisted
+      await _pumpUntil(
+          () => storage[StorageKeys.jwt] == 'new-access'); // refresh persisted
       await Future<void>.delayed(const Duration(milliseconds: 30));
 
       final s = container.read(authProvider).valueOrNull!;
@@ -240,7 +404,8 @@ void main() {
   });
 
   group('unreadable secure storage (locked keychain at launch)', () {
-    test('never treats a blocked read as logged out, and restores once '
+    test(
+        'never treats a blocked read as logged out, and restores once '
         'storage is readable again', () async {
       final storage = snapshotStorage();
       // First read throws (prewarmed launch while locked); later reads work.
@@ -357,12 +522,15 @@ class _FakeAuthService extends AuthService {
 
   final AuthResponse? refreshResult;
   final Object? refreshError;
-  final ServerConfig? config;
+  ServerConfig? config;
   final Object? configError;
   int refreshCalls = 0;
+  int configReads = 0;
+  Future<ServerConfig>? configFuture;
 
   @override
-  Future<AuthResponse> refreshToken(String serverUrl, String refreshToken) async {
+  Future<AuthResponse> refreshToken(
+      String serverUrl, String refreshToken) async {
     refreshCalls++;
     final error = refreshError;
     if (error != null) throw error;
@@ -371,6 +539,8 @@ class _FakeAuthService extends AuthService {
 
   @override
   Future<ServerConfig> fetchConfig(String serverUrl, String accessToken) async {
+    configReads++;
+    if (configFuture != null) return configFuture!;
     final error = configError;
     if (error != null) throw error;
     return config ??

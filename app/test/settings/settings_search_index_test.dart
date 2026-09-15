@@ -12,6 +12,8 @@ const _adminGates = SettingsSearchGates(
   donateVisible: true,
   phoneAppsVisible: true,
   mediaServersVisible: true,
+  audiobookshelfVisible: true,
+  videoServersVisible: true,
 );
 const _userGates = SettingsSearchGates(user: _user);
 
@@ -21,6 +23,10 @@ const _userGates = SettingsSearchGates(user: _user);
 const _routableSettingsPaths = {
   '/settings',
   '/settings/ai',
+  '/settings/listening-apps',
+  '/settings/request-allowance',
+  '/settings/video-apps',
+  '/settings/apple-tvs',
   '/settings/chatgpt',
   '/settings/credentials/chatgpt',
   '/settings/credentials',
@@ -31,12 +37,17 @@ const _routableSettingsPaths = {
   '/settings/ai-remediation',
   '/settings/agent-approval-rules',
   '/settings/request-settings',
+  '/settings/discord-notifications',
   '/settings/discovery',
   '/settings/devices',
   '/settings/plex',
-  '/settings/notifications',
+  '/settings/push-notifications',
+  '/settings/push-notifications/server',
   '/settings/passkeys',
   '/settings/password',
+  '/settings/oidc',
+  '/settings/plex-auth',
+  '/settings/sso-account',
   '/settings/instance/new',
   '/setup',
   '/issues',
@@ -47,6 +58,21 @@ const _routableSettingsPaths = {
 };
 
 void main() {
+  test('Apple TVs require an admin and server capability', () {
+    final entry = settingsSearchIndex.singleWhere((e) => e.id == 'screen.apple-tvs');
+    expect(entry.gate(const SettingsSearchGates(user: _admin, appleTvRemote: true)), isTrue);
+    expect(entry.gate(const SettingsSearchGates(user: _admin)), isFalse);
+    expect(entry.gate(const SettingsSearchGates(user: _user, appleTvRemote: true)), isFalse);
+  });
+
+  test('video app search follows the configured video-server gate', () {
+    final entry = settingsSearchIndex.singleWhere((e) => e.id == 'screen.video-apps');
+    expect(entry.route, '/settings/video-apps');
+    expect(entry.keywords, containsAll(['infuse', 'plex', 'jellyfin', 'emby']));
+    expect(entry.gate(const SettingsSearchGates(user: null)), isFalse);
+    expect(entry.gate(const SettingsSearchGates(user: null, videoServersVisible: true)), isTrue);
+  });
+
   group('registry invariants', () {
     test('ids are unique', () {
       final seen = <String>{};
@@ -83,6 +109,24 @@ void main() {
   });
 
   group('matching', () {
+    test('listening apps is searchable for either role with Audiobookshelf', () {
+      for (final user in [_admin, _user]) {
+        for (final query in ['ShelfPlayer', 'TheShelf', 'listening apps']) {
+          expect(
+            searchSettingsIndex(query, SettingsSearchGates(
+              user: user, audiobookshelfVisible: true,
+            )).map((e) => e.route),
+            contains('/settings/listening-apps'),
+          );
+          expect(
+            searchSettingsIndex(query, SettingsSearchGates(user: user))
+                .map((e) => e.route),
+            isNot(contains('/settings/listening-apps')),
+          );
+        }
+      }
+    });
+
     test('tracearr and monitoring find Add Instance for admins only', () {
       for (final query in ['tracearr', 'monitoring']) {
         expect(

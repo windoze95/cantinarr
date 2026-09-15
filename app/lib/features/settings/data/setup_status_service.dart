@@ -11,13 +11,12 @@ class SetupItem {
   final String title;
   final String description;
   final bool configured;
+
+  /// The server permits skipping this item. Kept for compatibility with older
+  /// servers that refuse skips for some keys.
   final bool optional;
 
-  /// An optional item the admin acknowledged and dismissed. The server stamps
-  /// it only on optional items, it is stored server-wide (the checklist
-  /// grades the server, not a device), and it is reversible in place — so a
-  /// feature the deployment deliberately doesn't use stops counting as
-  /// unfinished without a persistent nag.
+  /// A server-wide, reversible skip. Configuring the feature takes precedence.
   final bool skipped;
 
   const SetupItem({
@@ -66,41 +65,14 @@ class SetupStatus {
 
   int get remaining => effectiveTotal - configured;
 
-  /// The checklist keys that give a request somewhere to go. Chaptarr and
-  /// Lidarr are among them on purpose: a books-only or music-only server is a
-  /// real deployment, and calling it broken because it has no Radarr would be
-  /// wrong.
-  static const _libraryKeys = {'radarr', 'sonarr', 'books', 'music'};
+  bool get isComplete => remaining == 0;
 
-  bool _isConfigured(String key) =>
-      items.any((i) => i.key == key && i.configured);
+  String get summary => isComplete
+      ? 'Nothing left to set up'
+      : '$configured of $effectiveTotal features configured';
 
-  bool get _hasAnyLibrary =>
-      items.any((i) => _libraryKeys.contains(i.key) && i.configured);
-
-  /// Whether the server is missing something it cannot work without: metadata,
-  /// or any library at all. Deliberately not "an essential row is empty" — a
-  /// movies-only server never connects Sonarr and is perfectly functional, so
-  /// this asks what the server can actually do rather than which rows are
-  /// ticked. An empty list (a failed load) is never called broken.
-  bool get missingCoreCapability =>
-      items.isNotEmpty && (!_isConfigured('tmdb') || !_hasAnyLibrary);
-
-  /// Whether this row is what stands between the server and working at all,
-  /// which is what earns a row the alarm treatment instead of the ordinary
-  /// "you haven't got to this yet" one.
-  ///
-  /// Radarr and Sonarr are each individually essential, so an empty one is
-  /// only urgent while there is no library at all — otherwise a movies-only
-  /// server would wear a permanent alarm on Sonarr while the Settings tile
-  /// called the same server merely unfinished, and the two surfaces would
-  /// contradict each other. Any other unconfigured essential is urgent on its
-  /// own; optional rows never are, however much we'd like them tried.
-  bool isUrgent(SetupItem item) {
-    if (item.optional || item.configured) return false;
-    if (_libraryKeys.contains(item.key)) return !_hasAnyLibrary;
-    return true;
-  }
+  double get progress =>
+      effectiveTotal == 0 ? 1.0 : configured / effectiveTotal;
 
   factory SetupStatus.fromJson(Map<String, dynamic> json) {
     final items = (json['items'] as List? ?? [])
@@ -124,9 +96,8 @@ class SetupStatusService {
     return SetupStatus.fromJson(resp.data as Map<String, dynamic>);
   }
 
-  /// Records or clears one checklist skip. The server refuses essentials and
-  /// unknown keys; callers refresh the status afterwards so every surface
-  /// re-derives from the same answer.
+  /// Records or clears one checklist skip. Callers refresh afterwards so
+  /// every surface derives progress from the same response.
   Future<void> setSkipped(String key, bool skipped) async {
     await _dio.put('/api/admin/setup-status/skips',
         data: {'key': key, 'skipped': skipped});

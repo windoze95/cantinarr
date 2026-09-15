@@ -1,6 +1,20 @@
+import '../features/request/ui/request_allowance_screen.dart';
+import '../features/apple_tv/ui/apple_tvs_screen.dart';
+import '../core/providers/instance_provider.dart';
+import '../features/discover/logic/discovery_access.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
+import '../features/discover/data/book_discovery_service.dart';
+import '../features/discover/logic/book_discovery_provider.dart';
+import '../features/discover/ui/book_browse_screen.dart';
+import '../features/auth/ui/oidc_return_screen.dart';
+import '../features/auth/ui/plex_continue_screen.dart';
+import '../features/auth/data/plex_auth_service.dart';
+import '../features/settings/ui/plex_auth_settings_screen.dart';
+import '../features/settings/ui/oidc_settings_screen.dart';
+import '../features/settings/ui/oidc_account_screen.dart';
 import '../features/ai_assistant/ui/ai_chat_screen.dart';
 import '../features/ai_assistant/ui/ai_access_screen.dart';
 import '../features/ai_assistant/ui/codex_connection_screen.dart';
@@ -40,6 +54,9 @@ import '../features/dashboard/ui/requester_author_detail_screen.dart';
 import '../features/dashboard/ui/requester_book_detail_screen.dart';
 import '../features/dashboard/ui/requester_series_detail_screen.dart';
 import '../features/discover/data/tmdb_models.dart';
+import '../features/discover/data/music_models.dart';
+import '../features/discover/logic/music_browse_query.dart';
+import '../features/discover/ui/music_browse_screen.dart';
 import '../features/discover/logic/browse_query.dart';
 import '../features/discover/ui/browse_grid_screen.dart';
 import '../features/downloads/ui/downloads_history_screen.dart';
@@ -53,7 +70,8 @@ import '../features/issues/ui/issues_list_screen.dart';
 import '../features/issues/ui/pending_agent_actions_screen.dart';
 import '../features/media_access/ui/media_access_guide.dart';
 import '../features/media_detail/ui/media_detail_screen.dart';
-import '../features/notifications/ui/notification_preferences_screen.dart';
+import '../features/notifications/ui/push_notifications_screen.dart';
+import '../features/notifications/ui/server_push_notifications_screen.dart';
 import '../features/radarr/ui/radarr_calendar_screen.dart';
 import '../features/radarr/ui/radarr_history_screen.dart';
 import '../features/radarr/ui/radarr_home_screen.dart';
@@ -64,10 +82,14 @@ import '../features/settings/ui/ai_tools_screen.dart';
 import '../features/settings/ui/credentials_screen.dart';
 import '../features/settings/ui/devices_screen.dart';
 import '../features/settings/ui/discovery_settings_screen.dart';
+import '../features/settings/ui/discord_notifications_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
 import '../features/settings/ui/pending_requests_screen.dart';
 import '../features/settings/ui/request_settings_screen.dart';
+import '../features/request/ui/tv_matches_screen.dart';
 import '../features/settings/ui/settings_screen.dart';
+import '../features/settings/ui/listening_apps_screen.dart';
+import '../features/settings/ui/video_apps_screen.dart';
 import '../features/settings/ui/user_request_settings_screen.dart';
 import '../features/settings/ui/users_screen.dart';
 import '../features/setup_wizard/ui/setup_wizard_screen.dart';
@@ -83,6 +105,7 @@ import '../features/monitoring/ui/monitoring_history_screen.dart';
 import '../features/monitoring/ui/monitoring_module_shell.dart';
 import '../features/monitoring/ui/monitoring_stats_screen.dart';
 import '../core/widgets/app_ambient_background.dart';
+import '../core/widgets/unsaved_changes_guard.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -117,6 +140,9 @@ CustomTransitionPage<void> _fadeSurfacePage({
 /// Outer ShellRoute provides the drawer + search bar.
 /// Inner StatefulShellRoutes provide per-module bottom nav.
 final appRouterProvider = Provider<GoRouter>((ref) {
+  // A pushed browse/detail page keeps the previous page alive for Back, while
+  // its complete filter/instance URL must still be copyable and reloadable.
+  GoRouter.optionURLReflectsImperativeAPIs = true;
   // Re-run redirects when auth state changes WITHOUT rebuilding the router.
   // Watching authProvider here would create a brand-new GoRouter on every auth
   // change (token refresh, profile reload, etc.), which resets navigation to
@@ -124,6 +150,18 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   final authRefresh = ValueNotifier<int>(0);
   ref.onDispose(authRefresh.dispose);
   ref.listen(authProvider, (_, __) => authRefresh.value++);
+  ref.listen(plexPendingProvider, (_, __) => authRefresh.value++);
+
+  Future<bool> confirmSettingsExit(
+      BuildContext context, GoRouterState state) async {
+    final auth = ref.read(authProvider).valueOrNull;
+    // An expired session or revoked role must still reach its safe destination.
+    if (auth?.isAuthenticated != true ||
+        (_isAdminOnlyRoute(state.uri.path) && auth?.user?.isAdmin != true)) {
+      return true;
+    }
+    return ref.read(unsavedChangesProvider).confirmExit(context, state);
+  }
 
   // Keep an in-memory return target while authentication (or the first-login
   // passkey offer) temporarily sends the user to /login. This deliberately
@@ -137,8 +175,25 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     redirect: (context, state) {
       final auth = ref.read(authProvider).valueOrNull;
       final isAuthenticated = auth?.isAuthenticated ?? false;
+      // Use the same visibility calculation with this exact auth snapshot.
+      // A derived provider may still hold its previous value when the auth
+      // listener synchronously asks GoRouter to rerun redirects.
+      final discovery =
+          DiscoveryAccess(auth?.user, auth?.connection, const InstanceState());
+      final landing = discovery.landingRoute;
       final isAuthRoute = state.matchedLocation == '/login';
       final pendingPasskey = auth?.pendingPasskeyOffer ?? false;
+      if (state.uri.path == '/plex/continue') return null;
+      // Refresh keeps the previous value while native secure storage is read.
+      // After completion/cancellation, that stale attempt must not redirect
+      // the navigation back onto the approval screen.
+      final pendingPlex = ref.read(plexPendingProvider);
+      if (!pendingPlex.isLoading && pendingPlex.valueOrNull != null) {
+        return '/plex/continue';
+      }
+      if (state.uri.path == '/oidc/return' || state.uri.path == '/oidc/start') {
+        return null;
+      }
 
       if (!isAuthenticated && !isAuthRoute) {
         if (_isInternalReturnLocation(state.uri)) {
@@ -156,23 +211,36 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       if (isAuthenticated && isAuthRoute) {
         final destination = pendingReturnTo;
         pendingReturnTo = null;
-        return destination ?? '/dashboard/movies';
+        return destination ?? landing;
+      }
+      if (isAuthenticated &&
+          (state.uri.path == '/dashboard' ||
+              (state.uri.path.startsWith('/dashboard/') &&
+                  !discovery.pages
+                      .any((page) => page.route == state.uri.path)))) {
+        return state.uri.path == landing ? null : landing;
       }
       final isAdmin = auth?.user?.isAdmin ?? false;
       if (isAuthenticated && !isAdmin && _isAdminOnlyRoute(state.uri.path)) {
-        return '/dashboard/movies';
+        return landing;
       }
       // Requester book surfaces — the Books tab and the id-addressable book
       // and author details — require the books grant and degrade the same way
       // without it.
       final hasChaptarrGrant = auth?.connection?.services.chaptarr ?? false;
+      final retiredBookLink =
+          state.uri.queryParameters['source'] == 'openlibrary' ||
+              (state.uri.queryParameters['source'] != 'chaptarr' &&
+                  DiscoveryBook.validId(state.pathParameters['id'] ?? '') &&
+                  state.extra is! ChaptarrBook);
       if (isAuthenticated &&
           !hasChaptarrGrant &&
-          (_isWithinRoute(state.uri.path, '/dashboard/books') ||
-              _isWithinRoute(state.uri.path, '/detail/book') ||
+          ((!isAdmin && _isWithinRoute(state.uri.path, '/dashboard/books')) ||
+              (_isWithinRoute(state.uri.path, '/detail/book') &&
+                  !retiredBookLink) ||
               _isWithinRoute(state.uri.path, '/detail/author') ||
               _isWithinRoute(state.uri.path, '/detail/series'))) {
-        return '/dashboard/movies';
+        return landing;
       }
       // Requester music surfaces — the Music tab and the id-addressable album
       // and artist details — require the music grant and degrade the same way
@@ -180,10 +248,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       final hasLidarrGrant = auth?.connection?.services.lidarr ?? false;
       if (isAuthenticated &&
           !hasLidarrGrant &&
-          (_isWithinRoute(state.uri.path, '/dashboard/music') ||
-              _isWithinRoute(state.uri.path, '/detail/album') ||
+          ((!isAdmin && _isWithinRoute(state.uri.path, '/dashboard/music')) ||
+              (!isAdmin && _isWithinRoute(state.uri.path, '/browse/music')) ||
+              (!isAdmin && _isWithinRoute(state.uri.path, '/detail/album')) ||
               _isWithinRoute(state.uri.path, '/detail/artist'))) {
-        return '/dashboard/movies';
+        return landing;
       }
       return null;
     },
@@ -198,6 +267,18 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         ),
       ),
 
+      GoRoute(
+          path: '/plex/continue',
+          builder: (_, state) => PlexContinueScreen(uri: state.uri)),
+      GoRoute(
+        path: '/oidc/return',
+        builder: (_, state) => OIDCReturnScreen(uri: state.uri),
+      ),
+      GoRoute(
+        path: '/oidc/start',
+        builder: (_, state) => OIDCReturnScreen(uri: state.uri, start: true),
+      ),
+
       // Module shell (provides drawer/sidebar + search bar, no bottom nav)
       ShellRoute(
         pageBuilder: (context, state, child) => _fadeSurfacePage(
@@ -205,6 +286,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           child: AppShell(currentPath: state.uri.path, child: child),
         ),
         routes: [
+          GoRoute(
+            path: '/dashboard',
+            builder: (_, __) => const EmptyDiscoverScreen(),
+          ),
           // Dashboard module (Movies/TV tabs)
           StatefulShellRoute.indexedStack(
             pageBuilder: (context, state, navigationShell) => _fadeSurfacePage(
@@ -220,7 +305,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 routes: [
                   GoRoute(
                     path: '/dashboard/movies',
-                    builder: (_, __) => const DashboardMoviesTab(),
+                    builder: (_, __) => const DiscoverTabContent(
+                        mediaType: 'movie', child: DashboardMoviesTab()),
                   ),
                 ],
               ),
@@ -228,7 +314,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 routes: [
                   GoRoute(
                     path: '/dashboard/tv',
-                    builder: (_, __) => const DashboardTvTab(),
+                    builder: (_, __) => const DiscoverTabContent(
+                        mediaType: 'tv', child: DashboardTvTab()),
                   ),
                 ],
               ),
@@ -240,26 +327,24 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                   ),
                 ],
               ),
-              // Books (Chaptarr) — last branch so the Books tab can be shown or
-              // hidden (per the user's chaptarr grant) without shifting the
-              // Movies/TV/Releases tab indices. The DashboardShell only surfaces
-              // the Books tab when services.chaptarr is true.
+              // Fixed branch identities survive server visibility changes
+              // and the existing requester book/music grants.
               StatefulShellBranch(
                 routes: [
                   GoRoute(
                     path: '/dashboard/books',
-                    builder: (_, __) => const DashboardBooksTab(),
+                    builder: (_, __) => const DiscoverTabContent(
+                        mediaType: 'book', child: DashboardBooksTab()),
                   ),
                 ],
               ),
-              // Music (Lidarr) — after Books for the same index-stability
-              // reason: the grant-gated tabs are the trailing branches, so
-              // showing or hiding either never shifts the fixed tabs.
+              // Music follows Books in the existing tab order.
               StatefulShellBranch(
                 routes: [
                   GoRoute(
                     path: '/dashboard/music',
-                    builder: (_, __) => const DashboardMusicTab(),
+                    builder: (_, __) => const DiscoverTabContent(
+                        mediaType: 'music', child: DashboardMusicTab()),
                   ),
                 ],
               ),
@@ -555,13 +640,34 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           // row and the Browse page. Everything it needs is in the URL, so
           // web deep links and pushes are the same thing.
           GoRoute(
-            path: '/browse/:type/:feed',
-            redirect: (_, state) => BrowseQuery.tryParse(state.uri) == null
-                ? (state.pathParameters['type'] == 'tv'
-                    ? '/dashboard/tv'
-                    : '/dashboard/movies')
-                : null,
+            path: '/browse/books/:feed',
             builder: (_, state) {
+              final query = BookBrowseQuery.tryParse(state.uri);
+              return AppAmbientBackground(
+                  child: query == null
+                      ? const _InvalidRouteScreen(
+                          message: 'This book browse link is invalid.')
+                      : BookBrowseScreen(query: query));
+            },
+          ),
+          GoRoute(
+            path: '/browse/:type/:feed',
+            redirect: (_, state) => state.pathParameters['type'] == 'music'
+                ? (MusicBrowseQuery.tryParse(state.uri) == null
+                    ? '/dashboard/music'
+                    : null)
+                : BrowseQuery.tryParse(state.uri) == null
+                    ? (state.pathParameters['type'] == 'tv'
+                        ? '/dashboard/tv'
+                        : '/dashboard/movies')
+                    : null,
+            builder: (_, state) {
+              if (state.pathParameters['type'] == 'music') {
+                return AppAmbientBackground(
+                  child: MusicBrowseScreen(
+                      query: MusicBrowseQuery.tryParse(state.uri)!),
+                );
+              }
               final query = BrowseQuery.tryParse(state.uri);
               if (query == null) {
                 return const AppAmbientBackground(
@@ -583,21 +689,40 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings',
+            onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
                 child: SettingsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/ai',
+            onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
                 child: AiAccessScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
+            path: '/settings/apple-tvs',
+            builder: (_, __) =>
+                const AppAmbientBackground(child: AppleTVsScreen()),
+          ),
+          GoRoute(
+            path: '/settings/video-apps',
+            builder: (context, state) =>
+                const AppAmbientBackground(child: VideoAppsScreen()),
+          ),
+          GoRoute(
+            path: '/settings/listening-apps',
+            builder: (_, __) =>
+                const AppAmbientBackground(child: ListeningAppsScreen()),
+          ),
+          GoRoute(
             path: '/settings/chatgpt',
+            onExit: confirmSettingsExit,
             builder: (_, __) =>
                 const AppAmbientBackground(child: CodexConnectionScreen()),
           ),
           GoRoute(
             path: '/settings/credentials/chatgpt',
+            onExit: confirmSettingsExit,
             builder: (_, __) => const AppAmbientBackground(
               child: CodexConnectionScreen(
                 scope: CodexOAuthScope.adminShared,
@@ -606,11 +731,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/grok',
+            onExit: confirmSettingsExit,
             builder: (_, __) =>
                 const AppAmbientBackground(child: GrokConnectionScreen()),
           ),
           GoRoute(
             path: '/settings/credentials/grok',
+            onExit: confirmSettingsExit,
             builder: (_, __) => const AppAmbientBackground(
               child: GrokConnectionScreen(
                 scope: GrokOAuthScope.adminShared,
@@ -619,32 +746,36 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/credentials',
+            onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
                 child: CredentialsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/ai-tools',
+            onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
                 child: AiToolsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/change-history',
+            onExit: confirmSettingsExit,
             builder: (_, __) => const AppAmbientBackground(
               child: ConfigChangeHistoryScreen(),
             ),
           ),
           GoRoute(
             path: '/settings/profile-approvals',
+            onExit: confirmSettingsExit,
             builder: (_, __) => const AppAmbientBackground(
               child: ProfileProposalsScreen(),
             ),
           ),
           GoRoute(
             path: '/settings/change-history/:id',
-            redirect: (_, state) =>
-                _positiveIntParameter(state, 'id') == null
-                    ? '/settings/change-history'
-                    : null,
+            onExit: confirmSettingsExit,
+            redirect: (_, state) => _positiveIntParameter(state, 'id') == null
+                ? '/settings/change-history'
+                : null,
             builder: (context, state) {
               final id = _positiveIntParameter(state, 'id');
               if (id == null) {
@@ -661,11 +792,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/users',
+            onExit: confirmSettingsExit,
             builder: (_, __) =>
                 const AppAmbientBackground(child: UsersScreen()),
           ),
           GoRoute(
             path: '/settings/users/:userId/request-settings',
+            onExit: confirmSettingsExit,
             redirect: (_, state) =>
                 _positiveIntParameter(state, 'userId') == null
                     ? '/settings/users'
@@ -682,6 +815,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               final username = state.extra as String? ?? '';
               return AppAmbientBackground(
                 child: UserRequestSettingsScreen(
+                  key: ValueKey(state.uri.path),
                   userId: userId,
                   username: username,
                   targetIsAdmin: state.uri.queryParameters['admin'] == '1',
@@ -721,29 +855,80 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/ai-remediation',
+            onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
                 child: AiRemediationSettingsScreen(
                     highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/agent-approval-rules',
-            builder: (_, __) => const AppAmbientBackground(
-                child: AgentApprovalRulesScreen()),
+            onExit: confirmSettingsExit,
+            builder: (_, __) =>
+                const AppAmbientBackground(child: AgentApprovalRulesScreen()),
+          ),
+          GoRoute(
+            path: '/settings/request-allowance',
+            builder: (_, __) => const AppAmbientBackground(child: RequestAllowanceScreen()),
           ),
           GoRoute(
             path: '/settings/request-settings',
+            onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
-                child: RequestSettingsScreen(
-                    highlightId: _highlightParam(state))),
+                child:
+                    RequestSettingsScreen(highlightId: _highlightParam(state))),
+          ),
+          GoRoute(
+            path: '/settings/tv-matches',
+            builder: (_, __) => const AppAmbientBackground(child: TVMatchesScreen()),
+          ),
+          GoRoute(
+            path: '/settings/tv-matches/:tmdbId',
+            onExit: confirmSettingsExit,
+            builder: (_, state) => AppAmbientBackground(child: TVMatchEditorScreen(
+              tmdbId: int.tryParse(state.pathParameters['tmdbId'] ?? '') ?? 0,
+              instanceId: state.uri.queryParameters['instance_id'])),
+          ),
+          GoRoute(
+            path: '/settings/discord-notifications',
+            onExit: confirmSettingsExit,
+            builder: (_, __) =>
+                const AppAmbientBackground(child: DiscordNotificationsScreen()),
           ),
           GoRoute(
             path: '/settings/discovery',
+            onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
                 child: DiscoverySettingsScreen(
                     highlightId: _highlightParam(state))),
           ),
           GoRoute(
+              path: '/settings/plex-auth',
+              onExit: confirmSettingsExit,
+              builder: (_, state) => const PlexAuthSettingsScreen()),
+          GoRoute(
+            path: '/settings/oidc',
+            onExit: confirmSettingsExit,
+            builder: (_, state) =>
+                OIDCSettingsScreen(key: ValueKey(state.uri.path)),
+          ),
+          GoRoute(
+            path: '/settings/sso-account',
+            onExit: confirmSettingsExit,
+            builder: (_, state) => OIDCAccountScreen(key: ValueKey(state.uri)),
+          ),
+          GoRoute(
+            path: '/settings/users/:userId/sso',
+            onExit: confirmSettingsExit,
+            redirect: (_, state) =>
+                _positiveIntParameter(state, 'userId') == null
+                    ? '/settings/users'
+                    : null,
+            builder: (_, state) => OIDCAccountScreen(
+                userId: _positiveIntParameter(state, 'userId')),
+          ),
+          GoRoute(
             path: '/settings/devices',
+            onExit: confirmSettingsExit,
             builder: (_, __) =>
                 const AppAmbientBackground(child: DevicesScreen()),
           ),
@@ -751,32 +936,45 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           // address opens a new Plex instance so shared links keep working.
           GoRoute(
             path: '/settings/plex',
+            onExit: confirmSettingsExit,
             builder: (_, __) => const AppAmbientBackground(
                 child: InstanceEditScreen(initialServiceType: 'plex')),
           ),
           GoRoute(
-            path: '/settings/notifications',
+            path: '/settings/push-notifications/server',
+            onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
-                child: NotificationPreferencesScreen(
+                child: ServerPushNotificationsScreen(
+                    highlightId: _highlightParam(state))),
+          ),
+          GoRoute(
+            path: '/settings/push-notifications',
+            onExit: confirmSettingsExit,
+            builder: (_, state) => AppAmbientBackground(
+                child: PushNotificationsScreen(
                     highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/passkeys',
+            onExit: confirmSettingsExit,
             builder: (_, __) =>
                 const AppAmbientBackground(child: PasskeyManagementScreen()),
           ),
           GoRoute(
             path: '/settings/passkeys/new',
+            onExit: confirmSettingsExit,
             builder: (_, __) =>
                 const AppAmbientBackground(child: PasskeyCreateScreen()),
           ),
           GoRoute(
             path: '/settings/password',
+            onExit: confirmSettingsExit,
             builder: (_, __) =>
                 const AppAmbientBackground(child: SetPasswordScreen()),
           ),
           GoRoute(
             path: '/settings/instance/new',
+            onExit: confirmSettingsExit,
             builder: (context, state) {
               // The setup checklist names the service type (or, for the
               // download-client category, a selection prompt) when it sends
@@ -785,7 +983,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               final extra = state.extra as Map<String, dynamic>?;
               return AppAmbientBackground(
                 child: InstanceEditScreen(
+                  key: ValueKey(state.uri.path),
                   initialServiceType: extra?['service_type'] as String?,
+                  refreshConfigAfterReturn:
+                      extra?['refresh_config_after_return'] == true,
                   serviceTypePrompt: extra?['service_type_prompt'] as String?,
                 ),
               );
@@ -793,10 +994,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/instance/:id',
+            onExit: confirmSettingsExit,
             builder: (context, state) {
               final extra = state.extra as Map<String, dynamic>?;
               return AppAmbientBackground(
                 child: InstanceEditScreen(
+                  key: ValueKey(state.uri.path),
                   instanceId: state.pathParameters['id'],
                   initialServiceType: extra?['service_type'] as String?,
                   initialName: extra?['name'] as String?,
@@ -875,10 +1078,16 @@ bool _isAdminOnlyRoute(String path) {
     '/settings/change-history',
     '/settings/profile-approvals',
     '/settings/users',
+    '/settings/oidc',
+    '/settings/plex-auth',
     '/settings/ai-remediation',
     '/settings/agent-approval-rules',
     '/settings/request-settings',
+    '/settings/tv-matches',
+    '/settings/discord-notifications',
+    '/settings/push-notifications/server',
     '/settings/devices',
+    '/settings/apple-tvs',
     '/settings/plex',
     '/settings/instance',
   ];
@@ -935,6 +1144,9 @@ Widget _mediaDetailChild(GoRouterState state) {
     }
     return RequesterArtistDetailScreen(
       foreignArtistId: foreignId,
+      initialArtist:
+          state.extra is MusicArtist ? state.extra as MusicArtist : null,
+      searchTerm: state.uri.queryParameters['q'],
       nameHint: state.uri.queryParameters['name'],
       instanceId: state.uri.queryParameters['instance_id'],
     );
@@ -953,6 +1165,8 @@ Widget _mediaDetailChild(GoRouterState state) {
       instanceId: state.uri.queryParameters['instance_id'],
       initialAlbum:
           state.extra is LidarrAlbum ? state.extra! as LidarrAlbum : null,
+      discoveryAlbum:
+          state.extra is MusicAlbum ? state.extra! as MusicAlbum : null,
     );
   }
   if (type == 'book') {
@@ -964,12 +1178,17 @@ Widget _mediaDetailChild(GoRouterState state) {
     }
     return RequesterBookDetailScreen(
       foreignId: foreignId,
+      discoveryBook:
+          state.extra is DiscoveryBook ? state.extra! as DiscoveryBook : null,
+      discovery: state.uri.queryParameters['source'] == 'openlibrary' ||
+          (state.uri.queryParameters['source'] != 'chaptarr' &&
+              DiscoveryBook.validId(foreignId) &&
+              state.extra is! ChaptarrBook),
       titleHint: state.uri.queryParameters['title'],
       searchTerm: state.uri.queryParameters['q'],
       instanceId: state.uri.queryParameters['instance_id'],
-      initialBook: state.extra is ChaptarrBook
-          ? state.extra! as ChaptarrBook
-          : null,
+      initialBook:
+          state.extra is ChaptarrBook ? state.extra! as ChaptarrBook : null,
     );
   }
   final id = _positiveIntParameter(state, 'id');
@@ -980,8 +1199,10 @@ Widget _mediaDetailChild(GoRouterState state) {
   }
   final mediaType = type == 'tv' ? MediaType.tv : MediaType.movie;
   return MediaDetailScreen(
+    key: ValueKey((mediaType, id, state.uri.queryParameters['instance_id'])),
     id: id,
     mediaType: mediaType,
+    instanceId: state.uri.queryParameters['instance_id'],
   );
 }
 

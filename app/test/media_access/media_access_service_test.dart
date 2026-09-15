@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:cantinarr/features/discover/data/tmdb_models.dart';
 import 'package:cantinarr/features/media_access/data/media_access_service.dart';
+import 'package:cantinarr/features/media_access/data/listening_apps.dart';
+import 'package:cantinarr/features/media_access/data/video_apps.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -73,6 +75,105 @@ MediaAccessService _service(HttpClientAdapter adapter) => MediaAccessService(
     );
 
 void main() {
+  test('Plex admin labels require live acceptance evidence', () {
+    MediaServerAccountRow row(Map<String, dynamic> state) =>
+        MediaServerAccountRow.fromJson({'service_type': 'plex', ...state});
+    expect(row({'verified': true, 'pending': true}).accessLabel,
+        'Awaiting Plex acceptance');
+    expect(row({'verified': true, 'pending': false}).accessLabel,
+        'Active on server');
+    expect(row({'verified': true}).accessLabel, 'Server access unconfirmed');
+    expect(row({'verified': false, 'pending': false}).accessLabel,
+        'Server access unconfirmed');
+    expect(row({'verified': true, 'pending': true, 'disabled': true}).accessLabel,
+        'Off on server');
+    expect(row({'verified': true, 'pending': true, 'access_sync_pending': true})
+        .accessLabel, 'Access change pending');
+    expect(MediaServerAccountRow.fromJson({
+      'service_type': 'jellyfin', 'verified': true,
+    }).accessLabel, 'Active on server');
+  });
+
+  test('video preferences use the self route and preserve each service', () async {
+    final body = {'plex': {'ios': 'infuse'}, 'jellyfin': {'ios': ''}, 'emby': {'ios': 'browser'}};
+    final adapter = _FakeAdapter({
+      'GET /api/me/video-apps': _Reply(200, body),
+      'PUT /api/me/video-apps': _Reply(200, body),
+    });
+    final service = _service(adapter);
+    final prefs = await service.getVideoAppPreferences();
+    expect(prefs['plex']!.ios, 'infuse');
+    await service.saveVideoAppPreferences(prefs);
+    expect(adapter.requests.last.body, body);
+    expect(adapter.requests.last.body.containsKey('user_id'), isFalse);
+    for (final invalid in [<String, dynamic>{}, <dynamic>[], {...body, 'plex': {'ios': 2}}]) {
+      adapter.replies['GET /api/me/video-apps'] = _Reply(200, invalid);
+      await expectLater(service.getVideoAppPreferences(), throwsFormatException);
+    }
+  });
+
+  test('watch and guide responses read video defaults without requiring new fields', () {
+    final link = WatchLink.fromJson({'state': 'found', 'video_apps': {'ios': 'infuse'}});
+    final view = MediaServerAccess.fromJson({'video_apps': {'ios': 'browser'}});
+    expect(link.videoApps.ios, 'infuse');
+    expect(view.videoApps.ios, 'browser');
+    expect(WatchLink.fromJson({}).videoApps.toJson(), const VideoApps().toJson());
+    expect(MediaServerAccess.fromJson({}).videoApps.ios, '');
+  });
+
+  test('personal listening preferences use the self-only route and reject unreadable data', () async {
+    final adapter = _FakeAdapter({
+      'GET /api/me/listening-apps': const _Reply(200, {'ios': '', 'android': 'theshelf'}),
+      'PUT /api/me/listening-apps': const _Reply(200, {'ios': 'browser', 'android': ''}),
+    });
+    final service = _service(adapter);
+    expect((await service.getListeningAppPreferences()).android, 'theshelf');
+    final saved = await service.saveListeningAppPreferences(
+        const ListeningApps(ios: 'browser'));
+    expect(saved.toJson(), {'ios': 'browser', 'android': ''});
+    expect(adapter.requests.last.body, {'ios': 'browser', 'android': ''});
+    for (final invalid in [<String, dynamic>{}, <dynamic>[], {'ios': 2, 'android': ''}]) {
+      adapter.replies['GET /api/me/listening-apps'] = _Reply(200, invalid);
+      await expectLater(service.getListeningAppPreferences(), throwsFormatException);
+    }
+  });
+
+  test('management intent, local grant, and remote status parse separately',
+      () {
+    final row = MediaServerAccountRow.fromJson({
+      'manage_access': false,
+      'granted': true,
+      'disabled': true,
+      'verified': true
+    });
+    expect(row.manageAccess, false);
+    expect(row.granted, true);
+    expect(row.disabled, true);
+    expect(row.managementLabel, 'Linked only');
+    expect(row.accessLabel, 'Off on server');
+    final legacy = MediaServerAccountRow.fromJson({'disabled': true});
+    expect(legacy.manageAccess, true);
+    expect(legacy.granted, false);
+    final pending = MediaServerAccountRow.fromJson(
+        {'manage_access': true, 'access_sync_pending': true});
+    expect(pending.accessLabel, 'Access change pending');
+    expect(
+        MediaServerAccess.fromJson({'auto_link_suppressed': true})
+            .autoLinkSuppressed,
+        true);
+  });
+
+  test('management route carries only explicit mode', () async {
+    final adapter = _FakeAdapter({
+      'PATCH /api/admin/users/7/media-servers/abs/account/management':
+          const _Reply(200, {'manage_access': false})
+    });
+    final row = await _service(adapter)
+        .setManagement(userId: 7, instanceId: 'abs', manageAccess: false);
+    expect(row.manageAccess, false);
+    expect(adapter.requests.single.body, {'manage_access': false});
+  });
+
   group('mediaServerGuideTitle', () {
     test('names the granted product, in a stable order', () {
       expect(mediaServerGuideTitle(const []), 'Watch on your media server');
@@ -91,6 +192,45 @@ void main() {
       expect(mediaServerTypeLabel('emby'), 'Emby');
       expect(mediaServerTypeLabel(''), 'your media server');
     });
+  });
+
+  test('Audiobookshelf names and listening responses keep distinct copies',
+      () async {
+    expect(mediaServerTypeLabel('audiobookshelf'), 'Audiobookshelf');
+    expect(mediaServerGuideTitle(['audiobookshelf']), 'Audiobookshelf access');
+    expect(mediaServerGuideTitle(['plex', 'audiobookshelf']),
+        'Media server access');
+    final adapter = _FakeAdapter({
+      'GET /api/media-servers/listen': const _Reply(200, [
+        {
+          'instance_id': 'abs',
+          'name': 'Books',
+          'state': 'found',
+          'listening_apps': {'ios': 'shelfplayer', 'android': 'theshelf'},
+          'items': [
+            {
+              'id': 'one',
+              'title': 'Book',
+              'library_name': 'Main',
+              'url': 'https://abs.example/item/one'
+            },
+            {
+              'id': 'two',
+              'title': 'Book',
+              'library_name': 'Other',
+              'url': 'https://abs.example/item/two'
+            },
+          ],
+        }
+      ]),
+    });
+    final links = await _service(adapter)
+        .listenLinks(instanceId: 'chaptarr-a', foreignBookId: 'hc:1');
+    expect(links.single.items.map((item) => item.id), ['one', 'two']);
+    expect(links.single.listeningApps.toJson(),
+        {'ios': 'shelfplayer', 'android': 'theshelf'});
+    expect(adapter.uris.single.queryParameters,
+        {'instance_id': 'chaptarr-a', 'foreign_book_id': 'hc:1'});
   });
 
   group('listMine', () {
@@ -187,8 +327,7 @@ void main() {
       expect(links[1].url, isEmpty);
     });
 
-    test('unknown ids and an empty title are left out of the query',
-        () async {
+    test('unknown ids and an empty title are left out of the query', () async {
       final adapter = _FakeAdapter({
         'GET /api/media-servers/watch': const _Reply(200, []),
       });
@@ -311,8 +450,7 @@ void main() {
       );
       expect(
         MediaServerAccountRow.fromJson(
-                const {'disabled_at': '2026-08-28T10:00:00Z'})
-            .disabled,
+            const {'disabled_at': '2026-08-28T10:00:00Z'}).disabled,
         isTrue,
       );
       expect(MediaServerAccountRow.fromJson(const {}).disabled, isFalse);
@@ -333,8 +471,7 @@ void main() {
       expect(row.createdByCantinarr, isFalse);
     });
 
-    test('link PUTs the remote id and unlink DELETEs the same path',
-        () async {
+    test('link PUTs the remote id and unlink DELETEs the same path', () async {
       final adapter = _FakeAdapter({
         'PUT /api/admin/users/7/media-servers/jf-a/account': const _Reply(200, {
           'user_id': 7,
@@ -468,8 +605,7 @@ void main() {
     test('an account status reads administrator, off by default', () {
       expect(
         MediaServerAccountStatus.fromJson(
-                const {'username': 'julian', 'administrator': true})
-            .administrator,
+            const {'username': 'julian', 'administrator': true}).administrator,
         isTrue,
       );
       expect(

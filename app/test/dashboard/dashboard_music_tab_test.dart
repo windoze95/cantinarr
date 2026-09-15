@@ -214,6 +214,27 @@ void main() {
     expect(find.text('Weezer'), findsNWidgets(2));
   });
 
+  testWidgets('a partial import never claims the complete album is available',
+      (tester) async {
+    tester.view.physicalSize = const Size(900, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await _pumpMusicTab(tester, items: _twoRecentAlbums(), titles: [
+      {
+        ..._ownedEntry(
+            foreignAlbumId: 'mb-1', downloaded: true, monitored: true),
+        'status': 'requested'
+      },
+      {
+        ..._ownedEntry(foreignAlbumId: 'mb-2', downloaded: true),
+        'status': 'partial'
+      },
+    ]);
+    expect(find.text('Available'), findsNothing);
+    expect(find.text('Requested'), findsOneWidget);
+  });
+
   testWidgets('a card the digest cannot vouch for renders no pill',
       (tester) async {
     tester.view.physicalSize = const Size(900, 1400);
@@ -229,8 +250,7 @@ void main() {
     expect(find.text('Requested'), findsNothing);
   });
 
-  testWidgets('stays silent when the user has no music access',
-      (tester) async {
+  testWidgets('stays silent when the user has no music access', (tester) async {
     await _pumpMusicTab(tester, recentStatus: 403, artistsStatus: 403);
 
     expect(find.text('Recently Added'), findsNothing);
@@ -290,8 +310,7 @@ void main() {
     expect(adapter.artistSorts.single, 'albums');
   });
 
-  testWidgets('the artists row hides on an unreadable library',
-      (tester) async {
+  testWidgets('the artists row hides on an unreadable library', (tester) async {
     await _pumpMusicTab(tester, items: const [], artistsStatus: 500);
 
     expect(find.text('Artists'), findsNothing);

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 )
 
 // Client talks to the qBittorrent WebUI API v2. With a username and password
@@ -59,6 +61,7 @@ func newClient(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		httpClient: &http.Client{
+			Transport:     httpx.Internal(),
 			Timeout:       30 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},

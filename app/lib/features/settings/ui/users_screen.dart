@@ -7,6 +7,7 @@ import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -45,6 +46,10 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   List<ServiceInstance> get _mediaServers =>
       ref.read(authProvider).valueOrNull?.connection?.mediaServerInstances ??
       const [];
+
+  bool get _supportsManagement =>
+      ref.read(authProvider).valueOrNull?.connection?.mediaAccountManagement ??
+      false;
 
   @override
   void initState() {
@@ -122,13 +127,20 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   }
 
   Future<void> _deleteUser(UserSummary user) async {
+    final managed = _mediaAccounts
+        .where((a) => a.userId == user.id && a.manageAccess && !a.administrator)
+        .map((a) => a.instanceName)
+        .join(', ');
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Remove User'),
         content: Text(
           'Remove "${user.username}"? This deletes their account, devices, '
-          'and any pending invites. This cannot be undone.',
+          'and any pending invites. This cannot be undone.'
+          '${managed.isEmpty ? '' : '\n\nCantinarr will turn off their managed server access on: $managed.'}'
+          '${_supportsManagement ? '\n\nLinked-only accounts stay as they are on their servers.' : ''}'
+          '${_mediaAccountsFailed ? '\n\nMedia account details could not be loaded; managed server access will still be turned off.' : ''}',
         ),
         actions: [
           TextButton(
@@ -183,38 +195,42 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     final nameController = TextEditingController();
     final name = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Invite a new user'),
-        content: TextField(
-          controller: nameController,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Name',
-            hintText: 'e.g. Mom, Dad, Roommate',
-            prefixIcon: Icon(Icons.person_outline),
-          ),
-          textCapitalization: TextCapitalization.words,
-          textInputAction: TextInputAction.done,
-          onSubmitted: (value) {
-            final trimmed = value.trim();
-            if (trimmed.isEmpty) return;
-            Navigator.of(dialogContext).pop(trimmed);
-          },
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final trimmed = nameController.text.trim();
+      builder: (dialogContext) => UnsavedChangesGuard(
+        isDialog: true,
+        hasChanges: () => nameController.text.isNotEmpty,
+        child: AlertDialog(
+          title: const Text('Invite a new user'),
+          content: TextField(
+            controller: nameController,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Name',
+              hintText: 'e.g. Mom, Dad, Roommate',
+              prefixIcon: Icon(Icons.person_outline),
+            ),
+            textCapitalization: TextCapitalization.words,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (value) {
+              final trimmed = value.trim();
               if (trimmed.isEmpty) return;
               Navigator.of(dialogContext).pop(trimmed);
             },
-            child: const Text('Create invite'),
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).maybePop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final trimmed = nameController.text.trim();
+                if (trimmed.isEmpty) return;
+                Navigator.of(dialogContext).pop(trimmed);
+              },
+              child: const Text('Create invite'),
+            ),
+          ],
+        ),
       ),
     );
     if (name == null || name.isEmpty || !mounted) return;
@@ -513,25 +529,28 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   /// only records the connection and changes nothing on the server.
   Future<void> _linkMediaAccount(
       UserSummary user, ServiceInstance server) async {
-    final remote = await showMediaServerLinkSheet(
+    final choice = await showMediaServerLinkSheet(
       context,
       instanceId: server.id,
       instanceName: server.name,
       serviceType: server.serviceType,
       username: user.username,
     );
-    if (remote == null || !mounted) return;
+    if (choice == null || !mounted) return;
+    final remote = choice.account;
     try {
-      await ref.read(mediaAccessServiceProvider).link(
+      final linked = await ref.read(mediaAccessServiceProvider).link(
             userId: user.id,
             instanceId: server.id,
             remoteUserId: remote.id,
+            manageAccess: choice.manageAccess,
           );
       await _loadUsers();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(
-            'Linked ${remote.name} on ${server.name} to ${user.username}'),
+            'Linked ${remote.name} on ${server.name} to ${user.username}'
+            '${linked.plexIdentityError.isEmpty ? '' : '. Plex sign-in was not linked: ${linked.plexIdentityError}'}'),
       ));
     } catch (e) {
       if (!mounted) return;
@@ -541,10 +560,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     }
   }
 
-  /// Access to a media server IS the instance grant, so this edits the
-  /// user's grants for that service type: off removes this instance (the
-  /// server then switches the account off, keeping it), on adds it back
-  /// (the account comes back). There is no second switch anywhere.
+  /// Changes the Cantinarr grant. Only managed links propagate it remotely.
   Future<void> _setMediaAccess(
     UserSummary user,
     ServiceInstance server, {
@@ -562,9 +578,11 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
           .updateUserInstanceGrants(user.id, {server.serviceType: next});
       await _loadUsers();
       if (!mounted) return;
+      final pending = _mediaAccounts.any((account) => account.userId == user.id && account.instanceId == server.id && account.accessSyncPending);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Turned ${server.name} access ${enabled ? 'on' : 'off'} '
-            'for ${user.username}'),
+        content: Text(
+            'Turned ${server.name} access in Cantinarr ${enabled ? 'on' : 'off'} '
+            'for ${user.username}${pending ? '. Server access change pending; Cantinarr will retry.' : ''}'),
       ));
     } catch (e) {
       if (!mounted) return;
@@ -589,8 +607,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
         content: Text(
           'Cantinarr will forget that ${user.username} is '
           '${account.remoteUsername} on ${server.name}. The account on '
-          '${server.name} stays as it is, and Cantinarr stops managing it '
-          'until you link it again.',
+          '${server.name} stays as it is. Their Cantinarr grant stays in place. '
+          'Link it explicitly to connect it again.',
         ),
         actions: [
           TextButton(
@@ -621,6 +639,55 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(_mediaAccessError(e, "Couldn't unlink the account")),
       ));
+    }
+  }
+
+  Future<void> _setMediaManagement(UserSummary user, ServiceInstance server,
+      MediaServerAccountRow account) async {
+    final manage = !account.manageAccess;
+    final remoteAction = server.serviceType == 'plex'
+        ? (account.granted
+            ? 'restore their Plex share if needed'
+            : 'remove their Plex share')
+        : (account.granted ? 'enable this account' : 'disable this account');
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(manage
+            ? 'Manage access on ${server.name}?'
+            : 'Stop managing access?'),
+        content: Text(manage
+            ? 'Cantinarr will $remoteAction to match this user’s current grant. Future grant changes and user deletion will also change server access. Enabling management keeps the existing library selections.${server.serviceType == 'plex' ? ' Restoring a removed Plex share uses this server’s current shared-library selection.' : ''}'
+            : 'The link and account on ${server.name} stay as they are. Pending access changes are canceled. Future Cantinarr grant changes and user deletion will leave this account alone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(manage ? 'Manage access' : 'Stop managing')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      final result = await ref.read(mediaAccessServiceProvider).setManagement(
+          userId: user.id, instanceId: server.id, manageAccess: manage);
+      await _loadUsers();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+        result.accessSyncPending
+            ? 'Management saved. The server access change is pending; Cantinarr will retry.'
+            : manage
+                ? 'Cantinarr now manages access on ${server.name}'
+                : 'Stopped managing access on ${server.name}',
+      )));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              _mediaAccessError(e, 'Couldn’t change account management'))));
     }
   }
 
@@ -761,7 +828,9 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
             const <ServiceInstance>[];
     // The notice takes the first row when the account read failed, so the
     // list still renders every user and the gap is named, not implied.
-    final noticeRows = _mediaAccountsFailed ? 1 : 0;
+    final showPlexHelp = mediaServers.any((server) => server.serviceType == 'plex');
+    final failureRows = _mediaAccountsFailed ? 1 : 0;
+    final noticeRows = failureRows + (showPlexHelp ? 1 : 0);
 
     return RefreshIndicator(
       onRefresh: _loadUsers,
@@ -771,7 +840,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
         separatorBuilder: (_, __) =>
             const Divider(height: 1, color: AppTheme.border),
         itemBuilder: (context, index) {
-          if (index < noticeRows) {
+          if (index < failureRows) {
             return const ListTile(
               leading: Icon(Icons.sync_problem_outlined,
                   color: AppTheme.warning),
@@ -781,11 +850,25 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
               ),
             );
           }
+          if (index < noticeRows) {
+            return const ListTile(
+              leading: Icon(Icons.info_outline, color: AppTheme.textSecondary),
+              title: Text('Plex library access and sign-in are separate'),
+              subtitle: Text(
+                'Sending a library invitation records the media-account link. '
+                'The recipient accepts it in their own Plex account. '
+                'Review login identities in Settings > Plex sign-in.',
+              ),
+            );
+          }
           final user = users[index - noticeRows];
           return _UserTile(
             user: user,
             isSelf: user.id == currentUserId,
             mediaServers: mediaServers,
+            supportsManagement: _supportsManagement,
+            onSetManagement: (server, account) =>
+                _setMediaManagement(user, server, account),
             mediaAccounts: {
               for (final row in _mediaAccounts)
                 if (row.userId == user.id) row.instanceId: row,
@@ -831,6 +914,8 @@ class _UserTile extends StatelessWidget {
     required this.user,
     required this.isSelf,
     required this.mediaServers,
+    required this.supportsManagement,
+    required this.onSetManagement,
     required this.mediaAccounts,
     required this.onLinkMediaAccount,
     required this.onSetMediaAccess,
@@ -848,9 +933,13 @@ class _UserTile extends StatelessWidget {
 
   final UserSummary user;
   final bool isSelf;
+
   /// Every media server the admin's config lists, and this user's linked
   /// account on each (by instance id; absent = no account linked).
   final List<ServiceInstance> mediaServers;
+  final bool supportsManagement;
+  final void Function(ServiceInstance server, MediaServerAccountRow account)
+      onSetManagement;
   final Map<String, MediaServerAccountRow> mediaAccounts;
   final void Function(ServiceInstance server) onLinkMediaAccount;
   final void Function(ServiceInstance server, bool enabled) onSetMediaAccess;
@@ -912,6 +1001,8 @@ class _UserTile extends StatelessWidget {
               label: user.isAdmin ? 'Admin' : 'User',
               color: user.isAdmin ? AppTheme.accent : AppTheme.textSecondary,
             ),
+            if (user.ssoLinked)
+              const _Tag(label: 'SSO linked', color: AppTheme.available),
             if (user.child) const _Tag(label: 'Child', color: AppTheme.info),
             if (user.hasPendingInvite)
               const _Tag(label: 'Invited', color: AppTheme.requested)
@@ -933,15 +1024,11 @@ class _UserTile extends StatelessWidget {
               const _Tag(label: 'AI included', color: AppTheme.signal),
             if (user.plexEmail.isNotEmpty)
               _Tag(label: user.plexEmail, color: AppTheme.textSecondary),
-            // "Invite sent" only for a share Cantinarr itself sent; a share
-            // adopted from plex.tv, or the server's owner, is said by the
-            // account tag below and nothing was sent. "Asked" is an email
-            // with no Plex share yet (the grant toggle below is the tap).
-            if (mediaServers.any((server) =>
-                server.serviceType == 'plex' &&
-                (mediaAccounts[server.id]?.createdByCantinarr ?? false)))
-              const _Tag(label: 'Plex invite sent', color: AppTheme.available)
-            else if (user.plexEmail.isNotEmpty && user.plexInvitedAt == null)
+            if (user.plexEmail.isNotEmpty &&
+                user.plexInvitedAt == null &&
+                !mediaServers.any((server) =>
+                    server.serviceType == 'plex' &&
+                    mediaAccounts.containsKey(server.id)))
               const _Tag(
                   label: 'Asked for Plex access', color: AppTheme.requested),
             // One tag per linked media-server account: the server's name
@@ -949,15 +1036,23 @@ class _UserTile extends StatelessWidget {
             // the remote name otherwise, and ": off" while access is off.
             for (final server in mediaServers)
               if (mediaAccounts[server.id] case final account?)
-                account.disabled
-                    ? _Tag(
-                        label: '${server.name}: off',
-                        color: AppTheme.unavailable)
-                    : _Tag(
-                        label: account.remoteUsername == user.username
-                            ? server.name
-                            : '${server.name}: ${account.remoteUsername}',
-                        color: AppTheme.available),
+                _Tag(
+                  label: supportsManagement
+                      ? '${server.name}${account.remoteUsername == user.username ? '' : ' (${account.remoteUsername})'}: ${account.granted ? 'Granted' : 'No grant'} · ${account.managementLabel} · ${account.accessLabel}'
+                      : account.disabled
+                          ? '${server.name}: off'
+                          : account.remoteUsername == user.username
+                              ? server.name
+                              : '${server.name}: ${account.remoteUsername}',
+                  color: account.accessSyncPending ||
+                          !account.verified ||
+                          account.pending == true ||
+                          (server.serviceType == 'plex' && account.pending == null)
+                      ? AppTheme.warning
+                      : account.granted
+                          ? AppTheme.available
+                          : AppTheme.unavailable,
+                ),
           ],
         ),
       ),
@@ -982,8 +1077,10 @@ class _UserTile extends StatelessWidget {
                 onLinkMediaAccount(server);
               case 'media_access':
                 if (account != null) {
-                  onSetMediaAccess(server, account.disabled);
+                  onSetMediaAccess(server, !account.granted);
                 }
+              case 'media_manage':
+                if (account != null) onSetManagement(server, account);
               case 'media_unlink':
                 if (account != null) onUnlinkMediaAccount(server, account);
             }
@@ -992,6 +1089,9 @@ class _UserTile extends StatelessWidget {
           return;
         }
         switch (value) {
+          case 'sso':
+            context.push('/settings/users/${user.id}/sso');
+            break;
           case 'make_admin':
             onChangeRole('admin');
             break;
@@ -1028,6 +1128,7 @@ class _UserTile extends StatelessWidget {
         }
       },
       itemBuilder: (context) => [
+        const PopupMenuItem(value: 'sso', child: Text('Linked sign-in')),
         const PopupMenuItem(
           value: 'request_settings',
           child: ListTile(
@@ -1088,15 +1189,31 @@ class _UserTile extends StatelessWidget {
             PopupMenuItem(
               value: 'media_access:${server.id}',
               child: ListTile(
-                leading: Icon(account.disabled
+                leading: Icon(!account.granted
                     ? Icons.play_circle_outline
                     : Icons.block_outlined),
-                title: Text(account.disabled
+                title: Text(!account.granted
                     ? 'Turn ${server.name} access on'
                     : 'Turn ${server.name} access off'),
+                subtitle: supportsManagement
+                    ? Text(account.manageAccess && !account.administrator
+                        ? 'Also changes server access'
+                        : 'Cantinarr only; server access stays the same')
+                    : null,
                 contentPadding: EdgeInsets.zero,
               ),
             ),
+            if (supportsManagement && !account.administrator)
+              PopupMenuItem(
+                value: 'media_manage:${server.id}',
+                child: ListTile(
+                  leading: const Icon(Icons.manage_accounts_outlined),
+                  title: Text(account.manageAccess
+                      ? 'Stop managing ${server.name} access…'
+                      : 'Manage ${server.name} access…'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
             PopupMenuItem(
               value: 'media_unlink:${server.id}',
               child: ListTile(

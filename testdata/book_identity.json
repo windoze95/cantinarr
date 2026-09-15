@@ -1,0 +1,46 @@
+{
+  "description": "Synthetic provider identifiers for regression tests; title variants mirror the reported Ahsoka screenshots. This is not a capture of a live library.",
+  "cases": [
+    {"name": "work identity bridges providers and formats", "selected": {"title":"Ahsoka (Star Wars)","foreignBookId":"gr:101","pageCount":400}, "library": [
+      {"id":1,"title":"Ahsoka","foreignBookId":"hc:501","goodreadsWorkId":101,"mediaType":"ebook","pageCount":223,"statistics":{"bookFileCount":1}},
+      {"id":2,"title":"Ahsoka","foreignBookId":"hc:501","goodreadsWorkId":"gr:101","mediaType":"audiobook","statistics":{"bookFileCount":1}}
+    ], "expected":"hc:501"},
+    {"name":"exact native identity wins", "selected":{"foreignBookId":"gr:101","hardcoverBookId":"hc:501"}, "library":[
+      {"foreignBookId":"gr:101"}, {"foreignBookId":"hc:501","goodreadsWorkId":"gr:101"}
+    ], "expected":"gr:101"},
+    {"name":"ISBN10 and ISBN13 identify the same publication", "selected":{"foreignBookId":"gr:102","editions":[{"isbn10":"0-306-40615-2"}]}, "library":[
+      {"foreignBookId":"hc:502","editions":[{"isbn13":"9780306406157"}]}
+    ], "expected":"hc:502"},
+    {"name":"edition identity joins numeric and prefixed IDs", "selected":{"foreignBookId":"gr:103","goodreadsBookId":9001}, "library":[
+      {"foreignBookId":"hc:503","editions":[{"goodreadsEditionId":"gr:9001"}]}
+    ], "expected":"hc:503"},
+    {"name":"same title is not evidence", "selected":{"title":"Ahsoka (Star Wars)","foreignBookId":"gr:104"}, "library":[
+      {"title":"Ahsoka","foreignBookId":"hc:504"}
+    ], "expected":""},
+    {"name":"work and edition IDs never collide", "selected":{"foreignBookId":"gr:105"}, "library":[
+      {"foreignBookId":"hc:505","goodreadsBookId":"gr:105"}
+    ], "expected":""},
+    {"name":"conflicting identifiers fail closed", "selected":{"foreignBookId":"gr:106","editions":[{"isbn13":"9780306406157"}]}, "library":[
+      {"foreignBookId":"hc:506","goodreadsWorkId":"gr:106"},
+      {"foreignBookId":"hc:507","editions":[{"isbn13":"9780306406157"}]}
+    ], "ambiguous":true},
+    {"name":"shared identifier never picks first record", "selected":{"foreignBookId":"gr:107"}, "library":[
+      {"foreignBookId":"hc:508","goodreadsWorkId":"gr:107"}, {"foreignBookId":"hc:509","goodreadsWorkId":"gr:107"}
+    ], "ambiguous":true},
+    {"name":"invalid ISBN checksum never binds", "selected":{"foreignBookId":"gr:108","editions":[{"isbn13":"9780306406158"}]}, "library":[
+      {"foreignBookId":"hc:510","editions":[{"isbn13":"9780306406158"}]}
+    ], "expected":""},
+    {"name":"wrong provider prefix is rejected", "selected":{"foreignBookId":"gr:109","goodreadsWorkId":"hc:999"}, "library":[
+      {"foreignBookId":"gr:999"}
+    ], "expected":""},
+    {"name":"leading edition identity survives a lean library read", "selected":{"foreignBookId":"gr:110","editions":[{"goodreadsEditionId":8001}]}, "library":[
+      {"foreignBookId":"hc:511","foreignEditionId":"gr:8001"}
+    ], "expected":"hc:511"},
+    {"name":"Hardcover edition identity keeps its role", "selected":{"foreignBookId":"gr:111","editions":[{"hardcoverEditionId":"hc:edition:8002"}]}, "library":[
+      {"foreignBookId":"hc:512","foreignEditionId":"hc:edition:8002"}
+    ], "expected":"hc:512"},
+    {"name":"Open Library work keys normalize case", "selected":{"foreignBookId":"gr:112","openLibraryWorkId":"ol:ol123w"}, "library":[
+      {"foreignBookId":"ol:OL123W"}
+    ], "expected":"ol:OL123W"}
+  ]
+}

@@ -301,7 +301,7 @@ func TestEpisodeTimelineIsOnTheAgentsReadAllowList(t *testing.T) {
 	}
 }
 
-// A user report can never self-close — that judgment is the reporter's. What the
+// A user report can never self-close — a human must check the result. What the
 // closing message must not do is describe an applied repair the same way it
 // describes achieving nothing.
 func TestEscalatedCloseMessageDistinguishesAnAppliedFix(t *testing.T) {
@@ -309,7 +309,7 @@ func TestEscalatedCloseMessageDistinguishesAnAppliedFix(t *testing.T) {
 	autoIssue := &Issue{Source: SourceAuto}
 
 	applied := escalatedCloseMessage(userIssue, true)
-	if !strings.Contains(applied, "applied the approved fix") {
+	if !strings.Contains(applied, "A repair was applied") || !strings.Contains(applied, "administrator") {
 		t.Errorf("an applied fix reads as %q", applied)
 	}
 	nothing := escalatedCloseMessage(userIssue, false)
@@ -320,7 +320,7 @@ func TestEscalatedCloseMessageDistinguishesAnAppliedFix(t *testing.T) {
 		t.Errorf("an empty-handed run reads as %q", nothing)
 	}
 	// Auto incidents keep the original wording either way: they have their own
-	// typed recovery proof, and "your call" makes no sense to a machine report.
+	// typed recovery proof.
 	if got := escalatedCloseMessage(autoIssue, true); got != nothing {
 		t.Errorf("auto incident message = %q, want the unchanged text", got)
 	}

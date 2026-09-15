@@ -134,6 +134,51 @@ void main() {
     expect(pushedLocation, '/detail/tv/94997');
   });
 
+  testWidgets(
+      'a retired approval offers attention, cancellation and native search',
+      (tester) async {
+    const delivery = [
+      {
+        'request_id': 7,
+        'format': 'ebook',
+        'state': 'attention',
+        'code': 'catalog_retired',
+        'message': 'Open Library requests have retired.',
+        'can_cancel': true,
+        'can_manage': false
+      },
+    ];
+    final adapter = _ApprovalsAdapter(pending: const [
+      {
+        'id': 7,
+        'media_type': 'book',
+        'title': 'Selected',
+        'book_format': 'ebook',
+        'catalog_provider': 'openlibrary',
+        'catalog_id': 'OL1W',
+        'delivery': delivery
+      },
+    ], delivery: delivery);
+    final container = ProviderContainer(overrides: [
+      authProvider.overrideWith(_FakeAuthNotifier.new),
+      backendClientProvider.overrideWithValue(
+          Dio(BaseOptions(baseUrl: 'http://localhost'))
+            ..httpClientAdapter = adapter),
+      realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
+    ]);
+    addTearDown(container.dispose);
+    await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: PendingRequestsScreen())));
+    await tester.pumpAndSettle();
+    expect(find.text('Needs attention'), findsOneWidget);
+    expect(find.text('Cancel request'), findsOneWidget);
+    expect(find.text('Search books'), findsOneWidget);
+    expect(find.byTooltip('Approve'), findsNothing);
+    expect(adapter.approvalBodies, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('a book row keeps its placeholder and stays inert without an id',
       (tester) async {
     tester.view.physicalSize = const Size(390, 844);
@@ -215,13 +260,13 @@ void main() {
       const ValueKey('approvals-conditional-menu-visibility'),
     );
     expect(toggle, findsOneWidget);
-    expect(tester.widget<Switch>(toggle).value, isFalse);
+    expect(tester.widget<Switch>(toggle).value, isTrue);
 
     await tester.tap(toggle);
     await tester.pumpAndSettle();
 
-    expect(container.read(approvalsMenuOnlyWhenPendingProvider), isTrue);
-    expect(tester.widget<Switch>(toggle).value, isTrue);
+    expect(container.read(approvalsMenuOnlyWhenPendingProvider), isFalse);
+    expect(tester.widget<Switch>(toggle).value, isFalse);
   });
 
   testWidgets(
@@ -288,7 +333,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Needs approval'), findsOneWidget);
-    expect(find.text('Waiting for library'), findsOneWidget);
+    expect(find.text('Saved requests'), findsOneWidget);
     expect(find.text('The Body Keeps the Score'), findsOneWidget);
     // The facts an admin asked "where is Yana's book?" actually needs.
     expect(find.text('Library: Yana’s Books'), findsOneWidget);
@@ -356,7 +401,7 @@ void main() {
     // Both rows are real decisions and keep their buttons — this is not the
     // waiting section. The difference is that one of them stops pretending to
     // be a routine yes/no.
-    expect(find.text('Waiting for library'), findsNothing);
+    expect(find.text('Saved requests'), findsNothing);
     expect(find.byIcon(Icons.check_circle_outline), findsNWidgets(2));
     expect(find.byIcon(Icons.cancel_outlined), findsNWidgets(2));
     expect(container.read(pendingApprovalsProvider), 2);
@@ -367,7 +412,8 @@ void main() {
       findsOneWidget,
     );
     // The ordinary decision says nothing extra.
-    expect(find.textContaining('The automatic add already failed'), findsNothing);
+    expect(
+        find.textContaining('The automatic add already failed'), findsNothing);
   });
 
   testWidgets('an ended author-import wait offers try again, not approve',
@@ -441,8 +487,8 @@ void main() {
     }
     // The other failure kind keeps its own instruction, and an unknown reason
     // stays a non-routine row without inventing a wait to resume.
-    final unresolved =
-        PendingRequestItem.fromJson({'add_failure_reason': 'metadata_unresolved'});
+    final unresolved = PendingRequestItem.fromJson(
+        {'add_failure_reason': 'metadata_unresolved'});
     expect(unresolved.isImportWait, isFalse);
     expect(
       PendingRequestItem.fromJson({'add_failure_reason': 'some_future_reason'})
@@ -547,7 +593,7 @@ void main() {
     // An older server simply has no such section; Approvals reads as it always
     // did rather than reporting an error nobody can act on.
     expect(find.text('No pending requests.'), findsOneWidget);
-    expect(find.text('Waiting for library'), findsNothing);
+    expect(find.text('Saved requests'), findsNothing);
     expect(find.textContaining('Couldn’t check'), findsNothing);
   });
 
@@ -659,8 +705,8 @@ void main() {
     expect(dialog, findsOneWidget);
     expect(find.descendant(of: dialog, matching: find.text('Requested format')),
         findsOneWidget);
-    expect(find.descendant(
-            of: dialog, matching: find.text('eBook + Audiobook')),
+    expect(
+        find.descendant(of: dialog, matching: find.text('eBook + Audiobook')),
         findsOneWidget);
     expect(
       find.descendant(
@@ -676,8 +722,8 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.byType(DropdownButtonFormField<BookRequestFormat>),
-        findsNothing);
+    expect(
+        find.byType(DropdownButtonFormField<BookRequestFormat>), findsNothing);
 
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.pumpAndSettle();
@@ -758,7 +804,8 @@ void main() {
     };
     await approve();
     expect(
-      find.text('Check this book library’s paths and profiles, then try again.'),
+      find.text(
+          'Check this book library’s paths and profiles, then try again.'),
       findsOneWidget,
     );
     tester
@@ -800,6 +847,7 @@ class _FakeAuthNotifier extends AuthNotifier {
 
 class _ApprovalsAdapter implements HttpClientAdapter {
   final List<Map<String, dynamic>> pending;
+  final List<Map<String, dynamic>> delivery;
   Map<String, dynamic> approvalResponse;
   final int approvalStatusCode;
   final List<Map<String, dynamic>> approvalBodies = [];
@@ -815,6 +863,7 @@ class _ApprovalsAdapter implements HttpClientAdapter {
 
   _ApprovalsAdapter({
     this.pending = const [],
+    this.delivery = const [],
     this.approvalResponse = const {},
     this.approvalStatusCode = 200,
     this.waiting = const [],
@@ -852,6 +901,10 @@ class _ApprovalsAdapter implements HttpClientAdapter {
       );
     }
     final body = switch (options.uri.path) {
+      '/api/requests/delivery-status' => {
+          'success': true,
+          'delivery': delivery
+        },
       '/api/admin/requests' => pending,
       '/api/admin/requests/waiting' =>
         waitingStatusCode == 200 ? waiting : const <String, dynamic>{},

@@ -8,6 +8,8 @@ import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/widgets/attention_menu_visibility_switch.dart';
 import 'package:cantinarr/features/ai_assistant/data/ai_settings_service.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:cantinarr/features/media_access/logic/media_access_guide_provider.dart';
+import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
 import 'package:cantinarr/features/settings/ui/settings_screen.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -60,7 +62,8 @@ void main() {
     await _pumpSettings(
       tester,
       _settings(source: AiAccessSource.none),
-      user: const UserProfile(id: 7, username: 'kid', role: 'user', child: true),
+      user:
+          const UserProfile(id: 7, username: 'kid', role: 'user', child: true),
     );
     expect(find.text('Kids account'), findsOneWidget);
   });
@@ -278,8 +281,7 @@ void main() {
       (tester) async {
     final container =
         await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
-    final notifier =
-        container.read(authProvider.notifier) as _FakeAuthNotifier;
+    final notifier = container.read(authProvider.notifier) as _FakeAuthNotifier;
 
     // The tile sits in the Server section, above the fold for every role —
     // this is the only way off a server, so it must not hide behind a gate.
@@ -320,6 +322,58 @@ void main() {
     );
   });
 
+  testWidgets(
+      'a hidden guide opens from Settings and search, and can be restored',
+      (tester) async {
+    final router = GoRouter(initialLocation: '/settings', routes: [
+      GoRoute(path: '/settings', builder: (_, __) => const SettingsScreen()),
+      GoRoute(
+          path: '/media-servers', builder: (_, __) => const MediaAccessGuide()),
+    ]);
+    addTearDown(router.dispose);
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = _SettingsAdapter();
+    await tester.pumpWidget(ProviderScope(overrides: [
+      authProvider.overrideWith(() =>
+          _FakeAuthNotifier(isAdmin: false, instances: const [_homeJellyfin])),
+      aiSettingsProvider
+          .overrideWith((_) async => _settings(source: AiAccessSource.shared)),
+      backendClientProvider.overrideWithValue(dio),
+    ], child: MaterialApp.router(routerConfig: router)));
+    await tester.pumpAndSettle();
+    final container =
+        ProviderScope.containerOf(tester.element(find.byType(SettingsScreen)));
+    await container
+        .read(mediaAccessGuideHiddenProvider.notifier)
+        .setHidden(true);
+    await _dragSettingsUntilFound(tester, find.text('Media server access'));
+    await tester.ensureVisible(find.text('Media server access'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Media server access'));
+    await tester.pumpAndSettle();
+    expect(router.state.uri.path, '/media-servers');
+    expect(tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+        isTrue);
+    router.pop();
+    await tester.pumpAndSettle();
+    tester
+        .state<ScrollableState>(find.byType(Scrollable).first)
+        .position
+        .jumpTo(0);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, 'media server access');
+    await tester.pumpAndSettle();
+    final guideResult = find.text('Settings › Guides');
+    expect(guideResult, findsOneWidget);
+    await tester.tap(guideResult);
+    await tester.pumpAndSettle();
+    expect(router.state.uri.path, '/media-servers');
+    await tester.tap(find.byType(SwitchListTile));
+    await tester.pumpAndSettle();
+    expect(container.read(mediaAccessGuideNavigationVisibleProvider), isTrue);
+    expect(find.byType(MediaAccessGuide), findsOneWidget);
+  });
+
   testWidgets('the media server guide row is absent without a shared server',
       (tester) async {
     await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
@@ -352,8 +406,8 @@ void main() {
                 isAdmin: false,
                 instances: const [_homeJellyfin],
               )),
-          aiSettingsProvider
-              .overrideWith((_) async => _settings(source: AiAccessSource.shared)),
+          aiSettingsProvider.overrideWith(
+              (_) async => _settings(source: AiAccessSource.shared)),
           backendClientProvider.overrideWithValue(dio),
         ],
         child: MaterialApp.router(routerConfig: router),
@@ -380,13 +434,15 @@ void main() {
 /// The colour of the count in "X of Y features configured". That digit is the
 /// only state the Setup Checklist tile carries, so its colour is the contract.
 Color? _setupCountColor(WidgetTester tester) {
-  final text = tester.widget<Text>(find.textContaining('features configured'));
+  final text = tester.widget<Text>(find
+      .textContaining(RegExp('features configured|Nothing left to set up')));
   final span = text.textSpan! as TextSpan;
   return (span.children!.first as TextSpan).style?.color;
 }
 
 Map<String, dynamic> _setupPayload(List<(String, bool)> items,
-        {Set<String> skipped = const {}}) => {
+        {Set<String> skipped = const {}}) =>
+    {
       'items': [
         for (final (key, configured) in items)
           {
@@ -394,7 +450,7 @@ Map<String, dynamic> _setupPayload(List<(String, bool)> items,
             'title': key,
             'description': 'about $key',
             'configured': configured,
-            'optional': key != 'radarr' && key != 'sonarr' && key != 'tmdb',
+            'optional': true,
             if (skipped.contains(key)) 'skipped': true,
           },
       ],
@@ -403,7 +459,7 @@ Map<String, dynamic> _setupPayload(List<(String, bool)> items,
     };
 
 void _setupChecklistTileTests() {
-  testWidgets('reds the count when the server has no library at all',
+  testWidgets('uses the accent when the server has no library at all',
       (tester) async {
     await _pumpSettings(
       tester,
@@ -416,15 +472,17 @@ void _setupChecklistTileTests() {
       ]),
     );
     await _dragSettingsUntilFound(
-        tester, find.textContaining('features configured'));
+        tester,
+        find.textContaining(
+            RegExp('features configured|Nothing left to set up')));
 
     expect(find.textContaining('1 of 3 features configured'), findsOneWidget);
-    expect(_setupCountColor(tester), AppTheme.danger);
+    expect(_setupCountColor(tester), AppTheme.accent);
   });
 
-  testWidgets('ambers the count for a working but unfinished server',
+  testWidgets('uses the accent while features remain to set up',
       (tester) async {
-    // A movies-only server: Sonarr is an unconfigured essential and that is a
+    // A movies-only server: Sonarr is unconfigured and that is a
     // legitimate deployment, so this must not read as broken.
     await _pumpSettings(
       tester,
@@ -437,14 +495,16 @@ void _setupChecklistTileTests() {
       ]),
     );
     await _dragSettingsUntilFound(
-        tester, find.textContaining('features configured'));
+        tester,
+        find.textContaining(
+            RegExp('features configured|Nothing left to set up')));
 
-    expect(_setupCountColor(tester), AppTheme.warning);
+    expect(_setupCountColor(tester), AppTheme.accent);
   });
 
   testWidgets('greens the count once everything left is skipped',
       (tester) async {
-    // The admin acknowledged the optional rows this deployment doesn't want;
+    // The admin skipped the rows this deployment doesn't want;
     // the tile must read finished — no permanent amber nag — and its
     // denominator must shed the skips rather than counting them configured.
     await _pumpSettings(
@@ -456,13 +516,29 @@ void _setupChecklistTileTests() {
         ('sonarr', true),
         ('tmdb', true),
         ('music', false),
-      ], skipped: {'music'}),
+      ], skipped: {
+        'music'
+      }),
     );
     await _dragSettingsUntilFound(
-        tester, find.textContaining('features configured'));
+        tester,
+        find.textContaining(
+            RegExp('features configured|Nothing left to set up')));
 
     expect(_setupCountColor(tester), AppTheme.available);
-    expect(find.text('3 of 3 features configured'), findsOneWidget);
+    expect(find.text('Nothing left to set up'), findsOneWidget);
+  });
+
+  testWidgets('all skipped is complete without a zero denominator',
+      (tester) async {
+    await _pumpSettings(tester, _settings(source: AiAccessSource.shared),
+        isAdmin: true,
+        setupStatus: _setupPayload([('radarr', false), ('push', false)],
+            skipped: {'radarr', 'push'}));
+    await _dragSettingsUntilFound(tester, find.text('Nothing left to set up'));
+    expect(find.text('Nothing left to set up'), findsOneWidget);
+    expect(_setupCountColor(tester), AppTheme.available);
+    expect(find.textContaining('0 of 0'), findsNothing);
   });
 
   testWidgets('greens the count once nothing is left', (tester) async {
@@ -477,7 +553,9 @@ void _setupChecklistTileTests() {
       ]),
     );
     await _dragSettingsUntilFound(
-        tester, find.textContaining('features configured'));
+        tester,
+        find.textContaining(
+            RegExp('features configured|Nothing left to set up')));
 
     expect(_setupCountColor(tester), AppTheme.available);
   });
@@ -495,8 +573,8 @@ Future<ProviderContainer> _pumpSettings(
   dio.httpClientAdapter = _SettingsAdapter(setupStatus: setupStatus);
   final container = ProviderContainer(
     overrides: [
-      authProvider.overrideWith(() =>
-          _FakeAuthNotifier(isAdmin: isAdmin, instances: instances, user: user)),
+      authProvider.overrideWith(() => _FakeAuthNotifier(
+          isAdmin: isAdmin, instances: instances, user: user)),
       aiSettingsProvider.overrideWith((_) async => settings),
       backendClientProvider.overrideWithValue(dio),
     ],

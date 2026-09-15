@@ -13,6 +13,7 @@ import (
 	"time"
 
 	arrcommon "github.com/windoze95/cantinarr-server/internal/arr"
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 	"github.com/windoze95/cantinarr-server/internal/transporterr"
 )
 
@@ -34,10 +35,34 @@ func NewClient(baseURL, apiKey string) *Client {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		httpClient: &http.Client{
+			Transport:     httpx.Internal(),
 			Timeout:       30 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
+}
+
+// WithMutationGuard checks immediately before every consequential request.
+func (c *Client) WithMutationGuard(check func() error) *Client {
+	clone := *c
+	client := *c.httpClient
+	client.Transport = mutationGuard{base: client.Transport, check: check}
+	clone.httpClient = &client
+	return &clone
+}
+
+type mutationGuard struct {
+	base  http.RoundTripper
+	check func() error
+}
+
+func (g mutationGuard) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		if err := g.check(); err != nil {
+			return nil, err
+		}
+	}
+	return g.base.RoundTrip(r)
 }
 
 type Series struct {
@@ -46,6 +71,9 @@ type Series struct {
 	TvdbID int    `json:"tvdbId"`
 	TmdbID int    `json:"tmdbId"`
 	Year   int    `json:"year"`
+	// Sonarr clears addOptions only after its initial refresh and post-add
+	// monitoring have finished. Episode-only corrections wait for that fence.
+	AddOptions json.RawMessage `json:"addOptions"`
 	// Runtime is the show's own per-episode runtime in minutes — the honest
 	// baseline the truncated-import sentinel judges an imported file against.
 	Runtime        int               `json:"runtime"`
@@ -119,6 +147,7 @@ type AddSeriesRequest struct {
 	RootFolderPath   string `json:"rootFolderPath"`
 	Monitored        bool   `json:"monitored"`
 	SeasonFolder     bool   `json:"seasonFolder"`
+	MonitorNewItems  string `json:"monitorNewItems,omitempty"`
 	// Seasons carries explicit per-season monitored flags applied at add time.
 	// Sonarr keeps them through its add + metadata refresh, so this is the
 	// reliable way to add a series watching an arbitrary set of seasons; leave
@@ -207,20 +236,23 @@ func (c *Client) doRequestContext(ctx context.Context, method, path string) (*ht
 }
 
 func (c *Client) LookupByTVDB(tvdbID int) (*LookupResult, error) {
-	resp, err := c.doRequest("GET", fmt.Sprintf("/api/v3/series/lookup?term=tvdb:%d", tvdbID))
-	if err != nil {
-		return nil, fmt.Errorf("sonarr lookup: %w", err)
-	}
-	defer resp.Body.Close()
-
 	var results []LookupResult
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
-		return nil, fmt.Errorf("decode sonarr lookup: %w", err)
+	if err := c.do("GET", fmt.Sprintf("/api/v3/series/lookup?term=tvdb:%d", tvdbID), nil, &results); err != nil {
+		return nil, err
 	}
-	if len(results) == 0 {
-		return nil, fmt.Errorf("no results found for TVDB ID %d", tvdbID)
+	var match *LookupResult
+	for i := range results {
+		if results[i].TvdbID == tvdbID {
+			if match != nil {
+				return nil, fmt.Errorf("ambiguous results for TVDB ID %d", tvdbID)
+			}
+			match = &results[i]
+		}
 	}
-	return &results[0], nil
+	if match == nil {
+		return nil, fmt.Errorf("no verified results for TVDB ID %d", tvdbID)
+	}
+	return match, nil
 }
 
 // LookupByTitle returns Sonarr's metadata search results for a text term, in
@@ -228,15 +260,9 @@ func (c *Client) LookupByTVDB(tvdbID int) (*LookupResult, error) {
 // records (a reboot vs the original), so callers must verify identity (year,
 // ids) against the result they pick — never act on the ordering alone.
 func (c *Client) LookupByTitle(title string) ([]LookupResult, error) {
-	resp, err := c.doRequest("GET", "/api/v3/series/lookup?term="+url.QueryEscape(title))
-	if err != nil {
-		return nil, fmt.Errorf("sonarr title lookup: %w", err)
-	}
-	defer resp.Body.Close()
-
 	var results []LookupResult
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
-		return nil, fmt.Errorf("decode sonarr title lookup: %w", err)
+	if err := c.do("GET", "/api/v3/series/lookup?term="+url.QueryEscape(title), nil, &results); err != nil {
+		return nil, err
 	}
 	if len(results) == 0 {
 		return nil, fmt.Errorf("no results found for title %q", title)
@@ -259,18 +285,15 @@ func (c *Client) GetSeries(id int) (*Series, error) {
 }
 
 func (c *Client) GetSeriesByTVDB(tvdbID int) (*Series, error) {
-	resp, err := c.doRequest("GET", fmt.Sprintf("/api/v3/series?tvdbId=%d", tvdbID))
-	if err != nil {
-		return nil, fmt.Errorf("sonarr get series: %w", err)
-	}
-	defer resp.Body.Close()
-
 	var series []Series
-	if err := json.NewDecoder(resp.Body).Decode(&series); err != nil {
-		return nil, fmt.Errorf("decode sonarr series: %w", err)
+	if err := c.do("GET", fmt.Sprintf("/api/v3/series?tvdbId=%d", tvdbID), nil, &series); err != nil {
+		return nil, err
 	}
 	if len(series) == 0 {
 		return nil, nil
+	}
+	if len(series) != 1 || series[0].TvdbID != tvdbID || series[0].ID <= 0 {
+		return nil, fmt.Errorf("library returned an unverified TVDB identity")
 	}
 	return &series[0], nil
 }
@@ -534,13 +557,14 @@ type SeriesContext struct {
 
 // EpisodeContext is the lean episode object embedded in queue/history records.
 type EpisodeContext struct {
-	ID            int    `json:"id"`
-	SeriesID      int    `json:"seriesId"`
-	SeasonNumber  int    `json:"seasonNumber"`
-	EpisodeNumber int    `json:"episodeNumber"`
-	EpisodeFileID *int   `json:"episodeFileId"`
-	HasFile       *bool  `json:"hasFile"`
-	Title         string `json:"title"`
+	ID            int        `json:"id"`
+	SeriesID      int        `json:"seriesId"`
+	SeasonNumber  int        `json:"seasonNumber"`
+	EpisodeNumber int        `json:"episodeNumber"`
+	EpisodeFileID *int       `json:"episodeFileId"`
+	HasFile       *bool      `json:"hasFile"`
+	Title         string     `json:"title"`
+	AirDateUtc    *time.Time `json:"airDateUtc,omitempty"`
 }
 
 type DetailedQueueItem struct {
@@ -567,6 +591,16 @@ type DetailedQueueItem struct {
 	} `json:"statusMessages"`
 	Series  *SeriesContext  `json:"series,omitempty"`
 	Episode *EpisodeContext `json:"episode,omitempty"`
+}
+
+// AirTimeAtSnapshot exposes a date only for a consistently identified episode.
+func (item DetailedQueueItem) AirTimeAtSnapshot() *time.Time {
+	if item.SeriesID <= 0 || item.EpisodeID <= 0 || item.Episode == nil ||
+		item.Episode.ID != item.EpisodeID || item.Episode.SeriesID != item.SeriesID ||
+		item.Episode.SeasonNumber < 0 || item.Episode.EpisodeNumber <= 0 {
+		return nil
+	}
+	return item.Episode.AirDateUtc
 }
 
 // FileIDAtSnapshot returns the exact embedded episode's file ID only when
@@ -882,6 +916,7 @@ type Release struct {
 // release searches, which query every configured indexer.
 func releaseSearchClient() *http.Client {
 	return &http.Client{
+		Transport:     httpx.Internal(),
 		Timeout:       120 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}
@@ -956,6 +991,7 @@ func (c *Client) TriggerRssSync() error {
 // libraries big enough to matter.
 func libraryFetchClient() *http.Client {
 	return &http.Client{
+		Transport:     httpx.Internal(),
 		Timeout:       120 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}

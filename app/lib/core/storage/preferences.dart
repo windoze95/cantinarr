@@ -6,38 +6,11 @@ final sharedPreferencesProvider = FutureProvider<SharedPreferences>(
   (_) => SharedPreferences.getInstance(),
 );
 
-const _requestNotificationsKey = 'request_notifications_enabled';
-
-/// Whether in-app notifications for request approvals/denials are shown.
-/// Stored locally on the device and defaults to enabled; users can mute them
-/// from Settings without affecting the passively-updated request status.
-class RequestNotificationsNotifier extends StateNotifier<bool> {
-  RequestNotificationsNotifier() : super(true) {
-    _load();
-  }
-
-  Future<void> _load() async {
-    final prefs = await SharedPreferences.getInstance();
-    state = prefs.getBool(_requestNotificationsKey) ?? true;
-  }
-
-  Future<void> set(bool value) async {
-    state = value;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_requestNotificationsKey, value);
-  }
-}
-
-final requestNotificationsEnabledProvider =
-    StateNotifierProvider<RequestNotificationsNotifier, bool>(
-  (ref) => RequestNotificationsNotifier(),
-);
-
 const _setupReminderKey = 'setup_reminder_enabled';
 
 /// Whether the drawer shows a "Setup checklist" reminder while features
-/// remain unconfigured. Admins who have deliberately skipped features can
-/// mute it from the wizard; the Settings tile always remains.
+/// remain to set up or skip. Admins can mute it from the checklist; the
+/// Settings tile always remains.
 class SetupReminderNotifier extends StateNotifier<bool> {
   SetupReminderNotifier() : super(true) {
     _load();
@@ -68,10 +41,10 @@ const _profileApprovalsMenuOnlyWhenPendingKey =
     'profile_approvals_menu_only_when_pending';
 
 /// A device-local preference that hides an admin queue from the navigation
-/// menu while that queue has no active work. The default is false so existing
-/// installs keep their always-visible navigation until an admin opts in.
+/// menu while that queue has no active work. Hidden while empty by default;
+/// an explicitly saved preference still wins.
 class ConditionalMenuVisibilityNotifier extends StateNotifier<bool> {
-  ConditionalMenuVisibilityNotifier(this._key) : super(false) {
+  ConditionalMenuVisibilityNotifier(this._key) : super(true) {
     _load();
   }
 
@@ -79,7 +52,7 @@ class ConditionalMenuVisibilityNotifier extends StateNotifier<bool> {
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    state = prefs.getBool(_key) ?? false;
+    state = prefs.getBool(_key) ?? true;
   }
 
   Future<void> set(bool value) async {

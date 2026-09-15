@@ -33,6 +33,7 @@ func newHandlerEnv(t *testing.T) (*env, http.Handler) {
 	r.Get("/api/admin/media-servers/{instanceID}/users", h.RemoteUsers)
 	r.Put("/api/admin/users/{userID}/media-servers/{instanceID}/account", h.LinkAccount)
 	r.Delete("/api/admin/users/{userID}/media-servers/{instanceID}/account", h.UnlinkAccount)
+	r.Patch("/api/admin/users/{userID}/media-servers/{instanceID}/account/management", h.SetManagement)
 	return e, r
 }
 
@@ -237,7 +238,7 @@ func TestAdminRoutesStatusMapping(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &account); err != nil {
 		t.Fatal(err)
 	}
-	if account.UserID != alice || account.InstanceName != "Home" || account.Username != "alice" || account.CreatedByCantinarr || account.Disabled {
+	if account.UserID != alice || account.InstanceName != "Home" || account.Username != "alice" || account.CreatedByCantinarr || account.ManageAccess || !account.Granted || !account.Disabled {
 		t.Fatalf("account = %+v", account)
 	}
 	if rec := link(bob, jf, aliceID); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "remote_already_linked") {

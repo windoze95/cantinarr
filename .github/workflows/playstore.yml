@@ -2,7 +2,7 @@ name: Deploy to Play Store
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release/**']
     paths:
       - "app/**"
       - "!app/web/**"
@@ -17,20 +17,33 @@ on:
       # Listing copy/graphics sync via storelisting.yml — no build needed.
       - "!app/android/fastlane/metadata/**"
       - ".github/workflows/playstore.yml"
+      - ".github/workflows/prepare-mobile.yml"
+      - "scripts/release_control.py"
   # Build-only check (no Play upload) when the Android plumbing itself changes.
   pull_request:
-    branches: [main]
+    branches: [main, 'release/**']
     paths:
       - "app/android/**"
+      - "app/.flutter-version"
       - "app/pubspec.yaml"
+      - "app/pubspec.lock"
       - ".github/workflows/playstore.yml"
+      - "scripts/tests/test_playstore_release.rb"
+  workflow_call:
+    inputs:
+      preview_pr:
+        type: string
+        default: ''
+      reviewed_sha:
+        type: string
+        default: ''
   workflow_dispatch:
     inputs:
       track:
-        description: "Play track to upload to"
+        description: "Play tracks (both = open + closed testing, beta = open, alpha = closed)"
         type: choice
-        options: [alpha, internal]
-        default: alpha
+        options: [both, beta, alpha, internal]
+        default: both
       release_status:
         description: "Release status (a brand-new app must use draft until its first release is rolled out in the Play Console)"
         type: choice
@@ -41,13 +54,27 @@ on:
 # concurrent runs compute the SAME code and the second upload is rejected as a
 # duplicate. Queue instead of racing, and never cancel an in-flight upload.
 concurrency:
-  group: playstore-deploy
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('playstore-pr-{0}', github.event.pull_request.number) || 'playstore-deploy' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
 
 jobs:
+  source:
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/prepare-mobile.yml
+    with:
+      preview_pr: ${{ inputs.preview_pr || '' }}
+      reviewed_sha: ${{ inputs.reviewed_sha || '' }}
+
   # No AAB reaches Play until CI has passed on this exact commit. The pull
   # request trigger is a build-only check that uploads nothing, so it is exempt.
   gate:
+    needs: [source]
+    if: needs.source.outputs.enabled == 'true'
     # The repo's default token is contents/packages read only, and a called
     # workflow can't request a scope its caller doesn't hold — so the scope
     # that reads another workflow's run status is granted here.
@@ -56,11 +83,18 @@ jobs:
       contents: read
     uses: ./.github/workflows/require-ci-green.yml
     with:
-      sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      enforce: ${{ github.event_name != 'pull_request' }}
+      sha: ${{ needs.source.outputs.sha }}
+      ci-head: ${{ needs.source.outputs.ci_head }}
 
   deploy:
-    needs: [gate]
+    needs: [source, gate]
+    if: >-
+      !cancelled() && (github.event_name == 'pull_request' ||
+      (needs.source.outputs.enabled == 'true' && needs.gate.result == 'success'))
+    environment: ${{ inputs.preview_pr && 'mobile-preview' || 'mobile-publishing' }}
+    env:
+      SOURCE_JSON: ${{ needs.source.outputs.source }}
+      GH_TOKEN: ${{ github.token }}
     runs-on: ubuntu-latest
 
     defaults:
@@ -72,19 +106,39 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          ref: ${{ needs.source.outputs.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Checkout publishing tools from the workflow revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-policy
+          persist-credentials: false
+
+      - name: Verify preview audience was configured
+        if: inputs.preview_pr != '' && inputs.preview_pr != null
+        env:
+          PREVIEW_READY: ${{ vars.MOBILE_PREVIEW_READY }}
+        run: test "$PREVIEW_READY" = 'true'
 
       # Without Play credentials the workflow still builds and attaches the signed
       # AAB (the very first upload of a new app must happen manually in the Play
       # Console anyway - the publisher API can't create it).
       - name: Check Play credentials
+        if: github.event_name != 'pull_request'
         id: play
         env:
-          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ github.event_name != 'pull_request' && secrets.PLAY_SERVICE_ACCOUNT_JSON || '' }}
         run: |
           if [ -n "$PLAY_SERVICE_ACCOUNT_JSON" ]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
+            if [ '${{ needs.source.outputs.channel }}' != beta ]; then
+              echo "::error::Candidate and phone preview delivery require Play credentials."
+              exit 1
+            fi
             echo "::notice::PLAY_SERVICE_ACCOUNT_JSON is not set - building the signed AAB as an artifact and skipping the Play upload."
           fi
 
@@ -93,10 +147,15 @@ jobs:
         with:
           ruby-version: "3.3"
 
+      - name: Verify Play publishing
+        run: |
+          gem install fastlane minitest --no-document
+          ruby ../scripts/tests/test_playstore_release.rb
+
       - name: Calculate build number
         id: build_number
         env:
-          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ github.event_name != 'pull_request' && secrets.PLAY_SERVICE_ACCOUNT_JSON || '' }}
         run: |
           VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -104,7 +163,6 @@ jobs:
             printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
             export PLAY_JSON_KEY_PATH="$RUNNER_TEMP/play-service-account.json"
             cd android
-            gem install fastlane
             fastlane next_build_number
           else
             echo "build_number=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
@@ -116,15 +174,21 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Read Flutter version
+        id: flutter-version
+        run: echo "version=$(cat .flutter-version)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
           channel: stable
 
       - name: Install dependencies
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Configure signing
+        if: github.event_name != 'pull_request'
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -141,7 +205,7 @@ jobs:
 
       - name: Build AAB
         run: |
-          flutter build appbundle \
+          flutter build appbundle --no-pub \
             --build-number=${{ steps.build_number.outputs.build_number }} \
             --build-name=${{ steps.build_number.outputs.version }}
 
@@ -152,17 +216,40 @@ jobs:
           path: app/build/app/outputs/bundle/release/app-release.aab
           if-no-files-found: error
 
+      - name: Recheck source before upload
+        if: github.event_name != 'pull_request'
+        run: python3 ../.release-policy/scripts/release_control.py current
+
       - name: Upload to Play Store
         if: github.event_name != 'pull_request' && steps.play.outputs.available == 'true'
         env:
-          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-          PLAY_TRACK: ${{ inputs.track || 'alpha' }}
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ github.event_name != 'pull_request' && secrets.PLAY_SERVICE_ACCOUNT_JSON || '' }}
+          PLAY_TRACK: ${{ needs.source.outputs.channel == 'preview' && 'internal' || needs.source.outputs.channel == 'candidate' && 'both' || inputs.track || 'both' }}
+          PLAY_OWNER_CANDIDATE: ${{ needs.source.outputs.channel == 'candidate' }}
+          BUILD_TEST_NOTES: ${{ format('{0} | PR {1} | commit {2}', needs.source.outputs.channel, inputs.preview_pr || 'merged', needs.source.outputs.sha) }}
+          PLAY_VERSION_CODE: ${{ steps.build_number.outputs.build_number }}
           PLAY_RELEASE_STATUS: ${{ inputs.release_status || 'completed' }}
         run: |
           printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
           export PLAY_JSON_KEY_PATH="$RUNNER_TEMP/play-service-account.json"
           cd android
+          printf '%s\n' "$BUILD_TEST_NOTES" > "fastlane/metadata/android/en-US/changelogs/${PLAY_VERSION_CODE}.txt"
           fastlane beta
+
+      - name: Record uploaded build identity
+        if: github.event_name != 'pull_request' && steps.play.outputs.available == 'true'
+        working-directory: .
+        env:
+          BUILD_VERSION: ${{ steps.build_number.outputs.version }}
+          BUILD_NUMBER: ${{ steps.build_number.outputs.build_number }}
+        run: python3 .release-policy/scripts/release_control.py record --platform android
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request' && steps.play.outputs.available == 'true'
+        with:
+          name: android-release-record-${{ github.run_attempt }}
+          path: release.json
+          retention-days: 90
 
       - name: Cleanup signing material
         if: always()

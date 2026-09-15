@@ -90,6 +90,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		"openai_reasoning_effort":       strings.TrimSpace(h.registry.GetSetting(KeyOpenAIReasoningEffort)),
 		"local_openai_base_url":         strings.TrimSpace(h.registry.GetSetting(KeyLocalOpenAIBaseURL)),
 		"local_openai_reasoning_effort": strings.TrimSpace(h.registry.GetSetting(KeyLocalOpenAIReasoningEffort)),
+		"local_openai_use_proxy":        h.registry.LocalOpenAIUseProxy(),
 		"providers":                     AIProviders,
 		"health_check": map[string]any{
 			"enabled":        h.registry.AIHealthCheckEnabled(),
@@ -137,6 +138,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	valid[KeyOpenAIReasoningEffort] = true
 	valid[KeyLocalOpenAIBaseURL] = true
 	valid[KeyLocalOpenAIReasoningEffort] = true
+	valid[KeyLocalOpenAIUseProxy] = true
 
 	for key := range body {
 		if !valid[key] {
@@ -194,11 +196,11 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	// configured endpoint, not the provider default. The pairs are
 	// provider-scoped: hosted openai and the local provider never share a
 	// slot.
-	openaiEndpoint, ok := h.effectiveEndpointSettings(w, body, "", KeyOpenAIReasoningEffort)
+	openaiEndpoint, ok := h.effectiveEndpointSettings(w, body, "", KeyOpenAIReasoningEffort, "")
 	if !ok {
 		return
 	}
-	localEndpoint, ok := h.effectiveEndpointSettings(w, body, KeyLocalOpenAIBaseURL, KeyLocalOpenAIReasoningEffort)
+	localEndpoint, ok := h.effectiveEndpointSettings(w, body, KeyLocalOpenAIBaseURL, KeyLocalOpenAIReasoningEffort, KeyLocalOpenAIUseProxy)
 	if !ok {
 		return
 	}
@@ -244,6 +246,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			case AIProviderLocalOpenAI:
 				profile.BaseURL = localEndpoint.baseURL
 				profile.ReasoningEffort = localEndpoint.effort
+				profile.UseProxy = localEndpoint.useProxy
 			}
 			profiles[option.ID] = profile
 			body[option.CredentialKey] = value
@@ -260,7 +263,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if openaiEndpoint.effortSet && candidate.Provider == AIProviderOpenAI {
 		mustTestSelected = true
 	}
-	if (localEndpoint.baseURLSet || localEndpoint.effortSet) && candidate.Provider == AIProviderLocalOpenAI {
+	if (localEndpoint.baseURLSet || localEndpoint.effortSet || localEndpoint.useProxySet) && candidate.Provider == AIProviderLocalOpenAI {
 		mustTestSelected = true
 	}
 	if mustTestSelected {
@@ -279,6 +282,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			case AIProviderLocalOpenAI:
 				profile.BaseURL = localEndpoint.baseURL
 				profile.ReasoningEffort = localEndpoint.effort
+				profile.UseProxy = localEndpoint.useProxy
 			}
 			profiles[candidate.Provider] = profile
 		}
@@ -302,6 +306,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		{key: KeyOpenAIReasoningEffort, value: openaiEndpoint.effort, set: openaiEndpoint.effortSet},
 		{key: KeyLocalOpenAIBaseURL, value: localEndpoint.baseURL, set: localEndpoint.baseURLSet},
 		{key: KeyLocalOpenAIReasoningEffort, value: localEndpoint.effort, set: localEndpoint.effortSet},
+		{key: KeyLocalOpenAIUseProxy, value: strconv.FormatBool(localEndpoint.useProxy), set: localEndpoint.useProxySet},
 	}
 	if err := h.applyUpdate(body, candidate, providerSet || modelSet, healthEnabled, healthSet, plainWrites); err != nil {
 		writeJSONError(w, "failed to save settings", http.StatusInternalServerError)
@@ -369,23 +374,32 @@ func credentialValidationDiagnostic(err error) string {
 	return secrets.RedactError(err).Error()
 }
 
-// endpointSettings is the effective provider-scoped base-URL/effort pair for
-// one save, with per-field presence so an untouched field never rewrites the
-// stored row.
+// endpointSettings is one provider's effective endpoint configuration for a
+// single save -- base URL, reasoning effort, and transport class -- with
+// per-field presence so an untouched field never rewrites the stored row.
 type endpointSettings struct {
 	baseURL    string
 	baseURLSet bool
 	effort     string
 	effortSet  bool
+	// useProxy declares the endpoint internet-bound, which decides the
+	// transport class its turns ride. Provider-scoped like the pair above.
+	useProxy    bool
+	useProxySet bool
 }
 
-// effectiveEndpointSettings resolves one provider's endpoint pair from the
-// request body over the stored values, writing the HTTP error itself and
-// returning ok=false when a supplied value is invalid.
-func (h *Handler) effectiveEndpointSettings(w http.ResponseWriter, body map[string]string, baseURLKey, effortKey string) (endpointSettings, bool) {
+// effectiveEndpointSettings resolves one provider's endpoint settings from
+// the request body over the stored values, writing the HTTP error itself and
+// returning ok=false when a supplied value is invalid. An empty key name
+// means the provider has no such setting.
+func (h *Handler) effectiveEndpointSettings(w http.ResponseWriter, body map[string]string, baseURLKey, effortKey, proxyKey string) (endpointSettings, bool) {
 	settings := endpointSettings{effort: strings.TrimSpace(h.registry.GetSetting(effortKey))}
 	if baseURLKey != "" {
 		settings.baseURL = strings.TrimSpace(h.registry.GetSetting(baseURLKey))
+	}
+	if proxyKey != "" {
+		stored, err := strconv.ParseBool(strings.TrimSpace(h.registry.GetSetting(proxyKey)))
+		settings.useProxy = err == nil && stored
 	}
 	if value, set := body[baseURLKey]; baseURLKey != "" && set {
 		settings.baseURLSet = true
@@ -409,6 +423,15 @@ func (h *Handler) effectiveEndpointSettings(w http.ResponseWriter, body map[stri
 			writeJSONError(w, effortKey+" must be one of none, minimal, low, medium, high, or empty for auto", http.StatusBadRequest)
 			return settings, false
 		}
+	}
+	if value, set := body[proxyKey]; proxyKey != "" && set {
+		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			writeJSONError(w, proxyKey+" must be true or false", http.StatusBadRequest)
+			return settings, false
+		}
+		settings.useProxySet = true
+		settings.useProxy = parsed
 	}
 	return settings, true
 }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../radarr/data/radarr_models.dart';
 import '../../sonarr/data/sonarr_models.dart';
+import '../../request/data/request_service.dart';
 import '../data/tmdb_models.dart';
 
 /// Library presence indicator for search results.
@@ -10,7 +11,7 @@ class LibraryStatus {
   final String label;
   final Color color;
 
-  /// The all-seasons episode line for a partially-available series, e.g.
+  /// The episode line for a partially-available title, e.g.
   /// `'4/8 eps'` — derived from [SonarrSeries.episodeTotals], the same
   /// accessor the Partial verdict itself is decided from
   /// (deliberately not `statistics.episodeCount`, which
@@ -39,6 +40,44 @@ const _requested = LibraryStatus(
   label: 'Requested',
   color: AppTheme.requested,
 );
+
+const unknownTVLibraryStatus = LibraryStatus(
+  label: 'Status unknown',
+  color: AppTheme.textSecondary,
+);
+
+/// Server-corrected TV identity and counts are already in TMDB coordinates.
+/// Do not join this projection to Sonarr's parent-wide identity or statistics.
+LibraryStatus? tvLibraryStatus(RequestStatusDetail detail) {
+  if (!detail.isKnown || !(detail.match?.isResolved ?? true)) {
+    return unknownTVLibraryStatus;
+  }
+  return switch (detail.status) {
+    RequestStatus.available => _available,
+    RequestStatus.requested => _requested,
+    RequestStatus.pending => const LibraryStatus(
+        label: 'Pending', color: AppTheme.requested),
+    RequestStatus.downloading => const LibraryStatus(
+        label: 'Downloading', color: AppTheme.downloading),
+    RequestStatus.partial => _scopedPartial(detail.seasons),
+    RequestStatus.unavailable || RequestStatus.denied => null,
+  };
+}
+
+LibraryStatus _scopedPartial(List<RequestSeasonStatus> seasons) {
+  var files = 0;
+  var total = 0;
+  for (final season in seasons) {
+    if (season.seasonNumber <= 0) continue;
+    files += season.episodeFileCount;
+    total += season.episodeCount;
+  }
+  return LibraryStatus(
+    label: _partial.label,
+    color: _partial.color,
+    episodeSubtitle: total > 0 ? '$files/$total eps' : null,
+  );
+}
 
 /// Availability chips for search results, in the requester's vocabulary
 /// (Available / Partial / Requested) so they agree with what the

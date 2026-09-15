@@ -1,6 +1,7 @@
 package instance
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,31 +14,37 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/deluge"
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 	"github.com/windoze95/cantinarr-server/internal/mediapath"
 	"github.com/windoze95/cantinarr-server/internal/nzbget"
 	"github.com/windoze95/cantinarr-server/internal/plex"
+	"github.com/windoze95/cantinarr-server/internal/rutorrent"
 	"github.com/windoze95/cantinarr-server/internal/sabnzbd"
 	"github.com/windoze95/cantinarr-server/internal/transmission"
 )
 
 // allowedServiceTypes is the set of supported service types.
 var allowedServiceTypes = map[string]bool{
-	"radarr":       true,
-	"sonarr":       true,
-	"chaptarr":     true,
-	"lidarr":       true,
-	"sabnzbd":      true,
-	"qbittorrent":  true,
-	"nzbget":       true,
-	"transmission": true,
-	"tautulli":     true,
-	"tracearr":     true,
-	"jellyfin":     true,
-	"emby":         true,
-	"plex":         true,
+	"radarr":         true,
+	"sonarr":         true,
+	"chaptarr":       true,
+	"lidarr":         true,
+	"sabnzbd":        true,
+	"qbittorrent":    true,
+	"nzbget":         true,
+	"transmission":   true,
+	"deluge":         true,
+	"rutorrent":      true,
+	"tautulli":       true,
+	"tracearr":       true,
+	"audiobookshelf": true,
+	"jellyfin":       true,
+	"emby":           true,
+	"plex":           true,
 }
 
-const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'lidarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli', 'tracearr', 'jellyfin', 'emby', 'plex'"}`
+const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'lidarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'deluge', 'rutorrent', 'tautulli', 'tracearr', 'jellyfin', 'emby', 'plex', 'audiobookshelf'"}`
 
 // grantableServiceTypes is the subset a user can hold access-grant rows for.
 // Download clients and watch-history providers (Tautulli, Tracearr) are admin
@@ -45,13 +52,14 @@ const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 's
 // confusion. For media servers a grant is
 // the eligibility to create an account there.
 var grantableServiceTypes = map[string]bool{
-	"radarr":   true,
-	"sonarr":   true,
-	"chaptarr": true,
-	"lidarr":   true,
-	"jellyfin": true,
-	"emby":     true,
-	"plex":     true,
+	"radarr":         true,
+	"sonarr":         true,
+	"chaptarr":       true,
+	"lidarr":         true,
+	"audiobookshelf": true,
+	"jellyfin":       true,
+	"emby":           true,
+	"plex":           true,
 }
 
 // instanceResponse is the JSON shape returned to clients. All credentials are
@@ -122,6 +130,7 @@ type Handler struct {
 	arrCallbackURL string
 	mediaRoots     []string
 	grantObserver  GrantObserver
+	configChanged  func()
 	// sharedLibrariesObserver is told when a media server's shared-library
 	// selection changes, so existing accounts follow the new set.
 	sharedLibrariesObserver SharedLibrariesObserver
@@ -129,15 +138,45 @@ type Handler struct {
 	// plexBaseURL is where the link flow talks to (plex.tv, or a test).
 	plexLinks   *plexLinks
 	plexBaseURL string
+	// hardcoverAPIURL is where a pasted Hardcover token is verified
+	// (api.hardcover.app, or a test).
+	hardcoverAPIURL string
+	hardcover       *HardcoverManager
+	// hardcoverObserver is told which instance's Hardcover token changed, so
+	// anything cached under the old token (the trending list) is dropped.
+	hardcoverObserver func(instanceID string)
+}
+
+// SetHardcoverObserver installs the token-change notification.
+func (h *Handler) SetHardcoverObserver(observer func(instanceID string)) {
+	h.hardcoverObserver = observer
+	h.hardcover.changed = observer
+}
+
+func (h *Handler) notifyHardcoverChanged(instanceID string) {
+	if h.hardcoverObserver != nil {
+		h.hardcoverObserver(instanceID)
+	}
 }
 
 // NewHandler creates a new instance handler.
 func NewHandler(store *Store, registry *Registry, arrCallbackURL ...string) *Handler {
-	h := &Handler{store: store, registry: registry, webhookLocks: make(map[string]*sync.Mutex), plexLinks: newPlexLinks(), plexBaseURL: plex.BaseURL}
+	h := &Handler{store: store, registry: registry, webhookLocks: make(map[string]*sync.Mutex), plexLinks: newPlexLinks(), plexBaseURL: plex.BaseURL, hardcoverAPIURL: hardcoverAPIURL}
+	h.hardcover = newHardcoverManager(store)
 	if len(arrCallbackURL) > 0 {
 		h.arrCallbackURL = strings.TrimRight(arrCallbackURL[0], "/")
 	}
 	return h
+}
+
+// SetConfigChangedObserver installs a payload-free configuration invalidation.
+// Wired during startup; successful writes notify every signed-in session.
+func (h *Handler) SetConfigChangedObserver(changed func()) { h.configChanged = changed }
+
+func (h *Handler) notifyConfigChanged() {
+	if h.configChanged != nil {
+		h.configChanged()
+	}
 }
 
 // SetMediaDownloadRoots supplies the deployment-owned outer filesystem
@@ -274,6 +313,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	h.notifyConfigChanged()
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(h.toResponse(&inst))
 }
@@ -349,6 +389,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.registry.InvalidateClient(instanceID)
+	h.notifyConfigChanged()
 
 	// The shared-library selection is access, not just a default for new
 	// accounts: when it changes, the accounts Cantinarr created here follow
@@ -465,6 +506,9 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.registry.InvalidateClient(instanceID)
+	h.hardcover.ForgetUnlinked()
+	h.notifyHardcoverChanged(instanceID)
+	h.notifyConfigChanged()
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -538,6 +582,7 @@ func (h *Handler) UpdateUserDefaultInstances(w http.ResponseWriter, r *http.Requ
 	if defaults == nil {
 		defaults = map[string]string{}
 	}
+	h.notifyConfigChanged()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(defaults)
 }
@@ -604,6 +649,7 @@ func (h *Handler) UpdateUserInstanceGrants(w http.ResponseWriter, r *http.Reques
 	if grants == nil {
 		grants = map[string][]string{}
 	}
+	h.notifyConfigChanged()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(grants)
 }
@@ -646,6 +692,7 @@ func (h *Handler) GetInstanceUsers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
 		return
 	}
+	h.notifyConfigChanged()
 	h.writeInstanceUsers(w, serviceType)
 }
 
@@ -774,6 +821,7 @@ func (h *Handler) UpdateInstanceGrantUsers(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	h.notifyGrantObserver(affected)
+	h.notifyConfigChanged()
 	h.writeInstanceGrants(w, serviceType)
 }
 
@@ -801,8 +849,14 @@ func validateRequiredFields(inst *Instance) error {
 		if inst.Username == "" || inst.Password == "" {
 			return fmt.Errorf("username and password are required for %s", inst.ServiceType)
 		}
-	case "transmission":
-		// Username/password are optional: Transmission RPC may run without auth.
+	case "transmission", "rutorrent":
+		// Username/password are optional: Transmission RPC may run without
+		// auth, and ruTorrent is only protected when its web server asks.
+	case "deluge":
+		// Deluge's web UI has a password and no username.
+		if inst.Password == "" {
+			return fmt.Errorf("password is required for deluge")
+		}
 	case "plex":
 		if inst.APIKey == "" {
 			return fmt.Errorf("link a Plex account first")
@@ -862,6 +916,12 @@ func validateConnection(inst *Instance) error {
 	case "transmission":
 		_, err := transmission.NewClient(inst.URL, inst.Username, inst.Password).SessionGet()
 		return err
+	case "deluge":
+		_, err := deluge.NewClient(inst.URL, inst.Password).Version()
+		return err
+	case "rutorrent":
+		_, err := rutorrent.NewClient(inst.URL, inst.Username, inst.Password).Version()
+		return err
 	case "tautulli", "tracearr":
 		return validateWatchHistoryConnection(inst)
 	default:
@@ -876,6 +936,7 @@ func validateConnection(inst *Instance) error {
 // on v1) is reachable by hitting its system/status endpoint.
 func validateArrURL(baseURL, apiKey, apiVersion string) error {
 	client := &http.Client{
+		Transport:     httpx.Internal(),
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}
@@ -903,4 +964,9 @@ func validateArrURL(baseURL, apiKey, apiVersion string) error {
 		return fmt.Errorf("server returned status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// ResolveHardcoverToken is wired only into upstream catalog cache misses.
+func (h *Handler) ResolveHardcoverToken(ctx context.Context, id, rejected string) (string, error) {
+	return h.hardcover.Token(ctx, id, rejected)
 }

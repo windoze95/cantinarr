@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "reviewed": "2026-09-12",
+  "corrections": [
+    {"tmdb_id":113988,"title":"DAHMER - Monster: The Jeffrey Dahmer Story","tvdb_id":389492,"target_title":"Monster (2022)","season_map":{"1":1},"source":"https://www.thetvdb.com/series/monster-the-jeffrey-dahmer-story/seasons/official/1"},
+    {"tmdb_id":225634,"title":"Monsters: The Lyle and Erik Menendez Story","tvdb_id":389492,"target_title":"Monster (2022)","season_map":{"1":2},"source":"https://www.thetvdb.com/series/monster-the-jeffrey-dahmer-story/seasons/official/2"},
+    {"tmdb_id":286801,"title":"Monster: The Ed Gein Story","tvdb_id":389492,"target_title":"Monster (2022)","season_map":{"1":3},"source":"https://www.thetvdb.com/series/monster-the-jeffrey-dahmer-story/seasons/official/3"},
+    {"tmdb_id":299939,"title":"Monster: The Lizzie Borden Story","tvdb_id":389492,"target_title":"Monster (2022)","season_map":{"1":4},"source":"https://www.thetvdb.com/series/monster-the-jeffrey-dahmer-story/seasons/official/4"}
+  ]
+}

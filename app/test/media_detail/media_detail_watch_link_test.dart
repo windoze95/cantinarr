@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
@@ -8,9 +7,12 @@ import 'package:cantinarr/core/network/websocket_client.dart';
 import 'package:cantinarr/core/providers/realtime_provider.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/discover/data/tmdb_models.dart';
+import 'package:cantinarr/features/media_access/logic/media_app_launcher.dart';
+import 'package:cantinarr/features/media_access/logic/video_apps_provider.dart';
 import 'package:cantinarr/features/media_detail/ui/media_detail_screen.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -37,6 +39,7 @@ Map<String, dynamic> _link(
   ServiceInstance server,
   String state, {
   String url = '',
+  String fallbackUrl = '',
 }) =>
     {
       'instance_id': server.id,
@@ -44,6 +47,7 @@ Map<String, dynamic> _link(
       'name': server.name,
       'state': state,
       if (url.isNotEmpty) 'url': url,
+      if (fallbackUrl.isNotEmpty) 'fallback_url': fallbackUrl,
     };
 
 void main() {
@@ -54,6 +58,7 @@ void main() {
     List<ServiceInstance> mediaServers = const [_jellyfin],
     MediaType mediaType = MediaType.movie,
     int watchStatus = 200,
+    MediaAppLauncher? launcher,
   }) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
@@ -87,6 +92,8 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          if (launcher != null)
+            mediaAppLauncherProvider.overrideWithValue(launcher),
           authProvider.overrideWith(
             () => _FakeAuthNotifier(_state(mediaServers, mediaType)),
           ),
@@ -99,6 +106,76 @@ void main() {
     );
     await tester.pumpAndSettle();
     return adapter;
+  }
+
+  for (final server in [_plex, _jellyfin, _emby]) {
+    for (final type in [MediaType.movie, MediaType.tv]) {
+      testWidgets('${server.serviceType} $type opens Infuse using the verified title', (tester) async {
+        final urls = <Uri>[];
+        await pumpDetail(tester, status: 'available', mediaType: type,
+          mediaServers: [server], links: [{
+            ..._link(server, 'found', url: 'https://watch.example/title'),
+            'video_apps': {'ios': 'infuse'},
+          }], launcher: MediaAppLauncher(platform: TargetPlatform.iOS, isWeb: false,
+            launchExternal: (uri) async { urls.add(uri); return true; }));
+        final action = find.text('Open in Infuse');
+        await tester.ensureVisible(action);
+        await tester.tap(action);
+        await tester.pumpAndSettle();
+        expect(urls.single.toString(), 'infuse://${type == MediaType.movie ? 'movie' : 'series'}/$_tmdbId');
+      });
+    }
+  }
+
+  testWidgets('multiple Infuse actions retain service and instance context', (tester) async {
+    const second = ServiceInstance(id: 'px-b', serviceType: 'plex', name: 'Other Plex');
+    final servers = [_plex, second, _jellyfin, _emby];
+    await pumpDetail(tester, status: 'available', mediaServers: servers,
+      links: [for (final server in servers) {
+        ..._link(server, 'found', url: 'https://watch.example/title'),
+        'video_apps': {'ios': 'infuse'},
+      }], launcher: MediaAppLauncher(platform: TargetPlatform.iOS, isWeb: false));
+    for (final server in servers) {
+      expect(find.textContaining('Open in Infuse ·').evaluate().any((e) =>
+        (e.widget as Text).data!.contains(server.name)), isTrue);
+    }
+  });
+
+  testWidgets('generic Infuse fallback does not receive the page title id', (tester) async {
+    final urls = <Uri>[];
+    await pumpDetail(tester, status: 'available', mediaServers: [_plex], links: [{
+      ..._link(_plex, 'unverified', fallbackUrl: 'https://app.plex.tv'),
+      'video_apps': {'ios': 'infuse'},
+    }], launcher: MediaAppLauncher(platform: TargetPlatform.iOS, isWeb: false,
+      launchExternal: (uri) async { urls.add(uri); return true; }));
+    await tester.ensureVisible(find.text('Open in Infuse'));
+    await tester.tap(find.text('Open in Infuse'));
+    await tester.pumpAndSettle();
+    expect(urls.single.toString(), 'infuse://');
+  });
+
+  for (final refresh in ['save', 'config', 'resume']) {
+    testWidgets('$refresh refreshes the video choice on an open title page', (tester) async {
+      final links = [{..._link(_plex, 'found', url: 'https://app.plex.tv/desktop/#!/server/m/details?key=%2Flibrary%2Fmetadata%2F1'),
+        'video_apps': {'ios': 'service'}}];
+      final adapter = await pumpDetail(tester, status: 'available', mediaServers: [_plex], links: links,
+        launcher: MediaAppLauncher(platform: TargetPlatform.iOS, isWeb: false));
+      expect(find.text('Watch on Plex'), findsOneWidget);
+      links.single['video_apps'] = {'ios': 'infuse'};
+      if (refresh == 'save') {
+        ProviderScope.containerOf(tester.element(find.byType(MediaDetailScreen)))
+          .read(videoAppRevisionProvider.notifier).state++;
+      } else if (refresh == 'config') {
+        (ProviderScope.containerOf(tester.element(find.byType(MediaDetailScreen)))
+          .read(authProvider.notifier) as _FakeAuthNotifier).refreshConfiguration();
+      } else {
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      }
+      await tester.pumpAndSettle();
+      expect(find.text('Open in Infuse'), findsOneWidget);
+      expect(adapter.watchRequests.length, greaterThan(1));
+    });
   }
 
   testWidgets('an available movie the server holds gets a Watch button',
@@ -196,19 +273,192 @@ void main() {
     expect(find.textContaining('Watch on'), findsNothing);
   });
 
-  testWidgets('nothing is asked without a Jellyfin or Emby server',
+  testWidgets('a Plex-only household keeps the exact web link on desktop',
       (tester) async {
+    const url = 'https://app.plex.tv/desktop/#!/server/m1/details?key=%2Flibrary%2Fmetadata%2F123';
+    final launched = <String>[];
+    const channel = MethodChannel('plugins.flutter.io/url_launcher');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      channel,
+      (call) async {
+        if (call.method == 'launch') {
+          launched.add((call.arguments as Map)['url'] as String);
+        }
+        return true;
+      },
+    );
+    addTearDown(() => tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, null));
     final adapter = await pumpDetail(
       tester,
       status: 'available',
       mediaServers: const [_plex],
+      launcher: MediaAppLauncher(platform: TargetPlatform.linux),
       links: [
-        _link(_plex, 'found', url: 'https://app.plex.tv/x'),
+        _link(_plex, 'found', url: url),
       ],
     );
 
-    expect(adapter.watchRequests, isEmpty);
+    expect(adapter.watchRequests, hasLength(1));
+    final button = find.widgetWithText(TextButton, 'Watch on Plex');
+    expect(button, findsOneWidget);
+    expect(find.text('Open Plex'), findsNothing);
+    await tester.ensureVisible(button);
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(launched, [url]);
+  });
+
+  for (final state in ['unverified', 'unreachable', 'missing']) {
+    testWidgets('Plex $state offers only the generic shortcut', (tester) async {
+      const url = 'https://watch.example.com';
+      final launched = <String>[];
+      const channel = MethodChannel('plugins.flutter.io/url_launcher');
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        (call) async {
+          if (call.method == 'launch') {
+            launched.add((call.arguments as Map)['url'] as String);
+          }
+          return true;
+        },
+      );
+      addTearDown(() => tester.binding.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null));
+      await pumpDetail(tester,
+          status: 'partial',
+          mediaType: MediaType.tv,
+          mediaServers: const [_plex],
+          launcher: MediaAppLauncher(platform: TargetPlatform.linux),
+          links: [_link(_plex, state, fallbackUrl: url)]);
+      final button = find.widgetWithText(TextButton, 'Open Plex');
+      expect(button, findsOneWidget);
+      expect(find.textContaining('Watch on'), findsNothing);
+      expect(find.textContaining('Not on'), findsNothing);
+      await tester.ensureVisible(button);
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(launched, [url]);
+    });
+  }
+
+  for (final platform in [TargetPlatform.iOS, TargetPlatform.android]) {
+    testWidgets('$platform watch buttons hand each title to its media app',
+        (tester) async {
+      final external = <Uri>[];
+      final android = <({String serviceType, Uri? uri})>[];
+      final launcher = MediaAppLauncher(
+        platform: platform,
+        launchExternal: (uri) async {
+          external.add(uri);
+          return true;
+        },
+        launchAndroid: (serviceType, uri) async {
+          android.add((serviceType: serviceType, uri: uri));
+          return true;
+        },
+      );
+      await pumpDetail(tester,
+          status: 'partial',
+          mediaType: MediaType.tv,
+          mediaServers: const [_plex, _jellyfin, _emby],
+          launcher: launcher,
+          links: [
+            _link(_plex, 'found', url: 'https://app.plex.tv/desktop/'
+                '#!/server/m1/details?key=%2Flibrary%2Fmetadata%2F123'),
+            _link(_jellyfin, 'found', url: 'https://jf.example.com/'
+                'web/#/details?id=456&serverId=jf1'),
+            _link(_emby, 'found', url: 'https://emby.example.com/'
+                'web/index.html#!/item?id=789&serverId=em1'),
+          ]);
+      for (final name in ['Plex', 'Jellyfin', 'Emby']) {
+        final button = find.widgetWithText(TextButton, 'Watch on $name');
+        await tester.ensureVisible(button);
+        await tester.tap(button);
+        await tester.pumpAndSettle();
+      }
+      final plex = platform == TargetPlatform.iOS
+          ? external.first
+          : android.first.uri!;
+      expect(plex.queryParameters['metadataType'], '2');
+      expect(plex.queryParameters['server'], 'm1');
+      if (platform == TargetPlatform.iOS) {
+        expect(external.map((uri) => uri.scheme),
+            ['plex', 'org.jellyfin.expo', 'emby']);
+        expect(external.last.queryParameters,
+            {'serverId': 'em1', 'itemId': '789'});
+      } else {
+        expect(android.map((call) => call.serviceType),
+            ['plex', 'jellyfin', 'emby']);
+        expect(android[1].uri, isNull);
+        expect(android.last.uri.toString(), 'emby://items/em1/789');
+        expect(external, isEmpty);
+      }
+    });
+  }
+
+  testWidgets('unverified Plex opens the app without a title claim',
+      (tester) async {
+    final launched = <Uri>[];
+    await pumpDetail(tester,
+        status: 'available',
+        mediaServers: const [_plex],
+        launcher: MediaAppLauncher(
+          platform: TargetPlatform.iOS,
+          launchExternal: (uri) async {
+            launched.add(uri);
+            return true;
+          },
+        ),
+        links: [_link(_plex, 'unverified', fallbackUrl: 'https://app.plex.tv')]);
+    final button = find.widgetWithText(TextButton, 'Open Plex');
+    await tester.ensureVisible(button);
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(launched.single.toString(), 'plex://');
     expect(find.textContaining('Watch on'), findsNothing);
+  });
+
+  testWidgets('watch reports failure only after the app and browser fail',
+      (tester) async {
+    final launched = <Uri>[];
+    await pumpDetail(tester,
+        status: 'available',
+        launcher: MediaAppLauncher(
+          platform: TargetPlatform.iOS,
+          launchExternal: (uri) async {
+            launched.add(uri);
+            return false;
+          },
+        ),
+        links: [_link(_jellyfin, 'found', url: 'https://jf.example.com/web/'
+            '#/details?id=123&serverId=jf1')]);
+    final button = find.widgetWithText(TextButton, 'Watch on Jellyfin');
+    await tester.ensureVisible(button);
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(launched.map((uri) => uri.scheme), ['org.jellyfin.expo', 'https']);
+    expect(find.text("Couldn't open Jellyfin."), findsOneWidget);
+  });
+
+  testWidgets('Plex names distinguish an exact link from another server shortcut',
+      (tester) async {
+    const second = ServiceInstance(id: 'px-b', serviceType: 'plex', name: 'Cabin Plex');
+    await pumpDetail(tester,
+        status: 'available',
+        mediaServers: const [_plex, second],
+        links: [
+          _link(_plex, 'found', url: 'https://app.plex.tv/desktop/#!/server/m1/details?key=x'),
+          _link(second, 'unverified', fallbackUrl: 'https://app.plex.tv'),
+        ]);
+    expect(find.text('Watch on Cantina Plex'), findsOneWidget);
+    expect(find.text('Open Cabin Plex'), findsOneWidget);
+  });
+
+  testWidgets('no media server means no lookup', (tester) async {
+    final adapter = await pumpDetail(tester,
+        status: 'available', mediaServers: const [], links: const []);
+    expect(adapter.watchRequests, isEmpty);
   });
 
   testWidgets('a failed lookup shows nothing rather than a stale answer',
@@ -261,6 +511,9 @@ class _FakeAuthNotifier extends AuthNotifier {
 
   @override
   Future<AuthState> build() async => authState;
+
+  void refreshConfiguration() => state = AsyncData(authState.copyWith(
+    connection: authState.connection!.copyWith()));
 }
 
 /// Minimal backend stub: the TMDB detail, the request status, and the watch

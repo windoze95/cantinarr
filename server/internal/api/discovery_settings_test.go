@@ -89,7 +89,7 @@ func TestUpdateDiscoverySettingsRoundTrips(t *testing.T) {
 
 	body := `{"source":"trakt_trending","english_only":true}`
 	rec := httptest.NewRecorder()
-	updateDiscoverySettingsHandler(settings, creds)(
+	updateDiscoverySettingsHandler(settings, creds, nil)(
 		rec, httptest.NewRequest(http.MethodPut, "/", strings.NewReader(body)))
 
 	if rec.Code != http.StatusOK {
@@ -115,7 +115,7 @@ func TestUpdateDiscoverySettingsCanTurnEnglishOnlyOff(t *testing.T) {
 	settings, creds := newDiscoverySettingsEnv(t, false)
 
 	rec := httptest.NewRecorder()
-	updateDiscoverySettingsHandler(settings, creds)(
+	updateDiscoverySettingsHandler(settings, creds, nil)(
 		rec, httptest.NewRequest(http.MethodPut, "/", strings.NewReader(`{"source":"tmdb_trending","english_only":false}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -139,7 +139,7 @@ func TestUpdateDiscoverySettingsRejectsBadInput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			settings, creds := newDiscoverySettingsEnv(t, true)
 			rec := httptest.NewRecorder()
-			updateDiscoverySettingsHandler(settings, creds)(
+			updateDiscoverySettingsHandler(settings, creds, nil)(
 				rec, httptest.NewRequest(http.MethodPut, "/", strings.NewReader(body)))
 
 			if rec.Code != http.StatusBadRequest {
@@ -149,5 +149,45 @@ func TestUpdateDiscoverySettingsRejectsBadInput(t *testing.T) {
 				t.Errorf("stored source = %q, want the rejected write to have changed nothing", got)
 			}
 		})
+	}
+}
+
+func TestDiscoveryHidePartialUpdatesAndNotifications(t *testing.T) {
+	settings, creds := newDiscoverySettingsEnv(t, false)
+	events := 0
+	update := func(body string, want int) discoverySettingsResponse {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		updateDiscoverySettingsHandler(settings, creds, func() { events++ })(rec, httptest.NewRequest(http.MethodPut, "/", strings.NewReader(body)))
+		if rec.Code != want {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+		if want != http.StatusOK {
+			return discoverySettingsResponse{}
+		}
+		return decodeDiscoveryResponse(t, rec.Body.String())
+	}
+	got := update(`{"hidden_when_unconfigured":{"movie":true}}`, 200)
+	if !got.EnglishOnly || len(got.HiddenWhenUnconfigured) != 4 || !got.HiddenWhenUnconfigured["movie"] {
+		t.Fatalf("unexpected defaults: %+v", got)
+	}
+	update(`{"hidden_when_unconfigured":{"music":true}}`, 200)
+	got = update(`{"source":"tmdb_popular","english_only":false}`, 200)
+	if got.EnglishOnly || !got.HiddenWhenUnconfigured["movie"] || !got.HiddenWhenUnconfigured["music"] {
+		t.Fatalf("legacy write lost hide choices: %+v", got)
+	}
+	for _, body := range []string{
+		`{"source":"tmdb_trending","hidden_when_unconfigured":{"radarr":true}}`,
+		`{"hidden_when_unconfigured":{"movie":"true"}}`,
+		`{"hidden_when_unconfigured":["tv"]}`,
+	} {
+		update(body, 400)
+	}
+	if settings.Get().DiscoverySource != "tmdb_popular" || events != 2 {
+		t.Fatalf("invalid or row-only write changed visibility: events=%d", events)
+	}
+	got = update(`{"hidden_when_unconfigured":{"movie":false}}`, 200)
+	if got.HiddenWhenUnconfigured["movie"] || !got.HiddenWhenUnconfigured["music"] || events != 3 {
+		t.Fatalf("partial restore failed: %+v", got)
 	}
 }

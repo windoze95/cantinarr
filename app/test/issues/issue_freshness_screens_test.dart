@@ -555,13 +555,13 @@ void main() {
       const ValueKey('issues-conditional-menu-visibility'),
     );
     expect(toggle, findsOneWidget);
-    expect(tester.widget<Switch>(toggle).value, isFalse);
+    expect(tester.widget<Switch>(toggle).value, isTrue);
 
     await tester.tap(toggle);
     await tester.pumpAndSettle();
 
-    expect(container.read(issuesMenuOnlyWhenActiveProvider), isTrue);
-    expect(tester.widget<Switch>(toggle).value, isTrue);
+    expect(container.read(issuesMenuOnlyWhenActiveProvider), isFalse);
+    expect(tester.widget<Switch>(toggle).value, isFalse);
   });
 
   testWidgets('tracking thread is passive while arr recovery is in flight',
@@ -703,16 +703,16 @@ void main() {
       const ValueKey('agentFixes-conditional-menu-visibility'),
     );
     expect(toggle, findsOneWidget);
-    expect(tester.widget<Switch>(toggle).value, isFalse);
+    expect(tester.widget<Switch>(toggle).value, isTrue);
 
     await tester.tap(toggle);
     await tester.pumpAndSettle();
 
     expect(
       container.read(agentFixesMenuOnlyWhenAwaitingReviewProvider),
-      isTrue,
+      isFalse,
     );
-    expect(tester.widget<Switch>(toggle).value, isTrue);
+    expect(tester.widget<Switch>(toggle).value, isFalse);
   });
 
   testWidgets('live agent activity polls and labels a retained stale snapshot',

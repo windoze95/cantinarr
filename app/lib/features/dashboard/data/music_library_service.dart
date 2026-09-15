@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../request/data/album_ownership.dart';
+import '../../discover/logic/discovery_access.dart';
+import '../../../core/providers/library_refresh_provider.dart';
 
 /// Fetches the backend's lean owned-albums digest — what the user's Lidarr
 /// library already tracks, one entry per album — so the Music search can mark
@@ -12,9 +14,12 @@ class MusicLibraryService {
 
   MusicLibraryService({required Dio backendDio}) : _dio = backendDio;
 
-  Future<List<OwnedAlbum>> fetchOwnedAlbums({String? instanceId}) async {
+  Future<List<OwnedAlbum>> fetchOwnedAlbums(
+      {String? instanceId, CancelToken? cancelToken}) async {
     final resp = await _dio.get(
       '/api/requests/music-library',
+      cancelToken: cancelToken,
+      options: Options(receiveTimeout: const Duration(seconds: 10)),
       queryParameters: {
         if (instanceId != null && instanceId.isNotEmpty)
           'instance_id': instanceId,
@@ -37,9 +42,16 @@ class MusicLibraryService {
 /// with a genuinely empty one.
 final ownedAlbumsForInstanceProvider = FutureProvider.autoDispose
     .family<List<OwnedAlbum>, String?>((ref, instanceId) async {
+  ref.watch(catalogDiscoveryScopeProvider);
+  ref.watch(libraryRefreshTickProvider);
+  if (!ref.watch(discoveryAccessProvider).hasInstance('lidarr', instanceId)) {
+    throw StateError('Music is not available for this account.');
+  }
+  final token = CancelToken();
+  ref.onDispose(() => token.cancel());
   final dio = ref.read(backendClientProvider);
   return MusicLibraryService(backendDio: dio)
-      .fetchOwnedAlbums(instanceId: instanceId);
+      .fetchOwnedAlbums(instanceId: instanceId, cancelToken: token);
 });
 
 /// Convenience projection for search, which always follows the drawer's active

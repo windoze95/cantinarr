@@ -2,10 +2,10 @@ package auth
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"net/http"
 	"net/url"
 	"strings"
@@ -113,22 +113,31 @@ func (h *OAuthHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.service.AuthenticatePassword(r.Form.Get("username"), r.Form.Get("password"))
-	if err != nil {
-		h.renderAuthorizeForm(w, r, "Invalid username or password.")
-		return
-	}
+	var code string
+	if r.Form.Get("plex_consent") != "" {
+		code, err = h.authorizeExternal(r, client, "plex")
+	} else if r.Form.Get("oidc_consent") != "" {
+		code, err = h.authorizeOIDC(r, client)
+	} else {
 
-	resource := h.requestedMCPResource(r)
-	scope := normalizeOAuthScope(r.Form.Get("scope"))
-	code, err := h.service.CreateOAuthAuthorizationCode(
-		client,
-		user.ID,
-		r.Form.Get("redirect_uri"),
-		r.Form.Get("code_challenge"),
-		resource,
-		scope,
-	)
+		var user *User
+		user, err = h.service.AuthenticatePassword(r.Form.Get("username"), r.Form.Get("password"))
+		if err != nil {
+			h.renderAuthorizeForm(w, r, "Invalid username or password.")
+			return
+		}
+
+		resource := h.requestedMCPResource(r)
+		scope := normalizeOAuthScope(r.Form.Get("scope"))
+		code, err = h.service.CreateOAuthAuthorizationCode(
+			client,
+			user.ID,
+			r.Form.Get("redirect_uri"),
+			r.Form.Get("code_challenge"),
+			resource,
+			scope,
+		)
+	}
 	if err != nil {
 		h.renderAuthorizeForm(w, r, oauthErrorText(err))
 		return
@@ -341,16 +350,27 @@ func (h *OAuthHandler) validateAuthorizeRequest(r *http.Request) (*OAuthClient, 
 }
 
 func (h *OAuthHandler) renderAuthorizeForm(w http.ResponseWriter, r *http.Request, message string) {
+	oidcHeaders(w)
 	if r.Method == http.MethodGet {
 		_ = r.ParseForm()
 	}
 	if _, err := h.validateAuthorizeRequest(r); err != nil && message == "" {
 		message = oauthErrorText(err)
 	}
+	label, origin, note := h.oidcTemplateSettings()
+	plexLabel := ""
+	if c, err := h.service.plexConfiguration(); err == nil && c.Enabled {
+		plexLabel = "Continue with Plex"
+		if c.ssoOnly != "false" {
+			plexLabel = "Continue with Plex (administrator recovery)"
+		}
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_ = authorizeTemplate.Execute(w, map[string]string{
+		"SSOLabel": label, "SSOOrigin": origin, "SSONote": note, "PlexLabel": plexLabel,
 		"Message":             message,
 		"ResponseType":        r.Form.Get("response_type"),
 		"ClientID":            r.Form.Get("client_id"),
@@ -364,32 +384,23 @@ func (h *OAuthHandler) renderAuthorizeForm(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!doctype html>
+//go:embed plex_pkce.js
+var plexPKCEScript string
+
+var authorizeTemplate = newAuthPageTemplate("authorize", `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cantinarr MCP Authorization</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 0; background: #0f172a; color: #e5e7eb; }
-    main { max-width: 420px; margin: 10vh auto; padding: 28px; background: #111827; border: 1px solid #374151; border-radius: 8px; }
-    h1 { font-size: 22px; margin: 0 0 8px; }
-    p { color: #cbd5e1; line-height: 1.45; }
-    label { display: block; margin: 16px 0 6px; color: #cbd5e1; }
-    input { box-sizing: border-box; width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #475569; background: #020617; color: #f8fafc; }
-    button, a.button { box-sizing: border-box; display: block; width: 100%; margin-top: 20px; padding: 11px 12px; border: 0; border-radius: 6px; background: #38bdf8; color: #082f49; font-weight: 700; cursor: pointer; text-align: center; text-decoration: none; }
-    button.secondary, a.secondary { margin-top: 12px; background: transparent; color: #bae6fd; border: 1px solid #475569; }
-    .divider { display: flex; align-items: center; gap: 12px; margin: 20px 0 4px; color: #94a3b8; font-size: 13px; }
-    .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: #334155; }
-    .status { min-height: 20px; margin-top: 12px; color: #bae6fd; font-size: 14px; }
-    .error { margin-top: 14px; padding: 10px 12px; border-radius: 6px; background: #7f1d1d; color: #fee2e2; }
-  </style>
+  {{template "auth-style"}}
 </head>
 <body>
   <main>
-    <h1>Authorize Cantinarr MCP</h1>
-    <p>Sign in with your Cantinarr account to allow this MCP client to use tools permitted for your user role.</p>
-    {{if .Message}}<div class="error">{{.Message}}</div>{{end}}
+    {{template "auth-brand"}}
+    <h1>Connect your MCP client</h1>
+    <p>Sign in to let your MCP client access Cantinarr with your account’s permissions.</p>
+    {{if .Message}}<div class="error" role="alert">{{.Message}}</div>{{end}}
     <form method="post" action="/oauth/authorize">
       <input type="hidden" name="response_type" value="{{.ResponseType}}">
       <input type="hidden" name="client_id" value="{{.ClientID}}">
@@ -399,9 +410,20 @@ var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!doctype
       <input type="hidden" name="code_challenge" value="{{.CodeChallenge}}">
       <input type="hidden" name="code_challenge_method" value="{{.CodeChallengeMethod}}">
       <input type="hidden" name="resource" value="{{.Resource}}">
+      {{if .SSOLabel}}<button id="ssoButton" type="button">Continue with {{.SSOLabel}}</button>{{end}}
+      {{if .SSONote}}<p>{{.SSONote}}</p>{{end}}
+      <input type="hidden" name="oidc_consent" id="oidcConsent">
+      <input type="hidden" name="plex_consent" id="plexConsent">
+      {{if .PlexLabel}}<button id="plexButton" type="button" class="secondary">{{.PlexLabel}}</button>
+      <div id="plexControls" hidden>
+        <p>Approve Cantinarr in the Plex browser, then return here.</p>
+        <button id="plexReopen" type="button" class="secondary">Reopen Plex</button>
+        <button id="plexCheck" type="button" class="secondary">Check now</button>
+        <button id="plexCancel" type="button" class="secondary">Cancel Plex sign-in</button>
+      </div>{{end}}
       <button id="passkeyButton" type="button" class="secondary">Use passkey</button>
       <a class="button secondary" href="{{.PasskeySetupURL}}">Create a passkey</a>
-      <div id="passkeyStatus" class="status"></div>
+      <div id="passkeyStatus" class="status" role="status" aria-live="polite"></div>
       <div class="divider">or</div>
       <label for="username">Username</label>
       <input id="username" name="username" autocomplete="username" required>
@@ -410,7 +432,7 @@ var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!doctype
       <button type="submit">Authorize</button>
     </form>
   </main>
-  <script>
+  <script>`+plexPKCEScript+`
     const form = document.querySelector('form');
     const passkeyButton = document.getElementById('passkeyButton');
     const passkeyStatus = document.getElementById('passkeyStatus');
@@ -463,6 +485,98 @@ var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!doctype
       return params.toString();
     }
 
+    const ssoButton = document.getElementById('ssoButton');
+    const ssoOrigin = {{.SSOOrigin}};
+    const oauthFields = ['response_type','client_id','redirect_uri','scope','state','code_challenge','code_challenge_method','resource'];
+    async function ssoJSON(path, data) {
+      const response = await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+      const result = await response.json(); if(!response.ok) throw new Error(result.error || 'Sign-in failed'); return result;
+    }
+    if(ssoButton) ssoButton.addEventListener('click', async () => {
+      try {
+        const oauth = {}; const query = new URLSearchParams();
+        for(const key of oauthFields) {const value=form.elements[key].value; oauth[key]=[value];query.set(key,value);}
+        if(location.origin!==ssoOrigin) { location.assign(ssoOrigin+'/oauth/authorize?'+query.toString());return; }
+        const verifier=bufferToB64url(crypto.getRandomValues(new Uint8Array(32)));
+        const challenge=bufferToB64url(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier)));
+        const begun=await ssoJSON('/api/auth/oidc/mcp/begin',{client:'mcp',challenge,oauth});
+        sessionStorage.setItem('cantinarr_oidc_mcp_'+begun.flow,verifier);
+        location.assign(begun.start_url);
+      } catch(error) {setStatus(error.message);}
+    });
+    (async () => {
+      const q=new URLSearchParams(location.search),code=q.get('oidc_code'),flow=q.get('oidc_flow');
+      if(!code||!flow)return;
+      q.delete('oidc_code');q.delete('oidc_flow');history.replaceState(null,'',location.pathname+'?'+q.toString());
+      const key='cantinarr_oidc_mcp_'+flow,verifier=sessionStorage.getItem(key);sessionStorage.removeItem(key);
+      if(!verifier){setStatus('This sign-in started in another tab or has expired. Please start again.');return;}
+      try {
+        const result=await ssoJSON('/api/auth/oidc/exchange',{code,flow,verifier});
+        if(!result.consent)throw new Error('Please start sign-in again.');
+        document.getElementById('oidcConsent').value=result.consent;
+        for(const id of ['username','password']){const field=document.getElementById(id);field.required=false;field.disabled=true;}
+        if(ssoButton)ssoButton.disabled=true;passkeyButton.disabled=true;
+        setStatus('Signed in as '+result.username+'. Select Authorize to grant this MCP client access.');
+      } catch(error) {setStatus(error.message);}
+    })();
+
+    const plexButton=document.getElementById('plexButton'),plexKey='cantinarr_plex_mcp';
+    let plexPending=null,plexTimer=null,plexChecking=false,plexBeginning=false,plexGeneration=0;
+    function plexOAuth() {const oauth={};for(const key of oauthFields)oauth[key]=[form.elements[key].value];return oauth;}
+    function sameOAuth(a,b) {return oauthFields.every(key=>JSON.stringify(a[key])===JSON.stringify(b[key]));}
+    function plexURL(value) {const u=new URL(value);if(u.origin!=='https://app.plex.tv'||u.pathname!=='/auth'||u.username||u.password)throw new Error('Unexpected Plex address.');return u.href;}
+    function plexControls() {document.getElementById('plexControls').hidden=!plexPending;plexButton.textContent=plexPending?'Retry Plex sign-in':{{.PlexLabel}};}
+    function clearPlex() {plexPending=null;sessionStorage.removeItem(plexKey);clearInterval(plexTimer);if(plexButton)plexControls();}
+    async function cancelPlex() {plexGeneration++;const p=plexPending;clearPlex();if(p)try{await ssoJSON('/api/auth/plex/cancel',{flow:p.flow,verifier:p.verifier});}catch(_){} }
+    async function checkPlex() {
+      if(!plexPending||plexChecking)return;
+      const p=plexPending;
+      if(Date.now()>=Date.parse(p.expires_at)){clearPlex();setStatus('Plex sign-in expired. Please try again.');return;}
+      plexChecking=true;
+      try {
+        const proof={flow:p.flow,verifier:p.verifier};
+        const checked=await ssoJSON('/api/auth/plex/check',proof);
+        if(!plexPending||plexPending.flow!==p.flow||checked.status==='pending')return;
+        const result=await ssoJSON('/api/auth/plex/exchange',{...proof,code:checked.code});
+        if(!plexPending||plexPending.flow!==p.flow)return;
+        if(!result.consent)throw new Error('Please start Plex sign-in again.');
+        clearPlex();
+        document.getElementById('plexConsent').value=result.consent;
+        for(const id of ['username','password']){const field=document.getElementById(id);field.required=false;field.disabled=true;}
+        if(ssoButton)ssoButton.disabled=true;plexButton.disabled=true;passkeyButton.disabled=true;
+        setStatus('Signed in as '+result.username+'. Select Authorize to grant this MCP client access.');
+      }catch(error){clearInterval(plexTimer);setStatus(error.message);}
+      finally{plexChecking=false;}
+    }
+    if(plexButton){
+      plexButton.addEventListener('click',async()=>{
+        if(plexBeginning)return;plexBeginning=true;plexButton.disabled=true;
+        const popup=window.open('about:blank','_blank');if(popup)popup.opener=null;
+        try{
+          await cancelPlex();
+          const generation=plexGeneration;
+          const oauth=plexOAuth(),verifier=bufferToB64url(crypto.getRandomValues(new Uint8Array(32)));
+          const challenge=await plexChallenge(verifier);
+          const begun=await ssoJSON('/api/auth/plex/mcp/begin',{client:'mcp',challenge,oauth});
+          const url=plexURL(begun.url);
+          if(generation!==plexGeneration){if(popup)popup.close();await ssoJSON('/api/auth/plex/cancel',{flow:begun.flow,verifier});return;}
+          plexPending={...begun,url,verifier,oauth};sessionStorage.setItem(plexKey,JSON.stringify(plexPending));plexControls();
+          if(popup)popup.location.replace(url);else setStatus('The browser did not open. Select Reopen Plex.');
+          plexTimer=setInterval(checkPlex,3000);
+        }catch(error){if(popup)popup.close();setStatus(error.message);}
+        finally{plexBeginning=false;plexButton.disabled=false;}
+      });
+      document.getElementById('plexReopen').addEventListener('click',()=>{if(plexPending){const popup=window.open(plexURL(plexPending.url),'_blank','noopener');setStatus('Approve Plex in the browser, then select Check now.');}});
+      document.getElementById('plexCheck').addEventListener('click',checkPlex);
+      document.getElementById('plexCancel').addEventListener('click',async()=>{await cancelPlex();setStatus('Plex sign-in cancelled.');});
+      try{
+        const saved=JSON.parse(sessionStorage.getItem(plexKey));
+        if(saved&&Date.now()<Date.parse(saved.expires_at)&&sameOAuth(saved.oauth,plexOAuth())){
+          plexURL(saved.url);plexPending=saved;plexControls();plexTimer=setInterval(checkPlex,3000);checkPlex();
+        }else sessionStorage.removeItem(plexKey);
+      }catch(_){sessionStorage.removeItem(plexKey);}
+    }
+
     passkeyButton.addEventListener('click', async () => {
       if (!window.PublicKeyCredential || !navigator.credentials) {
         setStatus('Passkeys are not available in this browser. Create one in the app or another browser.');
@@ -492,25 +606,19 @@ var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!doctype
     });
   </script>
 </body>
-</html>`))
+</html>`)
 
-var passkeySetupTemplate = template.Must(template.New("passkey-setup").Parse(`<!doctype html>
+var passkeySetupTemplate = newAuthPageTemplate("passkey-setup", `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Create a Cantinarr Passkey</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 0; background: #0f172a; color: #e5e7eb; }
-    main { max-width: 440px; margin: 10vh auto; padding: 28px; background: #111827; border: 1px solid #374151; border-radius: 8px; }
-    h1 { font-size: 22px; margin: 0 0 8px; }
-    p { color: #cbd5e1; line-height: 1.45; }
-    a.button { box-sizing: border-box; display: block; width: 100%; margin-top: 18px; padding: 11px 12px; border-radius: 6px; background: #38bdf8; color: #082f49; font-weight: 700; text-align: center; text-decoration: none; }
-    a.secondary { margin-top: 12px; background: transparent; color: #bae6fd; border: 1px solid #475569; }
-  </style>
+  {{template "auth-style"}}
 </head>
 <body>
   <main>
+    {{template "auth-brand"}}
     <h1>Create a passkey</h1>
     <p>Open Cantinarr to add a passkey to your account, then return to your MCP client and connect again.</p>
     <a class="button" href="{{.AppURL}}">Open Cantinarr App</a>
@@ -521,34 +629,25 @@ var passkeySetupTemplate = template.Must(template.New("passkey-setup").Parse(`<!
     setTimeout(() => { window.location.href = '{{.AppURL}}'; }, 250);
   </script>
 </body>
-</html>`))
+</html>`)
 
-var passkeyCreateTemplate = template.Must(template.New("passkey-create").Parse(`<!doctype html>
+var passkeyCreateTemplate = newAuthPageTemplate("passkey-create", `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Create a Cantinarr Passkey</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 0; background: #0f172a; color: #e5e7eb; }
-    main { max-width: 420px; margin: 10vh auto; padding: 28px; background: #111827; border: 1px solid #374151; border-radius: 8px; }
-    h1 { font-size: 22px; margin: 0 0 8px; }
-    p { color: #cbd5e1; line-height: 1.45; }
-    label { display: block; margin: 16px 0 6px; color: #cbd5e1; }
-    input { box-sizing: border-box; width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #475569; background: #020617; color: #f8fafc; }
-    button { width: 100%; margin-top: 20px; padding: 11px 12px; border: 0; border-radius: 6px; background: #38bdf8; color: #082f49; font-weight: 700; cursor: pointer; }
-    .status { min-height: 20px; margin-top: 14px; color: #bae6fd; font-size: 14px; }
-    .error { color: #fecaca; }
-  </style>
+  {{template "auth-style"}}
 </head>
 <body>
   <main>
+    {{template "auth-brand"}}
     <h1>Create a passkey</h1>
     <p>Add a passkey to your Cantinarr account, then return to your MCP client and connect again.</p>
     <label for="name">Name</label>
     <input id="name" value="Passkey" autocomplete="off">
     <button id="createButton" type="button">Create Passkey</button>
-    <div id="status" class="status"></div>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
   </main>
   <script>
     const setupToken = '{{.Token}}';
@@ -626,7 +725,7 @@ var passkeyCreateTemplate = template.Must(template.New("passkey-create").Parse(`
     });
   </script>
 </body>
-</html>`))
+</html>`)
 
 func (h *OAuthHandler) requestedMCPResource(r *http.Request) string {
 	resource := r.Form.Get("resource")

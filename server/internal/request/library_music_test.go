@@ -11,31 +11,28 @@ import (
 
 func timePtr(t time.Time) *time.Time { return &t }
 
-func TestReduceMusicLibraryAggregatesDuplicateForeignIDs(t *testing.T) {
+func TestReduceMusicLibraryPreservesDistinctRecords(t *testing.T) {
 	release := time.Date(1994, 5, 10, 0, 0, 0, 0, time.UTC)
 	albums := []lidarr.Album{
-		{ID: 1, Title: "Blue Album", ForeignAlbumID: "mb-1", Monitored: false, ReleaseDate: timePtr(release),
-			Artist: &lidarr.Artist{ArtistName: "Weezer"}},
-		{ID: 2, Title: "Blue Album", ForeignAlbumID: "mb-1", Monitored: true,
-			Statistics: lidarr.AlbumStatistics{TrackFileCount: 10, TrackCount: 10}},
-		{ID: 3, Title: "Keyless", ForeignAlbumID: ""},
-		{ID: 4, Title: "Keyless", ForeignAlbumID: ""},
+		{ID: 1, Title: "Same title", ForeignAlbumID: "mb-1", ReleaseDate: &release, Artist: &lidarr.Artist{ArtistName: "Artist", ForeignArtistID: "artist-1"}},
+		{ID: 2, Title: "Same title", ForeignAlbumID: "mb-1", Monitored: true, Statistics: lidarr.AlbumStatistics{TrackFileCount: 10, TrackCount: 10}},
+		{ID: 3, Title: "Same title", ForeignAlbumID: "mb-2", Monitored: true, Statistics: lidarr.AlbumStatistics{TrackFileCount: 1, TrackCount: 10}},
+		{ID: 4, Title: "Keyless"}, {ID: 5, Title: "Keyless"},
 	}
 	digest := reduceMusicLibrary(albums)
-	if len(digest.Titles) != 3 {
-		t.Fatalf("titles = %+v", digest.Titles)
+	if len(digest.Titles) != 5 {
+		t.Fatalf("records collapsed: %+v", digest)
 	}
-	merged := digest.Titles[0]
-	if merged.ForeignAlbumID != "mb-1" || !merged.Monitored || !merged.Downloaded {
-		t.Fatalf("merged = %+v", merged)
+	for i, row := range digest.Titles {
+		if row.RecordID != i+1 {
+			t.Fatalf("record order changed: %+v", digest)
+		}
 	}
-	if merged.Artist != "Weezer" || merged.Year != 1994 {
-		t.Fatalf("merged metadata = %+v", merged)
+	if digest.Titles[0].ForeignArtistID != "artist-1" || digest.Titles[0].Year != 1994 {
+		t.Fatal("artist identity or metadata lost")
 	}
-	// Records without a foreignAlbumId never merge — two keyless records stay
-	// two rows for the user to decide about.
-	if digest.Titles[1].Title != "Keyless" || digest.Titles[2].Title != "Keyless" {
-		t.Fatalf("keyless rows = %+v", digest.Titles[1:])
+	if digest.Titles[1].Status != StatusAvailable || digest.Titles[2].Status == StatusAvailable {
+		t.Fatal("partial release claimed complete")
 	}
 }
 

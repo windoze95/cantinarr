@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'release/**']
   push:
-    branches: [main]
+    branches: [main, 'release/**']
   schedule:
     - cron: '23 5 * * 1'
 
@@ -26,6 +26,15 @@ jobs:
 
       - name: Validate automation traceability
         run: make check-test-automation
+
+      - name: Record the checkout tested by this CI run
+        run: printf '{"sha":"%s"}\n' "$(git rev-parse HEAD)" > ci-source.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-source-${{ github.run_attempt }}
+          path: ci-source.json
+          retention-days: 90
 
   go:
     name: Go
@@ -75,6 +84,26 @@ jobs:
       - name: Build
         run: CGO_ENABLED=0 go build -o cantinarr ./cmd/server
 
+  apple-tv:
+    name: Apple TV helper
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: server/tools/apple_tv/requirements.lock
+      - name: Install pinned helper dependencies
+        run: python -m pip install --require-hashes -r server/tools/apple_tv/requirements.lock
+      - name: Test private worker protocol
+        run: python -m unittest discover -s server/tools/apple_tv -v
+      - name: Check runtime and notices
+        run: |
+          python server/tools/apple_tv/cantinarr_appletv.py --self-test
+          python server/tools/apple_tv/collect_notices.py /tmp/apple-tv-notices
+          test -s /tmp/apple-tv-notices/pyatv/LICENSE.md
+
   flutter:
     name: Flutter
     runs-on: ubuntu-latest
@@ -85,20 +114,45 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Read Flutter version
+        id: flutter-version
+        run: echo "version=$(cat .flutter-version)" >> "$GITHUB_OUTPUT"
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
           channel: stable
           cache: true
 
       - name: Install dependencies
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Analyze
-        run: flutter analyze --no-fatal-infos
+        run: flutter analyze --no-fatal-infos --no-pub
 
       - name: Test
-        run: flutter test
+        run: flutter test --no-pub
 
       - name: Build web
-        run: flutter build web --release
+        run: flutter build web --release --no-pub
+
+  release-tooling:
+    name: Release tooling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache: false
+      - name: Test store submission and promotion boundaries
+        run: |
+          gem install fastlane minitest --no-document
+          ruby scripts/tests/test_appstore_release.rb
+          ruby scripts/tests/test_playstore_release.rb
+      - name: Validate workflow wiring
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck=''

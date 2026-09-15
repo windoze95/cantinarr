@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 )
 
 // Client talks to the NZBGet JSON-RPC API:
@@ -27,6 +29,7 @@ func NewClient(baseURL, username, password string) *Client {
 		username: username,
 		password: password,
 		httpClient: &http.Client{
+			Transport:     httpx.Internal(),
 			Timeout:       30 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},

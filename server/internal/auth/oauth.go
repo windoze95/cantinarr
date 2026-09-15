@@ -51,6 +51,9 @@ type OAuthTokenResponse struct {
 }
 
 type oauthAuthorizationCode struct {
+	PlexID        int64
+	AuthMethod    string
+	OIDCIssuer    string
 	CodeHash      string
 	ClientID      string
 	UserID        int64
@@ -151,11 +154,23 @@ func (s *Service) AuthenticatePassword(username, password string) (*User, error)
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return nil, ErrInvalidCredentials
 	}
+	if err := s.requireLocalSignIn(user.ID); err != nil {
+		return nil, err
+	}
 	withPerms := userWithPermissions(user)
 	return &withPerms, nil
 }
 
 func (s *Service) CreateOAuthAuthorizationCode(client *OAuthClient, userID int64, redirectURI, codeChallenge, resource, scope string) (string, error) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+	if err := s.requireLocalSignIn(userID); err != nil {
+		return "", err
+	}
+	return s.createOAuthAuthorizationCode(client, userID, redirectURI, codeChallenge, resource, scope, "local", "")
+}
+func (s *Service) createOAuthAuthorizationCode(client *OAuthClient, userID int64, redirectURI, codeChallenge, resource, scope, method, issuer string, plexIDs ...int64) (string, error) {
+
 	if !clientAllowsRedirect(client, redirectURI) {
 		return "", ErrOAuthInvalidRedirectURI
 	}
@@ -171,11 +186,15 @@ func (s *Service) CreateOAuthAuthorizationCode(client *OAuthClient, userID int64
 		return "", fmt.Errorf("generate auth code: %w", err)
 	}
 	codeHash := hashToken(code)
+	plexID := int64(0)
+	if len(plexIDs) > 0 {
+		plexID = plexIDs[0]
+	}
 	_, err = s.db.Exec(
 		`INSERT INTO oauth_authorization_codes
-		 (code_hash, client_id, user_id, redirect_uri, code_challenge, resource, scope, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		codeHash, client.ClientID, userID, redirectURI, codeChallenge, resource, scope, time.Now().Add(oauthAuthorizationCodeTTL),
+		 (code_hash, client_id, user_id, redirect_uri, code_challenge, resource, scope, expires_at, auth_method, oidc_issuer, plex_account_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		codeHash, client.ClientID, userID, redirectURI, codeChallenge, resource, scope, time.Now().Add(oauthAuthorizationCodeTTL), method, issuer, plexID,
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert auth code: %w", err)
@@ -184,6 +203,8 @@ func (s *Service) CreateOAuthAuthorizationCode(client *OAuthClient, userID int64
 }
 
 func (s *Service) ExchangeOAuthAuthorizationCode(clientID, code, redirectURI, codeVerifier, resource string) (*OAuthTokenResponse, error) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	client, err := s.GetOAuthClient(clientID)
 	if err != nil {
 		return nil, err
@@ -210,22 +231,61 @@ func (s *Service) ExchangeOAuthAuthorizationCode(clientID, code, redirectURI, co
 		return nil, ErrOAuthInvalidPKCE
 	}
 
-	user, err := s.getUserByID(stored.UserID)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, ErrAuthUnavailable
+	}
+	defer tx.Rollback()
+	user, err := scanUserRecord(tx.QueryRow(userSelect+" WHERE u.id=?", stored.UserID))
 	if err != nil {
 		return nil, ErrInvalidCredentials
 	}
-	deviceID, err := s.createOAuthDevice(user.ID, client.ClientName)
-	if err != nil {
-		return nil, err
+	if stored.AuthMethod == "plex" {
+		if err = requirePlexIdentity(tx, user.ID, stored.PlexID); err != nil {
+			return nil, err
+		}
+	} else if stored.AuthMethod == "local" {
+		var allowed bool
+		if tx.QueryRow("SELECT role='admin' OR COALESCE((SELECT value FROM settings WHERE key='oidc_sso_only'),'false')='false' FROM users WHERE id=?", user.ID).Scan(&allowed) != nil {
+			return nil, ErrAuthUnavailable
+		}
+		if !allowed {
+			return nil, ErrSSORequired
+		}
+	} else if stored.AuthMethod == "oidc" {
+		var linked bool
+		if tx.QueryRow("SELECT EXISTS(SELECT 1 FROM oidc_identities WHERE user_id=? AND issuer=?)", user.ID, stored.OIDCIssuer).Scan(&linked) != nil || !linked {
+			return nil, ErrInvalidCredentials
+		}
+	} else {
+		return nil, ErrInvalidCredentials
 	}
-	refreshToken, err := s.createOAuthRefreshToken(clientID, user.ID, deviceID, stored.Resource, stored.Scope)
+	deviceID := uuid.NewString()
+	name := strings.TrimSpace(client.ClientName)
+	if name == "" {
+		name = "MCP Client"
+	}
+	if !strings.HasPrefix(name, "MCP: ") {
+		name = "MCP: " + name
+	}
+	if _, err = tx.Exec("INSERT INTO devices(id,user_id,device_name,auth_method,oidc_issuer,plex_account_id)VALUES (?,?,?,?,?,?)", deviceID, user.ID, name, stored.AuthMethod, stored.OIDCIssuer, stored.PlexID); err != nil {
+		return nil, ErrAuthUnavailable
+	}
+	refreshToken, err := randomURLToken(48)
 	if err != nil {
-		return nil, err
+		return nil, ErrAuthUnavailable
+	}
+	if _, err = tx.Exec("INSERT INTO oauth_refresh_tokens(token_hash,client_id,user_id,device_id,resource,scope,expires_at,last_used_at)VALUES (?,?,?,?,?,?,?,?)", hashToken(refreshToken), clientID, user.ID, deviceID, stored.Resource, stored.Scope, time.Now().Add(oauthRefreshTokenLifetime), time.Now()); err != nil {
+		return nil, ErrAuthUnavailable
 	}
 	accessToken, err := s.generateOAuthAccessToken(user, deviceID, stored.Resource, stored.Scope)
 	if err != nil {
 		return nil, err
 	}
+	if tx.Commit() != nil {
+		return nil, ErrAuthUnavailable
+	}
+
 	return &OAuthTokenResponse{
 		AccessToken:  accessToken,
 		TokenType:    "Bearer",
@@ -236,6 +296,8 @@ func (s *Service) ExchangeOAuthAuthorizationCode(clientID, code, redirectURI, co
 }
 
 func (s *Service) RefreshOAuthToken(clientID, refreshToken, resource string) (*OAuthTokenResponse, error) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	stored, tokenHash, err := s.loadOAuthRefreshToken(clientID, refreshToken)
 	if err != nil {
 		return nil, err
@@ -294,9 +356,9 @@ func (s *Service) consumeOAuthAuthorizationCode(code, clientID, redirectURI stri
 	err := s.db.QueryRow(
 		`DELETE FROM oauth_authorization_codes
 		 WHERE code_hash = ? AND client_id = ? AND redirect_uri = ?
-		 RETURNING code_hash, client_id, user_id, redirect_uri, code_challenge, resource, scope, expires_at`,
+		 RETURNING code_hash, client_id, user_id, redirect_uri, code_challenge, resource, scope, expires_at, auth_method, oidc_issuer, plex_account_id`,
 		codeHash, clientID, redirectURI,
-	).Scan(&stored.CodeHash, &stored.ClientID, &stored.UserID, &stored.RedirectURI, &stored.CodeChallenge, &stored.Resource, &stored.Scope, &stored.ExpiresAt)
+	).Scan(&stored.CodeHash, &stored.ClientID, &stored.UserID, &stored.RedirectURI, &stored.CodeChallenge, &stored.Resource, &stored.Scope, &stored.ExpiresAt, &stored.AuthMethod, &stored.OIDCIssuer, &stored.PlexID)
 	if err != nil {
 		return nil, ErrOAuthInvalidCode
 	}
@@ -315,25 +377,6 @@ func (s *Service) loadOAuthRefreshToken(clientID, refreshToken string) (*oauthRe
 		return nil, "", ErrOAuthInvalidRefreshToken
 	}
 	return &stored, tokenHash, nil
-}
-
-func (s *Service) createOAuthDevice(userID int64, clientName string) (string, error) {
-	deviceID := uuid.New().String()
-	deviceName := strings.TrimSpace(clientName)
-	if deviceName == "" {
-		deviceName = "MCP Client"
-	}
-	if !strings.HasPrefix(deviceName, "MCP: ") {
-		deviceName = "MCP: " + deviceName
-	}
-	_, err := s.db.Exec(
-		"INSERT INTO devices (id, user_id, device_name) VALUES (?, ?, ?)",
-		deviceID, userID, deviceName,
-	)
-	if err != nil {
-		return "", fmt.Errorf("create oauth device: %w", err)
-	}
-	return deviceID, nil
 }
 
 func (s *Service) createOAuthRefreshToken(clientID string, userID int64, deviceID, resource, scope string) (string, error) {

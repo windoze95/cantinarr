@@ -28,7 +28,8 @@ class ModuleScaffold extends StatelessWidget {
       backgroundColor: Colors.transparent,
       appBar: appBar,
       body: child,
-      bottomNavigationBar: AppBreakpoints.isDesktop(context)
+      bottomNavigationBar: (AppBreakpoints.isDesktop(context) ||
+              pages.length < 2)
           ? null
           : SafeArea(
               top: false,

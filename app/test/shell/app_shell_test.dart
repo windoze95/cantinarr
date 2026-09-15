@@ -14,6 +14,7 @@ import 'package:cantinarr/features/ai_assistant/data/codex_oauth_service.dart';
 import 'package:cantinarr/features/ai_assistant/logic/ai_chat_provider.dart';
 import 'package:cantinarr/features/ai_assistant/ui/ai_chat_screen.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
 import 'package:cantinarr/features/shell/ui/app_shell.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -197,8 +198,8 @@ void main() {
 
     router.push('/movie/1');
     await tester.pumpAndSettle();
-    await tester.drag(find.byKey(const ValueKey('detail-scroll')),
-        const Offset(0, -300));
+    await tester.drag(
+        find.byKey(const ValueKey('detail-scroll')), const Offset(0, -300));
     await tester.pumpAndSettle();
 
     router.pop();
@@ -564,7 +565,8 @@ void main() {
     semantics.dispose();
   });
 
-  testWidgets('the drawer offers the media server guide only when one is shared',
+  testWidgets(
+      'the drawer offers the media server guide only when one is shared',
       (tester) async {
     final semantics = tester.ensureSemantics();
     tester.view.physicalSize = const Size(390, 844);
@@ -608,8 +610,8 @@ void main() {
     // A granted media server (the backend lists it only for granted
     // users) puts the guide in the menu, titled by the product.
     await pump(_mediaServerState());
-    expect(find.bySemanticsIdentifier('nav-action-media-servers'),
-        findsOneWidget);
+    expect(
+        find.bySemanticsIdentifier('nav-action-media-servers'), findsOneWidget);
     expect(find.text('Watch on Jellyfin'), findsOneWidget);
 
     // Without one there is nothing to open. Tear the first tree down first:
@@ -617,11 +619,76 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
     await pump(_multiRadarrState(isAdmin: false));
-    expect(find.bySemanticsIdentifier('nav-action-media-servers'),
-        findsNothing);
+    expect(
+        find.bySemanticsIdentifier('nav-action-media-servers'), findsNothing);
     expect(find.text('Watch on Jellyfin'), findsNothing);
     semantics.dispose();
   });
+
+  for (final desktop in [false, true]) {
+    testWidgets(
+        'guide switch updates navigation and keeps the page open (desktop=$desktop)',
+        (tester) async {
+      tester.view.physicalSize =
+          desktop ? const Size(1280, 900) : const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final auth = _FakeAuthNotifier(_mediaServerState());
+      final router = GoRouter(initialLocation: '/media-servers', routes: [
+        ShellRoute(
+            builder: (context, state, child) =>
+                AppShell(currentPath: state.uri.path, child: child),
+            routes: [
+              GoRoute(
+                  path: '/media-servers',
+                  builder: (_, __) => const MediaAccessGuide()),
+            ]),
+      ]);
+      addTearDown(router.dispose);
+      await tester.pumpWidget(ProviderScope(overrides: [
+        authProvider.overrideWith(() => auth),
+        backendClientProvider.overrideWithValue(_fakeDio()),
+      ], child: MaterialApp.router(routerConfig: router)));
+      await tester.pumpAndSettle();
+      Future<void> checkMenu(bool visible) async {
+        if (!desktop) {
+          await tester.tap(find.byIcon(Icons.menu));
+          await tester.pumpAndSettle();
+        }
+        expect(find.widgetWithText(ListTile, 'Watch on Jellyfin').hitTestable(),
+            visible ? findsOneWidget : findsNothing);
+        expect(find.widgetWithText(ListTile, 'Settings').hitTestable(),
+            findsOneWidget);
+        if (!desktop) {
+          await tester.tapAt(const Offset(370, 400));
+          await tester.pumpAndSettle();
+        }
+        expect(
+            router.routeInformationProvider.value.uri.path, '/media-servers');
+        expect(find.byType(MediaAccessGuide), findsOneWidget);
+      }
+
+      await checkMenu(true);
+      await tester.tap(find.byType(SwitchListTile));
+      await tester.pumpAndSettle();
+      await checkMenu(false);
+      await tester.tap(find.byType(SwitchListTile));
+      await tester.pumpAndSettle();
+      await checkMenu(true);
+      await tester.tap(find.byType(SwitchListTile));
+      await tester.pumpAndSettle();
+      auth.publish(_mediaServerState().copyWith(
+          connection: _mediaServerState().connection!.copyWith(instances: [
+        ..._mediaServerState().connection!.instances,
+        const ServiceInstance(
+            id: 'jf-b', serviceType: 'jellyfin', name: 'Second Jellyfin'),
+      ])));
+      await tester.pumpAndSettle();
+      await checkMenu(true);
+      expect(tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+          isFalse);
+    });
+  }
 
   testWidgets('the media server guide route carries its own breadcrumb',
       (tester) async {
@@ -809,6 +876,12 @@ void main() {
 
   testWidgets('the admin queues collapse behind one Needs attention row',
       (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'approvals_menu_only_when_pending': false,
+      'issues_menu_only_when_active': false,
+      'agent_fixes_menu_only_when_awaiting_review': false,
+      'profile_approvals_menu_only_when_pending': false,
+    });
     await _pumpAdminDrawer(tester);
 
     // One row stands for all of them until asked; the queues themselves are
@@ -845,7 +918,9 @@ void main() {
 
   testWidgets('closing the drawer collapses the attention group again',
       (tester) async {
-    await _pumpAdminDrawer(tester);
+    await _pumpAdminDrawer(tester, requests: const [
+      {'id': 1, 'title': 'One'},
+    ]);
 
     await tester.tap(find.text('Needs attention'));
     await tester.pumpAndSettle();
@@ -895,15 +970,8 @@ void main() {
   });
 
   testWidgets(
-      'conditional attention entries and empty section hide after empty loads',
+      'attention entries and the empty section hide by default after loading',
       (tester) async {
-    SharedPreferences.setMockInitialValues({
-      'approvals_menu_only_when_pending': true,
-      'issues_menu_only_when_active': true,
-      'agent_fixes_menu_only_when_awaiting_review': true,
-      'profile_approvals_menu_only_when_pending': true,
-    });
-
     await _pumpAdminDrawer(tester);
 
     expect(find.text('Approvals'), findsNothing);
@@ -911,6 +979,63 @@ void main() {
     expect(find.text('Agent fixes'), findsNothing);
     expect(find.text('Profile approvals'), findsNothing);
     expect(find.text('Needs attention'), findsNothing);
+  });
+
+  for (final desktop in [false, true]) {
+    testWidgets(
+        'setup reminder loads on first ${desktop ? 'desktop' : 'mobile'} '
+        'Discover visit without opening Settings', (tester) async {
+      await _pumpAdminDrawer(tester, desktop: desktop, setupRemaining: 3);
+
+      expect(find.text('Needs attention'), findsOneWidget);
+      expect(find.text('3'), findsOneWidget);
+      await tester.tap(find.text('Needs attention'));
+      await tester.pumpAndSettle();
+      expect(find.text('Setup checklist'), findsOneWidget);
+      expect(find.text('3'), findsNWidgets(2));
+      expect(find.text('Approvals'), findsNothing);
+    });
+  }
+
+  for (final desktop in [false, true]) {
+    for (final allSkipped in [false, true]) {
+      testWidgets(
+          '${desktop ? 'desktop' : 'mobile'} reminder excludes skips${allSkipped ? ' and disappears when all are skipped' : ''}',
+          (tester) async {
+        await _pumpAdminDrawer(tester, desktop: desktop, setupStatus: {
+          'items': [
+            for (final key in ['radarr', 'sonarr', 'push'])
+              {
+                'key': key,
+                'configured': false,
+                'optional': true,
+                'skipped': allSkipped || key != 'sonarr'
+              },
+          ],
+          'configured': 0,
+          'total': 3,
+        });
+        if (allSkipped) {
+          expect(find.text('Needs attention'), findsNothing);
+          expect(find.text('Setup checklist'), findsNothing);
+        } else {
+          expect(find.text('Needs attention'), findsOneWidget);
+          expect(find.text('1'), findsOneWidget);
+          await tester.tap(find.text('Needs attention'));
+          await tester.pumpAndSettle();
+          expect(find.text('Setup checklist'), findsOneWidget);
+          expect(find.text('1'), findsNWidgets(2));
+        }
+      });
+    }
+  }
+
+  testWidgets('muted setup reminder stays hidden after loading',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({'setup_reminder_enabled': false});
+    await _pumpAdminDrawer(tester, setupRemaining: 3);
+    expect(find.text('Needs attention'), findsNothing);
+    expect(find.text('Setup checklist'), findsNothing);
   });
 
   testWidgets('conditional attention entries fail open when queues are unknown',
@@ -1089,8 +1214,7 @@ void main() {
 
   testWidgets(
       'switching discovery tabs clears the search bar and closes the '
-      'results overlay without firing a search',
-      (tester) async {
+      'results overlay without firing a search', (tester) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(() {
@@ -1482,8 +1606,12 @@ Future<void> _pumpAdminDrawer(
   List<Map<String, dynamic>> issues = const [],
   bool failAttentionQueues = false,
   bool hangAttentionQueues = false,
+  bool desktop = false,
+  int setupRemaining = 0,
+  Map<String, dynamic>? setupStatus,
 }) async {
-  tester.view.physicalSize = const Size(390, 844);
+  tester.view.physicalSize =
+      desktop ? const Size(1280, 844) : const Size(390, 844);
   tester.view.devicePixelRatio = 1;
   addTearDown(() {
     tester.view.resetPhysicalSize();
@@ -1517,6 +1645,8 @@ Future<void> _pumpAdminDrawer(
           issues: issues,
           failAttentionQueues: failAttentionQueues,
           hangAttentionQueues: hangAttentionQueues,
+          setupRemaining: setupRemaining,
+          setupStatus: setupStatus,
         )),
         realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
       ],
@@ -1525,8 +1655,10 @@ Future<void> _pumpAdminDrawer(
   );
   await tester.pumpAndSettle();
 
-  await tester.tap(find.byIcon(Icons.menu));
-  await tester.pumpAndSettle();
+  if (!desktop) {
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+  }
 }
 
 /// Shell over long scrollable pages: two module routes and one pushed route.
@@ -1719,6 +1851,8 @@ class _FakeAuthNotifier extends AuthNotifier {
 
   _FakeAuthNotifier(this.authState);
 
+  void publish(AuthState value) => state = AsyncData(value);
+
   @override
   Future<AuthState> build() async => authState;
 }
@@ -1741,6 +1875,8 @@ Dio _fakeDio({
   List<Map<String, dynamic>> issues = const [],
   bool failAttentionQueues = false,
   bool hangAttentionQueues = false,
+  int setupRemaining = 0,
+  Map<String, dynamic>? setupStatus,
 }) {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   dio.httpClientAdapter = _JsonAdapter(
@@ -1748,6 +1884,8 @@ Dio _fakeDio({
     issues: issues,
     failAttentionQueues: failAttentionQueues,
     hangAttentionQueues: hangAttentionQueues,
+    setupRemaining: setupRemaining,
+    setupStatus: setupStatus,
   );
   return dio;
 }
@@ -1758,12 +1896,16 @@ class _JsonAdapter implements HttpClientAdapter {
     this.issues = const [],
     this.failAttentionQueues = false,
     this.hangAttentionQueues = false,
+    this.setupRemaining = 0,
+    this.setupStatus,
   });
 
   final List<Map<String, dynamic>> requests;
   final List<Map<String, dynamic>> issues;
   final bool failAttentionQueues;
   final bool hangAttentionQueues;
+  final int setupRemaining;
+  final Map<String, dynamic>? setupStatus;
 
   static bool _isAttentionQueue(String path) =>
       path == '/api/admin/requests' ||
@@ -1802,6 +1944,9 @@ class _JsonAdapter implements HttpClientAdapter {
       body = {'actions': []};
     } else if (path == '/api/admin/profile-change-proposals') {
       body = {'proposals': []};
+    } else if (path == '/api/admin/setup-status') {
+      body = setupStatus ??
+          {'items': [], 'configured': 0, 'total': setupRemaining};
     } else {
       body = [];
     }

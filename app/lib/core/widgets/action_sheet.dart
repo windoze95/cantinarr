@@ -8,8 +8,10 @@ class SheetAction<T> {
   final IconData icon;
   final String label;
   final Color? color;
+  final bool enabled;
 
-  const SheetAction(this.value, this.icon, this.label, {this.color});
+  const SheetAction(this.value, this.icon, this.label,
+      {this.color, this.enabled = true});
 }
 
 /// Bottom sheet of actions for one item (a series, a season, …): drag handle,
@@ -41,11 +43,17 @@ Future<T?> showActionSheet<T>(
             ),
           ),
           ...actions.map((a) => ListTile(
-                leading: Icon(a.icon, color: a.color ?? AppTheme.accent),
+                enabled: a.enabled,
+                leading: Icon(a.icon, color: a.enabled
+                    ? a.color ?? AppTheme.accent
+                    : AppTheme.textSecondary),
                 title: Text(a.label,
                     style: TextStyle(
-                        color: a.color ?? AppTheme.textPrimary, fontSize: 15)),
-                onTap: () => Navigator.pop(ctx, a.value),
+                        color: a.enabled
+                            ? a.color ?? AppTheme.textPrimary
+                            : AppTheme.textSecondary,
+                        fontSize: 15)),
+                onTap: a.enabled ? () => Navigator.pop(ctx, a.value) : null,
               )),
           const SizedBox(height: AppTheme.spaceSm),
         ],

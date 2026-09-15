@@ -2,6 +2,7 @@ package webhooks
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -49,7 +50,9 @@ type fakeContent struct {
 	upgradedMusic    []string
 }
 
-func (f *fakeContent) NotifyNewMovie(title string, tmdbID int, instanceID string) { f.movies = append(f.movies, title) }
+func (f *fakeContent) NotifyNewMovie(title string, tmdbID int, instanceID string) {
+	f.movies = append(f.movies, title)
+}
 func (f *fakeContent) NotifyNewEpisode(seriesTitle string, tmdbID int, instanceID string) {
 	f.episodes = append(f.episodes, seriesTitle)
 }
@@ -80,6 +83,7 @@ func (f *fakeContent) NotifyUpgradedMusic(title, artist, foreignID, instanceID s
 }
 
 type fixture struct {
+	database  *sql.DB
 	handler   *Handler
 	hub       *fakeBroadcaster
 	requests  *fakeInvalidator
@@ -125,6 +129,7 @@ func newFixture(t *testing.T, radarrURL, sonarrURL string) *fixture {
 	}
 
 	f := &fixture{
+		database:  database,
 		hub:       &fakeBroadcaster{},
 		requests:  &fakeInvalidator{},
 		content:   &fakeContent{},

@@ -11,14 +11,16 @@ flow safety.
 
 ## CI lanes
 
-Every pull request runs the same three checks: `Test catalog` (this folder's
-lint plus Maestro flow safety), `Go` (`go vet`, `go test` with the pinned
-Codex app-server smoke, and a `CGO_ENABLED=0` build), and `Flutter`
-(`flutter analyze`, `flutter test`, and a release web build). The same suite
-re-runs on every push to `main` to catch merge skew between independently
-green PRs, and on a weekly schedule to catch toolchain drift — the Flutter
-`stable` channel and Go toolchain float forward even when the repo does not
-change. None of these lanes receive credentials of any kind; see
+Every pull request runs `Test catalog` (catalog/tooling tests and Maestro flow
+safety), `Go` (`go vet`, race tests with the pinned Codex app-server smoke, and a
+`CGO_ENABLED=0` build), `Flutter` (analysis, tests, and a release web build),
+`Apple TV helper` (the locked Python worker), and `Release tooling` (Fastlane
+submission/promotion tests and workflow validation). CI records the actual
+checkout SHA so publishing can verify the exact tested tree, including a PR
+merge checkout used for a phone preview. The suite also runs on pushes to
+`main` and `release/**`, and weekly to detect dependency/service drift. Flutter
+uses `.flutter-version` and the committed lockfile. These test lanes receive
+no signing or store credentials; see
 [environments](environments.md) for what each layer needs, and does not
 need, to run.
 

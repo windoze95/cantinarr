@@ -14,8 +14,9 @@ import (
 // media-server contract as an invite server (mediaserver.KindInvite). An
 // "account" here is a share: the identity is the invitee's email in its
 // canonical spelling, a pending invite is a share nobody has accepted, and a
-// share that is gone is absence. Everything goes through plex.tv with the
-// owner's token; the server itself is never dialed.
+// share that is gone is absence. Account operations go through plex.tv with
+// the owner's token. Title lookup separately dials the server as the recipient
+// using their current server-scoped share token (see FindItem).
 //
 // The owner is the one account plex.tv never lists as a share, and the one
 // most likely to sign in from the guide (the admin's own). When the instance

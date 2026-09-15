@@ -30,6 +30,7 @@ class LibraryChoice {
 /// null cancels.
 class RequestOptionsSheet extends StatefulWidget {
   final RequestOptions options;
+  final RequestOptionsResult? initialSelection;
 
   /// The libraries this user may choose between; the section renders only
   /// when there is more than one.
@@ -46,6 +47,7 @@ class RequestOptionsSheet extends StatefulWidget {
   const RequestOptionsSheet({
     super.key,
     required this.options,
+    this.initialSelection,
     this.libraries = const [],
     this.selectedLibraryId,
     this.onLibraryOptions,
@@ -65,7 +67,8 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
   void initState() {
     super.initState();
     _options = widget.options;
-    _seasonScope = widget.options.defaultSeasonScope;
+    _seasonScope = widget.initialSelection?.seasonScope ?? widget.options.defaultSeasonScope;
+    _qualityProfileId = widget.initialSelection?.qualityProfileId;
     _libraryId = widget.selectedLibraryId ??
         (widget.libraries.isNotEmpty ? widget.libraries.first.id : null);
   }

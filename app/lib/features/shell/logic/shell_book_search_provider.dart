@@ -30,7 +30,7 @@ class ShellBookSearchState {
   final String searchQuery;
   final List<ChaptarrBook> results;
 
-  /// Author matches for [searchQuery], rendered above [results].
+  /// Author matches for [searchQuery], rendered below [results].
   final List<ChaptarrAuthor> authors;
   final bool isLoadingSearch;
 
@@ -47,6 +47,7 @@ class ShellBookSearchState {
   /// it is absence or blindness, and "no authors matched" and "authors could
   /// not be searched" are different sentences.
   final bool authorsUnavailable;
+  final bool authorsLoading;
 
   const ShellBookSearchState({
     this.searchQuery = '',
@@ -56,6 +57,7 @@ class ShellBookSearchState {
     this.searched = false,
     this.error,
     this.authorsUnavailable = false,
+    this.authorsLoading = false,
   });
 
   /// [clearError] is explicit (not a plain nullable default) because a
@@ -70,6 +72,7 @@ class ShellBookSearchState {
     BookSearchError? error,
     bool clearError = false,
     bool? authorsUnavailable,
+    bool? authorsLoading,
   }) =>
       ShellBookSearchState(
         searchQuery: searchQuery ?? this.searchQuery,
@@ -79,6 +82,7 @@ class ShellBookSearchState {
         searched: searched ?? this.searched,
         error: clearError ? null : (error ?? this.error),
         authorsUnavailable: authorsUnavailable ?? this.authorsUnavailable,
+        authorsLoading: authorsLoading ?? this.authorsLoading,
       );
 
   bool get isSearching => searchQuery.trim().isNotEmpty;
@@ -93,11 +97,19 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
   final Ref _ref;
   Timer? _searchDebounce;
   int _searchGeneration = 0;
+  CancelToken? _searchCancel;
+  Timer? _searchDeadline;
+
+  void _cancelSearch() {
+    _searchCancel?.cancel('Search changed');
+    _searchDeadline?.cancel();
+  }
 
   ShellBookSearchNotifier(this._ref) : super(const ShellBookSearchState());
 
   void updateSearch(String query) {
     _searchDebounce?.cancel();
+    _cancelSearch();
     final generation = ++_searchGeneration;
 
     if (query.trim().isEmpty) {
@@ -113,6 +125,7 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
       searched: false,
       clearError: true,
       authorsUnavailable: false,
+      authorsLoading: true,
     );
     _searchDebounce = Timer(
       AppConfig.searchDebounce,
@@ -142,6 +155,7 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
         isLoadingSearch: false,
         searched: false,
         authorsUnavailable: false,
+        authorsLoading: false,
         error: BookSearchError.noInstance,
       );
       return;
@@ -152,40 +166,50 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
       instanceId: instance.id,
     );
 
-    // Two independent Chaptarr calls, issued together rather than in sequence
-    // so adding authors costs no extra round-trip of latency. Their failures
-    // are NOT shared: the book lookup alone owns the FAIL-01/02/03 taxonomy
-    // below, and a failed author lookup only sets `authorsUnavailable` so the
-    // view can say "couldn't search authors" instead of showing an empty
-    // author list that reads as "this author doesn't exist".
-    final term = query.trim();
-    final authorsFuture = service.lookupAuthor(term);
-    // Claim the error now — an unawaited future that completes with an error
-    // while the book call is still in flight would otherwise reach the zone
-    // handler as an unhandled async error.
-    var authorsFailed = false;
-    final authorsGuarded = authorsFuture.catchError((Object error) {
-      if (kDebugMode) {
-        debugPrint(
-          'ShellBookSearchNotifier: author lookup failed with '
-          '${error.runtimeType}',
-        );
-      }
-      authorsFailed = true;
-      return <ChaptarrAuthor>[];
+    // Cancel both sockets at the interactive deadline, including connection
+    // time. Each result publishes independently under the same generation.
+    final token = CancelToken();
+    _searchCancel = token;
+    _searchDeadline = Timer(const Duration(seconds: 10), () {
+      if (superseded()) return;
+      token.cancel('Search timed out');
+      state = state.copyWith(
+        isLoadingSearch: false,
+        authorsLoading: false,
+        authorsUnavailable: state.authorsLoading,
+        error:
+            state.isLoadingSearch ? BookSearchError.requestFailed : state.error,
+      );
     });
+    void finishDeadline() {
+      if (!superseded() && !state.isLoadingSearch && !state.authorsLoading) {
+        _searchDeadline?.cancel();
+      }
+    }
+
+    final term = query.trim();
+    unawaited(() async {
+      try {
+        final authors = await service.lookupAuthor(term, cancelToken: token);
+        if (superseded() || token.isCancelled) return;
+        state = state.copyWith(
+            authors: authors, authorsLoading: false, authorsUnavailable: false);
+      } catch (_) {
+        if (superseded() || token.isCancelled) return;
+        state = state.copyWith(authorsLoading: false, authorsUnavailable: true);
+      } finally {
+        finishDeadline();
+      }
+    }());
 
     try {
-      final books = await service.lookupBook(term);
-      final authors = await authorsGuarded;
-      if (superseded()) return;
+      final books = await service.lookupBook(term, cancelToken: token);
+      if (superseded() || token.isCancelled) return;
       state = state.copyWith(
         results: books,
-        authors: authors,
         isLoadingSearch: false,
         searched: true,
         clearError: true,
-        authorsUnavailable: authorsFailed,
       );
     } on DioException catch (e) {
       if (kDebugMode) {
@@ -194,7 +218,7 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
           '${e.runtimeType}, status ${e.response?.statusCode}',
         );
       }
-      if (superseded()) return;
+      if (superseded() || token.isCancelled) return;
       final code = e.response?.statusCode;
       state = state.copyWith(
         // A failed search owns the whole overlay, so the previous query's
@@ -216,7 +240,7 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
           '${error.runtimeType}',
         );
       }
-      if (superseded()) return;
+      if (superseded() || token.isCancelled) return;
       state = state.copyWith(
         results: const [],
         authors: const [],
@@ -225,11 +249,14 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
         authorsUnavailable: false,
         error: BookSearchError.requestFailed,
       );
+    } finally {
+      finishDeadline();
     }
   }
 
   void reset() {
     _searchDebounce?.cancel();
+    _cancelSearch();
     _searchGeneration++;
     state = const ShellBookSearchState();
   }
@@ -243,6 +270,7 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
   /// and is dropped by [_executeSearch]'s existing guard.
   void rerunForInstance() {
     _searchDebounce?.cancel();
+    _cancelSearch();
     final generation = ++_searchGeneration;
     final query = state.searchQuery;
 
@@ -255,6 +283,9 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
 
     state = state.copyWith(
       results: const [],
+      authors: const [],
+      authorsLoading: true,
+      authorsUnavailable: false,
       isLoadingSearch: true,
       searched: false,
       clearError: true,
@@ -265,6 +296,7 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _cancelSearch();
     super.dispose();
   }
 }

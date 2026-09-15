@@ -14,6 +14,91 @@ import (
 )
 
 const initSQL = `
+-- Allowances start unlimited, with no historical charge backfill. Accounting
+-- is independent of mutable request owners, subscriptions and library state.
+CREATE TABLE IF NOT EXISTS request_quota_lock (id INTEGER PRIMARY KEY CHECK(id=1));
+INSERT OR IGNORE INTO request_quota_lock(id) VALUES (1);
+CREATE TABLE IF NOT EXISTS request_quota_defaults (
+    media_type TEXT NOT NULL,
+    book_format TEXT NOT NULL DEFAULT '',
+    count INTEGER CHECK(count >= 0),
+    window_days INTEGER NOT NULL CHECK(window_days IN (1,7,30)),
+    PRIMARY KEY(media_type,book_format)
+);
+CREATE TABLE IF NOT EXISTS user_request_quotas (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    media_type TEXT NOT NULL,
+    book_format TEXT NOT NULL DEFAULT '',
+    count INTEGER CHECK(count >= 0),
+    window_days INTEGER NOT NULL CHECK(window_days IN (1,7,30)),
+    PRIMARY KEY(user_id,media_type,book_format)
+);
+CREATE TABLE IF NOT EXISTS request_quota_resets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    admin_id INTEGER NOT NULL,
+    allowances TEXT NOT NULL,
+    restored_units TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS request_quota_charges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    media_type TEXT NOT NULL,
+    book_format TEXT NOT NULL DEFAULT '',
+    instance_id TEXT NOT NULL,
+    unit_key TEXT NOT NULL,
+    charged_at INTEGER NOT NULL,
+    refunded_at INTEGER,
+    refund_reason TEXT,
+    reset_id INTEGER REFERENCES request_quota_resets(id)
+);
+CREATE INDEX IF NOT EXISTS request_quota_usage ON request_quota_charges(user_id,media_type,book_format,charged_at);
+CREATE TABLE IF NOT EXISTS request_quota_items (
+    request_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    media_type TEXT NOT NULL,
+    book_format TEXT NOT NULL DEFAULT '',
+    unit_key TEXT NOT NULL,
+    work TEXT NOT NULL DEFAULT '',
+    charge_id INTEGER REFERENCES request_quota_charges(id),
+    delivery_started_at INTEGER NOT NULL DEFAULT 0,
+    released_at INTEGER,
+    release_reason TEXT,
+    PRIMARY KEY(request_id,user_id,media_type,book_format,unit_key)
+);
+CREATE INDEX IF NOT EXISTS request_quota_item_charge ON request_quota_items(charge_id);
+
+-- Apple TV pairing material is encrypted with the server's secrets key.
+-- Device names/addresses are not identities; reconnects verify the paired ID.
+CREATE TABLE IF NOT EXISTS apple_tv_devices (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    address TEXT NOT NULL,
+    identifier TEXT NOT NULL UNIQUE,
+    credentials TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS apple_tv_grants (
+    tv_id TEXT NOT NULL REFERENCES apple_tv_devices(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY (tv_id, user_id)
+);
+
+-- OAuth credentials can be shared deliberately by multiple Chaptarr instances.
+-- The JSON token pair is encrypted as one unit; links contain no secrets.
+CREATE TABLE IF NOT EXISTS hardcover_connections (
+    id TEXT PRIMARY KEY,
+    credentials TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    reconnect INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS hardcover_instance_connections (
+    instance_id TEXT PRIMARY KEY REFERENCES service_instances(id) ON DELETE CASCADE,
+    connection_id TEXT NOT NULL REFERENCES hardcover_connections(id)
+);
+CREATE INDEX IF NOT EXISTS hardcover_connection_links ON hardcover_instance_connections(connection_id);
+
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
@@ -41,6 +126,9 @@ CREATE TABLE IF NOT EXISTS request_log (
     book_format TEXT,
     book_record_id INTEGER,
     search_term TEXT,
+    catalog_provider TEXT,
+    catalog_id TEXT,
+    match_confirmed INTEGER NOT NULL DEFAULT 0,
     park_reason TEXT,
     add_failure_reason TEXT,
     instance_id TEXT REFERENCES service_instances(id) ON DELETE SET NULL,
@@ -59,6 +147,73 @@ CREATE TABLE IF NOT EXISTS book_request_waiters (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     book_format TEXT NOT NULL DEFAULT 'both',
     PRIMARY KEY (request_id, user_id)
+);
+
+-- Discord records delivery history, never current library availability.
+-- One receipt per new request survives retries and process restarts.
+CREATE TABLE IF NOT EXISTS discord_notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER NOT NULL UNIQUE REFERENCES request_log(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    detail TEXT NOT NULL DEFAULT 'Waiting to send.',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS discord_notifications_due ON discord_notifications(status, next_attempt_at);
+
+-- Durable delivery is separate from approval and from live library state.
+CREATE TABLE IF NOT EXISTS request_dispatch (
+    request_id INTEGER NOT NULL REFERENCES request_log(id) ON DELETE CASCADE,
+    format TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    delivery_started_at INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at INTEGER NOT NULL DEFAULT 0,
+    lease_until INTEGER NOT NULL DEFAULT 0,
+    lease_token TEXT NOT NULL DEFAULT '',
+    canonical_foreign_id TEXT NOT NULL DEFAULT '',
+    book_record_id INTEGER NOT NULL DEFAULT 0,
+    code TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (request_id, format)
+);
+CREATE INDEX IF NOT EXISTS request_dispatch_due ON request_dispatch(state, next_attempt_at);
+
+-- Local TV corrections are independent of the reviewed defaults bundled with
+-- the server. Reset retains a revision tombstone so stale edits stay stale.
+CREATE TABLE IF NOT EXISTS tv_match_overrides (
+    tmdb_id INTEGER PRIMARY KEY,
+    mode TEXT NOT NULL CHECK(mode IN ('custom','paused','default')),
+    tvdb_id INTEGER NOT NULL DEFAULT 0,
+    season_map TEXT NOT NULL DEFAULT '{}',
+    revision INTEGER NOT NULL DEFAULT 1,
+    updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Request seasons remain in TMDB coordinates. This immutable identity/scope
+-- snapshot and mutable delivery checkpoint survive approval and restarts.
+CREATE TABLE IF NOT EXISTS request_tv_targets (
+    request_id INTEGER PRIMARY KEY REFERENCES request_log(id) ON DELETE CASCADE,
+    snapshot TEXT NOT NULL,
+    phase TEXT NOT NULL DEFAULT 'queued',
+    series_id INTEGER NOT NULL DEFAULT 0,
+    repair_of INTEGER REFERENCES request_log(id),
+    repaired_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(repair_of)
+);
+-- Serializing native mutations per instance also covers aliases that resolve
+-- to the same book/album only after a metadata lookup, across server processes.
+CREATE TABLE IF NOT EXISTS request_dispatch_locks (
+    instance_id TEXT PRIMARY KEY,
+    lease_token TEXT NOT NULL,
+    lease_until INTEGER NOT NULL
 );
 
 -- Per-user request policy overrides. Any NULL column means "inherit the
@@ -151,10 +306,32 @@ CREATE TABLE IF NOT EXISTS user_media_server_accounts (
     remote_user_id TEXT NOT NULL,
     remote_username TEXT NOT NULL,
     created_by_cantinarr INTEGER NOT NULL DEFAULT 1,
+    manage_access INTEGER NOT NULL DEFAULT 0,
+    access_sync_pending INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     disabled_at DATETIME,
     PRIMARY KEY (user_id, instance_id),
     UNIQUE (instance_id, remote_user_id)
+);
+
+-- Audiobookshelf library choices exist before accounts are created and survive
+-- grant removal. remote_user_id binds pending writes to one managed account.
+CREATE TABLE IF NOT EXISTS user_media_library_policies (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    instance_id TEXT NOT NULL REFERENCES service_instances(id) ON DELETE CASCADE,
+    mode TEXT NOT NULL CHECK(mode IN ('default', 'all', 'selected')),
+    library_ids TEXT NOT NULL DEFAULT '[]',
+    remote_user_id TEXT NOT NULL DEFAULT '',
+    sync_pending INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, instance_id)
+);
+
+-- An explicit unlink prevents automatic Plex adoption/invitations from
+-- recreating the connection. No remote identity or credentials are retained.
+CREATE TABLE IF NOT EXISTS user_media_server_unlinks (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    instance_id TEXT NOT NULL REFERENCES service_instances(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, instance_id)
 );
 
 CREATE TABLE IF NOT EXISTS devices (
@@ -165,6 +342,23 @@ CREATE TABLE IF NOT EXISTS devices (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     revoked_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS oidc_identities (
+    issuer TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (issuer, subject),
+    UNIQUE (user_id, issuer)
+);
+
+CREATE TABLE IF NOT EXISTS plex_identities (
+    plex_account_id INTEGER PRIMARY KEY CHECK (plex_account_id > 0),
+    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    email TEXT NOT NULL DEFAULT '',
+    username TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS push_tokens (
@@ -178,13 +372,31 @@ CREATE TABLE IF NOT EXISTS push_tokens (
     UNIQUE(device_id)
 );
 
+-- Personal video-app choices inherit each video instance's default by service.
+CREATE TABLE IF NOT EXISTS video_app_preferences (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    service_type TEXT NOT NULL CHECK (service_type IN ('plex', 'jellyfin', 'emby')),
+    ios TEXT NOT NULL DEFAULT '' CHECK (ios IN ('', 'service', 'infuse', 'browser')),
+    PRIMARY KEY (user_id, service_type)
+);
+
+-- Personal listening-app choices follow the user across devices. Empty values
+-- inherit each Audiobookshelf instance's default for the corresponding platform.
+CREATE TABLE IF NOT EXISTS listening_app_preferences (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    ios TEXT NOT NULL DEFAULT '',
+    android TEXT NOT NULL DEFAULT ''
+);
+
 -- Per-user push notification preferences. A missing row means "all defaults",
 -- so a user only gets a row once they change something. Defaults match the
--- self-service API: request_decision off, everything else (request_pending,
--- the new_movie/new_episode/new_book/new_music content alerts, ...) on. Kept
+-- self-service API: request_decision, request_auto_approved, and content_upgraded
+-- off; the master and other categories on. Kept
 -- separate from user_request_settings (admin-managed request policy).
 CREATE TABLE IF NOT EXISTS notification_prefs (
     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    push_enabled INTEGER NOT NULL DEFAULT 1,
+    request_auto_approved INTEGER NOT NULL DEFAULT 0,
     request_decision INTEGER NOT NULL DEFAULT 0,
     request_pending  INTEGER NOT NULL DEFAULT 1,
     new_movie        INTEGER NOT NULL DEFAULT 1,
@@ -195,6 +407,7 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
     agent_action_pending INTEGER NOT NULL DEFAULT 1,
     plex_access_request INTEGER NOT NULL DEFAULT 1,
     plex_invite_sent INTEGER NOT NULL DEFAULT 1,
+    media_server_access INTEGER NOT NULL DEFAULT 1,
     issue_report_update INTEGER NOT NULL DEFAULT 1,
     agent_digest INTEGER NOT NULL DEFAULT 1,
     content_upgraded INTEGER NOT NULL DEFAULT 0
@@ -790,7 +1003,7 @@ func Open(dbPath string) (*sql.DB, error) {
 		// Parent directory should exist; caller creates it.
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -808,6 +1021,13 @@ func Open(dbPath string) (*sql.DB, error) {
 	// are ignored). Backfill statements run only when the column is first added
 	// so they execute exactly once per database.
 	migrations := []schemaMigration{
+		{alter: "ALTER TABLE request_dispatch ADD COLUMN delivery_started_at INTEGER NOT NULL DEFAULT 0"},
+		{
+			// Old request intake cached client hints without verification. Clear
+			// that cache once; subsequent bridge entries retain their normal TTL.
+			alter:    "ALTER TABLE tmdb_tvdb_cache ADD COLUMN identity_version INTEGER NOT NULL DEFAULT 1",
+			backfill: []string{"DELETE FROM tmdb_tvdb_cache"},
+		},
 		{alter: "ALTER TABLE service_instances ADD COLUMN username TEXT NOT NULL DEFAULT ''"},
 		{alter: "ALTER TABLE service_instances ADD COLUMN password TEXT NOT NULL DEFAULT ''"},
 		{
@@ -859,6 +1079,12 @@ func Open(dbPath string) (*sql.DB, error) {
 		// instead of creating a duplicate. Empty for rows created before this
 		// column or by clients that can't provide one (e.g. web).
 		{alter: "ALTER TABLE devices ADD COLUMN hardware_id TEXT NOT NULL DEFAULT ''"},
+		{alter: "ALTER TABLE devices ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'local'"},
+		{alter: "ALTER TABLE devices ADD COLUMN oidc_issuer TEXT NOT NULL DEFAULT ''"},
+		{alter: "ALTER TABLE devices ADD COLUMN plex_account_id INTEGER NOT NULL DEFAULT 0"},
+		{alter: "ALTER TABLE oauth_authorization_codes ADD COLUMN plex_account_id INTEGER NOT NULL DEFAULT 0"},
+		{alter: "ALTER TABLE oauth_authorization_codes ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'local'"},
+		{alter: "ALTER TABLE oauth_authorization_codes ADD COLUMN oidc_issuer TEXT NOT NULL DEFAULT ''"},
 		// AI remediation: admins are notified of new issues by default (on),
 		// matching request_pending. New on existing databases.
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN issue_created INTEGER NOT NULL DEFAULT 1"},
@@ -927,6 +1153,9 @@ func Open(dbPath string) (*sql.DB, error) {
 		// metadata record by searching, and this is the one term already proven to
 		// return it, so approval must replay the same starting point the submit had.
 		{alter: "ALTER TABLE request_log ADD COLUMN search_term TEXT"},
+		{alter: "ALTER TABLE request_log ADD COLUMN catalog_provider TEXT"},
+		{alter: "ALTER TABLE request_log ADD COLUMN catalog_id TEXT"},
+		{alter: "ALTER TABLE request_log ADD COLUMN match_confirmed INTEGER NOT NULL DEFAULT 0"},
 		// Book availability alerts: pushed when a Chaptarr book import lands.
 		// On by default like the other new-content categories; the audience is
 		// additionally scoped in SQL to users who can see the instance.
@@ -993,16 +1222,47 @@ func Open(dbPath string) (*sql.DB, error) {
 		// address shown to granted users plus the shared library ids, as one
 		// JSON document; '{}' for every other service type.
 		{alter: "ALTER TABLE service_instances ADD COLUMN media_server_config TEXT NOT NULL DEFAULT '{}'"},
+		// Preserve established offboarding behavior exactly once. New links
+		// default to passive; account creation explicitly opts into management.
+		{
+			alter:    "ALTER TABLE user_media_server_accounts ADD COLUMN manage_access INTEGER NOT NULL DEFAULT 0",
+			backfill: []string{"UPDATE user_media_server_accounts SET manage_access = 1"},
+		},
+		{alter: "ALTER TABLE user_media_server_accounts ADD COLUMN access_sync_pending INTEGER NOT NULL DEFAULT 0"},
 		// Music availability alerts: pushed when a Lidarr album import lands.
 		// On by default like the other new-content categories; the audience is
 		// additionally scoped in SQL to users who can see the instance.
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN new_music INTEGER NOT NULL DEFAULT 1"},
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN push_enabled INTEGER NOT NULL DEFAULT 1"},
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN request_auto_approved INTEGER NOT NULL DEFAULT 0"},
+		// Broaden the former Plex-invite preference without opting anyone back
+		// in. Retain the old column for upgrades; the new one owns future saves.
+		{
+			alter:    "ALTER TABLE notification_prefs ADD COLUMN media_server_access INTEGER NOT NULL DEFAULT 1",
+			backfill: []string{"UPDATE notification_prefs SET media_server_access = plex_invite_sent"},
+		},
+		// Hardcover: an admin-supplied Hardcover API token held per Chaptarr
+		// instance, encrypted at rest and write-only through the API. Empty =
+		// not connected, which is the only thing the API ever reports about it.
+		{alter: "ALTER TABLE service_instances ADD COLUMN hardcover_token TEXT NOT NULL DEFAULT ''"},
+		// A connection change reserves a revision before provider I/O. A stale
+		// verification/device flow cannot replace a newer connection or deletion.
+		{alter: "ALTER TABLE service_instances ADD COLUMN hardcover_revision INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {
 			db.Close()
 			return nil, err
 		}
+	}
+	// Repairs awaiting an end-user verdict now belong to the admin queue.
+	// Reassign legacy open waits without closing them or replaying a push.
+	if _, err := db.Exec(`UPDATE issues SET status='needs_admin', read=0,
+		resolution='A repair was applied. Verify the result and close the report.',
+		updated_at=CURRENT_TIMESTAMP
+		WHERE status='awaiting_confirmation' AND closed_at IS NULL`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("assign legacy repair reviews to admins: %w", err)
 	}
 	// Monetary estimates were briefly stored on remediation runs using a
 	// hardcoded model-price table. They are not reliable audit data, so erase
@@ -1019,10 +1279,24 @@ func Open(dbPath string) (*sql.DB, error) {
 	// (GetDefault) resolves purely by sort order. Runs every boot; idempotent
 	// and the table is tiny.
 	if _, err := db.Exec(
-		"UPDATE service_instances SET is_default = 0 WHERE service_type IN ('chaptarr', 'lidarr', 'jellyfin', 'emby', 'plex') AND is_default = 1",
+		"UPDATE service_instances SET is_default = 0 WHERE service_type IN ('chaptarr', 'lidarr', 'jellyfin', 'emby', 'plex', 'audiobookshelf') AND is_default = 1",
 	); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("clear grant-only default flags: %w", err)
+	}
+
+	// Retire unresolved Open Library deliveries without approving, deleting,
+	// or redirecting them. Verified native bindings retain their delivery jobs.
+	if _, err := db.Exec(`UPDATE request_dispatch SET state='attention', code='catalog_retired',
+        message='', next_attempt_at=0, lease_until=0, lease_token=''
+        WHERE state NOT IN ('complete','cancelled') AND request_id IN (
+          SELECT r.id FROM request_log r WHERE r.media_type='book' AND r.catalog_provider='openlibrary'
+          AND r.status='pending' AND NOT (
+            COALESCE(r.foreign_id,'')!='' AND (r.match_confirmed=1 OR COALESCE(r.book_record_id,0)>0 OR EXISTS (
+              SELECT 1 FROM request_dispatch d WHERE d.request_id=r.id AND
+                (d.canonical_foreign_id!='' OR d.book_record_id>0 OR d.state='waiting_library')))))`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("retire unresolved book catalog requests: %w", err)
 	}
 
 	// Auto-detected issues used to store the *arr service type in media_type

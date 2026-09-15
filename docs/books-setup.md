@@ -2,7 +2,7 @@
 
 Books differ from movies and TV in two ways worth knowing before you start:
 
-- **Chaptarr has no global default instance.** The per-user pin *is* the access grant, so a user who hasn't been pinned to a Chaptarr instance doesn't see the Books tab at all.
+- **Chaptarr has no global default instance.** Requesters need a per-user pin or explicit instance grant to see Books. Admins see the Chaptarr setup action until a library is connected.
 - **An ebook can finish downloading between two polls.** Instant updates aren't a nicety here; they're what makes the "ready to read" notification reliable.
 
 This page is the whole path, in order.
@@ -31,7 +31,7 @@ Use Chaptarr's **root** URL, never one of its media-scoped prefixes (`/ebook`, `
 
 This is the step people miss. Unlike Radarr and Sonarr, Chaptarr has no global default — pinning a user to a Chaptarr instance is how you grant that user access to books.
 
-Pin from either side: the instance editor, or **Settings → Users** for one person. Un-pinning revokes access. Admins see Chaptarr without a pin; everyone else needs one, and until they have it `services.chaptarr` stays `false` and the Books tab stays hidden.
+Pin from either side: the instance editor, or **Settings → Users** for one person. Remove both the pin and any explicit grants to revoke access. Admins see Books before setup unless it was conditionally hidden for the server, and see configured Chaptarr instances without a pin; everyone else needs one, and until they have it `services.chaptarr` stays `false` and the Books tab stays hidden.
 
 Running more than one Chaptarr instance is fine — pin different households or different libraries to different instances.
 
@@ -45,7 +45,21 @@ Without this, Cantinarr falls back to polling, and a fast ebook grab can land an
 
 The webhook also speeds up "Waiting for library" requests: Chaptarr announces the moment a queued author import lands, and Cantinarr completes the waiting request right then instead of on its next five-minute check.
 
-## 5. Optional — let people download the files
+## 5. Optional — connect Hardcover
+
+Open the instance and find the **Hardcover** section, just above Instant updates. Choose **Connect Hardcover**, then **Open Hardcover**. Enter the displayed code at [hardcover.app/link](https://hardcover.app/link) and approve Cantinarr's public catalog access. **Copy code** copies only the one-time code. Keep the dialog open: it checks automatically, including when you return to the app. If the code expires or authorization is declined, choose **Start again**. **Cancel** ends that attempt. No public server address, inbound callback, client secret, or personal developer app is needed.
+
+Cantinarr's built-in public OAuth app requests only `read:catalog:data`. It cannot read your private library, profile, or email, or change your Hardcover account. The server verifies the catalog queries before changing the connection. Replacing a connection preserves the current one until the replacement succeeds. OAuth access and refresh tokens stay encrypted on the server and never reach the app. **Reconnect Hardcover** appears if Hardcover no longer accepts renewal; temporary provider failures preserve the connection so you can try again. Completed connections survive server restarts; unfinished codes must be started again.
+
+Connecting turns on the **Trending Books** row at the top of the Books tab for everyone with a grant on this instance (see Discover books below). Connecting, replacing, or disconnecting refreshes the Books tab immediately. Otherwise the list is cached for 30 minutes per instance. OAuth credentials are read or renewed only when the server needs a new upstream list, rather than on every view or status check.
+
+With multiple Chaptarr instances, **Apply to all** links the explicitly listed instances to the verified OAuth connection, replacing any existing Hardcover connections there. **Only this instance**, or dismissing the prompt, limits the change to this instance. An instance changed by another admin while the prompt was open is reported for retry. Individual failures name the affected instance; successful changes stay in place. Sharing a connection serializes renewal so instances do not reuse a rotated refresh token. Later replacements and disconnections affect only the instance being edited. Removing the last local link deletes the stored credential; account-wide revocation is available under [Hardcover's Authorized Apps](https://hardcover.app/account/api/authorized-apps).
+
+**Use an API token instead** retains the previous setup: paste a token from Hardcover → Settings → API, allowing public catalog reads, and connect. Verification uses the catalog rather than your profile, and distinguishes missing catalog permission from rejected credentials or an unreachable provider. Applying an API token to all copies it to each listed instance independently. Older Cantinarr servers keep this token interface.
+
+This connection serves Cantinarr's trending feed. **Chaptarr continues managing its own metadata credential**; connecting or disconnecting Hardcover here does not update Chaptarr.
+
+## 6. Optional — let people download the files
 
 Off by default, and deliberately two-layered. Chaptarr reports file paths but doesn't serve the bytes, so the deployment has to hand Cantinarr the files itself:
 
@@ -56,15 +70,59 @@ A Chaptarr instance often needs several mappings — `/ebooks`, `/audiobooks`, a
 
 An instance offers downloads only once explicit mappings are saved for it.
 
-## 6. Verify
+## 7. Optional — listen with Audiobookshelf
 
-- The Books tab appears for a pinned non-admin user, opening on **Recently Added**.
+Audiobookshelf manages listening and its own library scans. Give it access to the audiobook files Chaptarr imports, and confirm those files play in Audiobookshelf before connecting it to Cantinarr. Cantinarr does not copy the files or synchronize listening progress.
+
+1. In Audiobookshelf, create an API key for an active administrator account. The integration is verified against Audiobookshelf 2.36.0; it uses API keys, not a user's legacy token.
+2. In Cantinarr, open **Settings → Add Instance → Audiobookshelf**. Enter its base URL as the Cantinarr server can reach it and the administrator API key. Test the connection, then select **Default libraries**. Selecting none makes the default include all libraries, including future ones.
+3. Set **Address users open** to the Audiobookshelf address your users can reach in a browser or app. This enables sign-in and **Open …** / **Listen in …** links; leaving it blank hides those links. If users can reach the connection URL above, **Use same URL** copies it into this field. Otherwise enter the address they use; Cantinarr never copies an internal address automatically.
+4. Choose **Default listening apps** for iPhone/iPad and Android. Each defaults to **Browser**. iPhone/iPad also supports **Audiobookshelf** and **ShelfPlayer**; Android also supports **Audiobookshelf** and **TheShelf**. These defaults belong to this Audiobookshelf instance, including all its shared libraries.
+5. Under **User Access**, grant the people who should listen. For each person, choose **Use server default**, **All libraries**, or **Choose libraries**. For example, one person can receive the main audiobook library and another can receive a separate family library on the same Audiobookshelf server. An individual selection must contain at least one library. They also need their own Chaptarr access to see the books in Cantinarr. Neither service grants the other; every Audiobookshelf instance requires its own access grant.
+6. Users open **Audiobookshelf access** in the menu (**Media server access** when video servers are also shared) to create an account with their chosen password or link an existing local account by signing in once. Admins can instead link or import existing accounts from **Settings → Users**.
+
+The guide shows all account cards first, each labeled with its service and server name, then separate instructions for each service you can use. Audiobookshelf has browser and app-download links and explains its separate Chaptarr-access requirement. If video servers are also shared, their installation and sign-in instructions stay visible. Each server has its own account or invitation; use that server’s credentials.
+
+**Hide from main navigation**, fixed below the guide title, immediately hides the mobile and desktop shortcut without closing the page. You can use it before setup is complete, while an invitation is pending, or when a connection fails. Open **Settings → Guides → Media server access** (also searchable in Settings) to switch it off again. The choice is saved on this device/browser for this Cantinarr server and user. A newly granted media-server instance — including another Audiobookshelf server — restores the shortcut until you hide it again. Renaming a server, changing account status, removing access, or a failed connection does not reset the preference. Grant information refreshes on configuration changes, reconnect, and app resume, keeping the last successful result if a read fails.
+
+Library choices are saved before account creation and survive access being removed and restored. Changing **Default libraries** updates only managed accounts following that default; individual selections stay as chosen. Failed library updates show **Library change pending** and retry through account maintenance, including after a restart. Stopping management or unlinking cancels pending updates. Existing linked accounts keep their ABS libraries until an admin enables account management and explicitly saves a library choice.
+
+Accounts Cantinarr creates are ordinary users restricted to that person’s selected libraries, with downloads enabled and explicit content and library editing disabled. Change additional content permissions in Audiobookshelf itself. New accounts are **Managed by Cantinarr**: removing their grant disables the account while preserving history; restoring the grant enables it again. Existing accounts linked by a user or linked/imported by an admin are **Linked only** by default. Removing their Cantinarr grant leaves their Audiobookshelf access unchanged. In **Settings → Users**, an admin can choose **Manage … access…** to apply the current grant to the existing account, or **Stop managing … access…** to leave its remote state alone and cancel pending changes. Enabling management preserves the existing library selections. **Unlink … account** forgets the connection while retaining the grant and the remote account. Root and administrator accounts are never changed. Connections present before this management feature retain their previous managed behavior on upgrade; review them in Users.
+
+Anyone, including admins, can override these choices in **Settings → Account → Listening apps**, also found by searching Settings for an app name. **Use admin default** follows each Audiobookshelf server independently; choosing **Browser** explicitly overrides an app default. The iPhone/iPad and Android choices are saved with the person's account on this Cantinarr server and follow them across devices. Install and sign in to the chosen app first. If it cannot open, Cantinarr silently uses the original browser link. Web and desktop always use the browser.
+
+After Chaptarr reports an audiobook as **Available**, its book page offers **Listen in …** (named for the chosen app) only when a live exact ASIN or ISBN match proves a playable copy is visible to the linked account. Cantinarr reads the audiobook edition identifiers, including when Chaptarr serves editions separately from the book record. If several copies match, choose the server/library/narration you want. The browser choice opens that item's page. ShelfPlayer opens a search for the selected book title; TheShelf and the Audiobookshelf app open their home screen, where you select the server and book. Playback does not start automatically. Ebook-only availability does not qualify.
+
+**Open …** is a general shortcut to the chosen app or browser when an exact copy cannot be verified, including before the account is linked or the new files are scanned. It also appears when Audiobookshelf cannot be reached, without a lookup notice or **Check again** button. It does not claim the audiobook is present. Book refreshes, account changes, and returning to Cantinarr refresh the lookup automatically. Library, tag, and explicit-content restrictions apply to every exact link, including changes made directly in Audiobookshelf.
+
+## 8. Verify
+
+- The Books tab appears for a pinned non-admin user, opening on Recently Added, Authors and Series, with native search in the top bar.
 - Searching a title returns results, and requesting an eBook or Audiobook row reads **Requested** until it downloads.
 - A grab that completes in Chaptarr flips the row to available within seconds, not on the next poll — that's the webhook working.
 - If downloads are on, a completed book offers a working download from a device.
+- If Audiobookshelf is connected, a scanned available audiobook opens the correct copy as the linked user; a copy in an unshared library never gets an exact listening link.
 
-## Requests that land in the approval queue instead
+## Discover books
 
-Adding a book Chaptarr doesn't already track means finding its metadata record again. Cantinarr fetches it by id first — Chaptarr's lookup answers a `foreignBookId` term with that exact record — and falls back to replaying the requester's own search term (stored on pending rows so approval later uses it too), then the exact title, then the title's headline without its subtitle and trailing parentheticals. Only an exact `foreignBookId` match is ever accepted: when the metadata provider keeps two works for one title, the id fetch of one may return the other (canonical) sibling, and the fallbacks re-find the exact row the requester chose instead of substituting it.
+Books use the selected Chaptarr instance for search and library browsing. Search results keep Chaptarr's order and each native identity. Books appear as soon as their lookup returns; author results load independently below them. Changing the query cancels the previous search, and interactive searches stop after ten seconds. Ownership updates change badges without rearranging native book results. A catalog record can share library availability when an explicit provider identifier or validated ISBN proves the connection. Distinct results remain separate and keep their selected metadata; matching titles alone do not prove ownership. Author counts on search, the shelf, and detail count titles, so owning both formats counts once. The Books tab opens with **Trending Books** once Hardcover is connected (step 5): the top 50 on Hardcover right now, each card carrying the library's real Available / Partial / Requested state by exact `hc:` id or ISBN match, and opening the same book page a search result would. Until an admin connects Hardcover, admins see a **Connect Hardcover in Chaptarr settings** button in its place and requesters see nothing there. Recently Added, Authors, and Series follow beneath it.
 
-When none of them find it, the request is **saved as pending** rather than failed, and the requester is told so. Resolve it from the admin side: add the author (or the book) in Chaptarr directly, then approve the pending request — approval replays the add, and a book whose author is already tracked no longer depends on the lookup. Denying it is the other valid answer. Either way the request stays visible instead of disappearing.
+Selecting a book preserves its native ID, edition, complete search record, library, and the search term that found it. The page displays all supplied synopsis text; a source-truncated preview remains as supplied. It omits standalone alternate-cover notices and shows publication information and provider links when available. A missing publication year falls back to the matched library record. Opening, hovering over, or scrolling search results makes no extra metadata lookup; direct links without a supplied record retain the exact-ID lookup and title fallback. The book page has one panel for **eBook**, **Audiobook**, and **Request both**. Its controls stay mounted while reading a long synopsis. The compact Formats card keeps request actions on the right, with download controls appearing when files are available. Genres and optional library actions follow the synopsis. Loaded details, request state, and scroll position survive same-book route refreshes; live availability, request, and download checks continue during polling and instant updates. Already-owned or requested formats show their current state. A pending availability check shows **Checking…**; **Retry** appears only after a failed check.
+
+Unconfigured libraries show the existing **Set up Chaptarr** action. Requesters, including kids accounts, still need discovery permission and a Chaptarr grant. Setup returns to Books after saving or cancelling; tab hiding remains under **Settings > Modules > Discover > Discover tabs**.
+
+Open Library search, Popular Books, genres, and request matching have retired. Old work and browse links show a stable message and **Search books**, prefilled when the link includes a title. Cantinarr makes no Open Library discovery or resolution calls. Chaptarr may still supply links to a book's provider pages.
+
+## Saved requests and automatic recovery
+
+A format tap saves the native request and immediately acknowledges it. The durable worker wakes after saving, then checks Chaptarr and delivers in the background. **Waiting for approval** remains a separate gate. Already-owned formats are reconciled without a new library mutation or approval. Temporary failures keep the request saved, retry after one minute, double up to six hours, and honor a longer upstream `Retry-After`. The schedule survives restarts. After 50 failures, or an identity/configuration problem, the request shows **Needs attention**.
+
+The format panel offers a separate retry for each failed format and **Cancel request** for remaining work. Admins can manage saved work under **Settings > Pending requests > Saved requests**. Delivery waits do not increase the approval badge. Shared requests retain each subscriber's requested formats; cancelling a subscription preserves others, and cancelling remaining work never removes delivered files.
+
+Delivery uses the originally selected native ID and instance, rechecks the requester's current access before writes, and never substitutes another title or library. When identifiers establish a library binding, existing formats and missing-format requests use that library record while the receipt keeps the original selection. Conflicting matches need attention rather than risking a duplicate or a wrong-book request. Saved delivery status is independent of current files: the app reads saved state with `include_live=false` and checks availability separately against Chaptarr. The existing default status read still includes live availability for older clients.
+
+Saved history is preserved. Old Open Library requests with verified native bindings continue. Unresolved source requests stop matching and show **Needs attention**, cancellation, and a native search link. Their existing approval requirements remain intact; retry or approval cannot convert an unresolved source into a new native request.
+
+**Waiting for library** means Chaptarr accepted an author import and owns its retry loop. Cantinarr observes its pending-import API and managed webhook without repeatedly adding it. An import that lands resumes the remaining formats; a failed, cancelled, or ambiguous import needs attention. Older Chaptarr versions without that API retain their supported add-probe fallback.
+
+Publication details name their catalog or library source and show edition publisher/format when available. Different editions may have different page counts. Dates more than five years ahead appear as **Date unconfirmed (year)** and move to the undated end of an author's bibliography; Cantinarr keeps the source value rather than inventing a correction.

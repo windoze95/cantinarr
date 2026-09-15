@@ -10,16 +10,20 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/windoze95/cantinarr-server/internal/ai"
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/bookdiscovery"
 	"github.com/windoze95/cantinarr-server/internal/config"
 	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/discordnotify"
 	"github.com/windoze95/cantinarr-server/internal/discover"
 	"github.com/windoze95/cantinarr-server/internal/downloads"
+	"github.com/windoze95/cantinarr-server/internal/hardcover"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/mcpserver"
 	"github.com/windoze95/cantinarr-server/internal/mediaaccess"
 	"github.com/windoze95/cantinarr-server/internal/mediafiles"
+	"github.com/windoze95/cantinarr-server/internal/musicdiscovery"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
@@ -58,8 +62,29 @@ func NewRouter(
 	updateChecker *update.Checker,
 	serverSettings *serversettings.Service,
 	contentPolicyHandler *contentpolicy.Handler,
+	discordNotifications *discordnotify.Service,
 ) http.Handler {
+	configChanged := func() {
+		if wsHub != nil {
+			wsHub.Broadcast(ws.Event{Type: "config_changed"})
+		}
+	}
+	if instanceHandler != nil {
+		instanceHandler.SetConfigChangedObserver(configChanged)
+	}
+	if mediaAccessHandler != nil {
+		mediaAccessHandler.SetConfigChangedObserver(configChanged)
+	}
 	r := chi.NewRouter()
+	musicDiscovery := musicdiscovery.NewHandlerWithService(instanceStore, requestHandler.MusicCatalog())
+	// Hardcover trending for the Books tab, read with the token connected to
+	// the caller's Chaptarr instance; a token change drops that instance's
+	// cached list so the row follows the new connection at once.
+	bookTrending := bookdiscovery.NewTrendingHandler(instanceStore, hardcover.NewClient())
+	if instanceHandler != nil {
+		instanceHandler.SetHardcoverObserver(bookTrending.Invalidate)
+		bookTrending.SetCredentialResolver(instanceHandler.ResolveHardcoverToken)
+	}
 
 	// Middleware
 	r.Use(middleware.RequestID)
@@ -88,6 +113,8 @@ func NewRouter(
 	r.With(oauthLimiter.Middleware).Post("/oauth/passkey/login/begin", oauthHandler.BeginOAuthPasskeyLogin)
 	r.With(oauthLimiter.Middleware).Post("/oauth/passkey/login/finish", oauthHandler.FinishOAuthPasskeyLogin)
 	r.With(oauthLimiter.Middleware).Post("/oauth/token", oauthHandler.Token)
+	r.With(oauthLimiter.Middleware).Post("/api/auth/oidc/mcp/begin", oauthHandler.BeginOIDC)
+	r.With(oauthLimiter.Middleware).Post("/api/auth/plex/mcp/begin", oauthHandler.BeginPlex)
 	r.Get("/passkeys/setup", oauthHandler.PasskeySetup)
 	r.Get("/passkeys/create", oauthHandler.PasskeyCreate)
 
@@ -124,6 +151,7 @@ func NewRouter(
 
 		// Rate limiter for public auth endpoints: 10 requests per minute per IP
 		authLimiter := auth.NewRateLimiter(10, 1*time.Minute)
+		plexPollLimiter := auth.NewRateLimiter(120, time.Minute)
 		// Keep authenticated ChatGPT/xAI device-flow churn from consuming the
 		// public password/passkey budget for everyone behind the same household
 		// proxy. Both OAuth providers share this begin-login budget.
@@ -132,6 +160,14 @@ func NewRouter(
 		// Auth routes (public)
 		r.Route("/auth", func(r chi.Router) {
 			r.Get("/status", authHandler.AuthStatus)
+			r.With(authLimiter.Middleware).Post("/plex/begin", authHandler.PlexBegin)
+			r.With(plexPollLimiter.Middleware).Post("/plex/check", authHandler.PlexCheck)
+			r.With(plexPollLimiter.Middleware).Post("/plex/cancel", authHandler.PlexCancel)
+			r.With(authLimiter.Middleware).Post("/plex/exchange", authHandler.PlexExchange)
+			r.With(authLimiter.Middleware).Post("/oidc/begin", authHandler.OIDCBegin)
+			r.With(authLimiter.Middleware).Get("/oidc/start", authHandler.OIDCStart)
+			r.Get("/oidc/callback", authHandler.OIDCCallback)
+			r.With(authLimiter.Middleware).Post("/oidc/exchange", authHandler.OIDCExchange)
 			r.With(authLimiter.Middleware).Post("/setup", authHandler.HandleSetup)
 			r.With(authLimiter.Middleware).Post("/login", authHandler.Login)
 			r.Post("/refresh", authHandler.Refresh)
@@ -147,6 +183,12 @@ func NewRouter(
 			r.Group(func(r chi.Router) {
 				r.Use(authService.AuthMiddleware)
 				r.Get("/me", authHandler.Me)
+				r.Get("/plex/identities", authHandler.PlexIdentities)
+				r.With(authLimiter.Middleware).Post("/plex/link", authHandler.PlexLinkBegin)
+				r.Delete("/plex/identities", authHandler.PlexUnlink)
+				r.Get("/oidc/identities", authHandler.OIDCIdentities)
+				r.Post("/oidc/link", authHandler.OIDCLinkBegin)
+				r.Delete("/oidc/identities", authHandler.OIDCUnlink)
 				r.With(authLimiter.Middleware).Post("/password", authHandler.SetPassword)
 				r.With(authLimiter.Middleware).Post("/plex-email", authHandler.SetPlexEmail)
 
@@ -165,6 +207,14 @@ func NewRouter(
 		// Admin routes
 		r.Route("/admin", func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
+			r.With(auth.RequirePermission(auth.PermissionAdmin)).Get("/push-notifications", pushHandler.ServerPolicy)
+			r.With(auth.RequirePermission(auth.PermissionAdmin)).Put("/push-notifications", pushHandler.ServerPolicy)
+			discordHandler := discordNotifications.Handler
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/discord-notifications", discordHandler)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Put("/discord-notifications", discordHandler)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/discord-notifications", discordHandler)
+			discordTestLimiter := auth.NewRateLimiter(3, time.Minute)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage), discordTestLimiter.Middleware).Post("/discord-notifications/test", discordHandler)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/connect-token", authHandler.HandleCreateConnectToken)
 			// The origin invite/passkey links are built from. Lives beside
 			// connect-token because that is the surface it exists for.
@@ -172,6 +222,19 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/external-address", updateExternalAddressHandler(serverSettings))
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/devices", authHandler.HandleListDevices)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/devices/{deviceID}", authHandler.HandleRevokeDevice)
+
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/plex-auth", authHandler.PlexConfig)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/plex-auth", authHandler.PlexConfigSave)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/plex-auth/candidates", authHandler.PlexCandidates)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/plex-auth/confirm", authHandler.PlexConfirm)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users/{userID}/plex", authHandler.PlexIdentities)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}/plex", authHandler.PlexUnlink)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/oidc", authHandler.OIDCConfig)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/oidc", authHandler.OIDCConfigSave)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/oidc/validate", authHandler.OIDCValidate)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/oidc/test", authHandler.OIDCTestBegin)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users/{userID}/oidc", authHandler.OIDCIdentities)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}/oidc", authHandler.OIDCUnlink)
 
 			// User management
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users", authHandler.HandleListUsers)
@@ -203,18 +266,28 @@ func NewRouter(
 			// Which feed backs the headline discovery rows, and whether those
 			// rows drop non-English originals.
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/discovery-settings", discoverySettingsHandler(serverSettings, creds))
-			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/discovery-settings", updateDiscoverySettingsHandler(serverSettings, creds))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/discovery-settings", updateDiscoverySettingsHandler(serverSettings, creds, configChanged))
+
+			// Outbound proxy for the server's internet-bound traffic (TMDB, Trakt,
+			// hosted AI, plex.tv, GitHub, the push relay); LAN instances never ride
+			// it. The test fetches TMDB through the candidate proxy without saving.
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/outbound-proxy", outboundProxyHandler(serverSettings))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/outbound-proxy", updateOutboundProxyHandler(serverSettings))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Post("/outbound-proxy/test", testOutboundProxyHandler(serverSettings, creds))
 
 			// Media-server accounts (Jellyfin, Emby, Plex): the linked-account
 			// rows the Users screen tags, the server's own account list for the
 			// link picker, link/unlink, and the import that turns picked
 			// accounts into granted, linked Cantinarr users. Access itself is
 			// the instance grant.
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/instances/{instanceID}/media-access", mediaAccessHandler.GetLibraryAccess)
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/instances/{instanceID}/media-access", mediaAccessHandler.UpdateLibraryAccess)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/media-servers/accounts", mediaAccessHandler.ListAccounts)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/media-servers/{instanceID}/users", mediaAccessHandler.RemoteUsers)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/media-servers/{instanceID}/import", mediaAccessHandler.Import)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/media-servers/{instanceID}/account", mediaAccessHandler.LinkAccount)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}/media-servers/{instanceID}/account", mediaAccessHandler.UnlinkAccount)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Patch("/users/{userID}/media-servers/{instanceID}/account/management", mediaAccessHandler.SetManagement)
 
 			// Per-user default *arr instance overrides (admin-managed). Pins which
 			// instance is a given user's default source per service type, and —
@@ -278,7 +351,19 @@ func NewRouter(
 			// watch instead of deciding it.
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{id}/wait", requestHandler.Wait)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/request-settings", requestHandler.GetSettings)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/request-quotas", requestHandler.AdminQuotas)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/request-quotas", requestHandler.AdminQuotas)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/users/{userID}/request-quotas", requestHandler.AdminQuotas)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/users/{userID}/request-quotas", requestHandler.AdminQuotas)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/users/{userID}/request-quotas/reset", requestHandler.ResetQuotas)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/request-settings", requestHandler.UpdateSettings)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/tv-matches", requestHandler.ListTVMatches)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/tv-matches/candidates", requestHandler.TVMatchCandidates)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/tv-matches/{tmdb_id}", requestHandler.GetTVMatch)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/tv-matches/{tmdb_id}", requestHandler.SaveTVMatch)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Delete("/tv-matches/{tmdb_id}", requestHandler.SaveTVMatch)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/tv-matches/{tmdb_id}/repairs", requestHandler.TVRepairPreviews)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{id}/repair-tv-match", requestHandler.RepairTVMatch)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/users/{userID}/request-settings", requestHandler.GetUserSettings)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/users/{userID}/request-settings", requestHandler.UpdateUserSettings)
 
@@ -316,7 +401,7 @@ func NewRouter(
 		// Config route (authenticated)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
-			r.Get("/config", configHandler(cfg, instanceStore, creds, aiHandler, remediationService))
+			r.Get("/config", configHandler(cfg, instanceStore, creds, aiHandler, remediationService, serverSettings, func() bool { return mediaAccessHandler != nil && mediaAccessHandler.AppleTV() != nil }))
 		})
 
 		// Media-server accounts (authenticated, self-scoped): a granted user
@@ -331,7 +416,20 @@ func NewRouter(
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
 			r.Get("/media-servers", mediaAccessHandler.List)
+			if tv := mediaAccessHandler.AppleTV(); tv != nil {
+				// TV discovery and setup must not consume the household login budget.
+				tvLimiter := auth.NewRateLimiter(60, time.Minute)
+				r.Route("/apple-tvs", func(r chi.Router) {
+					r.Use(tvLimiter.Middleware)
+					tv.Register(r)
+				})
+			}
 			r.Get("/media-servers/watch", mediaAccessHandler.Watch)
+			r.Get("/media-servers/listen", mediaAccessHandler.Listen)
+			r.Get("/me/video-apps", mediaAccessHandler.VideoAppPreferences)
+			r.Put("/me/video-apps", mediaAccessHandler.VideoAppPreferences)
+			r.Get("/me/listening-apps", mediaAccessHandler.ListeningAppPreferences)
+			r.Put("/me/listening-apps", mediaAccessHandler.ListeningAppPreferences)
 			r.With(authLimiter.Middleware).Post("/media-servers/{instanceID}/account", mediaAccessHandler.CreateAccount)
 			r.With(authLimiter.Middleware).Post("/media-servers/{instanceID}/account/link", mediaAccessHandler.LinkOwnAccount)
 			r.With(authLimiter.Middleware).Post("/media-servers/plex/sign-in/begin", mediaAccessHandler.PlexSignInBegin)
@@ -372,8 +470,12 @@ func NewRouter(
 			r.Use(authService.AuthMiddleware)
 			r.Use(auth.RequirePermission(auth.PermissionMediaRequest))
 			r.Post("/requests", requestHandler.Create)
+			r.Post("/requests/preview", requestHandler.Preview)
+			r.Get("/me/request-quotas", requestHandler.MyQuotas)
 			r.Get("/requests", requestHandler.List)
 			r.Get("/requests/options", requestHandler.Options)
+			r.Get("/requests/delivery-status", requestHandler.GetDelivery)
+			r.Post("/requests/{id}/delivery", requestHandler.UpdateDelivery)
 			r.Get("/requests/book-status", requestHandler.GetBookStatus)
 			r.Get("/requests/book-library", requestHandler.GetBookLibrary)
 			r.Get("/requests/book-recent", requestHandler.GetBookRecent)
@@ -383,6 +485,7 @@ func NewRouter(
 			r.Get("/requests/book-series-detail", requestHandler.GetBookSeriesDetail)
 			r.Get("/requests/music-status", requestHandler.GetMusicStatus)
 			r.Get("/requests/music-library", requestHandler.GetMusicLibrary)
+			r.Get("/requests/music-saved", requestHandler.GetSavedMusic)
 			r.Get("/requests/music-recent", requestHandler.GetMusicRecent)
 			r.Get("/requests/music-artists", requestHandler.GetMusicArtists)
 			r.Get("/requests/music-artist", requestHandler.GetMusicArtist)
@@ -407,6 +510,30 @@ func NewRouter(
 			r.Use(auth.RequirePermission(auth.PermissionMediaDiscover))
 
 			// Discover
+			books := bookdiscovery.NewHandler()
+			r.Get("/discover/books/search", books.Search)
+			// The one live book feed: Hardcover's trending list, read with
+			// the token connected to the caller's Chaptarr instance. A static
+			// segment, so chi matches it ahead of the retired {feed} routes.
+			r.Get("/discover/books/trending", bookTrending.Trending)
+			// Hardcover cover-art relay: the CDN sends no CORS headers, so the
+			// web client cannot decode its bytes cross-origin and would fall
+			// back to a DOM <img>, which Flutter composites above the canvas
+			// and hides the availability badge. Same-origin fixes the layering.
+			// Multi-segment, so it never collides with the {feed} route below.
+			r.Get("/discover/books/images/*", bookdiscovery.CoverImage)
+			r.Get("/discover/books/{feed}", books.Feed)
+			r.Get("/genres/book", books.Genres)
+			r.Get("/media/book/{workId}", books.Book)
+			r.Get("/media/book/{workId}/request-target", books.RequestTarget)
+			r.Get("/discover/music/search", musicDiscovery.Search)
+			r.Get("/discover/music/artists", musicDiscovery.Artists)
+			r.Get("/media/music/artists/{mbid}", musicDiscovery.Artist)
+			r.Get("/media/music/artists/{mbid}/albums", musicDiscovery.ArtistAlbums)
+			r.Get("/discover/music/{feed}", musicDiscovery.Feed)
+			r.Get("/discover/music/artwork/{mbid}", musicDiscovery.Artwork)
+			r.Get("/genres/music", musicDiscovery.Genres)
+			r.Get("/media/music/{mbid}", musicDiscovery.Album)
 			r.Get("/discover/trending", discoverHandler.Trending)
 			r.Get("/discover/movies/popular", discoverHandler.PopularMovies)
 			r.Get("/discover/tv/popular", discoverHandler.PopularTV)
@@ -532,6 +659,15 @@ func NewRouter(
 				// call — a stored flag would drift the moment an admin edited
 				// the arr's Connect list.
 				r.Get("/instances/{instanceID}/webhook", instanceHandler.WebhookStatus)
+				// Hardcover OAuth/API-token connection management. Catalog
+				// credentials remain encrypted and server-only.
+				r.Get("/instances/{instanceID}/hardcover", instanceHandler.HardcoverStatus)
+				r.Put("/instances/{instanceID}/hardcover", instanceHandler.SaveHardcoverToken)
+				r.Delete("/instances/{instanceID}/hardcover", instanceHandler.ClearHardcoverToken)
+				r.Post("/instances/{instanceID}/hardcover/device/begin", instanceHandler.BeginHardcoverDevice)
+				r.Get("/instances/{instanceID}/hardcover/device/{flowID}", instanceHandler.CheckHardcoverDevice)
+				r.Delete("/instances/{instanceID}/hardcover/device/{flowID}", instanceHandler.CancelHardcoverDevice)
+				r.Post("/instances/{instanceID}/hardcover/apply", instanceHandler.ApplyHardcoverConnection)
 			})
 
 			// Instance proxy — forward to specific instance. Read-only
@@ -648,7 +784,7 @@ type configInstanceStore interface {
 	EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error)
 }
 
-func configHandler(cfg *config.Config, store configInstanceStore, creds *credentials.Registry, aiHandler *ai.Handler, remediationService *remediation.Service) http.HandlerFunc {
+func configHandler(cfg *config.Config, store configInstanceStore, creds *credentials.Registry, aiHandler *ai.Handler, remediationService *remediation.Service, settings *serversettings.Service, appleTVCapability ...func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		// Build instances list
@@ -715,33 +851,52 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 		// admins hear about it. Nothing else about the instance is revealed.
 		plexRequestable := false
 		allInstances, err := store.ListAll()
-		if err == nil {
-			for _, inst := range allInstances {
-				if inst.ServiceType == "plex" {
-					plexRequestable = true
-				}
-				if !isAdmin && !visible[inst.ServiceType][inst.ID] {
-					continue
-				}
-				// A requester's is_default always marks their effective
-				// default, including the deterministic first-instance fallback
-				// when no row carries the global flag. Admins retain the
-				// configured global flag unless their own per-user override
-				// selects a sibling.
-				isDefault := inst.IsDefault
-				if !isAdmin {
-					isDefault = visibleDefault[inst.ServiceType] == inst.ID
-				} else if pinned, ok := overrides[inst.ServiceType]; ok {
-					isDefault = pinned == inst.ID
-				}
-				instances = append(instances, instanceInfo{
-					ID:             inst.ID,
-					ServiceType:    inst.ServiceType,
-					Name:           inst.Name,
-					IsDefault:      isDefault,
-					MediaDownloads: inst.MediaDownloadsConfigured(cfg.MediaDownloadRoots),
-				})
+		if err != nil {
+			http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+			return
+		}
+		hiddenTabs := []string{}
+		configured := map[string]bool{}
+		for _, inst := range allInstances {
+			configured[inst.ServiceType] = true
+		}
+		if settings != nil {
+			preferences, err := settings.Read()
+			if err != nil {
+				http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+				return
 			}
+			for _, mediaType := range []string{"movie", "tv", "book", "music"} {
+				if preferences.HiddenWhenUnconfigured[mediaType] && !configured[serversettings.DiscoverServices()[mediaType]] {
+					hiddenTabs = append(hiddenTabs, mediaType)
+				}
+			}
+		}
+		for _, inst := range allInstances {
+			if inst.ServiceType == "plex" {
+				plexRequestable = true
+			}
+			if !isAdmin && !visible[inst.ServiceType][inst.ID] {
+				continue
+			}
+			// A requester's is_default always marks their effective
+			// default, including the deterministic first-instance fallback
+			// when no row carries the global flag. Admins retain the
+			// configured global flag unless their own per-user override
+			// selects a sibling.
+			isDefault := inst.IsDefault
+			if !isAdmin {
+				isDefault = visibleDefault[inst.ServiceType] == inst.ID
+			} else if pinned, ok := overrides[inst.ServiceType]; ok {
+				isDefault = pinned == inst.ID
+			}
+			instances = append(instances, instanceInfo{
+				ID:             inst.ID,
+				ServiceType:    inst.ServiceType,
+				Name:           inst.Name,
+				IsDefault:      isDefault,
+				MediaDownloads: inst.MediaDownloadsConfigured(cfg.MediaDownloadRoots),
+			})
 		}
 
 		// Derive service availability from the per-user filtered instance list,
@@ -792,7 +947,13 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"allow_reporting": remSettings.AllowReporting,
 			// True when a Plex server exists at all, so a user without the
 			// grant can still ask for access from the guide.
-			"plex_access_requestable": plexRequestable,
+			"plex_access_requestable":  plexRequestable,
+			"admin_catalog_browsing":   true,
+			"request_quotas":           true,
+			"tv_match_corrections":     true,
+			"apple_tv_remote":          len(appleTVCapability) > 0 && appleTVCapability[0](),
+			"media_account_management": true,
+			"hidden_discover_tabs":     hiddenTabs,
 		})
 	}
 }

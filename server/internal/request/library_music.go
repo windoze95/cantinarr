@@ -1,6 +1,7 @@
 package request
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"time"
@@ -18,9 +19,13 @@ const musicLibraryCacheTTL = 15 * time.Second
 // format axis, so ownership is a single monitored/downloaded pair rather than
 // the per-format struct books carry.
 type MusicLibraryTitle struct {
-	Title  string `json:"title"`
-	Artist string `json:"artist"`
-	Year   int    `json:"year"`
+	RecordID        int    `json:"record_id"`
+	ForeignArtistID string `json:"foreign_artist_id,omitempty"`
+	ReleaseType     string `json:"release_type,omitempty"`
+	Status          string `json:"status"`
+	Title           string `json:"title"`
+	Artist          string `json:"artist"`
+	Year            int    `json:"year"`
 	// ForeignAlbumID lets the app address the album: the MusicBrainz
 	// release-group id requests and detail reads carry.
 	ForeignAlbumID string `json:"foreign_album_id"`
@@ -38,28 +43,16 @@ type MusicLibraryDigest struct {
 	Titles []MusicLibraryTitle `json:"titles"`
 }
 
-// reduceMusicLibrary collapses the Lidarr album list into the digest: one
-// entry per album record, with duplicate foreignAlbumIds aggregated the same
-// way the live projection aggregates them (any file counts as downloaded, any
-// monitored record as monitored).
+// reduceMusicLibrary preserves each native album record, including records
+// with the same release-group identity. Status is computed from current files.
 func reduceMusicLibrary(albums []lidarr.Album) MusicLibraryDigest {
-	byForeign := make(map[string]int)
 	titles := make([]MusicLibraryTitle, 0, len(albums))
-
 	for _, album := range albums {
 		key := album.ForeignAlbumID
-		if key != "" {
-			if at, ok := byForeign[key]; ok {
-				existing := &titles[at]
-				existing.Monitored = existing.Monitored || album.Monitored
-				existing.Downloaded = existing.Downloaded || album.Statistics.TrackFileCount > 0
-				if existing.Cover == "" {
-					existing.Cover = clientReachableAlbumCover(album)
-				}
-				continue
-			}
-		}
 		entry := MusicLibraryTitle{
+			RecordID:       album.ID,
+			ReleaseType:    album.AlbumType,
+			Status:         StatusUnavailable,
 			Title:          album.Title,
 			ForeignAlbumID: key,
 			Cover:          clientReachableAlbumCover(album),
@@ -68,14 +61,19 @@ func reduceMusicLibrary(albums []lidarr.Album) MusicLibraryDigest {
 		}
 		if album.Artist != nil {
 			entry.Artist = strings.TrimSpace(album.Artist.ArtistName)
+			entry.ForeignArtistID = album.Artist.ForeignArtistID
 		}
 		if album.ReleaseDate != nil {
 			entry.Year = album.ReleaseDate.Year()
 		}
-		titles = append(titles, entry)
-		if key != "" {
-			byForeign[key] = len(titles) - 1
+		if albumComplete(album) {
+			entry.Status = StatusAvailable
+		} else if album.Monitored {
+			entry.Status = StatusRequested
+		} else if album.Statistics.TrackFileCount > 0 {
+			entry.Status = StatusPartial
 		}
+		titles = append(titles, entry)
 	}
 
 	return MusicLibraryDigest{Titles: titles}
@@ -86,7 +84,7 @@ func reduceMusicLibrary(albums []lidarr.Album) MusicLibraryDigest {
 // effective instance when omitted. A user with no Lidarr access gets an empty
 // (non-nil) digest rather than an error, so the app can degrade gracefully to
 // "nothing owned".
-func (s *Service) GetMusicLibraryDigestForInstance(userID int64, requestedInstanceID string) (*MusicLibraryDigest, error) {
+func (s *Service) GetMusicLibraryDigestForInstance(userID int64, requestedInstanceID string, contexts ...context.Context) (*MusicLibraryDigest, error) {
 	client, instanceID, err := s.resolveLidarr(userID, requestedInstanceID)
 	if err != nil {
 		return nil, err
@@ -108,11 +106,17 @@ func (s *Service) GetMusicLibraryDigestForInstance(userID int64, requestedInstan
 		}
 	}
 
+	if len(contexts) > 0 {
+		client = client.WithContext(contexts[0])
+	}
 	albums, err := client.GetAllAlbums()
 	if err != nil {
 		return nil, err
 	}
 	digest := reduceMusicLibrary(albums)
+	if _, _, err = s.resolveLidarr(userID, instanceID); err != nil {
+		return nil, err
+	}
 
 	if s.libraryCache != nil {
 		if data, err := json.Marshal(digest); err == nil {

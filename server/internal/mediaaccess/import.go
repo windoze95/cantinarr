@@ -16,6 +16,7 @@ import (
 // the import never touches the users table's identity columns itself.
 type UserCreator interface {
 	CreateConnectToken(createdBy int64, name, serverURL string) (*auth.CreateConnectTokenResponse, error)
+	CreateImportUser(createdBy int64, name, serverURL string) (int64, *auth.CreateConnectTokenResponse, error)
 }
 
 // SetUserCreator wires the user creation an import relies on. Wired late by
@@ -41,35 +42,40 @@ const (
 	// ImportUserHasAccount: the Cantinarr user of that name already has an
 	// account on this server.
 	ImportUserHasAccount = "user_has_account"
+	// ImportUsernameConflict: a Plex import cannot reuse a local namesake.
+	ImportUsernameConflict = "username_conflict"
 	// ImportLinkFailed: the user exists (and has their link) but the account
 	// could not be linked; the admin can link it by hand.
 	ImportLinkFailed = "link_failed"
 )
 
 // ImportResult is one requested account's outcome. Created says a Cantinarr
-// user was made for it (an existing user of the same name is reused and
-// gets no new connect link); Linked says the account is now that user's.
+// user was made for it. Jellyfin/Emby can reuse an existing namesake without a
+// new connect link; Plex requires a new user or an explicit account link.
+// Linked says the media account is now that user's.
 type ImportResult struct {
-	RemoteUserID   string `json:"remote_user_id"`
-	RemoteUsername string `json:"remote_username"`
-	UserID         int64  `json:"user_id,omitempty"`
-	Username       string `json:"username,omitempty"`
-	Created        bool   `json:"created"`
-	Linked         bool   `json:"linked"`
-	Link           string `json:"link,omitempty"`
-	OriginSource   string `json:"origin_source,omitempty"`
-	Error          string `json:"error,omitempty"`
+	PlexIdentityError string `json:"plex_identity_error,omitempty"`
+	RemoteUserID      string `json:"remote_user_id"`
+	RemoteUsername    string `json:"remote_username"`
+	UserID            int64  `json:"user_id,omitempty"`
+	Username          string `json:"username,omitempty"`
+	Created           bool   `json:"created"`
+	Linked            bool   `json:"linked"`
+	Link              string `json:"link,omitempty"`
+	OriginSource      string `json:"origin_source,omitempty"`
+	Error             string `json:"error,omitempty"`
 }
 
 // ImportAccounts turns accounts the media server lists into Cantinarr users:
 // for each requested id, a user named after the account (found or created;
 // a new one gets a connect link for the admin to hand out), the instance
 // grant, and the account linked to them, exactly as the admin's link picker
-// does it. The admin's pick is the mapping; nothing on the server changes.
+// does it. The admin's pick is the mapping; the remote account changes only
+// when access management is explicitly requested.
 // Rows are best-effort and independent, each carrying its own outcome, so
 // one failure never stops the rest; only a server that cannot list its
 // accounts fails the whole call.
-func (s *Service) ImportAccounts(ctx context.Context, adminID int64, instanceID, serverURL string, remoteIDs []string) ([]ImportResult, error) {
+func (s *Service) ImportAccounts(ctx context.Context, adminID int64, instanceID, serverURL string, remoteIDs []string, manage ...bool) ([]ImportResult, error) {
 	if s.userCreator == nil {
 		return nil, ErrImportUnavailable
 	}
@@ -108,14 +114,14 @@ func (s *Service) ImportAccounts(ctx context.Context, adminID int64, instanceID,
 			continue
 		}
 		seen[id] = true
-		results = append(results, s.importOne(ctx, adminID, inst.ID, serverURL, invite, id, byID))
+		results = append(results, s.importOne(ctx, adminID, inst.ID, serverURL, invite, id, byID, len(manage) > 0 && manage[0]))
 	}
 	return results, nil
 }
 
 // importOne is one row of an import; every outcome is a result, never an
 // error, so the caller's loop goes on.
-func (s *Service) importOne(ctx context.Context, adminID int64, instanceID, serverURL string, invite bool, id string, byID map[string]mediaserver.RemoteUser) ImportResult {
+func (s *Service) importOne(ctx context.Context, adminID int64, instanceID, serverURL string, invite bool, id string, byID map[string]mediaserver.RemoteUser, manage bool) ImportResult {
 	res := ImportResult{RemoteUserID: id}
 	remote, ok := byID[id]
 	if !ok {
@@ -140,13 +146,25 @@ func (s *Service) importOne(ctx context.Context, adminID int64, instanceID, serv
 	userID, err := s.userIDByName(username)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		token, err := s.userCreator.CreateConnectToken(adminID, username, serverURL)
+		var token *auth.CreateConnectTokenResponse
+		if invite {
+			userID, token, err = s.userCreator.CreateImportUser(adminID, username, serverURL)
+		} else {
+			token, err = s.userCreator.CreateConnectToken(adminID, username, serverURL)
+		}
 		if err != nil {
+			if errors.Is(err, auth.ErrUserExists) {
+				res.Error = ImportUsernameConflict
+				return res
+			}
 			s.logger.Error("mediaaccess: import: create user", "err", err, "instance_id", instanceID)
 			res.Error = ImportUserFailed
 			return res
 		}
-		if userID, err = s.userIDByName(username); err != nil {
+		if !invite {
+			userID, err = s.userIDByName(username)
+		}
+		if err != nil {
 			s.logger.Error("mediaaccess: import: load created user", "err", err, "instance_id", instanceID)
 			res.Error = ImportUserFailed
 			return res
@@ -155,6 +173,12 @@ func (s *Service) importOne(ctx context.Context, adminID int64, instanceID, serv
 	case err != nil:
 		s.logger.Error("mediaaccess: import: load user", "err", err, "instance_id", instanceID)
 		res.Error = ImportUserFailed
+		return res
+	}
+	// Selecting a remote account does not select an existing local namesake.
+	// The admin can make that mapping explicitly through Link account.
+	if invite && !res.Created {
+		res.Error = ImportUsernameConflict
 		return res
 	}
 	res.UserID, res.Username = userID, username
@@ -167,7 +191,8 @@ func (s *Service) importOne(ctx context.Context, adminID int64, instanceID, serv
 			}
 		}
 	}
-	_, err = s.LinkAccount(ctx, userID, instanceID, id)
+	account, err := s.LinkAccount(ctx, userID, instanceID, id, manage)
+	res.PlexIdentityError = account.PlexIdentityError
 	switch {
 	case err == nil:
 		res.Linked = true

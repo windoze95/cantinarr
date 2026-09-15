@@ -53,7 +53,7 @@ type notStartedTestError struct{}
 func (notStartedTestError) Error() string            { return "fresh scoped release no longer exists" }
 func (notStartedTestError) MutationNotStarted() bool { return true }
 
-func (f *fakeExecutor) Execute(ctx context.Context, issueID int64, kind ActionKind, params json.RawMessage, proposedAt time.Time) (string, error) {
+func (f *fakeExecutor) Execute(ctx context.Context, issueID int64, kind ActionKind, params json.RawMessage, proposedAt time.Time, beforeQueueMutation ...func(string) error) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, execCall{issueID: issueID, kind: kind, params: string(params)})

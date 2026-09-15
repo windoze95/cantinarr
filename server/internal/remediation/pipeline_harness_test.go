@@ -626,13 +626,10 @@ func countEvents(events []string, want string) int {
 	return n
 }
 
-// TestPipelineConfirmWaitLoop drives the full confirm-wait timeline: after the
-// fix executes and the model cannot type-prove a subjective report, the issue
-// parks at awaiting_confirmation (reporter paged, admin queue untouched, no
-// rule bookkeeping), the day-3 sweep re-asks exactly once, and the reporter's
-// tap still closes it — with no issue_closed push for a close they made
-// themselves.
-func TestPipelineConfirmWaitLoop(t *testing.T) {
+// TestPipelineRepairReviewLoop proves that applying a repair pages admins and
+// stays open until a human checks it. Only successful admin closure notifies
+// the reporter, once, without asking them to manage the repair.
+func TestPipelineRepairReviewLoop(t *testing.T) {
 	h := newPipelineHarness(t)
 	if _, err := h.svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (2, 'viewer', '', 'user')"); err != nil {
 		t.Fatalf("seed reporter: %v", err)
@@ -689,85 +686,38 @@ func TestPipelineConfirmWaitLoop(t *testing.T) {
 		t.Fatalf("ApproveAction: %v", err)
 	}
 
-	// The resume reads, then tries to conclude a SUBJECTIVE report resolved.
-	// The gate refuses, and with the fix executed the escalation must land at
-	// awaiting_confirmation — reporter paged, admin queue untouched.
+	// An executed repair is not proof of success. Admins own the review.
 	if err := r.Resume(context.Background(), issueID); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
 	parked, err := h.svc.GetIssue(issueID)
 	if err != nil {
-		t.Fatalf("load parked issue: %v", err)
+		t.Fatal(err)
 	}
-	if parked.Status != IssueAwaitingConfirmation {
+	if parked.Status != IssueNeedsAdmin || parked.Read || parked.ClosedAt != nil {
 		dumpSteps(t, h.svc, issueID)
-		t.Fatalf("issue after refused conclude = %q, want %q", parked.Status, IssueAwaitingConfirmation)
+		t.Fatalf("repair must await admin review: %+v", parked)
 	}
-	if !parked.Read {
-		t.Fatalf("awaiting_confirmation flagged the admin queue (read=false); this state belongs to the reporter")
+	if got := countEvents(h.notifier.adminEvents, "issue_fix_confirm"); got != 1 {
+		t.Fatalf("admin repair alerts = %d, want 1", got)
 	}
-	if got := countEvents(h.notifier.userEvents, "issue_fix_confirm"); got != 1 {
-		t.Fatalf("issue_fix_confirm pushes after park = %d, want exactly 1", got)
+	if countEvents(h.notifier.userEvents, "issue_fix_confirm") != 0 || countEvents(h.notifier.userEvents, "issue_closed") != 0 {
+		t.Fatal("unfinished repair notified the reporter")
 	}
-
-	// Day 3: one nudge, exactly once, without resetting the 7-day clock.
-	if _, err := h.svc.db.Exec(
-		"UPDATE issues SET updated_at = datetime('now', '-80 hours') WHERE id = ?", issueID,
-	); err != nil {
-		t.Fatalf("age confirm wait: %v", err)
-	}
-	nudged, escalated, err := h.svc.SweepAwaitingConfirmation(context.Background())
-	if err != nil || nudged != 1 || escalated != 0 {
-		t.Fatalf("first confirm sweep = (%d, %d, %v), want one nudge", nudged, escalated, err)
-	}
-	nudged, _, err = h.svc.SweepAwaitingConfirmation(context.Background())
-	if err != nil || nudged != 0 {
-		t.Fatalf("second confirm sweep nudged %d (err %v); the stamp must make it exactly once", nudged, err)
-	}
-	if got := countEvents(h.notifier.userEvents, "issue_fix_confirm"); got != 2 {
-		t.Fatalf("issue_fix_confirm pushes after nudge = %d, want 2", got)
-	}
-
-	// The reporter answers late but in time: their tap closes it, and a close
-	// they made themselves sends them no issue_closed page.
-	if err := h.svc.ReporterConfirmFix(context.Background(), issueID, 2); err != nil {
-		t.Fatalf("ReporterConfirmFix from awaiting_confirmation: %v", err)
-	}
-	final, err := h.svc.GetIssue(issueID)
+	final, err := h.svc.ResolveIssueByAdmin(context.Background(), 1, issueID, AdminDispositionResolved, "Checked the replacement episode; the reported problem is resolved.")
 	if err != nil {
-		t.Fatalf("load final issue: %v", err)
+		t.Fatal(err)
 	}
-	if final.Status != IssueResolved || final.ResolutionKind != ResolutionReporterConfirmed {
-		t.Fatalf("final = %q/%q, want resolved/reporter_confirmed", final.Status, final.ResolutionKind)
+	if final.Status != IssueResolved || final.ResolutionKind != ResolutionAdminCompleted || final.ClosedAt == nil {
+		t.Fatalf("admin close = %+v", final)
 	}
-	if got := countEvents(h.notifier.userEvents, "issue_closed"); got != 0 {
-		t.Fatalf("issue_closed pushes after the reporter's own close = %d, want 0", got)
+	if got := countEvents(h.notifier.userEvents, "issue_closed"); got != 1 {
+		t.Fatalf("report success alerts = %d, want 1", got)
 	}
-}
-
-// TestConfirmWaitEscalatesToAdminAtSevenDays: an unanswered confirm-wait is
-// handed to an admin — the verdict is never fabricated, and the issue may not
-// stay open forever.
-func TestConfirmWaitEscalatesToAdminAtSevenDays(t *testing.T) {
-	h := newPipelineHarness(t)
-	if _, err := h.svc.db.Exec(
-		`INSERT INTO issues (source, status, category, reporter_id, media_type, tmdb_id, title, detail, read, updated_at)
-		 VALUES ('user', ?, 'wrong_content', 1, 'tv', 615, 'Futurama', 'wrong', 1, datetime('now', '-170 hours'))`,
-		IssueAwaitingConfirmation,
-	); err != nil {
-		t.Fatalf("seed confirm wait: %v", err)
-	}
-	nudged, escalated, err := h.svc.SweepAwaitingConfirmation(context.Background())
-	if err != nil || escalated != 1 {
-		t.Fatalf("sweep = (%d, %d, %v), want one escalation", nudged, escalated, err)
-	}
-	var status string
-	var read bool
-	if err := h.svc.db.QueryRow("SELECT status, read FROM issues ORDER BY id DESC LIMIT 1").Scan(&status, &read); err != nil {
-		t.Fatalf("read escalated issue: %v", err)
-	}
-	if status != IssueNeedsAdmin || read {
-		t.Fatalf("escalated issue = (%q, read=%v), want unread needs_admin", status, read)
+	// Repeated admin actions cannot announce the same close twice.
+	_, _ = h.svc.ResolveIssueByAdmin(context.Background(), 1, issueID, AdminDispositionResolved, "Already checked.")
+	if got := countEvents(h.notifier.userEvents, "issue_closed"); got != 1 {
+		t.Fatalf("repeated close sent %d alerts", got)
 	}
 }
 

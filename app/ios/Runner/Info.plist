@@ -26,6 +26,9 @@
 		<string>$(FLUTTER_BUILD_NUMBER)</string>
 		<key>LSRequiresIPhoneOS</key>
 		<true/>
+		<!-- app_links owns native callbacks, including pending OIDC returns. -->
+		<key>FlutterDeepLinkingEnabled</key>
+		<false/>
 		<key>UIApplicationSceneManifest</key>
 		<dict>
 			<key>UIApplicationSupportsMultipleScenes</key>

@@ -12,6 +12,10 @@ library;
 /// One parsed row of the music ownership digest: an album the user's library
 /// already tracks, with the fields used to mark search results as owned.
 class OwnedAlbum {
+  final int recordId;
+  final String foreignArtistId;
+  final String releaseType;
+  final String? status;
   final String title;
   final String artist;
   final int year;
@@ -29,6 +33,10 @@ class OwnedAlbum {
 
   const OwnedAlbum({
     required this.title,
+    this.recordId = 0,
+    this.foreignArtistId = '',
+    this.releaseType = 'Album',
+    this.status,
     required this.artist,
     this.year = 0,
     this.cover = '',
@@ -42,6 +50,10 @@ class OwnedAlbum {
   bool get owned => monitored || downloaded;
 
   factory OwnedAlbum.fromJson(Map<String, dynamic> json) => OwnedAlbum(
+        recordId: json['record_id'] as int? ?? 0,
+        foreignArtistId: json['foreign_artist_id'] as String? ?? '',
+        releaseType: json['release_type'] as String? ?? 'Album',
+        status: json['status'] as String?,
         title: json['title'] as String? ?? '',
         artist: json['artist'] as String? ?? '',
         year: json['year'] as int? ?? 0,

@@ -1,11 +1,32 @@
+/// Server-wide permission to deliver each push category.
+class PushNotificationPolicy {
+  final bool enabled;
+  final Map<String, bool> categories;
+  const PushNotificationPolicy(
+      {required this.enabled, required this.categories});
+  factory PushNotificationPolicy.fromJson(Map<String, dynamic> json) =>
+      PushNotificationPolicy(
+          enabled: json['enabled'] == true,
+          categories: Map<String, bool>.from(json['categories'] as Map? ?? {}));
+  Map<String, dynamic> toJson() =>
+      {'enabled': enabled, 'categories': categories};
+}
+
 /// A user's push-notification preferences. Each flag toggles one category of
 /// push notification the server may send to this user's devices.
 ///
-/// IMPORTANT: the server's PUT replaces the full preference row, treating
-/// missing keys as false — so this model must carry EVERY category the server
-/// knows (including admin-only ones), or saving any toggle silently disables
-/// the omitted categories.
+/// PUT must include every existing category, including administrator choices:
+/// omitting a legacy category turns it off. Server policy is read-only metadata
+/// and is never included in a personal save.
 class NotificationPrefs {
+  final bool pushEnabled;
+  final bool requestAutoApproved;
+  final PushNotificationPolicy? serverPolicy;
+  bool get supportsControls => serverPolicy != null;
+  bool get serverEnabled => serverPolicy?.enabled ?? true;
+  bool categoryAllowed(String key) =>
+      serverPolicy == null || serverPolicy!.categories[key] == true;
+
   final bool requestDecision;
   final bool requestPending;
   final bool newMovie;
@@ -15,12 +36,15 @@ class NotificationPrefs {
   final bool issueCreated;
   final bool agentActionPending;
   final bool plexAccessRequest;
-  final bool plexInviteSent;
+  final bool mediaServerAccess;
   final bool issueReportUpdate;
   final bool agentDigest;
   final bool contentUpgraded;
 
   const NotificationPrefs({
+    this.pushEnabled = true,
+    this.requestAutoApproved = false,
+    this.serverPolicy,
     required this.requestDecision,
     required this.requestPending,
     required this.newMovie,
@@ -30,7 +54,7 @@ class NotificationPrefs {
     this.issueCreated = true,
     this.agentActionPending = true,
     this.plexAccessRequest = true,
-    this.plexInviteSent = true,
+    this.mediaServerAccess = true,
     this.issueReportUpdate = true,
     this.agentDigest = true,
     this.contentUpgraded = false,
@@ -38,6 +62,12 @@ class NotificationPrefs {
 
   factory NotificationPrefs.fromJson(Map<String, dynamic> json) =>
       NotificationPrefs(
+        pushEnabled: json['push_enabled'] as bool? ?? true,
+        requestAutoApproved: json['request_auto_approved'] as bool? ?? false,
+        serverPolicy: json['server_policy'] is Map
+            ? PushNotificationPolicy.fromJson(
+                Map<String, dynamic>.from(json['server_policy'] as Map))
+            : null,
         requestDecision: json['request_decision'] as bool? ?? false,
         requestPending: json['request_pending'] as bool? ?? false,
         newMovie: json['new_movie'] as bool? ?? false,
@@ -49,7 +79,9 @@ class NotificationPrefs {
         issueCreated: json['issue_created'] as bool? ?? true,
         agentActionPending: json['agent_action_pending'] as bool? ?? true,
         plexAccessRequest: json['plex_access_request'] as bool? ?? true,
-        plexInviteSent: json['plex_invite_sent'] as bool? ?? true,
+        mediaServerAccess: json['media_server_access'] as bool? ??
+            json['plex_invite_sent'] as bool? ??
+            true,
         issueReportUpdate: json['issue_report_update'] as bool? ?? true,
         agentDigest: json['agent_digest'] as bool? ?? true,
         // Unlike the admin categories above, quality-upgrade alerts default
@@ -60,6 +92,8 @@ class NotificationPrefs {
       );
 
   Map<String, dynamic> toJson() => {
+        'push_enabled': pushEnabled,
+        'request_auto_approved': requestAutoApproved,
         'request_decision': requestDecision,
         'request_pending': requestPending,
         'new_movie': newMovie,
@@ -69,13 +103,24 @@ class NotificationPrefs {
         'issue_created': issueCreated,
         'agent_action_pending': agentActionPending,
         'plex_access_request': plexAccessRequest,
-        'plex_invite_sent': plexInviteSent,
+        'media_server_access': mediaServerAccess,
+        // Older servers still call this preference Plex invite sent.
+        'plex_invite_sent': mediaServerAccess,
         'issue_report_update': issueReportUpdate,
         'agent_digest': agentDigest,
         'content_upgraded': contentUpgraded,
       };
 
+  NotificationPrefs withCategory(String key, bool value) =>
+      NotificationPrefs.fromJson({
+        ...toJson(),
+        key: value,
+        if (serverPolicy != null) 'server_policy': serverPolicy!.toJson(),
+      });
+
   NotificationPrefs copyWith({
+    bool? pushEnabled,
+    bool? requestAutoApproved,
     bool? requestDecision,
     bool? requestPending,
     bool? newMovie,
@@ -85,12 +130,15 @@ class NotificationPrefs {
     bool? issueCreated,
     bool? agentActionPending,
     bool? plexAccessRequest,
-    bool? plexInviteSent,
+    bool? mediaServerAccess,
     bool? issueReportUpdate,
     bool? agentDigest,
     bool? contentUpgraded,
   }) =>
       NotificationPrefs(
+        pushEnabled: pushEnabled ?? this.pushEnabled,
+        requestAutoApproved: requestAutoApproved ?? this.requestAutoApproved,
+        serverPolicy: serverPolicy,
         requestDecision: requestDecision ?? this.requestDecision,
         requestPending: requestPending ?? this.requestPending,
         newMovie: newMovie ?? this.newMovie,
@@ -100,7 +148,7 @@ class NotificationPrefs {
         issueCreated: issueCreated ?? this.issueCreated,
         agentActionPending: agentActionPending ?? this.agentActionPending,
         plexAccessRequest: plexAccessRequest ?? this.plexAccessRequest,
-        plexInviteSent: plexInviteSent ?? this.plexInviteSent,
+        mediaServerAccess: mediaServerAccess ?? this.mediaServerAccess,
         issueReportUpdate: issueReportUpdate ?? this.issueReportUpdate,
         agentDigest: agentDigest ?? this.agentDigest,
         contentUpgraded: contentUpgraded ?? this.contentUpgraded,

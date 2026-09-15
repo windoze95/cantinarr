@@ -1,9 +1,12 @@
+import '../../apple_tv/ui/apple_tv_open_button.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../discover/logic/discovery_access.dart';
+import '../../discover/ui/catalog_setup_button.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
@@ -25,8 +28,12 @@ import '../../discover/data/tmdb_models.dart';
 import '../../discover/data/discover_api_service.dart';
 import '../../discover/logic/browse_query.dart';
 import '../../issues/logic/issues_provider.dart';
+import '../../issues/data/issue_models.dart';
 import '../../issues/ui/report_problem_sheet.dart';
 import '../../media_access/data/media_access_service.dart';
+import '../../media_access/logic/media_app_launcher.dart';
+import '../../media_access/data/video_apps.dart';
+import '../../media_access/logic/video_apps_provider.dart';
 import '../../media_download/data/media_download_models.dart';
 import '../../media_download/ui/media_download_button.dart';
 import '../../person/ui/person_detail_sheet.dart';
@@ -34,6 +41,7 @@ import '../../radarr/data/radarr_api_service.dart';
 import '../../radarr/data/radarr_models.dart';
 import '../../radarr/ui/radarr_movie_detail_screen.dart';
 import '../../request/data/request_service.dart';
+import '../../request/data/tv_match_service.dart';
 import '../../request/logic/request_provider.dart';
 import '../../request/ui/request_button.dart';
 import '../../request/ui/request_options_sheet.dart';
@@ -47,6 +55,7 @@ import '../logic/title_links.dart';
 import '../logic/release_schedule.dart';
 import '../logic/release_window.dart';
 import '../logic/title_facts.dart';
+import '../logic/tv_schedule.dart';
 import 'cast_crew_sheet.dart';
 import 'media_hero.dart';
 import 'season_table.dart';
@@ -55,18 +64,39 @@ import 'season_table.dart';
 class MediaDetailScreen extends ConsumerStatefulWidget {
   final int id;
   final MediaType mediaType;
+  final String? instanceId;
 
   const MediaDetailScreen({
     super.key,
     required this.id,
     required this.mediaType,
+    this.instanceId,
   });
 
   @override
   ConsumerState<MediaDetailScreen> createState() => _MediaDetailScreenState();
 }
 
-class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
+sealed class _TVProblemChoice {
+  const _TVProblemChoice();
+}
+
+class _CorrectTVMatchChoice extends _TVProblemChoice {
+  const _CorrectTVMatchChoice();
+}
+
+class _ViewTVReportChoice extends _TVProblemChoice {
+  final int reportId;
+  const _ViewTVReportChoice(this.reportId);
+}
+
+class _ReportTVScopeChoice extends _TVProblemChoice {
+  final ReportScope scope;
+  const _ReportTVScopeChoice(this.scope);
+}
+
+class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
+    with WidgetsBindingObserver {
   /// Opens a browse grid anchored on this title or on one of its genres.
   void _browse(
     BrowseFeed feed, {
@@ -89,6 +119,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// Anchors the "Seasons" section so "Request More" can scroll the user to the
   /// per-season picker.
   final GlobalKey _seasonsKey = GlobalKey();
+  RequestOptionsResult? _lastRequestOptions;
 
   /// The request option set the server allows this user (season/quality
   /// choice). Loaded once for TV so the season picker can hide its request
@@ -108,6 +139,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// change or replace files directly in Radarr/Sonarr at any time.
   RadarrMovieFile? _downloadMovieFile;
   List<SonarrEpisode> _downloadEpisodes = const [];
+  Map<int, int> _downloadSourceSeasons = const {};
+  Timer? _tvDeliveryPoll;
+  String? _resolvedMatchKey;
   String? _downloadInstanceId;
   int _arrResolveGeneration = 0;
 
@@ -119,13 +153,38 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   RequestStatus? _watchedStatus;
 
   /// The library this screen currently reads and requests against; null means
-  /// the user's default. Only ever set when the connection exposes more than
-  /// one library for this media type (multi-grant users, or admins).
+  /// the user's default. Notification destinations initialize this before any
+  /// library reads, even when that library is no longer accessible.
   String? _selectedLibraryId;
+
+  String get _serviceType => widget.mediaType == MediaType.movie ? 'radarr' : 'sonarr';
+  bool get _needsSetup {
+    if (_selectedLibraryId != null) return false;
+    final access = ref.read(discoveryAccessProvider);
+    return access.isAdmin && access.activeId(_serviceType) == null;
+  }
+
+  void _checkStatus() {
+    if (!_needsSetup && !_missingSelectedLibrary) _requestNotifier.checkStatus();
+  }
+
+  void _loadRequestState() {
+    if (_needsSetup || _missingSelectedLibrary) return;
+    _checkStatus();
+    if (widget.mediaType == MediaType.tv) {
+      _requestNotifier.fetchOptions().then((opts) {
+        if (mounted && opts != null) setState(() => _requestOptions = opts);
+      });
+    }
+  }
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final initialInstance = widget.instanceId?.trim();
+    _selectedLibraryId = initialInstance == null || initialInstance.isEmpty
+        ? null : initialInstance;
     final api = ref.read(discoverServiceProvider);
     _detailNotifier = MediaDetailNotifier(
       api: api,
@@ -137,7 +196,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       service: RequestService(backendDio: backendDio),
       tmdbId: widget.id,
       mediaType: widget.mediaType,
-    );
+    )..instanceId = _selectedLibraryId;
 
     // Resolve the arr deep link once the TMDB detail is in — Sonarr matching
     // needs the show's TVDB id, which only lands after the detail loads. The
@@ -149,19 +208,33 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       _resolveWatchLinks();
     });
     _requestNotifier.addListener(_onRequestStateChanged);
-    _requestNotifier.checkStatus();
-    _loadMyOpenReport();
+    _loadRequestState();
     if (widget.mediaType == MediaType.tv) {
-      _requestNotifier.fetchOptions().then((opts) {
-        if (mounted && opts != null) setState(() => _requestOptions = opts);
+      _tvDeliveryPoll = Timer.periodic(const Duration(seconds: 15), (_) {
+        final state = _requestNotifier.state;
+        if (mounted && state.deliveryMessages.isNotEmpty &&
+            !state.isCheckingStatus && !state.isRequesting) {
+          _checkStatus();
+        }
       });
     }
+    _loadMyOpenReport();
   }
 
   @override
   void dispose() {
+    _tvDeliveryPoll?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     _requestNotifier.removeListener(_onRequestStateChanged);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _resolveWatchLinks();
+      if (widget.mediaType == MediaType.tv) _checkStatus();
+    }
   }
 
   /// Re-asks the media servers when the request status moves, and only then:
@@ -169,11 +242,19 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// change nothing about where the title can be watched.
   void _onRequestStateChanged() {
     if (_requestNotifier.state.status != _watchedStatus) _resolveWatchLinks();
+    if (widget.mediaType == MediaType.tv) {
+      final state = _requestNotifier.state;
+      final key = '${state.match?.revision}:${state.match?.seriesId}:${state.hasStatus}';
+      if (key != _resolvedMatchKey) {
+        _resolvedMatchKey = key;
+        _resolveArrLink();
+      }
+    }
   }
 
   /// Whether the user may pick specific seasons. Defaults to true (the
   /// server's out-of-the-box global setting) until the options load.
-  bool get _canChooseSeasons => _requestOptions?.canChooseSeason ?? true;
+  bool get _canChooseSeasons => !_needsSetup && (_requestOptions?.canChooseSeason ?? true);
 
   /// The libraries this user may aim requests at for this media type, from
   /// the per-user filtered connection (granted set for requesters, every
@@ -201,14 +282,21 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// else the connection's default for this media type.
   String? get _effectiveLibraryId => _selectedLibraryId ?? _defaultLibraryId;
 
+  bool get _missingSelectedLibrary => _selectedLibraryId != null &&
+      !_libraryChoices.any((library) => library.id == _selectedLibraryId);
+
+  bool get _libraryUnavailable => _missingSelectedLibrary ||
+      _requestNotifier.state.libraryUnavailable;
+
   /// Switches every read and write on this screen to [libraryId] and
   /// refreshes what depends on it.
   void _selectLibrary(String? libraryId) {
     if (_selectedLibraryId == libraryId) return;
     setState(() => _selectedLibraryId = libraryId);
     _requestNotifier.instanceId = libraryId;
-    _requestNotifier.checkStatus();
+    _checkStatus();
     _resolveArrLink();
+    _loadMyOpenReport();
   }
 
   @override
@@ -216,6 +304,14 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     // Reporting binds to the currently active arr, so an instance switch must
     // rebuild the affordance and capture the new concrete instance id.
     ref.watch(instanceProvider);
+    ref.watch(discoveryAccessProvider);
+    ref.watch(authProvider);
+    ref.watch(tvMatchesAllowedProvider);
+    ref.listen(discoveryAccessProvider.select((access) => access.activeId(_serviceType)), (previous, next) {
+      if (previous == null && next != null) _loadRequestState();
+      if (previous != next) _loadMyOpenReport();
+      if (next == null && _needsSetup) _requestNotifier.state = const RequestState();
+    });
     // Live-update the request button when an approval decision for THIS title
     // arrives over the socket (complements the global toast).
     ref.listen(requestDecisionEventsProvider, (_, next) {
@@ -224,19 +320,35 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       final tmdb = (event.data['tmdb_id'] as num?)?.toInt();
       if (tmdb == widget.id &&
           event.data['media_type'] == widget.mediaType.name) {
-        _requestNotifier.checkStatus();
+        _checkStatus();
       }
     });
     // A request just added the title to the arr (main or per-season request
     // both bump this tick) — re-check so the admin "Open in …" link appears,
     // and ask the media servers again.
     ref.listen(libraryRefreshTickProvider, (_, __) {
+      if (widget.mediaType == MediaType.tv &&
+          !_requestNotifier.state.isCheckingStatus && !_requestNotifier.state.isRequesting) {
+        _checkStatus();
+      }
       _resolveArrLink();
       _resolveWatchLinks();
     });
     // Resolve (or re-resolve) the admin link once auth settles — covers auth
     // landing after the initial detail load (e.g. an optimistic reconnect).
-    ref.listen(authProvider, (_, __) => _resolveArrLink());
+    ref.listen(videoAppRevisionProvider, (_, __) => _resolveWatchLinks());
+    ref.listen(authProvider, (previous, next) {
+      if (_selectedLibraryId != null) _loadRequestState();
+      _resolveArrLink();
+      if (previous?.valueOrNull?.connection != null) {
+        if (previous?.valueOrNull?.user?.id != next.valueOrNull?.user?.id ||
+            previous?.valueOrNull?.connection?.serverUrl !=
+                next.valueOrNull?.connection?.serverUrl) {
+          setState(() => _watchLinks = const []);
+        }
+        _resolveWatchLinks();
+      }
+    });
     ref.listen(
       instanceProvider.select((s) => s.activeRadarrInstanceId),
       (_, __) => _resolveArrLink(),
@@ -246,8 +358,22 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       (_, __) => _resolveArrLink(),
     );
     return ListenableBuilder(
-      listenable: _detailNotifier,
+      listenable: Listenable.merge([_detailNotifier, _requestNotifier]),
       builder: (context, _) {
+        if (_libraryUnavailable) {
+          return Scaffold(
+            appBar: AppBar(title: const Text('Library unavailable')),
+            body: const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Text(
+                  'This library was removed or you no longer have access to it.',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+          );
+        }
         final state = _detailNotifier.state;
 
         if (state.isLoading &&
@@ -292,6 +418,18 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
 
         final size = MediaQuery.sizeOf(context);
         final topPadding = MediaQuery.paddingOf(context).top;
+        final now = ref.watch(mediaDetailClockProvider)();
+        final facts = state.facts(now: now);
+        final tvDate = state.tvDetail == null ? null
+            : upcomingTVDateLabel(state.tvDetail!, now: now);
+        // Resolve once so the status line and full schedule use the same
+        // country's dates. The widget locale is always en_US in this app.
+        final movieSchedule = resolveReleaseSchedule(
+          state.movieDetail?.releaseDates ?? const [],
+          preferredRegion: watchRegionFor(WidgetsBinding
+              .instance.platformDispatcher.locale.countryCode),
+          now: now,
+        );
         return Scaffold(
           body: CustomScrollView(
             slivers: [
@@ -341,7 +479,16 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                               // Secondary actions land async (request status,
                               // admin arr-link resolution), so the dock height
                               // morphs instead of snapping when one appears.
-                              child: AnimatedSize(
+                              child: _needsSetup
+                                  ? Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        CatalogSetupButton(serviceType: _serviceType),
+                                        if (tvDate != null)
+                                          _DateStatusLine(label: tvDate),
+                                      ],
+                                    )
+                                  : AnimatedSize(
                                 duration: const Duration(milliseconds: 220),
                                 curve: Curves.easeOutCubic,
                                 alignment: Alignment.topCenter,
@@ -355,19 +502,26 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                         isRequesting:
                                             _requestNotifier.state.isRequesting,
                                         error: _requestNotifier.state.error,
-                                        onRequest: () => _onRequest(),
+                                        onRequest: widget.mediaType == MediaType.tv && !_requestNotifier.state.hasStatus
+                                            ? null : () => _onRequest(),
                                       ),
-                                      // Sits with the status, not down in the
-                                      // facts: its whole job is to explain a
-                                      // badge that would otherwise read as a
-                                      // stalled download. Empty for TV, for
-                                      // titles not in the library, and once
-                                      // every date has passed.
-                                      _PendingReleaseLine(
-                                        releases:
-                                            _requestNotifier.state.releases,
-                                        status: _requestNotifier.state.status,
-                                      ),
+                                      if (widget.mediaType == MediaType.tv && !_requestNotifier.state.hasStatus)
+                                        TextButton.icon(onPressed: _requestNotifier.state.isCheckingStatus
+                                            ? null : _requestNotifier.checkStatus,
+                                          icon: const Icon(Icons.refresh),
+                                          label: Text(_requestNotifier.state.isCheckingStatus ? 'Checking TV match…' : 'Retry TV match')),
+                                      for (final message in _requestNotifier.state.deliveryMessages)
+                                        Padding(padding: const EdgeInsets.only(top: 8), child: Text(message, textAlign: TextAlign.center)),
+                                      // TV dates come from metadata, including
+                                      // when existing episodes are Available.
+                                      if (tvDate != null)
+                                        _DateStatusLine(label: tvDate),
+                                      if (widget.mediaType == MediaType.movie)
+                                        _PendingReleaseLine(
+                                          schedule: movieSchedule,
+                                          status: _requestNotifier.state.status,
+                                          now: now,
+                                        ),
                                       // One chip per granted library when the
                                       // user holds more than one (HD vs 4K):
                                       // each carries that library's own
@@ -375,6 +529,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                       // whole screen — status, request,
                                       // downloads — at that library.
                                       _LibraryStatusChips(
+                                        unknownIds: _requestNotifier.state.unknownInstanceIds,
                                         statuses: _requestNotifier
                                             .state.instanceStatuses,
                                         libraries: _libraryChoices,
@@ -392,25 +547,28 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                         spacing: 6,
                                         runSpacing: 4,
                                         children: [
-                                          TextButton.icon(
-                                            onPressed: () => _showStatusSheet(
-                                              context,
-                                              state.title,
-                                              _requestNotifier.state.status,
-                                            ),
-                                            icon: const Icon(
-                                              Icons.info_outline_rounded,
-                                              size: 17,
-                                            ),
-                                            label: Text(
-                                              _requestNotifier
-                                                  .state.status.label,
-                                            ),
-                                          ),
-                                          if (_myOpenReportId != null)
+                                          if (_requestNotifier.state.status !=
+                                              RequestStatus.available)
                                             TextButton.icon(
-                                              onPressed: () => context.push(
-                                                  '/issues/$_myOpenReportId'),
+                                              onPressed: () => _showStatusSheet(
+                                                context,
+                                                state.title,
+                                                _requestNotifier.state.status,
+                                              ),
+                                              icon: const Icon(
+                                                Icons.info_outline_rounded,
+                                                size: 17,
+                                              ),
+                                              label: Text(
+                                                _requestNotifier
+                                                    .state.status.label,
+                                              ),
+                                            ),
+                                          if (_myOpenReportId != null &&
+                                              !_canCorrectTVMatch)
+                                            TextButton.icon(
+                                              onPressed: () =>
+                                                  _viewReport(_myOpenReportId!),
                                               icon: const Icon(
                                                 Icons.flag,
                                                 size: 17,
@@ -419,9 +577,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                                 'View your report',
                                               ),
                                             )
-                                          else if (_canReport(
-                                            _requestNotifier.state.status,
-                                          ))
+                                          else if (_canReport ||
+                                              (_myOpenReportId != null &&
+                                                  _canCorrectTVMatch))
                                             TextButton.icon(
                                               onPressed: () =>
                                                   _onReportProblem(state),
@@ -446,6 +604,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                               reportedPath:
                                                   _downloadMovieFile!.path,
                                             ),
+                                          if (_watchLinks.any((link) => link.state == WatchLinkState.found))
+                                            AppleTVOpenButton(mediaType: widget.mediaType, tmdbId: widget.id),
                                           for (final link in _watchLinks)
                                             if (link.state ==
                                                 WatchLinkState.found)
@@ -457,7 +617,21 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                                   size: 17,
                                                 ),
                                                 label: Text(
-                                                  'Watch on ${_watchLabel(link)}',
+                                                  _watchActionLabel(link),
+                                                ),
+                                              )
+                                            else if (link.fallbackUrl.isNotEmpty)
+                                              TextButton.icon(
+                                                onPressed: () => _openWatchLink(
+                                                  link,
+                                                  fallback: true,
+                                                ),
+                                                icon: const Icon(
+                                                  Icons.open_in_new_rounded,
+                                                  size: 17,
+                                                ),
+                                                label: Text(
+                                                  _watchActionLabel(link, fallback: true),
                                                 ),
                                               )
                                             else if (link.state ==
@@ -630,7 +804,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                           // render; the Links line closes it with the
                           // title's own pages elsewhere (TMDB's is always
                           // known, so the section is there once loaded).
-                          if (state.facts.isNotEmpty ||
+                          if (facts.isNotEmpty ||
                               state.studios.isNotEmpty ||
                               state.links.isNotEmpty) ...[
                             const SizedBox(height: 24),
@@ -638,7 +812,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                               padding:
                                   const EdgeInsets.symmetric(horizontal: 16),
                               child: _DetailsSection(
-                                facts: state.facts,
+                                facts: facts,
                                 studios: state.studios,
                                 onStudio: (studio) => _browse(
                                   BrowseFeed.discover,
@@ -652,24 +826,14 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                             ),
                           ],
 
-                          // Release dates: TMDB-backed cinema/digital/disc
-                          // schedule for any movie, library or not. See D-02
-                          // in the plan — this is deliberately separate from
-                          // _PendingReleaseLine in the request dock above.
-                          // The region is the device's, read the way the
-                          // browse screen reads it: a widget-level locale
-                          // here is always en_US.
+                          // Full regional schedule, including past dates and
+                          // disc releases omitted from the status line.
                           if (state.movieDetail != null)
                             Padding(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 16),
                               child: _ReleaseDatesSection(
-                                regions: state.movieDetail!.releaseDates,
-                                deviceRegion: watchRegionFor(WidgetsBinding
-                                    .instance
-                                    .platformDispatcher
-                                    .locale
-                                    .countryCode),
+                                schedule: movieSchedule,
                               ),
                             ),
 
@@ -755,6 +919,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// quality), present the picker first; otherwise submit immediately to keep
   /// the one-tap experience.
   Future<void> _onRequest() async {
+    if (_needsSetup) return;
+    if (widget.mediaType == MediaType.tv && !_requestNotifier.state.hasStatus) return;
     final s = _detailNotifier.state;
 
     final options = await _requestNotifier.fetchOptions();
@@ -791,6 +957,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       final result = await showAppSheet<RequestOptionsResult>(
         context,
         builder: (_) => RequestOptionsSheet(
+          initialSelection: (_lastRequestOptions?.instanceId == null || _lastRequestOptions?.instanceId == _effectiveLibraryId) ? _lastRequestOptions : null,
           options: options ??
               const RequestOptions(
                 canChooseSeason: false,
@@ -805,6 +972,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
         ),
       );
       if (result == null) return; // cancelled
+      _lastRequestOptions = result;
       seasonScope = result.seasonScope;
       qualityProfileId = result.qualityProfileId;
       if (result.instanceId != null &&
@@ -814,17 +982,41 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
         // pre-request read could land after it and overwrite it.
         setState(() => _selectedLibraryId = result.instanceId);
         _requestNotifier.instanceId = result.instanceId;
+        _loadMyOpenReport();
+        if (widget.mediaType == MediaType.tv) {
+          await _requestNotifier.checkStatus();
+          if (!_requestNotifier.state.hasStatus) return;
+        }
         _resolveArrLink();
       }
     }
 
-    await _requestNotifier.request(
+    final accepted = await _requestNotifier.request(
       title: title,
       tvdbId: tvdbId,
       seasonScope: seasonScope,
       qualityProfileId: qualityProfileId,
     );
-    if (mounted && _requestNotifier.state.error == null) _onRequestSucceeded();
+    if (!mounted) return;
+    final quotaMessage = _requestNotifier.state.quotaMessage;
+    if (accepted) {
+      _onRequestSucceeded();
+    } else if (quotaMessage != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(quotaMessage)),
+      );
+    }
+  }
+
+  Future<void> _correctTVMatch() async {
+    if (!_canCorrectTVMatch) return;
+    final uri = Uri(path: '/settings/tv-matches/${widget.id}', queryParameters: {
+      if (_effectiveLibraryId != null) 'instance_id': _effectiveLibraryId!,
+    });
+    await context.push(uri.toString());
+    if (!mounted) return;
+    await _requestNotifier.checkStatus();
+    if (mounted) _resolveArrLink();
   }
 
   /// Every successful submission (coarse request or per-season table) lands
@@ -859,9 +1051,11 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
         _arrLink = null;
         _downloadMovieFile = null;
         _downloadEpisodes = const [];
+        _downloadSourceSeasons = const {};
         _downloadInstanceId = null;
       });
     }
+    if (_libraryUnavailable) return;
     try {
       if (widget.mediaType == MediaType.movie) {
         final instanceId = _selectedLibraryId ??
@@ -909,14 +1103,24 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
           backendDio: backendDio,
           instanceId: instanceId,
         );
+        final serverMatch = _requestNotifier.state.match;
+        final correctedServer = connection?.tvMatchCorrections == true;
+        if (correctedServer && (!_requestNotifier.state.hasStatus ||
+            serverMatch?.isResolved != true || serverMatch!.seriesId <= 0)) {
+          return;
+        }
         final series = await service.getSeries();
-        final match = matchSonarrSeries(
-          series,
-          tvdbId: _detailNotifier.state.tvDetail?.externalIds?.tvdbId,
-          tmdbId: widget.id,
-          title: _detailNotifier.state.title,
-          year: tmdbPremiereYear(_detailNotifier.state.tvDetail?.firstAirDate),
-        );
+        final exact = correctedServer ? series.where((s) =>
+            s.id == serverMatch!.seriesId && s.tvdbId == serverMatch.tvdbId).toList() : null;
+        final match = correctedServer
+            ? (exact!.length == 1 ? exact.single : null)
+            : matchSonarrSeries(series,
+                tvdbId: _detailNotifier.state.tvDetail?.externalIds?.tvdbId,
+                tmdbId: widget.id, title: _detailNotifier.state.title,
+                year: tmdbPremiereYear(_detailNotifier.state.tvDetail?.firstAirDate));
+        final sourceSeasons = <int, int>{
+          if (correctedServer) for (final e in serverMatch!.seasonMap.entries) e.value: e.key,
+        };
         var episodes = const <SonarrEpisode>[];
         if (downloadsEnabled && match != null && match.id > 0) {
           episodes = (await service.getEpisodes(
@@ -924,7 +1128,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
             includeEpisodeFile: true,
           ))
               .where((episode) =>
-                  episode.hasFile && episode.episodeFileId > 0)
+                  episode.hasFile && episode.episodeFileId > 0 &&
+                  (!correctedServer || sourceSeasons.containsKey(episode.seasonNumber)))
               .toList()
             ..sort((left, right) {
               final season =
@@ -941,6 +1146,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
               : null;
           if (downloadsEnabled && episodes.isNotEmpty) {
             _downloadEpisodes = episodes;
+            _downloadSourceSeasons = sourceSeasons;
             _downloadInstanceId = instanceId;
           }
         });
@@ -955,17 +1161,19 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       _episodeDownloadChoicesBySeason {
     final result = <int, List<MediaDownloadChoice>>{};
     for (final episode in _downloadEpisodes) {
+      final sourceSeason = _downloadSourceSeasons[episode.seasonNumber] ?? episode.seasonNumber;
+      final episodeLabel = 'S${sourceSeason.toString().padLeft(2, '0')}E${episode.episodeNumber.toString().padLeft(2, '0')}';
       final title = episode.title?.trim();
       final file = episode.episodeFile;
       final details = <String>[
         if (file?.quality?.trim().isNotEmpty ?? false) file!.quality!.trim(),
         if (file != null && file.size > 0) file.sizeFormatted,
       ];
-      (result[episode.seasonNumber] ??= []).add(MediaDownloadChoice(
+      (result[sourceSeason] ??= []).add(MediaDownloadChoice(
         fileId: episode.episodeFileId,
         label: title == null || title.isEmpty
-            ? episode.seasonEpisodeLabel
-            : '${episode.seasonEpisodeLabel} · $title',
+            ? episodeLabel
+            : '$episodeLabel · $title',
         subtitle: details.isEmpty ? null : details.join(' · '),
         reportedPath: file?.path,
       ));
@@ -978,7 +1186,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// the TMDB detail is in (the year, the title, and a show's TVDB id narrow
   /// the lookup; the match is by provider id). Best-effort like the arr
   /// link: a failed read clears the links rather than showing stale ones.
-  /// Nothing is asked when the user has no Jellyfin or Emby server at all.
+  /// Nothing is asked when the user has no media server at all.
   Future<void> _resolveWatchLinks() async {
     final generation = ++_watchGeneration;
     final status = _requestNotifier.state.status;
@@ -986,11 +1194,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     final connection = ref.read(authProvider).valueOrNull?.connection;
     final watchable = status == RequestStatus.available ||
         status == RequestStatus.partial;
-    final askable = connection?.mediaServerInstances
-            .any((i) => i.serviceType != 'plex') ??
-        false;
+    final askable = connection?.mediaServerInstances.any((server) => server.serviceType != 'audiobookshelf') ?? false;
     final detail = _detailNotifier.state;
-    if (!watchable || !askable) {
+    if (_libraryUnavailable || !watchable || !askable) {
       if (_watchLinks.isNotEmpty) setState(() => _watchLinks = const []);
       return;
     }
@@ -1022,18 +1228,27 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     return sameType > 1 ? link.name : mediaServerTypeLabel(link.serviceType);
   }
 
-  /// Opens the title's page on the media server, in the browser or the
-  /// server's app when it claims the address.
-  Future<void> _openWatchLink(WatchLink link) async {
-    final uri = Uri.tryParse(link.url);
-    var opened = false;
-    if (uri != null) {
-      try {
-        opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } catch (_) {
-        opened = false;
-      }
+  String _watchActionLabel(WatchLink link, {bool fallback = false}) {
+    if (ref.read(mediaAppLauncherProvider).videoAppFor(link.videoApps) == VideoApp.infuse) {
+      final context = _watchLinks.length > 1
+          ? ' · ${mediaServerTypeLabel(link.serviceType)} / ${link.name}' : '';
+      return 'Open in Infuse$context';
     }
+    return '${fallback ? 'Open' : 'Watch on'} ${_watchLabel(link)}';
+  }
+
+  /// Prefers the installed media app on mobile, retaining the server's web
+  /// link when no app can open. Only a confirmed match carries a title hint.
+  Future<void> _openWatchLink(WatchLink link, {bool fallback = false}) async {
+    final opened = await ref.read(mediaAppLauncherProvider).open(
+          serviceType: link.serviceType,
+          apps: link.videoApps,
+          tmdbId: !fallback && link.state == WatchLinkState.found ? widget.id : null,
+          webUrl: fallback ? link.fallbackUrl : link.url,
+          mediaType: !fallback && link.state == WatchLinkState.found
+              ? widget.mediaType
+              : null,
+        );
     if (opened || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text("Couldn't open ${_watchLabel(link)}."),
@@ -1079,42 +1294,56 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     );
   }
 
-  /// The caller's own OPEN report for this exact title, when one exists — the
-  /// detail page then offers the thread instead of a duplicate report. Loaded
-  /// once per screen from the self-scoped inbox; best-effort (a failed read
-  /// just leaves the plain Report button).
-  int? _myOpenReportId;
+  /// Keep the self-scoped inbox separate from the current library selection.
+  /// Switching libraries immediately stops showing the previous one's report,
+  /// even while a fresh inbox read is in flight.
+  List<Issue> _myReports = const [];
+  int _reportLoadGeneration = 0;
+
+  int? get _myOpenReportId {
+    final instanceId = _reportInstanceId;
+    for (final issue in _myReports) {
+      if (issue.closedAt == null &&
+          issue.mediaType == widget.mediaType.name &&
+          issue.tmdbId == widget.id && issue.instanceId == instanceId) {
+        return issue.id;
+      }
+    }
+    return null;
+  }
 
   Future<void> _loadMyOpenReport() async {
+    final generation = ++_reportLoadGeneration;
     try {
       final mine = await ref.read(issuesServiceProvider).listMyIssues();
-      if (!mounted) return;
-      final wantType = widget.mediaType == MediaType.movie ? 'movie' : 'tv';
-      for (final issue in mine) {
-        if (issue.closedAt == null &&
-            issue.mediaType == wantType &&
-            issue.tmdbId == widget.id) {
-          setState(() => _myOpenReportId = issue.id);
-          return;
-        }
-      }
+      if (!mounted || generation != _reportLoadGeneration) return;
+      setState(() => _myReports = mine);
     } catch (_) {
-      // The chip is a convenience; the report flow works without it.
+      // The shortcut is best-effort; never retain a stale/closed report after
+      // a failed refresh. Report submission still has server-side deduplication.
+      if (mounted && generation == _reportLoadGeneration) {
+        setState(() => _myReports = const []);
+      }
     }
   }
 
-  /// Reporting is offered only once the title is at least partially in the
-  /// library (so there's a download to complain about) and the server allows
-  /// it.
-  bool _canReport(RequestStatus status) {
-    final allow =
-        ref.watch(authProvider).valueOrNull?.connection?.allowReporting ??
-            false;
-    if (!allow || _reportInstanceId == null) return false;
-    return status == RequestStatus.available ||
-        status == RequestStatus.partial ||
-        status == RequestStatus.downloading;
+  Future<void> _viewReport(int id) async {
+    await context.push('/issues/$id');
+    if (mounted) await _loadMyOpenReport();
   }
+
+  bool get _reportingAllowed =>
+      ref.read(authProvider).valueOrNull?.connection?.allowReporting ?? false;
+
+  bool get _canCorrectTVMatch => widget.mediaType == MediaType.tv &&
+      ref.read(tvMatchesAllowedProvider) && !_needsSetup &&
+      _reportInstanceId != null;
+
+  /// The same state rule covers one-tap requests, season-table requests and
+  /// failures that block either. Admin corrections do not enable reporting.
+  bool get _canReport => !_needsSetup && _reportInstanceId != null &&
+      (_reportingAllowed || _canCorrectTVMatch) &&
+      _requestNotifier.state.canReportProblem;
 
   /// Opens the report flow. For a movie, scopes directly to the movie. For TV,
   /// lets the reporter narrow to a season/episode (reusing the loaded seasons)
@@ -1122,6 +1351,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   Future<void> _onReportProblem(MediaDetailState state) async {
     final instanceId = _reportInstanceId;
     if (instanceId == null) return;
+    final canCorrect = _canCorrectTVMatch;
+    if (!_reportingAllowed && !canCorrect) return;
     final title = state.title;
     if (widget.mediaType == MediaType.movie) {
       await showReportProblemSheet(
@@ -1131,24 +1362,38 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
           tmdbId: widget.id,
           title: title,
         ),
+        onSubmitted: _loadMyOpenReport,
       );
       return;
     }
 
     final tvdbId = state.tvDetail?.externalIds?.tvdbId;
-    final scope = await _pickTvScope(state, title, tvdbId, instanceId);
-    if (scope == null) return; // cancelled
-    if (!mounted) return;
-    await showReportProblemSheet(context, scope: scope);
+    final choice = await _pickTvScope(state, title, tvdbId, instanceId,
+      canCorrect: canCorrect, allowReporting: _reportingAllowed,
+      reportId: _myOpenReportId);
+    if (!mounted || instanceId != _reportInstanceId) return;
+    switch (choice) {
+      case _CorrectTVMatchChoice():
+        await _correctTVMatch();
+      case _ViewTVReportChoice(:final reportId):
+        await _viewReport(reportId);
+      case _ReportTVScopeChoice(:final scope):
+        if (!_reportingAllowed) return;
+        await showReportProblemSheet(context, scope: scope,
+          onSubmitted: _loadMyOpenReport);
+      case null:
+        return;
+    }
   }
 
   /// Presents a small picker for which part of a show the report is about.
   /// Returns null if cancelled.
-  Future<ReportScope?> _pickTvScope(
-      MediaDetailState state, String title, int? tvdbId, String instanceId) {
+  Future<_TVProblemChoice?> _pickTvScope(
+      MediaDetailState state, String title, int? tvdbId, String instanceId,
+      {required bool canCorrect, required bool allowReporting, int? reportId}) {
     // Real seasons only (drop a season 0 / specials placeholder when empty).
     final seasons = state.seasons.where((s) => s.seasonNumber > 0).toList();
-    return showAppSheet<ReportScope>(
+    return showAppSheet<_TVProblemChoice>(
       context,
       builder: (sheetContext) {
         return AppSheet(
@@ -1160,63 +1405,94 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
               const Padding(
                 padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
                 child: Text(
-                  "What's the problem with?",
+                  'Report a problem',
                   style: TextStyle(
                       color: AppTheme.textPrimary,
-                      fontSize: 16,
+                      fontSize: 20,
                       fontWeight: FontWeight.bold),
                 ),
               ),
-              ListTile(
-                leading: const Icon(Icons.tv_outlined,
-                    color: AppTheme.textSecondary),
-                title: const Text('The whole series',
-                    style: TextStyle(color: AppTheme.textPrimary)),
-                onTap: () => Navigator.of(sheetContext).pop(
-                  ReportScope.series(
-                    instanceId: instanceId,
-                    tmdbId: widget.id,
-                    tvdbId: tvdbId,
-                    title: title,
+              if (canCorrect)
+                ListTile(
+                  leading: const Icon(Icons.rule_outlined,
+                      color: AppTheme.textSecondary),
+                  title: const Text('Correct TV match',
+                      style: TextStyle(color: AppTheme.textPrimary)),
+                  onTap: () => Navigator.of(sheetContext).pop(
+                      const _CorrectTVMatchChoice()),
+                ),
+              if (reportId != null)
+                ListTile(
+                  leading: const Icon(Icons.flag_outlined,
+                      color: AppTheme.textSecondary),
+                  title: const Text('View your report',
+                      style: TextStyle(color: AppTheme.textPrimary)),
+                  onTap: () => Navigator.of(sheetContext).pop(
+                      _ViewTVReportChoice(reportId)),
+                ),
+              if (!allowReporting)
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 8, 20, 8),
+                  child: Text('Problem reporting is disabled. You can still correct this TV match.',
+                      style: TextStyle(color: AppTheme.textSecondary)),
+                ),
+              if (allowReporting && reportId == null) ...[
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 12, 20, 8),
+                  child: Text("What's the problem with?",
+                      style: TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.tv_outlined,
+                      color: AppTheme.textSecondary),
+                  title: const Text('The whole series',
+                      style: TextStyle(color: AppTheme.textPrimary)),
+                  onTap: () => Navigator.of(sheetContext).pop(
+                    _ReportTVScopeChoice(ReportScope.series(
+                      instanceId: instanceId,
+                      tmdbId: widget.id,
+                      tvdbId: tvdbId,
+                      title: title,
+                    )),
                   ),
                 ),
-              ),
-              for (final s in seasons)
-                ListTile(
-                  leading: const Icon(Icons.video_library_outlined,
-                      color: AppTheme.textSecondary),
-                  title: Text('Season ${s.seasonNumber}',
-                      style: const TextStyle(color: AppTheme.textPrimary)),
-                  trailing: (s.episodeCount ?? 0) > 0
-                      ? const Icon(Icons.chevron_right,
-                          color: AppTheme.textSecondary, size: 18)
-                      : null,
-                  onTap: () async {
-                    // A season with a known episode list narrows once more —
-                    // "wrong episode" deserves an episode-shaped report, and a
-                    // tighter scope is a cheaper diagnosis. No count, no
-                    // second step.
-                    final episodes = s.episodeCount ?? 0;
-                    if (episodes <= 0) {
-                      Navigator.of(sheetContext).pop(
-                        ReportScope.series(
-                          instanceId: instanceId,
-                          tmdbId: widget.id,
-                          tvdbId: tvdbId,
-                          seasonNumber: s.seasonNumber,
-                          title: title,
-                        ),
-                      );
-                      return;
-                    }
-                    final scope = await _pickSeasonScope(
-                        sheetContext, s.seasonNumber, episodes,
-                        title: title, tvdbId: tvdbId, instanceId: instanceId);
-                    if (scope != null && sheetContext.mounted) {
-                      Navigator.of(sheetContext).pop(scope);
-                    }
-                  },
-                ),
+                for (final s in seasons)
+                  ListTile(
+                    leading: const Icon(Icons.video_library_outlined,
+                        color: AppTheme.textSecondary),
+                    title: Text('Season ${s.seasonNumber}',
+                        style: const TextStyle(color: AppTheme.textPrimary)),
+                    trailing: (s.episodeCount ?? 0) > 0
+                        ? const Icon(Icons.chevron_right,
+                            color: AppTheme.textSecondary, size: 18)
+                        : null,
+                    onTap: () async {
+                      // A season with a known episode list narrows once more —
+                      // "wrong episode" deserves an episode-shaped report, and a
+                      // tighter scope is a cheaper diagnosis. No count, no
+                      // second step.
+                      final episodes = s.episodeCount ?? 0;
+                      if (episodes <= 0) {
+                        Navigator.of(sheetContext).pop(
+                          _ReportTVScopeChoice(ReportScope.series(
+                            instanceId: instanceId,
+                            tmdbId: widget.id,
+                            tvdbId: tvdbId,
+                            seasonNumber: s.seasonNumber,
+                            title: title,
+                          )),
+                        );
+                        return;
+                      }
+                      final scope = await _pickSeasonScope(
+                          sheetContext, s.seasonNumber, episodes,
+                          title: title, tvdbId: tvdbId, instanceId: instanceId);
+                      if (scope != null && sheetContext.mounted) {
+                        Navigator.of(sheetContext).pop(_ReportTVScopeChoice(scope));
+                      }
+                    },
+                  ),
+              ],
               const SizedBox(height: 8),
             ],
           ),
@@ -1298,22 +1574,20 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     );
   }
 
-  /// The concrete arr currently backing this media surface. An already
-  /// resolved detail link is authoritative; regular requester screens fall
-  /// back to the active/default instance exposed for that media type.
+  /// Reports follow the request library, never a stale arr-link read from the
+  /// previous selection. A link is only a fallback when no default is known.
   String? get _reportInstanceId {
-    final linked = _arrLink?.instanceId;
-    if (linked != null && linked.isNotEmpty) return linked;
-    if (_selectedLibraryId != null) return _selectedLibraryId;
+    final selected = _effectiveLibraryId;
+    if (selected != null && selected.isNotEmpty) return selected;
 
     final instances = ref.read(instanceProvider);
     final connection = ref.read(authProvider).valueOrNull?.connection;
     if (widget.mediaType == MediaType.movie) {
       return instances.activeRadarrInstance?.id ??
-          connection?.defaultRadarrInstance?.id;
+          connection?.defaultRadarrInstance?.id ?? _arrLink?.instanceId;
     }
     return instances.activeSonarrInstance?.id ??
-        connection?.defaultSonarrInstance?.id;
+        connection?.defaultSonarrInstance?.id ?? _arrLink?.instanceId;
   }
 
   void _showStatusSheet(
@@ -1336,23 +1610,13 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
 /// payload, matching the shrink-to-nothing discipline `_PendingReleaseLine`
 /// already uses below: the page never asserts a schedule it does not have.
 class _ReleaseDatesSection extends StatelessWidget {
-  final List<TmdbReleaseDateRegion> regions;
+  final ReleaseSchedule? schedule;
 
-  /// The device's country, tried first; `resolveReleaseSchedule` falls
-  /// back from it the same way whatever it is.
-  final String deviceRegion;
-
-  const _ReleaseDatesSection({
-    required this.regions,
-    required this.deviceRegion,
-  });
+  const _ReleaseDatesSection({required this.schedule});
 
   @override
   Widget build(BuildContext context) {
-    final schedule = resolveReleaseSchedule(
-      regions,
-      preferredRegion: deviceRegion,
-    );
+    final schedule = this.schedule;
     if (schedule == null) return const SizedBox.shrink();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1428,15 +1692,31 @@ class _ReleaseDatesSection extends StatelessWidget {
 /// ahead, so the request dock keeps its current shape for the overwhelmingly
 /// common case of an already-released title.
 class _PendingReleaseLine extends StatelessWidget {
-  final MovieReleaseDates releases;
+  final ReleaseSchedule? schedule;
   final RequestStatus status;
+  final DateTime now;
 
-  const _PendingReleaseLine({required this.releases, required this.status});
+  const _PendingReleaseLine({
+    required this.schedule,
+    required this.status,
+    required this.now,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final pending = pendingReleases(releases, status: status);
+    final pending = pendingReleases(schedule, status: status, now: now);
     if (pending.isEmpty) return const SizedBox.shrink();
+    return _DateStatusLine(label: formatPendingReleases(pending, now: now));
+  }
+}
+
+/// Shared supporting date style for movie milestones and TV schedules.
+class _DateStatusLine extends StatelessWidget {
+  final String label;
+  const _DateStatusLine({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(top: 8),
       child: Row(
@@ -1448,7 +1728,7 @@ class _PendingReleaseLine extends StatelessWidget {
           const SizedBox(width: 6),
           Flexible(
             child: Text(
-              formatPendingReleases(pending),
+              label,
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: AppTheme.textSecondary,
@@ -1468,11 +1748,13 @@ class _PendingReleaseLine extends StatelessWidget {
 /// library, so single-library users keep today's dock exactly.
 class _LibraryStatusChips extends StatelessWidget {
   final Map<String, RequestStatus> statuses;
+  final Set<String> unknownIds;
   final List<LibraryChoice> libraries;
   final String? selectedId;
   final ValueChanged<String> onSelect;
 
   const _LibraryStatusChips({
+    required this.unknownIds,
     required this.statuses,
     required this.libraries,
     required this.selectedId,
@@ -1481,11 +1763,11 @@ class _LibraryStatusChips extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (statuses.length < 2) return const SizedBox.shrink();
+    if (statuses.length + unknownIds.length < 2) return const SizedBox.shrink();
     // Connection order (the admin's sort order); ignore libraries the server
     // reported no status for.
     final chips = libraries
-        .where((library) => statuses.containsKey(library.id))
+        .where((library) => statuses.containsKey(library.id) || unknownIds.contains(library.id))
         .toList();
     if (chips.length < 2) return const SizedBox.shrink();
     return Padding(
@@ -1497,7 +1779,7 @@ class _LibraryStatusChips extends StatelessWidget {
         children: chips.map((library) {
           final selected = library.id == selectedId;
           return ChoiceChip(
-            label: Text('${library.name} · ${statuses[library.id]!.label}'),
+            label: Text('${library.name} · ${unknownIds.contains(library.id) ? 'Could not check' : statuses[library.id]!.label}'),
             selected: selected,
             onSelected: (_) => onSelect(library.id),
             showCheckmark: false,

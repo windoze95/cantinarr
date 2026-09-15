@@ -12,7 +12,30 @@ import 'server_status.dart';
 /// Fetch transport: these calls decide whether a session lives, and the
 /// default browser adapter was observed stalling them for the full receive
 /// timeout while Fetch requests from the same page completed instantly.
+class SSORequired implements Exception {
+  const SSORequired();
+}
+
 class AuthService {
+  Future<Map<String, dynamic>> externalSignInRequest(String server, String path,
+          {String method = 'GET',
+          String? accessToken,
+          Map<String, dynamic>? data}) =>
+      oidcRequest(server, path,
+          method: method, accessToken: accessToken, data: data);
+
+  Future<Map<String, dynamic>> oidcRequest(String server, String path,
+      {String method = 'GET', String? accessToken, Map<String, dynamic>? data}) async {
+    final dio = _createDio(server);
+    try {
+      final response = await dio.request(path, data: data, options: Options(
+        method: method,
+        headers: {if (accessToken != null) 'Authorization': 'Bearer $accessToken'},
+      ));
+      return response.data as Map<String, dynamic>;
+    } finally { dio.close(); }
+  }
+
   Dio _createDio(String serverUrl) {
     final dio = Dio(BaseOptions(
       baseUrl: serverUrl,
@@ -95,6 +118,9 @@ class AuthService {
       'device_name': deviceName,
       if (hardwareId.isNotEmpty) 'hardware_id': hardwareId,
     });
+    if ((resp.data as Map<String, dynamic>)['sso_required'] == true) {
+      throw const SSORequired();
+    }
     return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
   }
 
@@ -475,6 +501,7 @@ class DeviceInfo {
 
 /// Enriched user account returned by the admin users endpoint.
 class UserSummary {
+  final bool ssoLinked;
   final int id;
   final String username;
   final String role;
@@ -498,6 +525,7 @@ class UserSummary {
 
   const UserSummary({
     required this.id,
+    this.ssoLinked = false,
     required this.username,
     required this.role,
     required this.permissions,
@@ -517,6 +545,7 @@ class UserSummary {
 
   factory UserSummary.fromJson(Map<String, dynamic> json) => UserSummary(
         id: json['id'] as int,
+        ssoLinked: json['sso_linked'] as bool? ?? false,
         username: json['username'] as String,
         role: json['role'] as String,
         permissions: (json['permissions'] as List<dynamic>?)
@@ -557,6 +586,18 @@ class ServerConfig {
 
   /// Whether a Plex server exists that an ungranted user can ask access to.
   final bool plexAccessRequestable;
+  final bool adminCatalogBrowsing;
+
+  /// Supports linking accounts independently from managing their access.
+  final bool mediaAccountManagement;
+
+  /// Server supports paired Apple TV handoffs.
+  final bool appleTvRemote;
+  final bool tvMatchCorrections;
+  final bool requestQuotas;
+
+  /// Null means the server predates Discover visibility preferences.
+  final List<String>? hiddenDiscoverTabs;
 
   const ServerConfig({
     required this.serverName,
@@ -567,6 +608,12 @@ class ServerConfig {
     this.issuesEnabled = false,
     this.allowReporting = false,
     this.plexAccessRequestable = false,
+    this.adminCatalogBrowsing = false,
+    this.mediaAccountManagement = false,
+    this.appleTvRemote = false,
+    this.tvMatchCorrections = false,
+    this.requestQuotas = false,
+    this.hiddenDiscoverTabs,
   });
 
   factory ServerConfig.fromJson(Map<String, dynamic> json) {
@@ -585,6 +632,14 @@ class ServerConfig {
       issuesEnabled: json['issues_enabled'] as bool? ?? false,
       allowReporting: json['allow_reporting'] as bool? ?? false,
       plexAccessRequestable: json['plex_access_requestable'] as bool? ?? false,
+      adminCatalogBrowsing: json['admin_catalog_browsing'] as bool? ?? false,
+      mediaAccountManagement:
+          json['media_account_management'] as bool? ?? false,
+      appleTvRemote: json['apple_tv_remote'] as bool? ?? false,
+      tvMatchCorrections: json['tv_match_corrections'] as bool? ?? false,
+      requestQuotas: json['request_quotas'] as bool? ?? false,
+      hiddenDiscoverTabs:
+          (json['hidden_discover_tabs'] as List?)?.cast<String>(),
     );
   }
 }

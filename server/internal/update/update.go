@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 )
 
 // repoSlug is the GitHub "owner/repo" whose releases are checked.
@@ -63,7 +65,7 @@ func NewChecker(current string, disable bool) *Checker {
 	return &Checker{
 		current:  current,
 		disabled: disable || !ok,
-		client:   &http.Client{Timeout: 15 * time.Second},
+		client:   &http.Client{Transport: httpx.External(), Timeout: 15 * time.Second},
 		apiBase:  "https://api.github.com",
 		cached:   Status{Current: current},
 	}

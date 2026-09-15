@@ -494,3 +494,20 @@ func TestPollResultReachesSubscribedClients(t *testing.T) {
 		t.Fatalf("progress = %v, want 0.75 (size 1000, sizeleft 250)", ev.Data["progress"])
 	}
 }
+
+func TestConfigChangedReachesAdminAndRequesterWithoutPayload(t *testing.T) {
+	env := newWSTestEnv(t)
+	alice := env.userToken(t, "config-alice", "config-alice-device")
+	requester := env.mustDial(t, alice.AccessToken)
+	defer requester.Close()
+	admin := env.mustDial(t, env.adminToken(t))
+	defer admin.Close()
+	env.waitForClients(t, 2)
+	env.hub.Broadcast(Event{Type: "config_changed"})
+	for _, conn := range []*websocket.Conn{requester, admin} {
+		ev := readEvent(t, conn)
+		if ev.Type != "config_changed" || len(ev.Data) != 0 {
+			t.Fatalf("expected payload-free config ping, got %+v", ev)
+		}
+	}
+}

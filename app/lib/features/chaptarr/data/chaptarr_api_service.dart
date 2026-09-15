@@ -69,9 +69,14 @@ class ChaptarrApiService {
     return ChaptarrAuthor.fromJson(resp.data as Map<String, dynamic>);
   }
 
-  Future<List<ChaptarrAuthor>> lookupAuthor(String term) async {
-    final resp = await _dio
-        .get('$_basePath/author/lookup', queryParameters: {'term': term});
+  Future<List<ChaptarrAuthor>> lookupAuthor(String term,
+      {CancelToken? cancelToken}) async {
+    final resp = await _dio.get('$_basePath/author/lookup',
+        queryParameters: {'term': term},
+        cancelToken: cancelToken,
+        options: Options(
+            sendTimeout: const Duration(seconds: 10),
+            receiveTimeout: const Duration(seconds: 10)));
     return _jsonList(resp.data)
         .map((a) => ChaptarrAuthor.fromJson(a as Map<String, dynamic>))
         .toList();
@@ -99,9 +104,14 @@ class ChaptarrApiService {
     return ChaptarrBook.fromJson(resp.data as Map<String, dynamic>);
   }
 
-  Future<List<ChaptarrBook>> lookupBook(String term) async {
-    final resp = await _dio
-        .get('$_basePath/book/lookup', queryParameters: {'term': term});
+  Future<List<ChaptarrBook>> lookupBook(String term,
+      {CancelToken? cancelToken}) async {
+    final resp = await _dio.get('$_basePath/book/lookup',
+        queryParameters: {'term': term},
+        cancelToken: cancelToken,
+        options: Options(
+            sendTimeout: const Duration(seconds: 10),
+            receiveTimeout: const Duration(seconds: 10)));
     return _jsonList(resp.data)
         .map((b) => ChaptarrBook.fromJson(b as Map<String, dynamic>))
         .toList();

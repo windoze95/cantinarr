@@ -57,8 +57,7 @@ class ChatMessage {
         wireContent: wireContent ?? this.wireContent,
         timestamp: timestamp,
         mediaResults: mediaResults ?? this.mediaResults,
-        configurationChanges:
-            configurationChanges ?? this.configurationChanges,
+        configurationChanges: configurationChanges ?? this.configurationChanges,
         isStreaming: isStreaming ?? this.isStreaming,
         toolActivity: toolActivity ?? this.toolActivity,
         errorText: errorText ?? this.errorText,
@@ -111,6 +110,9 @@ class MediaResultItem {
   /// (used verbatim instead of a TMDB path).
   final String? foreignId;
   final String? posterUrl;
+  final String? catalogProvider;
+  final String? catalogId;
+  final String? instanceId;
 
   const MediaResultItem({
     required this.id,
@@ -122,6 +124,9 @@ class MediaResultItem {
     this.mediaType,
     this.foreignId,
     this.posterUrl,
+    this.catalogProvider,
+    this.catalogId,
+    this.instanceId,
   });
 
   factory MediaResultItem.fromJson(Map<String, dynamic> json) =>
@@ -135,6 +140,9 @@ class MediaResultItem {
         mediaType: json['media_type'] as String?,
         foreignId: json['foreign_id'] as String?,
         posterUrl: json['poster_url'] as String?,
+        catalogProvider: (json['catalog_ref'] as Map?)?['provider'] as String?,
+        catalogId: (json['catalog_ref'] as Map?)?['id'] as String?,
+        instanceId: json['instance_id'] as String?,
       );
 }
 

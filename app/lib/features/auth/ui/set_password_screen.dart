@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../logic/auth_provider.dart';
 
 /// Lets a signed-in user create or change their account password.
@@ -61,6 +62,8 @@ class _SetPasswordScreenState extends ConsumerState<SetPasswordScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Password saved')),
       );
+      _passwordController.clear();
+      _confirmController.clear();
       context.pop(true);
     } catch (e) {
       if (!mounted) return;
@@ -87,7 +90,15 @@ class _SetPasswordScreenState extends ConsumerState<SetPasswordScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+        hasChanges: () =>
+            _passwordController.text.isNotEmpty ||
+            _confirmController.text.isNotEmpty,
+        isSaving: _isSaving,
+        child: _buildPage(context),
+      );
+
+  Widget _buildPage(BuildContext context) {
     final user = ref.watch(authProvider).valueOrNull?.user;
     final isChange = user?.hasPassword == true;
     final account = user?.username ?? 'your account';

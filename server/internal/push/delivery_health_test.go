@@ -83,7 +83,8 @@ func TestDeliveryFailuresRaiseHealthOnlyAfterARun(t *testing.T) {
 	n := NewNotifier(database, newFailingGateway(t, database), nil)
 	n.SetDeliveryHealthSink(sink)
 
-	n.send(n.client(), []int64{1}, "first", "body", nil)
+	mustExec(t, database, "INSERT OR IGNORE INTO users(id,username,password_hash) VALUES(1,'recipient','')")
+	n.send(n.client(), []int64{1}, "first", "body", map[string]any{"type": CategoryNewMovie})
 	waitFor(t, "the first send to fail", func() bool {
 		n.healthMu.Lock()
 		defer n.healthMu.Unlock()
@@ -93,7 +94,8 @@ func TestDeliveryFailuresRaiseHealthOnlyAfterARun(t *testing.T) {
 		t.Fatalf("transitions after one failure = %v, want none", got)
 	}
 
-	n.send(n.client(), []int64{1}, "second", "body", nil)
+	mustExec(t, database, "INSERT OR IGNORE INTO users(id,username,password_hash) VALUES(1,'recipient','')")
+	n.send(n.client(), []int64{1}, "second", "body", map[string]any{"type": CategoryNewMovie})
 	waitFor(t, "the health sink to be told", func() bool {
 		return len(sink.transitions()) > 0
 	})
@@ -120,7 +122,8 @@ func TestDeliverySuccessAlwaysReportsHealth(t *testing.T) {
 	n := NewNotifier(database, mgr, nil)
 	n.SetDeliveryHealthSink(sink)
 
-	n.send(n.client(), []int64{1}, "hello", "body", nil)
+	mustExec(t, database, "INSERT OR IGNORE INTO users(id,username,password_hash) VALUES(1,'recipient','')")
+	n.send(n.client(), []int64{1}, "hello", "body", map[string]any{"type": CategoryNewMovie})
 	waitFor(t, "the health sink to be told", func() bool {
 		return len(sink.transitions()) > 0
 	})

@@ -1,3 +1,4 @@
+import '../../request/logic/request_quota_provider.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,18 +7,22 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/models/user_profile.dart';
-import '../../../core/storage/preferences.dart';
+import '../../../core/network/api_error_message.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/attention_menu_visibility_switch.dart';
 import '../../../core/widgets/phone_apps_sheet.dart';
 import '../../../core/widgets/settings_highlight.dart';
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../media_access/data/video_apps.dart';
+import '../data/outbound_proxy_service.dart';
 import '../data/settings_search_index.dart';
 import '../data/setup_status_service.dart';
 import '../logic/app_version_provider.dart';
 import '../logic/external_address_provider.dart';
+import '../logic/outbound_proxy_provider.dart';
 import '../logic/setup_status_provider.dart';
 import '../logic/update_status_provider.dart';
 import '../settings_anchors.dart';
@@ -62,6 +67,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ref.read(setupStatusProvider.notifier).refresh();
       ref.read(updateStatusProvider.notifier).refresh();
       ref.read(externalAddressProvider.notifier).refresh();
+      ref.read(outboundProxyProvider.notifier).refresh();
     });
   }
 
@@ -75,9 +81,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final setupStatus = ref.watch(setupStatusProvider);
     final updateStatus = ref.watch(updateStatusProvider);
     final externalAddress = ref.watch(externalAddressProvider);
+    final outboundProxy = ref.watch(outboundProxyProvider);
     final aiSettings = ref.watch(aiSettingsProvider).valueOrNull;
     final appVersion = ref.watch(appVersionProvider).valueOrNull;
     final mediaServersVisible = connection?.mediaAccessGuideVisible ?? false;
+    final audiobookshelfVisible = connection?.mediaServerInstances
+            .any((instance) => instance.serviceType == 'audiobookshelf') ??
+        false;
+    final videoServersVisible = connection?.mediaServerInstances
+        .any((instance) => VideoApps.serviceTypes.contains(instance.serviceType)) ?? false;
     final gates = SettingsSearchGates(
       user: user,
       chaptarrEnabled: connection?.services.chaptarr ?? false,
@@ -85,6 +97,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       donateVisible: _donateVisible,
       phoneAppsVisible: phoneAppsVisible,
       mediaServersVisible: mediaServersVisible,
+      audiobookshelfVisible: audiobookshelfVisible,
+      videoServersVisible: videoServersVisible,
+      appleTvRemote: connection?.appleTvRemote ?? false,
+      requestQuotas: connection?.requestQuotas ?? false,
     );
     final searching = _query.trim().isNotEmpty;
 
@@ -164,6 +180,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               title: user?.username ?? 'Unknown',
               subtitle: _accountSubtitle(user),
             ),
+            _SettingsTile(
+              icon: Icons.link,
+              title: 'Linked sign-in',
+              subtitle: 'Manage single sign-on and Plex identities',
+              onTap: () => context.push('/settings/sso-account'),
+            ),
             if (user?.canUsePassword == true)
               _SettingsTile(
                 icon: Icons.lock_outline,
@@ -189,6 +211,26 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 subtitle: _aiAccessSubtitle(aiSettings),
                 onTap: () => context.push('/settings/ai'),
               ),
+            if (videoServersVisible)
+              _SettingsTile(
+                icon: Icons.video_library_outlined,
+                title: 'Video apps',
+                subtitle: 'Choose video apps for iPhone and iPad',
+                onTap: () => context.push('/settings/video-apps'),
+              ),
+            if (audiobookshelfVisible)
+              _SettingsTile(
+                icon: Icons.headphones_outlined,
+                title: 'Listening apps',
+                subtitle: 'Choose audiobook apps for iPhone, iPad and Android',
+                onTap: () => context.push('/settings/listening-apps'),
+              ),
+            if (ref.watch(requestQuotasSupportedProvider))
+              _SettingsTile(
+                icon: Icons.data_usage,
+                title: 'Request allowance',
+                onTap: () => context.push('/settings/request-allowance'),
+              ),
 
             const SizedBox(height: 16),
 
@@ -207,7 +249,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               const _SettingsTile(
                 icon: Icons.info_outline,
                 title: 'No instances configured',
-                subtitle: 'Add a Radarr or Sonarr instance to get started',
+                subtitle: 'Connect a service to enable requests and library tools',
               ),
             ...instances.map((inst) => _SettingsTile(
                   icon: _serviceIcon(inst.serviceType),
@@ -273,6 +315,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onTap: () => context.push('/settings/users'),
               ),
               _SettingsTile(
+                  icon: Icons.play_arrow,
+                  title: 'Plex sign-in',
+                  subtitle:
+                      'Sign-in, automatic signup and existing account review',
+                  onTap: () => context.push('/settings/plex-auth')),
+              _SettingsTile(
+                icon: Icons.login,
+                title: 'Single sign-on',
+                subtitle: 'Identity provider, account creation and sign-in policy',
+                onTap: () => context.push('/settings/oidc'),
+              ),
+              _SettingsTile(
                 icon: Icons.public,
                 title: 'External Address',
                 subtitle: (externalAddress?.isNotEmpty ?? false)
@@ -282,11 +336,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     _showExternalAddressDialog(context, externalAddress ?? ''),
               ),
               _SettingsTile(
+                icon: Icons.vpn_lock_outlined,
+                title: 'Outbound Proxy',
+                subtitle: (outboundProxy?.url.isNotEmpty ?? false)
+                    ? outboundProxy!.url
+                    : 'Route internet traffic through a proxy',
+                onTap: () => _showOutboundProxyDialog(
+                  context,
+                  outboundProxy ?? OutboundProxySettings.empty,
+                ),
+              ),
+              _SettingsTile(
                 icon: Icons.devices,
                 title: 'Connected Devices',
                 subtitle: 'Manage all connected devices',
                 onTap: () => context.push('/settings/devices'),
               ),
+              if (connection?.appleTvRemote == true)
+                _SettingsTile(
+                  icon: Icons.tv,
+                  title: 'Apple TVs',
+                  subtitle: 'Pair TVs and choose who can open titles in Infuse',
+                  onTap: () => context.push('/settings/apple-tvs'),
+                ),
               _SettingsTile(
                 icon: Icons.key_outlined,
                 title: 'Providers & Credentials',
@@ -336,6 +408,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ],
 
+            const SizedBox(height: 16),
+
+            // Notifications
+            SettingsHighlight(
+              anchorId: SettingsAnchors.rootNotifications,
+              highlightId: _activeHighlight,
+              child: const _SectionHeader(title: 'Notifications'),
+            ),
+            _SettingsTile(
+              icon: Icons.notifications_outlined,
+              title: 'Push Notifications',
+              subtitle: 'Choose which push notifications you receive',
+              onTap: () => context.push('/settings/push-notifications'),
+            ),
+            if (user?.isAdmin == true)
+              _SettingsTile(
+                icon: Icons.notifications_active_outlined,
+                title: 'Discord Notifications',
+                subtitle: 'Send new media requests to a Discord channel',
+                onTap: () => context.push('/settings/discord-notifications'),
+              ),
+
             if (user?.isAdmin == true) ...[
               const SizedBox(height: 16),
               const _SectionHeader(title: 'Needs attention menu'),
@@ -372,36 +466,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
               ),
             ],
-
-            const SizedBox(height: 16),
-
-            // Notifications
-            const _SectionHeader(title: 'Notifications'),
-            _SettingsTile(
-              icon: Icons.notifications_outlined,
-              title: 'Notification Preferences',
-              subtitle: 'Choose which push notifications you receive',
-              onTap: () => context.push('/settings/notifications'),
-            ),
-            SettingsHighlight(
-              anchorId: SettingsAnchors.rootRequestUpdates,
-              highlightId: _activeHighlight,
-              child: SwitchListTile(
-                value: ref.watch(requestNotificationsEnabledProvider),
-                onChanged: (v) =>
-                    ref.read(requestNotificationsEnabledProvider.notifier).set(v),
-                secondary: const Icon(Icons.notifications_active_outlined,
-                    color: AppTheme.textSecondary),
-                title: const Text('Request updates',
-                    style: TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontWeight: FontWeight.w500)),
-                subtitle: const Text(
-                    'Show an in-app banner when a request is approved or denied',
-                    style:
-                        TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-              ),
-            ),
 
             const SizedBox(height: 16),
 
@@ -556,6 +620,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ref.read(externalAddressProvider) ?? '',
         );
         return;
+      case 'root.outbound-proxy':
+        _showOutboundProxyDialog(
+          context,
+          ref.read(outboundProxyProvider) ?? OutboundProxySettings.empty,
+        );
+        return;
       case 'root.update-portal':
         _showManagementUrlDialog(
           context,
@@ -627,70 +697,85 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     showDialog(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('External Address'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'The address other people use to reach this server, like a '
-                'reverse proxy domain or a public IP. Invite links and '
-                'passkey links are built from it. Leave blank to build links '
-                'from the address your own app connects with, which usually '
-                'only works on your network.',
-                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                decoration: const InputDecoration(
-                  labelText: 'External address',
-                  hintText: 'https://cantinarr.example.com',
-                  prefixIcon: Icon(Icons.public),
+        builder: (context, setDialogState) => UnsavedChangesGuard(
+          isDialog: true,
+          hasChanges: () => controller.text != current,
+          isSaving: saving,
+          child: AlertDialog(
+            title: const Text('External Address'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'The address other people use to reach this server, like a '
+                  'reverse proxy domain or a public IP. Invite links and '
+                  'passkey links are built from it. Leave blank to build links '
+                  'from the address your own app connects with, which usually '
+                  'only works on your network.',
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                 ),
-                keyboardType: TextInputType.url,
-                autocorrect: false,
-                textInputAction: TextInputAction.done,
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  decoration: const InputDecoration(
+                    labelText: 'External address',
+                    hintText: 'https://cantinarr.example.com',
+                    prefixIcon: Icon(Icons.public),
+                  ),
+                  keyboardType: TextInputType.url,
+                  autocorrect: false,
+                  textInputAction: TextInputAction.done,
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).maybePop(),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: saving
+                    ? null
+                    : () async {
+                        setDialogState(() => saving = true);
+                        try {
+                          await ref
+                              .read(externalAddressProvider.notifier)
+                              .set(controller.text.trim());
+                          if (dialogContext.mounted) {
+                            Navigator.of(dialogContext).pop();
+                          }
+                        } catch (e) {
+                          setDialogState(() => saving = false);
+                          if (dialogContext.mounted) {
+                            ScaffoldMessenger.of(dialogContext).showSnackBar(
+                              SnackBar(content: Text('Failed to save: $e')),
+                            );
+                          }
+                        }
+                      },
+                child: saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Save'),
               ),
             ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: saving
-                  ? null
-                  : () async {
-                      setDialogState(() => saving = true);
-                      try {
-                        await ref
-                            .read(externalAddressProvider.notifier)
-                            .set(controller.text.trim());
-                        if (dialogContext.mounted) {
-                          Navigator.of(dialogContext).pop();
-                        }
-                      } catch (e) {
-                        setDialogState(() => saving = false);
-                        if (dialogContext.mounted) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            SnackBar(content: Text('Failed to save: $e')),
-                          );
-                        }
-                      }
-                    },
-              child: saving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Save'),
-            ),
-          ],
         ),
       ),
+    );
+  }
+
+  void _showOutboundProxyDialog(
+    BuildContext context,
+    OutboundProxySettings current,
+  ) {
+    showDialog(
+      context: context,
+      builder: (_) => _OutboundProxyDialog(current: current),
     );
   }
 
@@ -701,72 +786,287 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     showDialog(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Update Portal'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Optional. When set, an in-app prompt to update the server '
-                'links here so you can apply the update in your own container '
-                'manager (e.g. an Unraid Docker page or Portainer). The link '
-                'opens on your '
-                'devices, so use an address they can reach — a cluster-internal '
-                'name only the server resolves won\'t work from a phone. Leave '
-                'blank to clear.',
-                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                decoration: const InputDecoration(
-                  labelText: 'Portal URL',
-                  hintText: 'http://tower.local/Docker',
-                  prefixIcon: Icon(Icons.open_in_new),
+        builder: (context, setDialogState) => UnsavedChangesGuard(
+          isDialog: true,
+          hasChanges: () => controller.text != current,
+          isSaving: saving,
+          child: AlertDialog(
+            title: const Text('Update Portal'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Optional. When set, an in-app prompt to update the server '
+                  'links here so you can apply the update in your own container '
+                  'manager (e.g. an Unraid Docker page or Portainer). The link '
+                  'opens on your '
+                  'devices, so use an address they can reach — a cluster-internal '
+                  'name only the server resolves won\'t work from a phone. Leave '
+                  'blank to clear.',
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                 ),
-                keyboardType: TextInputType.url,
-                autocorrect: false,
-                textInputAction: TextInputAction.done,
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  decoration: const InputDecoration(
+                    labelText: 'Portal URL',
+                    hintText: 'http://tower.local/Docker',
+                    prefixIcon: Icon(Icons.open_in_new),
+                  ),
+                  keyboardType: TextInputType.url,
+                  autocorrect: false,
+                  textInputAction: TextInputAction.done,
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).maybePop(),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: saving
+                    ? null
+                    : () async {
+                        setDialogState(() => saving = true);
+                        try {
+                          await ref
+                              .read(updateStatusProvider.notifier)
+                              .setManagementUrl(controller.text.trim());
+                          if (dialogContext.mounted) {
+                            Navigator.of(dialogContext).pop();
+                          }
+                        } catch (e) {
+                          setDialogState(() => saving = false);
+                          if (dialogContext.mounted) {
+                            ScaffoldMessenger.of(dialogContext).showSnackBar(
+                              SnackBar(content: Text('Failed to save: $e')),
+                            );
+                          }
+                        }
+                      },
+                child: saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Save'),
               ),
             ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel'),
+        ),
+      ),
+    );
+  }
+}
+
+/// The Outbound Proxy editor. A widget of its own rather than the sibling
+/// dialogs' StatefulBuilder so its three controllers are disposed with the
+/// dialog, after the close transition, and so a test result has state to
+/// live in.
+class _OutboundProxyDialog extends ConsumerStatefulWidget {
+  final OutboundProxySettings current;
+
+  const _OutboundProxyDialog({required this.current});
+
+  @override
+  ConsumerState<_OutboundProxyDialog> createState() =>
+      _OutboundProxyDialogState();
+}
+
+class _OutboundProxyDialogState extends ConsumerState<_OutboundProxyDialog> {
+  late final _addressController =
+      TextEditingController(text: widget.current.url);
+  late final _usernameController =
+      TextEditingController(text: widget.current.username);
+
+  /// Always starts empty: the server never returns the stored password.
+  final _passwordController = TextEditingController();
+  bool _saving = false;
+  bool _testing = false;
+
+  /// The last test's verdict line; null until a test ran, and null again the
+  /// moment any field changes, so a stale pass is never mistaken for a fresh
+  /// one.
+  String? _testResult;
+  bool _testSucceeded = false;
+
+  @override
+  void dispose() {
+    _addressController.dispose();
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  String get _url => _addressController.text.trim();
+  String get _username => _usernameController.text.trim();
+
+  /// On the fields' onChanged rather than the controllers: a controller also
+  /// notifies for focus and selection moves, which must not retire a result.
+  void _onEdited(String _) => setState(() => _testResult = null);
+
+  Future<void> _test() async {
+    setState(() {
+      _testing = true;
+      _testResult = null;
+    });
+    try {
+      await ref.read(outboundProxyServiceProvider).test(
+            url: _url,
+            username: _username,
+            password: _passwordController.text,
+          );
+      if (!mounted) return;
+      setState(() {
+        _testing = false;
+        _testSucceeded = true;
+        _testResult = 'Proxy works: TMDB reached through it.';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _testing = false;
+        _testSucceeded = false;
+        _testResult = apiErrorMessage(e);
+      });
+    }
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      await ref.read(outboundProxyProvider.notifier).set(
+            url: _url,
+            username: _username,
+            password: _passwordController.text,
+          );
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to save: ${apiErrorMessage(e)}')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = _saving || _testing;
+    return UnsavedChangesGuard(
+      isDialog: true,
+      hasChanges: () =>
+          _addressController.text != widget.current.url ||
+          _usernameController.text != widget.current.username ||
+          _passwordController.text.isNotEmpty,
+      isSaving: _saving,
+      child: _buildDialog(context, busy),
+    );
+  }
+
+  Widget _buildDialog(BuildContext context, bool busy) {
+    return AlertDialog(
+      title: const Text('Outbound Proxy'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              "Optional. Send this server's internet traffic (TMDB, Trakt, "
+              'hosted AI providers, plex.tv, the update check, the push relay) '
+              'through a proxy, for example a VPN-tunnelled Privoxy on the '
+              'same host. Your arr instances, download clients, Jellyfin, '
+              'Emby, and a local AI endpoint always connect directly. Leave '
+              'the address blank to clear.',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
-            ElevatedButton(
-              onPressed: saving
-                  ? null
-                  : () async {
-                      setDialogState(() => saving = true);
-                      try {
-                        await ref
-                            .read(updateStatusProvider.notifier)
-                            .setManagementUrl(controller.text.trim());
-                        if (dialogContext.mounted) {
-                          Navigator.of(dialogContext).pop();
-                        }
-                      } catch (e) {
-                        setDialogState(() => saving = false);
-                        if (dialogContext.mounted) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            SnackBar(content: Text('Failed to save: $e')),
-                          );
-                        }
-                      }
-                    },
-              child: saving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Save'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _addressController,
+              decoration: const InputDecoration(
+                labelText: 'Proxy address',
+                hintText: 'http://proxy:8118',
+                prefixIcon: Icon(Icons.vpn_lock_outlined),
+              ),
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+              textInputAction: TextInputAction.next,
+              onChanged: _onEdited,
             ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _usernameController,
+              decoration: const InputDecoration(
+                labelText: 'Username (optional)',
+              ),
+              autocorrect: false,
+              textInputAction: TextInputAction.next,
+              onChanged: _onEdited,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _passwordController,
+              decoration: InputDecoration(
+                labelText: 'Password',
+                helperText: widget.current.hasPassword
+                    ? 'Leave blank to keep the saved password'
+                    : null,
+              ),
+              obscureText: true,
+              autocorrect: false,
+              enableSuggestions: false,
+              textInputAction: TextInputAction.done,
+              onChanged: _onEdited,
+            ),
+            if (_testing || _testResult != null) ...[
+              const SizedBox(height: 12),
+              if (_testing)
+                const Center(
+                  child: SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: AppTheme.accent),
+                  ),
+                )
+              else
+                Text(
+                  _testResult!,
+                  style: TextStyle(
+                    color:
+                        _testSucceeded ? AppTheme.available : AppTheme.error,
+                    fontSize: 13,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+            ],
           ],
         ),
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).maybePop(),
+          child: const Text('Cancel'),
+        ),
+        // Nothing to test without an address; the server would only say so.
+        TextButton(
+          onPressed: busy || _url.isEmpty ? null : _test,
+          child: const Text('Test'),
+        ),
+        ElevatedButton(
+          onPressed: busy ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Save'),
+        ),
+      ],
     );
   }
 }
@@ -785,10 +1085,14 @@ IconData _serviceIcon(String serviceType) {
     case 'qbittorrent':
     case 'nzbget':
     case 'transmission':
+    case 'deluge':
+    case 'rutorrent':
       return Icons.download_outlined;
     case 'tautulli':
     case 'tracearr':
       return Icons.monitor_heart_outlined;
+    case 'audiobookshelf':
+      return Icons.headphones_outlined;
     case 'jellyfin':
     case 'emby':
       return Icons.live_tv_outlined;
@@ -815,10 +1119,16 @@ String _serviceLabel(String serviceType) {
       return 'NZBGet';
     case 'transmission':
       return 'Transmission';
+    case 'deluge':
+      return 'Deluge';
+    case 'rutorrent':
+      return 'ruTorrent';
     case 'tautulli':
       return 'Tautulli';
     case 'tracearr':
       return 'Tracearr';
+    case 'audiobookshelf':
+      return 'Audiobookshelf';
     case 'jellyfin':
       return 'Jellyfin';
     case 'emby':
@@ -912,12 +1222,7 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-/// The Setup Checklist tile. The count carries the state, because this tile is
-/// the only trace of the checklist once an admin mutes the drawer reminder:
-/// amber while anything is unconfigured, red when the server is missing
-/// something it cannot work without, green once everything is done. Colouring
-/// the number in place rather than hanging another badge off the row keeps a
-/// screen of near-identical tiles readable.
+/// The checklist remains available here after its menu reminder is cleared.
 Widget _setupChecklistTile(BuildContext context, SetupStatus? status) {
   void open() => context.push('/setup');
   if (status == null) {
@@ -929,11 +1234,19 @@ Widget _setupChecklistTile(BuildContext context, SetupStatus? status) {
     );
   }
   final tail = ' of ${status.effectiveTotal} features configured';
-  final countColor = status.missingCoreCapability
-      ? AppTheme.danger
-      : status.remaining > 0
-          ? AppTheme.warning
-          : AppTheme.available;
+  if (status.isComplete) {
+    return _SettingsTile(
+      icon: Icons.checklist_outlined,
+      title: 'Setup Checklist',
+      subtitle: status.summary,
+      subtitleSpans: [
+        TextSpan(
+            text: status.summary,
+            style: const TextStyle(color: AppTheme.available)),
+      ],
+      onTap: open,
+    );
+  }
   return _SettingsTile(
     icon: Icons.checklist_outlined,
     title: 'Setup Checklist',
@@ -941,7 +1254,8 @@ Widget _setupChecklistTile(BuildContext context, SetupStatus? status) {
     subtitleSpans: [
       TextSpan(
         text: '${status.configured}',
-        style: TextStyle(color: countColor, fontWeight: FontWeight.w700),
+        style: const TextStyle(
+            color: AppTheme.accent, fontWeight: FontWeight.w700),
       ),
       TextSpan(text: tail),
     ],
@@ -952,7 +1266,7 @@ Widget _setupChecklistTile(BuildContext context, SetupStatus? status) {
 class _SettingsTile extends StatelessWidget {
   final IconData icon;
   final String title;
-  final String subtitle;
+  final String? subtitle;
 
   /// Rendered instead of [subtitle] when the copy needs more than one colour.
   /// [subtitle] stays the plain-text equivalent of the same sentence.
@@ -963,7 +1277,7 @@ class _SettingsTile extends StatelessWidget {
   const _SettingsTile({
     required this.icon,
     required this.title,
-    required this.subtitle,
+    this.subtitle,
     this.subtitleSpans,
     this.onTap,
     this.trailing,
@@ -998,9 +1312,11 @@ class _SettingsTile extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
-          subtitle: subtitleSpans == null
+          subtitle: subtitle == null && subtitleSpans == null
+              ? null
+              : subtitleSpans == null
               ? Text(
-                  subtitle,
+                  subtitle!,
                   style: const TextStyle(
                     color: AppTheme.textSecondary,
                     fontSize: 13,

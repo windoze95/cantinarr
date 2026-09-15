@@ -36,6 +36,20 @@ func (f *fakeCreator) CreateConnectToken(_ int64, name, serverURL string) (*auth
 	return &auth.CreateConnectTokenResponse{Link: serverURL + "/connect?token=" + name, OriginSource: "external_address"}, nil
 }
 
+func (f *fakeCreator) CreateImportUser(admin int64, name, serverURL string) (int64, *auth.CreateConnectTokenResponse, error) {
+	// Production enforces this inside the transaction; this fake is sequential.
+	var id int64
+	if f.e.db.QueryRow("SELECT id FROM users WHERE username=?", name).Scan(&id) == nil {
+		return 0, nil, auth.ErrUserExists
+	}
+	response, err := f.CreateConnectToken(admin, name, serverURL)
+	if err != nil {
+		return 0, nil, err
+	}
+	err = f.e.db.QueryRow("SELECT id FROM users WHERE username=?", name).Scan(&id)
+	return id, response, err
+}
+
 func TestImportAccountsCreatesGrantsAndLinks(t *testing.T) {
 	e := newEnv(t)
 	creator := &fakeCreator{e: e, fail: map[string]bool{"failing": true}}

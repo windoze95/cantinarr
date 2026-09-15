@@ -256,8 +256,8 @@ func TestRequestInviteSendsInviteAndRecordsPendingRow(t *testing.T) {
 	if e.email(alice) != "alice@example.com" {
 		t.Fatalf("remembered email = %q, want canonical", e.email(alice))
 	}
-	if pushes.userEvents(alice, eventInviteSent) != 1 {
-		t.Fatalf("invite push count = %d, want 1", pushes.userEvents(alice, eventInviteSent))
+	if pushes.userEvents(alice, eventMediaServerAccess) != 1 {
+		t.Fatalf("invite push count = %d, want 1", pushes.userEvents(alice, eventMediaServerAccess))
 	}
 
 	servers, err := e.svc.ListForUser(context.Background(), alice)
@@ -328,7 +328,7 @@ func TestRequestInviteAdoptsAShareMadeByHand(t *testing.T) {
 	if row := e.row(alice, plex); row == nil || row.CreatedByCantinarr {
 		t.Fatalf("row = %+v, want a linked (not created) row", row)
 	}
-	if pushes.userEvents(alice, eventInviteSent) != 0 {
+	if pushes.userEvents(alice, eventMediaServerAccess) != 0 {
 		t.Fatal("adopting a share pushed 'check your email'")
 	}
 }
@@ -461,8 +461,8 @@ func TestReconcileRemovesShareOnRevokeAndReinvitesOnRegrant(t *testing.T) {
 	if !reflect.DeepEqual(fake.lastLibraryIDs, []string{"11"}) {
 		t.Fatalf("re-invite libraries = %v", fake.lastLibraryIDs)
 	}
-	if pushes.userEvents(alice, eventInviteSent) != 2 {
-		t.Fatalf("invite pushes = %d, want 2 (first invite + re-invite)", pushes.userEvents(alice, eventInviteSent))
+	if pushes.userEvents(alice, eventMediaServerAccess) != 2 {
+		t.Fatalf("invite pushes = %d, want 2 (first invite + re-invite)", pushes.userEvents(alice, eventMediaServerAccess))
 	}
 }
 
@@ -635,7 +635,8 @@ func TestSharedLibrariesChangeRescopesInviteSharesAndUserDeleteRemovesThem(t *te
 		t.Fatalf("library writes = %+v", fake.libraryWrites)
 	}
 
-	commit := e.svc.BeforeUserDelete(alice)
+	commit, release := e.svc.BeforeUserDelete(alice)
+	defer release()
 	if _, err := e.db.Exec("DELETE FROM users WHERE id = ?", alice); err != nil {
 		t.Fatal(err)
 	}
@@ -659,8 +660,8 @@ func TestNoCheckYourEmailPushWhenPlexAcceptsAtOnce(t *testing.T) {
 	if err != nil || created.Pending {
 		t.Fatalf("created = %+v, %v", created, err)
 	}
-	if pushes.userEvents(alice, eventInviteSent) != 0 {
-		t.Fatal("an accepted-at-once share pushed 'check your email'")
+	if pushes.userEvents(alice, eventMediaServerAccess) != 1 || pushes.user[0].data["access_state"] != "ready" {
+		t.Fatal("an accepted-at-once share must announce ready access without an invitation")
 	}
 
 	e.grant(alice)
@@ -670,7 +671,73 @@ func TestNoCheckYourEmailPushWhenPlexAcceptsAtOnce(t *testing.T) {
 	if !fake.has("alice@example.com") || e.row(alice, plex).DisabledAt.Valid {
 		t.Fatal("re-grant did not re-share")
 	}
-	if pushes.userEvents(alice, eventInviteSent) != 0 {
-		t.Fatal("a re-share plex.tv accepted at once pushed 'check your email'")
+	if pushes.userEvents(alice, eventMediaServerAccess) != 2 || pushes.user[1].data["access_state"] != "ready" {
+		t.Fatal("an accepted-at-once re-share must announce ready access without an invitation")
 	}
+}
+
+func TestAdminPlexInvitationStateIsLiveAndReadOnly(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	user := e.user("alice")
+	first := e.mediaServer("plex", "First", instance.MediaServerConfig{})
+	second := e.mediaServer("plex", "Second", instance.MediaServerConfig{})
+	p, q := newFakeInviteProvider(), newFakeInviteProvider()
+	e.providers[first], e.providers[second] = p, q
+	e.grantType(user, "plex", first, second)
+	for _, id := range []string{first, second} {
+		if _, err := e.svc.RequestInvite(ctx, user, id, "alice@example.com"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(id string) Account {
+		t.Helper()
+		rows, err := e.svc.ListAccounts(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range rows {
+			if row.InstanceID == id {
+				return row
+			}
+		}
+		t.Fatal("missing linked account")
+		return Account{}
+	}
+	if row := check(first); !row.Verified || !row.Pending {
+		t.Fatalf("pending = %+v", row)
+	}
+	p.accept("alice@example.com")
+	p.mu.Lock()
+	p.shares["alice@example.com"].Name = "fresh-name"
+	p.mu.Unlock()
+	if row := check(first); !row.Verified || row.Pending || row.Username != "fresh-name" {
+		t.Fatalf("accepted = %+v", row)
+	}
+	if row := check(second); !row.Verified || !row.Pending {
+		t.Fatalf("other server = %+v", row)
+	}
+	if e.row(user, first).RemoteUsername == "fresh-name" {
+		t.Fatal("read rewrote stored link")
+	}
+	e.providers[first] = unavailableInviteDirectory{p}
+	if row := check(first); row.Verified {
+		t.Fatalf("unavailable = %+v", row)
+	}
+	e.providers[first] = p
+	p.mu.Lock()
+	delete(p.shares, "alice@example.com")
+	p.mu.Unlock()
+	if row := check(first); row.Verified {
+		t.Fatalf("revoked = %+v", row)
+	}
+	if p.invites != 1 || q.invites != 1 || p.removals != 0 || q.removals != 0 {
+		t.Fatal("read changed shares")
+	}
+}
+
+type unavailableInviteDirectory struct{ *fakeInviteProvider }
+
+func (p unavailableInviteDirectory) Users(context.Context) ([]mediaserver.RemoteUser, error) {
+	return nil, errors.New("directory unavailable")
 }

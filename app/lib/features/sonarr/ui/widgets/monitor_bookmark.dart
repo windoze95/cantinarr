@@ -24,26 +24,28 @@ enum MonitorFill {
 /// whole one or to an empty one.
 class MonitorBookmark extends StatelessWidget {
   final MonitorFill fill;
+  final bool enabled;
 
-  const MonitorBookmark(this.fill, {super.key});
+  const MonitorBookmark(this.fill, {super.key, this.enabled = true});
 
   @override
   Widget build(BuildContext context) {
+    final color = enabled ? AppTheme.accent : AppTheme.textSecondary;
     switch (fill) {
       case MonitorFill.none:
         return const Icon(Icons.bookmark_border, color: AppTheme.textSecondary);
       case MonitorFill.full:
-        return const Icon(Icons.bookmark, color: AppTheme.accent);
+        return Icon(Icons.bookmark, color: color);
       case MonitorFill.partial:
         // The filled and outlined bookmarks are the same glyph, so clipping
         // one over the other fills the outline exactly.
-        return const Stack(
+        return Stack(
           alignment: Alignment.center,
           children: [
-            Icon(Icons.bookmark_border, color: AppTheme.accent),
+            Icon(Icons.bookmark_border, color: color),
             ClipRect(
-              clipper: _BottomHalf(),
-              child: Icon(Icons.bookmark, color: AppTheme.accent),
+              clipper: const _BottomHalf(),
+              child: Icon(Icons.bookmark, color: color),
             ),
           ],
         );

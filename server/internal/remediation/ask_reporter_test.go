@@ -79,7 +79,8 @@ func askCycleRunner(t *testing.T, withReporter bool) (*Runner, *Service, *fakeEx
 
 // TestAskReporterParksAwaitingUserNoMutation is acceptance: ask_reporter parks
 // the issue awaiting_user (the run waiting_user) and performs NO mutation. The
-// agent's question lands on the thread and the reporter is pinged.
+// agent's question lands on the thread, admins receive its alert, and the
+// reporter's open client refreshes without a push.
 func TestAskReporterParksAwaitingUserNoMutation(t *testing.T) {
 	r, svc, fx, issueID, reporterID := askCycleRunner(t, true)
 
@@ -126,11 +127,15 @@ func TestAskReporterParksAwaitingUserNoMutation(t *testing.T) {
 	if !askedOnThread {
 		t.Fatalf("expected the agent's question on the thread, got %+v", thread)
 	}
-	// The reporter was pinged (NotifyUser fired).
-	if notif, ok := svc.notifier.(*fakeNotifier); ok {
-		if len(notif.userEvents) == 0 {
-			t.Fatalf("expected a NotifyUser ping to the reporter %d, got none", reporterID)
-		}
+	notif := svc.notifier.(*fakeNotifier)
+	if countEvents(notif.userEvents, "issue_updated") == 0 {
+		t.Fatalf("expected a refresh for reporter %d", reporterID)
+	}
+	if countEvents(notif.userEvents, "issue_question") != 0 {
+		t.Fatal("question pushed to the reporter")
+	}
+	if countEvents(notif.adminEvents, "issue_question") != 1 {
+		t.Fatal("question must notify admins once")
 	}
 
 	// The parked transcript carries the ask_reporter tool_use + a placeholder

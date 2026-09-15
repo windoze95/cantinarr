@@ -12,6 +12,10 @@ import '../../notifications/push_service.dart';
 import '../data/auth_service.dart';
 import '../data/passkey_service.dart';
 import '../data/server_status.dart';
+import '../data/server_url.dart';
+import 'saved_servers_provider.dart';
+import '../data/oidc_service.dart';
+import '../data/plex_auth_service.dart';
 
 /// The authentication state exposed to the rest of the app.
 class AuthState {
@@ -57,6 +61,8 @@ class AuthState {
         isReconnecting: isReconnecting ?? this.isReconnecting,
       );
 }
+
+enum ServerSwitchResult { switched, ssoPending, rejected }
 
 /// Manages authentication lifecycle: login, connect token, token refresh.
 class AuthNotifier extends AsyncNotifier<AuthState> {
@@ -115,6 +121,15 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     }
     _restoreBlocked = false;
     _stopRestoreRetry();
+
+    // Migrate while the old session address is still readable, including when
+    // its refresh token will be rejected below. Never mistake a locked store
+    // for an empty installation or re-add an explicitly forgotten shortcut.
+    await _migrateSavedServer(
+      serverUrl != null && accessToken != null && refreshToken != null
+          ? serverUrl
+          : null,
+    );
 
     if (serverUrl == null || accessToken == null || refreshToken == null) {
       return const AuthState();
@@ -209,6 +224,14 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         allowReporting: meta['allow_reporting'] as bool? ?? false,
         plexAccessRequestable:
             meta['plex_access_requestable'] as bool? ?? false,
+        adminCatalogBrowsing: meta['admin_catalog_browsing'] as bool? ?? false,
+        mediaAccountManagement:
+            meta['media_account_management'] as bool? ?? false,
+        appleTvRemote: meta['apple_tv_remote'] as bool? ?? false,
+        tvMatchCorrections: meta['tv_match_corrections'] as bool? ?? false,
+        requestQuotas: meta['request_quotas'] as bool? ?? false,
+        hiddenDiscoverTabs:
+            (meta['hidden_discover_tabs'] as List?)?.cast<String>(),
       );
       return AuthState(
           connection: connection, user: user, isReconnecting: true);
@@ -284,6 +307,13 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
           issuesEnabled: config.issuesEnabled,
           allowReporting: config.allowReporting,
           plexAccessRequestable: config.plexAccessRequestable,
+          adminCatalogBrowsing: config.adminCatalogBrowsing,
+          mediaAccountManagement: config.mediaAccountManagement,
+          appleTvRemote: config.appleTvRemote,
+          tvMatchCorrections: config.tvMatchCorrections,
+        requestQuotas: config.requestQuotas,
+          hiddenDiscoverTabs: config.hiddenDiscoverTabs,
+          configConfirmed: true,
         );
         await _persistSession(connection, authResp.user);
       } catch (e) {
@@ -364,7 +394,14 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
         allowReporting: config.allowReporting,
-          plexAccessRequestable: config.plexAccessRequestable,
+        plexAccessRequestable: config.plexAccessRequestable,
+        adminCatalogBrowsing: config.adminCatalogBrowsing,
+        mediaAccountManagement: config.mediaAccountManagement,
+        appleTvRemote: config.appleTvRemote,
+        tvMatchCorrections: config.tvMatchCorrections,
+        requestQuotas: config.requestQuotas,
+        hiddenDiscoverTabs: config.hiddenDiscoverTabs,
+        configConfirmed: true,
       );
       await _persistSession(connection, authResp.user);
       _registerForPush();
@@ -437,7 +474,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     final schemeProbe = serverUrl.trim().toLowerCase();
     final hasScheme = schemeProbe.startsWith('http://') ||
         schemeProbe.startsWith('https://');
-    final normalizedUrl = _normalizeUrl(serverUrl);
+    final normalizedUrl = normalizeServerUrl(serverUrl);
     try {
       final status = await _authService.getServerStatus(normalizedUrl);
       return (serverUrl: normalizedUrl, status: status);
@@ -476,7 +513,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     state = const AsyncData(AuthState(isLoading: true));
 
     try {
-      final normalizedUrl = _normalizeUrl(serverUrl);
+      final normalizedUrl = normalizeServerUrl(serverUrl);
       final identity = await ref.read(deviceIdentityProvider).resolve();
       final authResp = await _authService.setup(normalizedUrl, username,
           password, identity.displayName, identity.hardwareId);
@@ -501,7 +538,14 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
         allowReporting: config.allowReporting,
-          plexAccessRequestable: config.plexAccessRequestable,
+        plexAccessRequestable: config.plexAccessRequestable,
+        adminCatalogBrowsing: config.adminCatalogBrowsing,
+        mediaAccountManagement: config.mediaAccountManagement,
+        appleTvRemote: config.appleTvRemote,
+        tvMatchCorrections: config.tvMatchCorrections,
+        requestQuotas: config.requestQuotas,
+        hiddenDiscoverTabs: config.hiddenDiscoverTabs,
+        configConfirmed: true,
       );
 
       await _persistSession(connection, authResp.user);
@@ -510,6 +554,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         user: authResp.user,
         pendingPasskeyOffer: await _shouldOfferPasskey(normalizedUrl),
       ));
+      await _rememberServer(connection);
       _registerForPush();
     } catch (e) {
       state = AsyncData(AuthState(error: _parseSetupError(e)));
@@ -524,12 +569,142 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     }
   }
 
+  Future<void> startSSO(String server,
+      {String purpose = 'login',
+      String? invitation,
+      String? externalOrigin}) async {
+    final current = state.valueOrNull ?? const AuthState();
+    try {
+      final normalized = normalizeServerUrl(server);
+      if (purpose != 'login' &&
+          (current.connection == null ||
+              normalizeServerUrl(current.connection!.serverUrl) != normalized)) {
+        throw StateError('Sign in to this server before linking or testing single sign-on.');
+      }
+      final identity = await ref.read(deviceIdentityProvider).resolve();
+      await ref.read(oidcServiceProvider).start(normalized,
+          purpose: purpose,
+          invitation: invitation,
+          externalOrigin: externalOrigin,
+          accessToken: purpose == 'login' ? null : current.connection?.accessToken,
+          deviceName: identity.displayName,
+          hardwareId: identity.hardwareId);
+      state = AsyncData(current.copyWith(isLoading: false, clearError: true));
+    } catch (e) {
+      state = AsyncData(
+          current.copyWith(isLoading: false, error: _parseOIDCError(e)));
+      rethrow;
+    }
+  }
+
+  bool _finishingSSO = false;
+  Future<String> finishSSO(Uri uri) async {
+    if (_finishingSSO) return '';
+    _finishingSSO = true;
+    final current = state.valueOrNull ?? const AuthState();
+    try {
+      final result = await ref.read(oidcServiceProvider).finish(uri);
+      await _completeExternalSignIn(result, current);
+      return result.purpose;
+    } catch (e) {
+      state = AsyncData((state.valueOrNull ?? current)
+          .copyWith(isLoading: false, error: _parseOIDCError(e)));
+      rethrow;
+    } finally {
+      _finishingSSO = false;
+    }
+  }
+
+  Future<void> _completeExternalSignIn(OIDCResult result, AuthState current,
+      {bool Function()? beforeAdopt}) async {
+    if (result.purpose == 'login') {
+      final response = AuthResponse.fromJson(result.data);
+      final config =
+          await _authService.fetchConfig(result.server, response.accessToken);
+      if (beforeAdopt != null && !beforeAdopt()) {
+        throw StateError('Plex sign-in cancelled.');
+      }
+      await _endPreviousSession(current.connection, revoke: false);
+      // Keep the previous credentials usable until the replacement is stored.
+      // A partial secure-storage write must not strand the existing connection.
+      const keys = [
+        StorageKeys.serverUrl,
+        StorageKeys.jwt,
+        StorageKeys.refreshToken,
+        StorageKeys.refreshTokenBackup,
+        StorageKeys.deviceId,
+        StorageKeys.sessionUser,
+        StorageKeys.sessionConnection,
+      ];
+      final previous = <String, String?>{};
+      for (final key in keys) {
+        previous[key] = await _storage.read(key: key);
+      }
+      try {
+        await _adoptSession(result.server, response, config);
+      } catch (_) {
+        for (final entry in previous.entries) {
+          try {
+            if (entry.value == null) {
+              await _storage.delete(key: entry.key);
+            } else {
+              await _storage.write(key: entry.key, value: entry.value!);
+            }
+          } catch (_) {}
+        }
+        rethrow;
+      }
+      await _revokePreviousSession(current.connection);
+    } else if (result.purpose == 'link') {
+      await refreshUser();
+    }
+  }
+
+  Future<PlexPending> startPlex(String server,
+      {String purpose = 'login'}) async {
+    final normalized = normalizeServerUrl(server);
+    final current = state.valueOrNull ?? const AuthState();
+    if (purpose == 'link' &&
+        (current.connection == null ||
+            normalizeServerUrl(current.connection!.serverUrl) != normalized)) {
+      throw StateError('Sign in to this server before linking Plex.');
+    }
+    final service = ref.read(plexAuthServiceProvider);
+    final generation = service.epoch;
+    final identity = await ref.read(deviceIdentityProvider).resolve();
+    if (generation != service.epoch) throw StateError('Plex sign-in cancelled.');
+    final pending = await service.start(normalized,
+        purpose: purpose,
+        accessToken: current.connection?.accessToken,
+        deviceName: identity.displayName,
+        hardwareId: identity.hardwareId);
+    ref.invalidate(plexPendingProvider);
+    return pending;
+  }
+
+  Future<String?> checkPlex() async {
+    final current = state.valueOrNull ?? const AuthState();
+    final service = ref.read(plexAuthServiceProvider);
+    final generation = service.epoch;
+    final result = await service.check();
+    if (result == null) return null;
+    try {
+      await _completeExternalSignIn(result, current,
+          beforeAdopt: () => service.claimCompletion(generation));
+      await service.completed();
+      ref.invalidate(plexPendingProvider);
+      return result.purpose;
+    } finally {
+      service.releaseCompletion();
+    }
+  }
+
   /// Log in with server URL, username, and password (admin bootstrap).
   Future<void> login(String serverUrl, String username, String password) async {
     state = const AsyncData(AuthState(isLoading: true));
 
     try {
-      final normalizedUrl = _normalizeUrl(serverUrl);
+      final normalizedUrl = normalizeServerUrl(serverUrl);
       final identity = await ref.read(deviceIdentityProvider).resolve();
       final authResp = await _authService.login(normalizedUrl, username,
           password, identity.displayName, identity.hardwareId);
@@ -554,7 +729,14 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
         allowReporting: config.allowReporting,
-          plexAccessRequestable: config.plexAccessRequestable,
+        plexAccessRequestable: config.plexAccessRequestable,
+        adminCatalogBrowsing: config.adminCatalogBrowsing,
+        mediaAccountManagement: config.mediaAccountManagement,
+        appleTvRemote: config.appleTvRemote,
+        tvMatchCorrections: config.tvMatchCorrections,
+        requestQuotas: config.requestQuotas,
+        hiddenDiscoverTabs: config.hiddenDiscoverTabs,
+        configConfirmed: true,
       );
 
       final offerPasskey =
@@ -566,6 +748,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         user: authResp.user,
         pendingPasskeyOffer: offerPasskey,
       ));
+      await _rememberServer(connection);
       _registerForPush();
     } catch (e) {
       state = AsyncData(AuthState(error: _parseError(e)));
@@ -574,16 +757,24 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
 
   /// Connect using a connect token (from deep link or paste).
   Future<void> connectWithToken(String serverUrl, String token) async {
-    state = const AsyncData(AuthState(isLoading: true));
+    final previous = state.valueOrNull ?? const AuthState();
+    state = AsyncData(previous.copyWith(isLoading: true));
 
     try {
-      final normalizedUrl = _normalizeUrl(serverUrl);
+      final normalizedUrl = normalizeServerUrl(serverUrl);
       final identity = await ref.read(deviceIdentityProvider).resolve();
       final authResp = await _authService.redeemConnectToken(
           normalizedUrl, token, identity.displayName, identity.hardwareId);
       final config =
           await _authService.fetchConfig(normalizedUrl, authResp.accessToken);
       await _adoptSession(normalizedUrl, authResp, config);
+    } on SSORequired {
+      state = AsyncData(previous.copyWith(isLoading: false));
+      try {
+        await startSSO(serverUrl, invitation: token);
+      } catch (_) {
+        // startSSO records the error while preserving the previous session.
+      }
     } catch (e) {
       state = AsyncData(AuthState(error: _parseConnectError(e)));
     }
@@ -593,28 +784,43 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   /// the path for a link tapped while already signed in. The new server must
   /// accept the link BEFORE the current session is touched: a passwordless
   /// user may have no way back in, so an expired or superseded link has to
-  /// leave them exactly where they were. Returns false on rejection (the
-  /// current session is untouched); the old session's teardown mirrors
-  /// [logout] and is best-effort — an unreachable old server never blocks
-  /// the switch.
-  Future<bool> switchServer(String serverUrl, String token) async {
+  /// leave them exactly where they were. An SSO continuation leaves the
+  /// current session intact until the browser sign-in succeeds. The old
+  /// session's teardown mirrors [logout] and is best-effort — an unreachable
+  /// old server never blocks the switch.
+  Future<ServerSwitchResult> switchServer(String serverUrl, String token) async {
     final oldConn = state.valueOrNull?.connection;
 
     final String normalizedUrl;
     final AuthResponse authResp;
     final ServerConfig config;
     try {
-      normalizedUrl = _normalizeUrl(serverUrl);
+      normalizedUrl = normalizeServerUrl(serverUrl);
       final identity = await ref.read(deviceIdentityProvider).resolve();
       authResp = await _authService.redeemConnectToken(
           normalizedUrl, token, identity.displayName, identity.hardwareId);
       config =
           await _authService.fetchConfig(normalizedUrl, authResp.accessToken);
+    } on SSORequired {
+      try {
+        await startSSO(serverUrl, invitation: token);
+        return ServerSwitchResult.ssoPending;
+      } catch (_) {
+        return ServerSwitchResult.rejected;
+      }
     } catch (e) {
       debugPrint('Switch server: link rejected, keeping current session: $e');
-      return false;
+      return ServerSwitchResult.rejected;
     }
 
+    await _endPreviousSession(oldConn);
+
+    await _adoptSession(normalizedUrl, authResp, config);
+    return ServerSwitchResult.switched;
+  }
+
+  Future<void> _endPreviousSession(BackendConnection? oldConn,
+      {bool revoke = true}) async {
     // The new server accepted us. End the old session while its access token
     // and the stored device_id are still in place (same order as logout()).
     if (oldConn != null) {
@@ -626,17 +832,19 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       } catch (e) {
         debugPrint('Switch server: push unregister skipped: $e');
       }
-      try {
-        await _authService
-            .logout(oldConn.serverUrl, oldConn.accessToken)
-            .timeout(const Duration(seconds: 5));
-      } catch (e) {
-        debugPrint('Switch server: old-session revoke skipped: $e');
-      }
+      if (revoke) await _revokePreviousSession(oldConn);
     }
+  }
 
-    await _adoptSession(normalizedUrl, authResp, config);
-    return true;
+  Future<void> _revokePreviousSession(BackendConnection? oldConn) async {
+    if (oldConn == null) return;
+    try {
+      await _authService
+          .logout(oldConn.serverUrl, oldConn.accessToken)
+          .timeout(const Duration(seconds: 5));
+    } catch (e) {
+      debugPrint('Switch server: old-session revoke skipped: $e');
+    }
   }
 
   /// The single session-adoption path: persist the redeemed tokens and the
@@ -666,11 +874,19 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       instances: config.instances,
       issuesEnabled: config.issuesEnabled,
       allowReporting: config.allowReporting,
-          plexAccessRequestable: config.plexAccessRequestable,
+      plexAccessRequestable: config.plexAccessRequestable,
+      adminCatalogBrowsing: config.adminCatalogBrowsing,
+      mediaAccountManagement: config.mediaAccountManagement,
+      appleTvRemote: config.appleTvRemote,
+      tvMatchCorrections: config.tvMatchCorrections,
+        requestQuotas: config.requestQuotas,
+      hiddenDiscoverTabs: config.hiddenDiscoverTabs,
+      configConfirmed: true,
     );
 
     await _persistSession(connection, authResp.user);
     state = AsyncData(AuthState(connection: connection, user: authResp.user));
+    await _rememberServer(connection);
     _registerForPush();
   }
 
@@ -691,27 +907,73 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     await connectWithToken(server, token);
   }
 
-  /// Re-fetch /api/config and update the connection state (e.g. after
-  /// changing API credentials so service availability is reflected).
+  int _configRefreshDeferrals = 0;
+  bool _configRefreshPending = false;
+  Future<void>? _configRefreshInFlight;
+
+  /// Keep configuration events from reparsing a setup route while it is open.
+  void deferConfigRefresh() => _configRefreshDeferrals++;
+
+  Future<void> resumeConfigRefresh() async {
+    if (_configRefreshDeferrals > 0) _configRefreshDeferrals--;
+    if (_configRefreshDeferrals == 0) await refreshConfig();
+  }
+
+  /// Re-fetch config without replacing the router, tokens, or a newer session.
+  /// Coalesce concurrent events, then catch up if one arrived during the read.
   Future<void> refreshConfig() async {
-    final current = state.valueOrNull;
-    if (current?.connection == null) return;
-    final conn = current!.connection!;
-    final config =
-        await _authService.fetchConfig(conn.serverUrl, conn.accessToken);
-    final updatedConn = conn.copyWith(
-      serverName: config.serverName,
-      serverVersion: config.serverVersion,
-      minAppVersion: config.minAppVersion,
-      services: config.services,
-      instances: config.instances,
-      issuesEnabled: config.issuesEnabled,
-      allowReporting: config.allowReporting,
-          plexAccessRequestable: config.plexAccessRequestable,
-    );
-    final user = current.user;
-    if (user != null) await _persistSession(updatedConn, user);
-    state = AsyncData(current.copyWith(connection: updatedConn));
+    _configRefreshPending = true;
+    if (_configRefreshDeferrals > 0) return;
+    if (_configRefreshInFlight != null) return _configRefreshInFlight;
+    final refresh = _drainConfigRefreshes();
+    _configRefreshInFlight = refresh;
+    try {
+      await refresh;
+    } finally {
+      _configRefreshInFlight = null;
+    }
+  }
+
+  Future<void> _drainConfigRefreshes() async {
+    while (_configRefreshPending && _configRefreshDeferrals == 0) {
+      _configRefreshPending = false;
+      final current = state.valueOrNull;
+      final conn = current?.connection;
+      if (conn == null) return;
+      final config =
+          await _authService.fetchConfig(conn.serverUrl, conn.accessToken);
+      if (_configRefreshDeferrals > 0) {
+        _configRefreshPending = true;
+        return;
+      }
+      final latest = state.valueOrNull;
+      if (latest?.connection?.serverUrl != conn.serverUrl ||
+          latest?.user?.id != current?.user?.id) {
+        return;
+      }
+      final updatedConn = latest!.connection!.copyWith(
+        serverName: config.serverName,
+        serverVersion: config.serverVersion,
+        minAppVersion: config.minAppVersion,
+        services: config.services,
+        instances: config.instances,
+        issuesEnabled: config.issuesEnabled,
+        allowReporting: config.allowReporting,
+        plexAccessRequestable: config.plexAccessRequestable,
+        adminCatalogBrowsing: config.adminCatalogBrowsing,
+        mediaAccountManagement: config.mediaAccountManagement,
+        appleTvRemote: config.appleTvRemote,
+        tvMatchCorrections: config.tvMatchCorrections,
+        requestQuotas: config.requestQuotas,
+        hiddenDiscoverTabs: config.hiddenDiscoverTabs,
+        clearHiddenDiscoverTabs: config.hiddenDiscoverTabs == null,
+        configConfirmed: true,
+      );
+      // Publish synchronously so an intervening token refresh cannot be lost
+      // while storage is awaited. Persistence uses the same public snapshot.
+      state = AsyncData(latest.copyWith(connection: updatedConn));
+      if (latest.user != null) await _persistSession(updatedConn, latest.user!);
+    }
   }
 
   /// Re-fetch the current user's profile (e.g. to learn whether a password is
@@ -889,7 +1151,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     state = const AsyncData(AuthState(isLoading: true));
 
     try {
-      final normalizedUrl = _normalizeUrl(serverUrl);
+      final normalizedUrl = normalizeServerUrl(serverUrl);
 
       // Step 1: Begin login on server
       final beginResp = await _authService.beginPasskeyLogin(normalizedUrl);
@@ -928,11 +1190,19 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
         allowReporting: config.allowReporting,
-          plexAccessRequestable: config.plexAccessRequestable,
+        plexAccessRequestable: config.plexAccessRequestable,
+        adminCatalogBrowsing: config.adminCatalogBrowsing,
+        mediaAccountManagement: config.mediaAccountManagement,
+        appleTvRemote: config.appleTvRemote,
+        tvMatchCorrections: config.tvMatchCorrections,
+        requestQuotas: config.requestQuotas,
+        hiddenDiscoverTabs: config.hiddenDiscoverTabs,
+        configConfirmed: true,
       );
 
       await _persistSession(connection, authResp.user);
       state = AsyncData(AuthState(connection: connection, user: authResp.user));
+      await _rememberServer(connection);
       _registerForPush();
     } catch (e) {
       state = AsyncData(AuthState(error: _parsePasskeyLoginError(e)));
@@ -1097,6 +1367,13 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         'instances': conn.instances.map((i) => i.toJson()).toList(),
         'issues_enabled': conn.issuesEnabled,
         'allow_reporting': conn.allowReporting,
+        'admin_catalog_browsing': conn.adminCatalogBrowsing,
+        'media_account_management': conn.mediaAccountManagement,
+        'apple_tv_remote': conn.appleTvRemote,
+        'tv_match_corrections': conn.tvMatchCorrections,
+        'request_quotas': conn.requestQuotas,
+        if (conn.hiddenDiscoverTabs != null)
+          'hidden_discover_tabs': conn.hiddenDiscoverTabs,
       }),
     );
   }
@@ -1111,20 +1388,50 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     }
   }
 
-  String _normalizeUrl(String url) {
-    var normalized = url.trim();
-    final schemeProbe = normalized.toLowerCase();
-    if (schemeProbe.startsWith('http://')) {
-      normalized = 'http://${normalized.substring('http://'.length)}';
-    } else if (schemeProbe.startsWith('https://')) {
-      normalized = 'https://${normalized.substring('https://'.length)}';
-    } else {
-      normalized = 'https://$normalized';
+  Future<void> _migrateSavedServer(String? serverUrl) async {
+    try {
+      String? name;
+      if (serverUrl != null) {
+        try {
+          final raw = await _storage.read(key: StorageKeys.sessionConnection);
+          final meta = raw == null ? null : jsonDecode(raw);
+          if (meta is Map && meta['server_name'] is String) {
+            name = meta['server_name'] as String;
+          }
+        } catch (_) {
+          // The stored address remains useful without the optional name.
+        }
+      }
+      await ref.read(savedServersProvider.notifier).migrateLegacySession(
+          serverUrl == null
+              ? null
+              : SavedServer.fromAddress(serverUrl, name: name));
+    } catch (_) {
+      // Preferences are optional; a failure must never end a valid session.
+      debugPrint('Saved server migration deferred: preferences unavailable.');
     }
-    while (normalized.endsWith('/')) {
-      normalized = normalized.substring(0, normalized.length - 1);
+  }
+
+  Future<void> _rememberServer(BackendConnection connection) async {
+    final server = SavedServer.fromAddress(connection.serverUrl,
+        name: connection.serverName);
+    if (server == null) return;
+    try {
+      await ref.read(savedServersProvider.notifier).remember(server);
+    } catch (_) {
+      debugPrint('Could not remember server: preferences unavailable.');
     }
-    return normalized;
+  }
+
+  String _parseOIDCError(Object e) {
+    if (e is StateError) return e.message;
+    if (e is DioException) {
+      final data = e.response?.data;
+      if (data is Map<String, dynamic> && data['error'] is String) {
+        return data['error'] as String;
+      }
+    }
+    return _parseError(e);
   }
 
   String _parseError(Object e) {

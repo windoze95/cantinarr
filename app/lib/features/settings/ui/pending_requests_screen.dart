@@ -1,5 +1,7 @@
+import '../../request/ui/catalog_request_panel.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import '../../request/data/request_quota.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/config/app_config.dart';
@@ -41,6 +43,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
   AdminRequestSettings? _admin;
   bool _isLoading = true;
   String? _error;
+  final Map<int, ({String scope, int? profile})> _approvalSelections = {};
 
   @override
   void initState() {
@@ -54,6 +57,8 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
   }
 
   String _friendlyError(Object e) {
+    final quota = requestQuotaError(e);
+    if (quota != null) return quota;
     String? raw;
     if (e is DioException) {
       final data = e.response?.data;
@@ -197,7 +202,8 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
     String chosenScope = isExplicit
         ? _keepRequestedScope
         : (item.seasonScope.isNotEmpty ? item.seasonScope : SeasonScope.all);
-    int? chosenProfile;
+    chosenScope = _approvalSelections[item.id]?.scope ?? chosenScope;
+    int? chosenProfile = _approvalSelections[item.id]?.profile;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -334,6 +340,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
     if (confirmed != true) return;
     if (!mounted) return;
     try {
+      _approvalSelections[item.id] = (scope: chosenScope, profile: chosenProfile);
       final result = await _service.approve(
         item.id,
         // The "keep requested" sentinel sends no override, so the server keeps
@@ -344,6 +351,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
         qualityProfileId: item.isBook || item.isMusic ? null : chosenProfile,
       );
       if (!mounted) return;
+      _approvalSelections.remove(item.id);
       await _load();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -483,7 +491,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
 
     if (_waiting.isNotEmpty || _waitingBlind) {
       children.add(const _SectionHeader(
-        title: 'Waiting for library',
+        title: 'Saved requests',
         caption: 'Being retried automatically. Nothing to approve.',
       ));
       if (_waitingBlind) {
@@ -674,6 +682,18 @@ class _WaitingTile extends StatelessWidget {
               ),
             ],
           ),
+          if (item.delivery.isNotEmpty)
+            CatalogRequestPanel(
+                mediaType: item.mediaType,
+                foreignId: item.catalogProvider == 'openlibrary'
+                    ? 'ol:${item.catalogId}'
+                    : item.foreignId,
+                title: item.title,
+                instanceId: item.instanceId,
+                provider: item.catalogProvider,
+                sourceId: item.catalogId,
+                requestId: item.id,
+                progressOnly: true),
           const SizedBox(height: 6),
           Wrap(
             spacing: 6,
@@ -785,6 +805,20 @@ class _PendingTile extends StatelessWidget {
           // Most rows are a plain yes/no and say nothing here. A row whose add
           // already failed is not one, and without this it looked identical —
           // so Approve got pressed, failed, and left no idea what to do next.
+          if (item.isCatalogRetired) ...[
+            const SizedBox(height: 4),
+            const Text('Needs attention',
+                style: TextStyle(color: AppTheme.requested)),
+            CatalogRequestPanel(
+                mediaType: item.mediaType,
+                foreignId: 'ol:${item.catalogId}',
+                title: item.title,
+                instanceId: item.instanceId,
+                provider: item.catalogProvider,
+                sourceId: item.catalogId,
+                requestId: item.id,
+                progressOnly: true),
+          ],
           if (item.addFailure case final failure?) ...[
             const SizedBox(height: 4),
             Row(
@@ -828,8 +862,7 @@ class _PendingTile extends StatelessWidget {
               if (showScope) _chip(SeasonScope.describe(item.seasonScope)),
               if (showBookFormat)
                 _chip(item.requestedBookFormat?.label ?? 'Unsupported format'),
-              if ((item.isBook || item.isMusic) &&
-                  item.instanceName.isNotEmpty)
+              if ((item.isBook || item.isMusic) && item.instanceName.isNotEmpty)
                 _chip('Library: ${item.instanceName}'),
             ],
           ),
@@ -842,7 +875,9 @@ class _PendingTile extends StatelessWidget {
           // approving just replays an add the library already refused, so the
           // honest verb is "try again" — resume the wait, or complete on the
           // spot if the author has landed since.
-          if (item.isImportWait)
+          if (item.isCatalogRetired)
+            const SizedBox.shrink()
+          else if (item.isImportWait)
             IconButton(
               icon: const Icon(Icons.replay),
               color: AppTheme.requested,

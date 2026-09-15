@@ -25,6 +25,7 @@ class BookFormatPanel extends StatefulWidget {
   final RequestService service;
   final BookOwnership? ownership;
   final bool ownershipStatusKnown;
+  final bool identityAmbiguous;
   final int refreshTick;
 
   /// Per-format download actions, supplied only for formats whose files the
@@ -32,12 +33,13 @@ class BookFormatPanel extends StatefulWidget {
   /// download action and a request action never share a row.
   final Widget? ebookDownload;
   final Widget? audiobookDownload;
+  final Widget? audiobookListen;
 
   final FutureOr<void> Function()? onRequestCompleted;
 
   /// Reports the library's own foreignBookId when the server resolved this
   /// book's request through a record Chaptarr filed under a different id.
-  /// The owner should re-address the book by it (and rebuild this panel).
+  /// The owner may use it to refresh ownership; submission keeps the selected ID.
   final ValueChanged<String>? onCanonicalForeignId;
 
   const BookFormatPanel({
@@ -49,9 +51,11 @@ class BookFormatPanel extends StatefulWidget {
     required this.service,
     this.ownership,
     this.ownershipStatusKnown = true,
+    this.identityAmbiguous = false,
     this.refreshTick = 0,
     this.ebookDownload,
     this.audiobookDownload,
+    this.audiobookListen,
     this.onRequestCompleted,
     this.onCanonicalForeignId,
   });
@@ -65,13 +69,21 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
   // [_detail] on every read, so the rows reflect the owned-books digest even
   // when it loads AFTER this panel was first built — otherwise an owned-but-
   // unrequested format would offer a duplicate request action.
-  BookRequestStatusDetail _serverDetail = const BookRequestStatusDetail();
+  BookRequestStatusDetail _serverDetail =
+      const BookRequestStatusDetail(isKnown: false);
   bool _loading = true;
+  bool _hasLiveDetail = false;
+  bool _refreshFailed = false;
+  List<Map<String, dynamic>> _delivery = const [];
+  int _savedGeneration = 0;
+  final Set<int> _actions = {};
+
   /// Formats with a request currently in flight. Kept per format — the eBook
   /// and Audiobook rows are independent actions, so submitting one must not
   /// dead-zone the other. Concurrent submissions for one title are safe: the
   /// server serializes them per canonical book behind its own lock.
   final Set<BookRequestFormat> _inFlight = {};
+  String? _reportedCanonicalId;
   int _activeChecks = 0;
   int _checkGeneration = 0;
   Timer? _pendingRecheckTimer;
@@ -98,21 +110,40 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     final detail = _serverDetail.withOwnership(
       widget.ownership,
       ownershipStatusKnown: widget.ownershipStatusKnown,
+      identityAmbiguous: widget.identityAmbiguous,
     );
-    if (_submitted.isEmpty) return detail;
     final formats = {...detail.formats};
     final waits = {...detail.formatWaits};
-    var covered = false;
-    for (final entry in _submitted.entries) {
-      // Only an explicit "never requested" is overridden; an unresolved status
-      // stays unknown rather than being dressed up as a live request.
-      if (detail.statusFor(entry.key) != RequestStatus.unavailable) continue;
-      formats[entry.key] = entry.value.status;
-      final wait = entry.value.wait;
-      if (wait != null) waits[entry.key] = wait;
-      covered = true;
+    for (final d in _delivery) {
+      final format =
+          BookRequestFormat.tryFromValue(d['format'] as String? ?? '');
+      if (format == null || format == BookRequestFormat.both) continue;
+      final state = d['state'];
+      if (state == 'complete') continue; // availability is read separately
+      if ({RequestStatus.available, RequestStatus.downloading}
+          .contains(detail.statusFor(format))) {
+        continue;
+      }
+      if (state == 'cancelled') {
+        formats[format] = RequestStatus.denied;
+        waits.remove(format);
+      } else if (state == 'approval') {
+        formats[format] = RequestStatus.pending;
+        waits.remove(format);
+      } else {
+        formats[format] = RequestStatus.requested;
+        waits[format] = BookFormatWait(
+            reason: BookWaitReason.fromValue(state == 'waiting_library'
+                ? 'author_import'
+                : state as String?));
+      }
     }
-    if (!covered) return detail;
+    for (final entry in _submitted.entries) {
+      final status = formats[entry.key];
+      if (status != null && status != RequestStatus.unavailable) continue;
+      formats[entry.key] = entry.value.status;
+      if (entry.value.wait != null) waits[entry.key] = entry.value.wait!;
+    }
     return BookRequestStatusDetail(
       status: detail.status,
       formats: formats,
@@ -126,7 +157,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
   @override
   void initState() {
     super.initState();
-    _check();
+    _refresh();
   }
 
   @override
@@ -136,13 +167,17 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     if (oldWidget.foreignId != widget.foreignId ||
         oldWidget.instanceId != widget.instanceId) {
       _loading = true;
-      _serverDetail = const BookRequestStatusDetail();
+      _hasLiveDetail = false;
+      _reportedCanonicalId = null;
+      _serverDetail = const BookRequestStatusDetail(isKnown: false);
       // Another book (or library) knows nothing about what was requested here.
       _submitted.clear();
-      _check();
+      _delivery = const [];
+      _refresh();
     } else if (oldWidget.refreshTick != widget.refreshTick &&
-        _inFlight.isEmpty) {
-      _check();
+        _inFlight.isEmpty &&
+        !_checking) {
+      _refresh();
     } else if (oldWidget.ownership != widget.ownership ||
         oldWidget.ownershipStatusKnown != widget.ownershipStatusKnown) {
       _syncPendingRecheck();
@@ -163,6 +198,8 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       final detail = await widget.service.checkBookStatusDetail(
         foreignId,
         instanceId: widget.instanceId,
+        title: widget.title,
+        searchTerm: widget.searchTerm,
       );
       if (!mounted ||
           generation != _checkGeneration ||
@@ -170,16 +207,86 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
         return;
       }
       setState(() {
-        _serverDetail = detail;
+        _refreshFailed = !detail.isKnown;
+        if (detail.isKnown ||
+            !_hasLiveDetail ||
+            detail.effectiveUnknownReason !=
+                BookStatusUnknownReason.transient) {
+          _serverDetail = detail;
+          _hasLiveDetail = true;
+        }
         _loading = false;
       });
       _syncPendingRecheck();
       final canonical = detail.canonicalForeignId ?? '';
-      if (canonical.isNotEmpty && canonical != widget.foreignId) {
-        widget.onCanonicalForeignId?.call(canonical);
+      if (detail.isKnown ||
+          detail.effectiveUnknownReason ==
+              BookStatusUnknownReason.identityNeedsAttention) {
+        final nextId =
+            !detail.isKnown || canonical.isEmpty ? widget.foreignId : canonical;
+        if (nextId != (_reportedCanonicalId ?? widget.foreignId)) {
+          _reportedCanonicalId = nextId;
+          widget.onCanonicalForeignId?.call(nextId);
+        }
       }
     } finally {
       _activeChecks--;
+    }
+  }
+
+  void _refresh() {
+    unawaited(_checkSaved());
+    unawaited(_check());
+  }
+
+  Future<void> _checkSaved() async {
+    final generation = ++_savedGeneration;
+    final data = await widget.service
+        .bookDeliveryStatus(widget.foreignId, instanceId: widget.instanceId);
+    if (!mounted || generation != _savedGeneration || data == null) return;
+    setState(() {
+      _delivery = ((data['delivery'] as List?) ?? [])
+          .map((d) => Map<String, dynamic>.from(d as Map))
+          .toList();
+      _loading = !_hasLiveDetail;
+    });
+    _syncPendingRecheck();
+  }
+
+  Future<void> _deliveryAction(int id, String action, {String? format}) async {
+    if (!_actions.add(id)) return;
+    setState(() {});
+    try {
+      final data =
+          await widget.service.bookDeliveryAction(id, action, format: format);
+      if (!mounted) return;
+      _savedGeneration++;
+      setState(() {
+        final updated = ((data['delivery'] as List?) ?? [])
+            .map((d) => Map<String, dynamic>.from(d as Map))
+            .toList();
+        _delivery = [
+          ..._delivery.where((d) => d['request_id'] != id),
+          ...updated
+        ];
+        if (action == 'cancel') {
+          for (final d in updated) {
+            final format =
+                BookRequestFormat.tryFromValue(d['format'] as String? ?? '');
+            if (format != null && d['state'] == 'cancelled') {
+              _submitted.remove(format);
+            }
+          }
+        }
+      });
+      _announce(action == 'cancel'
+          ? 'Request cancelled.'
+          : 'Your request is saved for another delivery attempt.');
+      _refresh();
+    } on RequestSubmissionException catch (e) {
+      if (mounted) _announce(e.message);
+    } finally {
+      if (mounted) setState(() => _actions.remove(id));
     }
   }
 
@@ -201,7 +308,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     _pendingRecheckTimer ??= Timer.periodic(
       const Duration(seconds: 30),
       (_) {
-        if (mounted && _inFlight.isEmpty && !_checking) _check();
+        if (mounted && _inFlight.isEmpty && !_checking) _refresh();
       },
     );
   }
@@ -210,8 +317,15 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
   /// requester: a tap that changed nothing visible would leave them guessing
   /// whether it registered at all.
   Future<void> _request(BookRequestFormat format) async {
-    if (_inFlight.contains(format) || !_detail.isRequestable(format)) return;
-    setState(() => _inFlight.add(format));
+    final selected = format == BookRequestFormat.both
+        ? [BookRequestFormat.ebook, BookRequestFormat.audiobook]
+        : [format];
+    if (selected.any(_inFlight.contains) || !_canRequest(_detail, format)) {
+      return;
+    }
+    _savedGeneration++; // ignore reads started before this submission
+    _checkGeneration++;
+    setState(() => _inFlight.addAll(selected));
     try {
       BookRequestSubmission? submission;
       String? failureMessage;
@@ -225,6 +339,10 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
           searchTerm: widget.searchTerm,
         );
       } on RequestSubmissionException catch (e) {
+        if (e.quotaExceeded) {
+          if (mounted) _announce(e.message);
+          return;
+        }
         failureMessage = e.message;
         definitiveFailure = e.definitive;
       }
@@ -267,18 +385,33 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       final outcome = submission.message.isNotEmpty
           ? submission.message
           : _formatOutcome(format, resolved);
-      _rememberSubmission(format, resolved, submission.formatWaits[format]);
-      await _refreshAfterSubmission();
-      if (!mounted) return;
+      for (final selectedFormat in selected) {
+        _rememberSubmission(
+            selectedFormat,
+            submission.formats[selectedFormat] ?? resolved,
+            submission.formatWaits[selectedFormat]);
+      }
+      setState(() {
+        final ids = submission!.delivery.map((d) => d['request_id']).toSet();
+        _delivery = [
+          ..._delivery.where((d) => !ids.contains(d['request_id'])),
+          ...submission.delivery
+        ];
+      });
       _announce(outcome);
+      _syncPendingRecheck();
+      _refresh();
+      unawaited(Future<void>.sync(() async {
+        await widget.onRequestCompleted?.call();
+      }));
       if (submission.succeeded(format)) {
         unawaited(maybeShowPhoneAppsPrompt(context));
       }
     } finally {
       if (mounted) {
-        setState(() => _inFlight.remove(format));
+        setState(() => _inFlight.removeAll(selected));
       } else {
-        _inFlight.remove(format);
+        _inFlight.removeAll(selected);
       }
     }
   }
@@ -327,17 +460,41 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       switch (status) {
         RequestStatus.available => '${format.label} is available.',
         RequestStatus.downloading => '${format.label} is downloading.',
-        RequestStatus.requested || RequestStatus.partial =>
+        RequestStatus.requested ||
+        RequestStatus.partial =>
           '${format.label} requested.',
         RequestStatus.pending => '${format.label} is pending approval.',
         RequestStatus.denied => '${format.label} was not approved.',
-        RequestStatus.unavailable || null =>
+        RequestStatus.unavailable ||
+        null =>
           '${format.label} could not be requested. Try again.',
       };
+
+  bool _canRequest(BookRequestStatusDetail detail, BookRequestFormat format) {
+    if (format != BookRequestFormat.both) return detail.isRequestable(format);
+    // One owned or already requested format does not block requesting the pair.
+    // The worker leaves that format alone and delivers the missing one.
+    const formats = [BookRequestFormat.ebook, BookRequestFormat.audiobook];
+    return formats.any(detail.isRequestable) &&
+        formats.every((f) =>
+            detail.isRequestable(f) ||
+            {
+              RequestStatus.available,
+              RequestStatus.downloading,
+              RequestStatus.requested,
+              RequestStatus.pending
+            }.contains(detail.statusFor(f)));
+  }
 
   @override
   Widget build(BuildContext context) {
     final detail = _detail;
+    final cancellable = <int>{
+      for (final d in _delivery)
+        if (!{'complete', 'cancelled'}.contains(d['state']) &&
+            d['can_cancel'] != false)
+          d['request_id'] as int,
+    };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -372,6 +529,56 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
                 icon: Icons.headphones,
                 download: widget.audiobookDownload,
               ),
+              if (widget.audiobookListen != null &&
+                  detail.isKnown &&
+                  !widget.identityAmbiguous &&
+                  !_refreshFailed &&
+                  detail.statusFor(BookRequestFormat.audiobook) ==
+                      RequestStatus.available)
+                Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: widget.audiobookListen),
+              const Divider(height: 1, color: AppTheme.border),
+              Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    key: const ValueKey('book-request-both'),
+                    onPressed: !_loading &&
+                            _inFlight.isEmpty &&
+                            _canRequest(detail, BookRequestFormat.both)
+                        ? () => _request(BookRequestFormat.both)
+                        : null,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Request both'),
+                  )),
+              for (final d in _delivery)
+                if (!{'complete', 'cancelled'}.contains(d['state']))
+                  Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Wrap(spacing: 12, children: [
+                        if ({'attention', 'retry'}.contains(d['state']) &&
+                            d['can_manage'] != false &&
+                            d['code'] != 'catalog_retired')
+                          TextButton(
+                              onPressed: _actions.contains(d['request_id'])
+                                  ? null
+                                  : () => _deliveryAction(
+                                      d['request_id'] as int, 'retry',
+                                      format: d['format'] as String),
+                              child: Text(
+                                  'Retry ${d['format'] == 'ebook' ? 'eBook' : 'audiobook'}')),
+                      ])),
+              for (final id in cancellable)
+                Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton(
+                            onPressed: _actions.contains(id)
+                                ? null
+                                : () => _deliveryAction(id, 'cancel'),
+                            child: const Text('Cancel request')))),
             ],
           ),
         ),
@@ -401,18 +608,23 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
             ),
           ),
         if (detail.effectiveUnknownReason ==
-            BookStatusUnknownReason.formatNeedsAttention)
-          const Padding(
-            padding: EdgeInsets.only(top: 10, left: 4, right: 4),
+                BookStatusUnknownReason.formatNeedsAttention ||
+            detail.effectiveUnknownReason ==
+                BookStatusUnknownReason.identityNeedsAttention)
+          Padding(
+            padding: const EdgeInsets.only(top: 10, left: 4, right: 4),
             child: Row(
               children: [
-                Icon(Icons.warning_amber_rounded,
+                const Icon(Icons.warning_amber_rounded,
                     size: 18, color: AppTheme.requested),
-                SizedBox(width: 6),
+                const SizedBox(width: 6),
                 Flexible(
                   child: Text(
-                    'Ask an admin to check this book’s format',
-                    style: TextStyle(
+                    detail.effectiveUnknownReason ==
+                            BookStatusUnknownReason.identityNeedsAttention
+                        ? 'Ask an admin to check this book’s library match'
+                        : 'Ask an admin to check this book’s format',
+                    style: const TextStyle(
                       color: AppTheme.requested,
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -422,12 +634,15 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
               ],
             ),
           )
-        else if (detail.effectiveUnknownReason ==
-            BookStatusUnknownReason.transient)
+        // The initial unknown status is still being checked, not a failure.
+        else if (!_loading &&
+            (_refreshFailed ||
+                detail.effectiveUnknownReason ==
+                    BookStatusUnknownReason.transient))
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
-              onPressed: _inFlight.isNotEmpty || _checking ? null : _check,
+              onPressed: _inFlight.isNotEmpty || _checking ? null : _refresh,
               icon: const Icon(Icons.refresh_rounded, size: 18),
               label: const Text('Couldn’t check · Retry'),
             ),
@@ -513,8 +728,9 @@ class _FormatRow extends StatelessWidget {
     final stack = MediaQuery.textScalerOf(context).scale(1) > 1.3 ||
         MediaQuery.sizeOf(context).width < 360 ||
         (status != null && status.label.length > 18);
-    final pill =
-        status == null ? null : StatusPill(text: status.label, color: status.color);
+    final pill = status == null
+        ? null
+        : StatusPill(text: status.label, color: status.color);
     final heading = Row(
       children: [
         Icon(icon, color: AppTheme.accent, size: 20),
@@ -604,12 +820,14 @@ class _RequestAction extends StatelessWidget {
         children: [
           const Icon(Icons.add_rounded, size: 15, color: AppTheme.accent),
           const SizedBox(width: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              color: AppTheme.accent,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
+          Flexible(
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: AppTheme.accent,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],
@@ -629,16 +847,18 @@ class _SubmittingIndicator extends StatelessWidget {
         SizedBox(
           width: 14,
           height: 14,
-          child: CircularProgressIndicator(
-              strokeWidth: 2, color: AppTheme.accent),
+          child:
+              CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accent),
         ),
         SizedBox(width: 8),
-        Text(
-          'Requesting…',
-          style: TextStyle(
-            color: AppTheme.accent,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
+        Flexible(
+          child: Text(
+            'Requesting…',
+            style: TextStyle(
+              color: AppTheme.accent,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
       ],
@@ -676,18 +896,24 @@ class _SubmittingIndicator extends StatelessWidget {
   final status = detail.statusFor(format);
   if (status != null && status != RequestStatus.unavailable) {
     return switch (status) {
-      RequestStatus.available =>
-        (label: 'Available', color: AppTheme.available),
-      RequestStatus.pending =>
-        (label: 'Pending Approval', color: AppTheme.requested),
-      RequestStatus.requested =>
-        (label: 'Requested', color: AppTheme.requested),
-      RequestStatus.downloading =>
-        (label: 'Downloading', color: AppTheme.downloading),
-      RequestStatus.partial =>
-        (label: 'Requested', color: AppTheme.requested),
-      RequestStatus.denied =>
-        (label: 'Request Denied', color: AppTheme.error),
+      RequestStatus.available => (
+          label: 'Available',
+          color: AppTheme.available
+        ),
+      RequestStatus.pending => (
+          label: 'Pending Approval',
+          color: AppTheme.requested
+        ),
+      RequestStatus.requested => (
+          label: 'Requested',
+          color: AppTheme.requested
+        ),
+      RequestStatus.downloading => (
+          label: 'Downloading',
+          color: AppTheme.downloading
+        ),
+      RequestStatus.partial => (label: 'Requested', color: AppTheme.requested),
+      RequestStatus.denied => (label: 'Request Denied', color: AppTheme.error),
       RequestStatus.unavailable => throw StateError('unreachable'),
     };
   }
@@ -700,6 +926,13 @@ class _SubmittingIndicator extends StatelessWidget {
   }
 
   if (!detail.isKnown) {
+    if (detail.effectiveUnknownReason ==
+        BookStatusUnknownReason.identityNeedsAttention) {
+      return (
+        label: 'Library match needs attention',
+        color: AppTheme.requested
+      );
+    }
     return detail.effectiveUnknownReason ==
             BookStatusUnknownReason.formatNeedsAttention
         ? (label: 'Format needs attention', color: AppTheme.requested)

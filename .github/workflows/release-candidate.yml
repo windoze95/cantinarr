@@ -1,0 +1,43 @@
+name: Record release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      server_run:
+        description: 'Successful Docker candidate run ID (omit for mobile-only release)'
+        type: string
+      ios_run:
+        description: 'Successful TestFlight candidate run ID (omit if iOS is not being released)'
+        type: string
+      android_run:
+        description: 'Successful Play candidate run ID (omit if Android is not being released)'
+        type: string
+      verification:
+        description: 'Real device/upgrade/compatibility results; no credentials or personal data'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify candidates and record the tested combination
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVER_RUN: ${{ inputs.server_run }}
+          IOS_RUN: ${{ inputs.ios_run }}
+          ANDROID_RUN: ${{ inputs.android_run }}
+          VERIFICATION: ${{ inputs.verification }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          python3 scripts/release_control.py manifest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-candidate-${{ github.run_attempt }}
+          path: release-candidate.json
+          retention-days: 90

@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
+import 'package:cantinarr/core/providers/instance_provider.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/shell/logic/shell_music_search_provider.dart';
 import 'package:dio/dio.dart';
@@ -11,8 +13,22 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('no active Lidarr instance short-circuits before any request',
+  test('typing cancels an in-flight search before later results arrive',
       () async {
+    final adapter = _LookupAdapter(heldTerm: 'old', albums: _twoAlbums);
+    final container = await _makeContainer(adapter: adapter);
+    addTearDown(container.dispose);
+    final notifier = container.read(shellMusicSearchProvider.notifier);
+    notifier.updateSearch('old');
+    await adapter.started.future;
+    notifier.updateSearch('new');
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    expect(adapter.cancelled, 1);
+    expect(container.read(shellMusicSearchProvider).searchQuery, 'new');
+    expect(container.read(shellMusicSearchProvider).results.length, 2);
+  });
+
+  test('no active Lidarr instance short-circuits before any request', () async {
     final adapter = _LookupAdapter();
     final container =
         await _makeContainer(authState: _noInstanceState, adapter: adapter);
@@ -42,6 +58,36 @@ void main() {
       container.read(shellMusicSearchProvider).error,
       MusicSearchError.forbidden,
     );
+  });
+
+  test('instance changes cancel active work and reissue the same query',
+      () async {
+    final adapter = _LookupAdapter(heldTerm: 'held', albums: _twoAlbums);
+    final container = await _makeContainer(adapter: adapter);
+    addTearDown(container.dispose);
+    container.read(shellMusicSearchProvider.notifier).updateSearch('held');
+    await adapter.started.future;
+    adapter.heldTerm = null;
+    container
+        .read(instanceProvider.notifier)
+        .setActiveLidarrInstance('second-music');
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(adapter.cancelled, 1);
+    expect(adapter.instances.last, 'second-music');
+    expect(container.read(shellMusicSearchProvider).searchQuery, 'held');
+    expect(container.read(shellMusicSearchProvider).results.length, 2);
+  });
+
+  test('a revoked artist read clears albums from the same scope', () async {
+    final adapter = _LookupAdapter(albums: _twoAlbums, artistStatusCode: 403);
+    final container = await _makeContainer(adapter: adapter);
+    addTearDown(container.dispose);
+    container.read(shellMusicSearchProvider.notifier).updateSearch('weezer');
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    expect(container.read(shellMusicSearchProvider).error,
+        MusicSearchError.forbidden);
+    expect(container.read(shellMusicSearchProvider).results, isEmpty);
+    expect(container.read(shellMusicSearchProvider).artists, isEmpty);
   });
 
   test('a 500 response classifies as requestFailed', () async {
@@ -152,9 +198,9 @@ void main() {
       'failure in a debug build, without leaking hosts or terms', () async {
     final malformedAlbums = [
       {
-        'id': 'not-an-int',
+        'artist': 42,
         'title': 'Pinkerton',
-        'foreignAlbumId': 'mb-1',
+        'foreign_id': 'mb-1',
       },
     ];
     final adapter = _LookupAdapter(albums: malformedAlbums);
@@ -200,9 +246,12 @@ const _music = AuthState(
         name: 'Music',
         isDefault: true,
       ),
+      ServiceInstance(
+          id: 'second-music', serviceType: 'lidarr', name: 'Second Music'),
     ],
   ),
-  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+  user: UserProfile(
+      id: 1, username: 'tester', role: 'user', permissions: ['media:discover']),
 );
 
 /// The grant is present (the route stays reachable) but no Lidarr instance is
@@ -215,24 +264,25 @@ const _noInstanceState = AuthState(
     services: AvailableServices(lidarr: true),
     instances: [],
   ),
-  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+  user: UserProfile(
+      id: 1, username: 'tester', role: 'user', permissions: ['media:discover']),
 );
 
 final _twoAlbums = [
   {
     'title': 'Pinkerton',
-    'foreignAlbumId': 'mb-1',
-    'artist': {'id': 0, 'artistName': 'Weezer', 'foreignArtistId': 'a-1'},
+    'foreign_id': 'mb-1',
+    'artist': 'Weezer',
   },
   {
     'title': 'Blue Album',
-    'foreignAlbumId': 'mb-2',
-    'artist': {'id': 0, 'artistName': 'Weezer', 'foreignArtistId': 'a-1'},
+    'foreign_id': 'mb-2',
+    'artist': 'Weezer',
   },
 ];
 
 final _oneArtist = [
-  {'id': 0, 'artistName': 'Weezer', 'foreignArtistId': 'a-1'},
+  {'name': 'Weezer', 'foreign_id': 'a-1'},
 ];
 
 Future<ProviderContainer> _makeContainer({
@@ -260,7 +310,7 @@ class _FakeAuthNotifier extends AuthNotifier {
   Future<AuthState> build() async => _initial;
 }
 
-/// Fakes `GET .../album/lookup` and `.../artist/lookup`, either uniformly or
+/// Fakes the independent MusicBrainz album and artist searches, uniformly or
 /// per search term — the latter is what lets the supersede case answer two
 /// different queries differently on the same notifier instance.
 class _LookupAdapter implements HttpClientAdapter {
@@ -271,6 +321,7 @@ class _LookupAdapter implements HttpClientAdapter {
     this.artistStatusCode,
     this.termStatusCode,
     this.termAlbums,
+    this.heldTerm,
   });
 
   final int statusCode;
@@ -280,6 +331,10 @@ class _LookupAdapter implements HttpClientAdapter {
   final Map<String, int>? termStatusCode;
   final Map<String, List<Map<String, dynamic>>>? termAlbums;
 
+  String? heldTerm;
+  final instances = <String?>[];
+  final started = Completer<void>();
+  int cancelled = 0;
   int albumLookupRequests = 0;
 
   @override
@@ -288,16 +343,19 @@ class _LookupAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
-    if (options.path.endsWith('/artist/lookup')) {
+    if (options.path.endsWith('/discover/music/artists')) {
       return ResponseBody.fromString(
-        jsonEncode(artistStatusCode == null ? artists : const []),
+        jsonEncode({
+          'results': artistStatusCode == null ? artists : const [],
+          'page': 1
+        }),
         artistStatusCode ?? 200,
         headers: {
           'content-type': ['application/json'],
         },
       );
     }
-    if (!options.path.endsWith('/album/lookup')) {
+    if (!options.path.endsWith('/discover/music/search')) {
       return ResponseBody.fromString(
         '{}',
         200,
@@ -307,11 +365,17 @@ class _LookupAdapter implements HttpClientAdapter {
       );
     }
     albumLookupRequests++;
-    final term = options.queryParameters['term']?.toString() ?? '';
+    instances.add(options.queryParameters['instance_id'] as String?);
+    final term = options.queryParameters['query']?.toString() ?? '';
+    if (term == heldTerm) {
+      started.complete();
+      await cancelFuture;
+      cancelled++;
+    }
     final code = termStatusCode?[term] ?? statusCode;
     final body = termAlbums?[term] ?? albums;
     return ResponseBody.fromString(
-      jsonEncode(body),
+      jsonEncode({'results': body, 'page': 1}),
       code,
       headers: {
         'content-type': ['application/json'],

@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/bookdiscovery"
 	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
+	"github.com/windoze95/cantinarr-server/internal/musicdiscovery"
 	"github.com/windoze95/cantinarr-server/internal/request"
+	"github.com/windoze95/cantinarr-server/internal/requestquota"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
 
@@ -136,10 +140,14 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "search_books",
 		Permission:  auth.PermissionMediaDiscover,
-		Description: "Search for books by title or author on the user's book server. Each result carries the foreign_book_id that check_request_status, request_media, and display_media need for books (books have no TMDB id).",
+		Description: "Search the selected Chaptarr instance by title or author. Preserve each result's foreign_book_id, instance_id, title and search_term for status, requests, and display. Books and authors with similar names remain distinct.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
+				"catalog": map[string]interface{}{"type": "string", "enum": []string{"library"}, "description": "Search Chaptarr directly. Open Library search has retired."},
+
+				"instance_id": map[string]interface{}{"type": "string", "description": "Selected authorized Chaptarr or Lidarr instance."},
+
 				"query": map[string]interface{}{
 					"type":        "string",
 					"description": "The book title or author to search for",
@@ -151,10 +159,14 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "search_music",
 		Permission:  auth.PermissionMediaDiscover,
-		Description: "Search for music by album or artist on the user's music server. Each result carries the foreign_album_id that check_request_status, request_media, and display_media need for music (albums have no TMDB id; one result is one album, never a whole discography).",
+		Description: "Search albums, EPs, and singles in one MusicBrainz catalog, enriched with selected-library records and saved requests by release-group ID. Preserve foreign_id (also foreign_album_id), instance_id, title, and search_term for display and requests. Explicit public, library, and all modes retain the legacy catalog interfaces. Request one release, never a discography.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
+				"catalog":     map[string]interface{}{"type": "string", "enum": []string{"unified", "all", "public", "library"}, "description": "Omit for unified album, EP, and single search. Explicit all, public, and library preserve legacy searches."},
+				"page":        map[string]interface{}{"type": "integer", "minimum": 1, "description": "Public catalog page, starting at 1."},
+				"instance_id": map[string]interface{}{"type": "string", "description": "Selected authorized Lidarr instance."},
+
 				"query": map[string]interface{}{
 					"type":        "string",
 					"description": "The album or artist to search for",
@@ -170,6 +182,8 @@ var toolDefinitions = []Tool{
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
+				"catalog_ref": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "enum": []string{"musicbrainz", "musicbrainz_release"}}, "id": map[string]interface{}{"type": "string"}}, "required": []string{"provider", "id"}, "description": "Public identity from catalog search, separate from a native foreign_id."},
+
 				"tmdb_id": map[string]interface{}{
 					"type":        "integer",
 					"description": "The TMDB ID of the movie or TV show (movie/tv only)",
@@ -194,10 +208,21 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "get_request_options",
 		Permission:  auth.PermissionMediaRequest,
-		Description: "Show whether the current user may choose request options and list the quality profiles available for a movie, TV, book, or music request. When the user holds more than one library for the media type, the response also lists their libraries (id, name, is_default) for request_media's instance_id.",
+		Description: "Show request choices, quality profiles, libraries and current request allowances. Optional preview prices a selected request without reserving allowance. TV costs one unit per selected season; books have separate ebook and audiobook allowances. Use preview to offer an affordable selection; submission always recalculates.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
+				"preview": map[string]interface{}{"type": "object", "description": "Optional selected request to price without reservation. Uses this call's media_type and default instance_id.", "properties": map[string]interface{}{
+					"tmdb_id":      map[string]interface{}{"type": "integer"},
+					"title":        map[string]interface{}{"type": "string"},
+					"foreign_id":   map[string]interface{}{"type": "string"},
+					"book_format":  map[string]interface{}{"type": "string", "enum": []string{"ebook", "audiobook", "both"}},
+					"season_scope": map[string]interface{}{"type": "string", "enum": []string{"all", "first", "latest", "pilot"}},
+					"seasons":      map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "integer", "minimum": 1}},
+					"instance_id":  map[string]interface{}{"type": "string"},
+					"search_term":  map[string]interface{}{"type": "string"},
+					"catalog_ref":  map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "enum": []string{"musicbrainz", "musicbrainz_release"}}, "id": map[string]interface{}{"type": "string"}}, "required": []string{"provider", "id"}},
+				}},
 				"media_type": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"movie", "tv", "book", "music"},
@@ -214,10 +239,18 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "request_media",
 		Permission:  auth.PermissionMediaRequest,
-		Description: "Request a movie, TV show, book, or album, optionally selecting a quality_profile_id returned by get_request_options when the current user may choose quality. Movies/TV are keyed by tmdb_id; books by the foreign_book_id from search_books plus an optional book_format; music by the foreign_album_id from search_music (one request is one album).",
+		Description: "Request a movie, selected TV seasons, book formats, or album under the user's request allowance. Use get_request_options with preview to check cost; preserve the user's selection on request_quota_exceeded and ask them to reduce it. Movies/TV use tmdb_id; books use foreign_book_id from search_books; music uses foreign_album_id from search_music. Quality choices do not have separate allowances.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
+				"search_term":  map[string]interface{}{"type": "string", "description": "Original Chaptarr search query that returned the selected book."},
+				"season_scope": map[string]interface{}{"type": "string", "enum": []string{"all", "first", "latest", "pilot"}, "description": "TV selection when no explicit seasons are supplied. A pilot costs one season."},
+				"seasons":      map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "integer", "minimum": 1}, "description": "Explicit TV seasons shown to the user, excluding specials. Overrides season_scope when season choice is allowed."},
+				"catalog_ref":  map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "enum": []string{"musicbrainz", "musicbrainz_release"}}, "id": map[string]interface{}{"type": "string"}}, "required": []string{"provider", "id"}, "description": "Public identity from catalog search, separate from a native foreign_id."},
+
+				"request_id": map[string]interface{}{"type": "integer", "description": "Saved request to retry, cancel, or confirm."},
+				"action":     map[string]interface{}{"type": "string", "enum": []string{"retry", "cancel"}, "description": "Modify saved delivery. confirm uses foreign_id and is allowed only after the user explicitly chooses that book from the offered matches. Never infer confirmation from title similarity."},
+
 				"tmdb_id": map[string]interface{}{
 					"type":        "integer",
 					"description": "The TMDB ID of the movie or TV show (movie/tv only)",
@@ -285,6 +318,8 @@ var toolDefinitions = []Tool{
 								"enum":        []string{"movie", "tv", "book", "music"},
 								"description": "Whether this is a movie, TV show, book, or album",
 							},
+							"catalog_ref": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "enum": []string{"musicbrainz"}}, "id": map[string]interface{}{"type": "string"}}, "required": []string{"provider", "id"}, "description": "Public source identity from search; use instead of a native foreign_id."},
+							"instance_id": map[string]interface{}{"type": "string", "description": "Selected library instance from the search."},
 							"foreign_id": map[string]interface{}{
 								"type":        "string",
 								"description": "Book/music only: the foreign_book_id from search_books or foreign_album_id from search_music (required for book and music items)",
@@ -309,13 +344,15 @@ var toolDefinitions = []Tool{
 
 // MediaResultItem is the structured data the MCP App UI renders.
 type MediaResultItem struct {
-	ID          int     `json:"id"`
-	Title       string  `json:"title"`
-	Year        string  `json:"year,omitempty"`
-	PosterPath  string  `json:"poster_path,omitempty"`
-	VoteAverage float64 `json:"vote_average,omitempty"`
-	Overview    string  `json:"overview,omitempty"`
-	MediaType   string  `json:"media_type,omitempty"`
+	CatalogRef  *request.CatalogRef `json:"catalog_ref,omitempty"`
+	InstanceID  string              `json:"instance_id,omitempty"`
+	ID          int                 `json:"id"`
+	Title       string              `json:"title"`
+	Year        string              `json:"year,omitempty"`
+	PosterPath  string              `json:"poster_path,omitempty"`
+	VoteAverage float64             `json:"vote_average,omitempty"`
+	Overview    string              `json:"overview,omitempty"`
+	MediaType   string              `json:"media_type,omitempty"`
 	// Book identity/artwork. Books have no TMDB id (ID stays 0): ForeignID is
 	// the Chaptarr foreignBookId the detail route keys on, and PosterURL is an
 	// absolute external metadata-CDN cover (never an arr-origin URL).
@@ -720,12 +757,18 @@ func (s *ToolServer) getRecommendations(ctx context.Context, input json.RawMessa
 // other book flows key on, plus a carousel item with its external cover.
 func (s *ToolServer) searchBooks(input json.RawMessage, userID int64) (*ToolResult, error) {
 	var params struct {
-		Query string `json:"query"`
+		Query      string `json:"query"`
+		Catalog    string `json:"catalog"`
+		Page       int    `json:"page"`
+		InstanceID string `json:"instance_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	results, err := s.request.SearchBooksForUser(userID, params.Query)
+	if params.Catalog == "public" {
+		return retiredBookCatalogResult(), nil
+	}
+	results, err := s.request.SearchBooksForUserInInstance(userID, params.Query, params.InstanceID)
 	if errors.Is(err, request.ErrNoChaptarrAccess) {
 		return &ToolResult{Text: "Books are not available for this account (no book server is configured or granted)."}, nil
 	}
@@ -733,7 +776,7 @@ func (s *ToolServer) searchBooks(input json.RawMessage, userID int64) (*ToolResu
 		return nil, err
 	}
 	if len(results) == 0 {
-		return &ToolResult{Text: fmt.Sprintf("No books found for %q.", params.Query)}, nil
+		return &ToolResult{Text: fmt.Sprintf("No books found for %q in the selected Chaptarr catalog. This does not rule out another query or another library.", params.Query)}, nil
 	}
 	const maxBookResults = 10
 	if len(results) > maxBookResults {
@@ -750,28 +793,56 @@ func (s *ToolServer) searchBooks(input json.RawMessage, userID int64) (*ToolResu
 		if r.Year > 0 {
 			fmt.Fprintf(&sb, " (%d)", r.Year)
 		}
-		fmt.Fprintf(&sb, " [foreign_book_id: %s]", r.ForeignBookID)
+		fmt.Fprintf(&sb, " [foreign_book_id: %s, instance_id: %s, search_term: %q]", r.ForeignBookID, r.InstanceID, params.Query)
 		year := ""
 		if r.Year > 0 {
 			year = strconv.Itoa(r.Year)
 		}
 		items = append(items, MediaResultItem{
 			Title: r.Title, Year: year, Overview: r.Overview,
-			MediaType: "book", ForeignID: r.ForeignBookID, PosterURL: r.RemoteCover,
+			MediaType: "book", ForeignID: r.ForeignBookID, PosterURL: r.RemoteCover, InstanceID: r.InstanceID,
 		})
 	}
 	sb.WriteString("\nUse the foreign_book_id with check_request_status, request_media, and display_media.")
 	return &ToolResult{Text: sb.String(), StructuredData: items}, nil
 }
 
-func (s *ToolServer) searchMusic(input json.RawMessage, userID int64) (*ToolResult, error) {
+func (s *ToolServer) searchMusic(input json.RawMessage, userID int64, contexts ...context.Context) (*ToolResult, error) {
 	var params struct {
-		Query string `json:"query"`
+		Query      string `json:"query"`
+		Catalog    string `json:"catalog"`
+		Page       int    `json:"page"`
+		InstanceID string `json:"instance_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	results, err := s.request.SearchAlbumsForUser(userID, params.Query)
+	if params.Catalog == "public" || params.Catalog == "all" {
+		return s.searchCatalogs(input, userID, "music")
+	}
+	if params.Catalog == "" || params.Catalog == "unified" {
+		ctx := context.Background()
+		if len(contexts) > 0 {
+			ctx = contexts[0]
+		}
+		if params.Page == 0 {
+			params.Page = 1
+		}
+		out, err := s.request.UnifiedMusicSearch(ctx, userID, params.Query, params.InstanceID, params.Page)
+		if err != nil {
+			return nil, err
+		}
+		body, _ := json.Marshal(out)
+		items := make([]MediaResultItem, 0, len(out.Results))
+		for _, r := range out.Results {
+			items = append(items, MediaResultItem{Title: r.Title, MediaType: "music", ForeignID: r.ForeignID, InstanceID: r.InstanceID, PosterURL: r.Artwork})
+		}
+		return &ToolResult{Text: string(body), StructuredData: items}, nil
+	}
+	if params.Catalog != "library" {
+		return nil, fmt.Errorf("invalid music catalog")
+	}
+	results, err := s.request.SearchAlbumsForUserInInstance(userID, params.Query, params.InstanceID)
 	if errors.Is(err, request.ErrNoLidarrAccess) {
 		return &ToolResult{Text: "Music is not available for this account (no music server is configured or granted)."}, nil
 	}
@@ -812,13 +883,33 @@ func (s *ToolServer) searchMusic(input json.RawMessage, userID int64) (*ToolResu
 
 func (s *ToolServer) checkRequestStatus(input json.RawMessage, userID int64) (*ToolResult, error) {
 	var params struct {
-		TmdbID     int    `json:"tmdb_id"`
-		MediaType  string `json:"media_type"`
-		ForeignID  string `json:"foreign_id"`
-		InstanceID string `json:"instance_id"`
+		CatalogRef *request.CatalogRef `json:"catalog_ref"`
+		RequestID  int64               `json:"request_id"`
+		Action     string              `json:"action"`
+		TmdbID     int                 `json:"tmdb_id"`
+		MediaType  string              `json:"media_type"`
+		ForeignID  string              `json:"foreign_id"`
+		InstanceID string              `json:"instance_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
+	}
+	if params.RequestID > 0 {
+		status, err := s.request.DeliveryByID(userID, params.RequestID, false)
+		if err != nil {
+			return nil, err
+		}
+		data, _ := json.Marshal(status)
+		return &ToolResult{Text: string(data)}, nil
+	}
+	if params.CatalogRef != nil {
+		status, err := s.request.DeliveryStatus(userID, params.MediaType, params.ForeignID, params.InstanceID, params.CatalogRef)
+		if err != nil {
+			return nil, err
+		}
+
+		data, _ := json.Marshal(status)
+		return &ToolResult{Text: string(data)}, nil
 	}
 	if params.MediaType == "book" {
 		if strings.TrimSpace(params.ForeignID) == "" {
@@ -858,8 +949,9 @@ func (s *ToolServer) checkRequestStatus(input json.RawMessage, userID int64) (*T
 
 func (s *ToolServer) getRequestOptions(input json.RawMessage, userID int64, role string) (*ToolResult, error) {
 	var params struct {
-		MediaType  string `json:"media_type"`
-		InstanceID string `json:"instance_id"`
+		MediaType  string                 `json:"media_type"`
+		InstanceID string                 `json:"instance_id"`
+		Preview    *request.CreateRequest `json:"preview"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -871,14 +963,26 @@ func (s *ToolServer) getRequestOptions(input json.RawMessage, userID int64, role
 	if err != nil {
 		return nil, err
 	}
+	var preview *requestquota.Preview
+	if params.Preview != nil {
+		params.Preview.MediaType = params.MediaType
+		if params.Preview.InstanceID == "" {
+			params.Preview.InstanceID = params.InstanceID
+		}
+		preview, err = s.request.PreviewRequest(userID, params.Preview)
+		if err != nil {
+			return nil, err
+		}
+	}
 	// When the caller holds more than one library for the media type, list
 	// them (id, name, is_default — names only, never hosts) so the model can
 	// route request_media's instance_id. Single-library users get exactly the
 	// old payload.
 	data, _ := json.Marshal(struct {
 		*request.RequestOptions
-		Libraries []toolLibrary `json:"libraries,omitempty"`
-	}{opts, s.visibleLibraries(userID, params.MediaType)})
+		Libraries []toolLibrary         `json:"libraries,omitempty"`
+		Preview   *requestquota.Preview `json:"preview,omitempty"`
+	}{opts, s.visibleLibraries(userID, params.MediaType), preview})
 	return &ToolResult{Text: string(data)}, nil
 }
 
@@ -942,21 +1046,41 @@ func (s *ToolServer) visibleLibraries(userID int64, mediaType string) []toolLibr
 
 func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolResult, error) {
 	var params struct {
-		TmdbID           int    `json:"tmdb_id"`
-		MediaType        string `json:"media_type"`
-		ForeignID        string `json:"foreign_id"`
-		BookFormat       string `json:"book_format"`
-		Title            string `json:"title"`
-		QualityProfileID int    `json:"quality_profile_id"`
-		InstanceID       string `json:"instance_id"`
+		SeasonScope      string              `json:"season_scope"`
+		Seasons          []int               `json:"seasons"`
+		CatalogRef       *request.CatalogRef `json:"catalog_ref"`
+		RequestID        int64               `json:"request_id"`
+		Action           string              `json:"action"`
+		TmdbID           int                 `json:"tmdb_id"`
+		MediaType        string              `json:"media_type"`
+		ForeignID        string              `json:"foreign_id"`
+		BookFormat       string              `json:"book_format"`
+		Title            string              `json:"title"`
+		SearchTerm       string              `json:"search_term"`
+		QualityProfileID int                 `json:"quality_profile_id"`
+		InstanceID       string              `json:"instance_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	if params.MediaType == "book" && strings.TrimSpace(params.ForeignID) == "" {
+	if params.Action == "confirm" || (params.Action == "" && params.MediaType == "book" && params.CatalogRef != nil) {
+		return retiredBookCatalogResult(), nil
+	}
+	if params.Action != "" {
+		response, err := s.request.DeliveryAction(context.Background(), userID, params.RequestID, params.Action, params.ForeignID, params.BookFormat)
+		if errors.Is(err, bookdiscovery.ErrRetired) {
+			return retiredBookCatalogResult(), nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		data, _ := json.Marshal(response)
+		return &ToolResult{Text: string(data)}, nil
+	}
+	if params.MediaType == "book" && strings.TrimSpace(params.ForeignID) == "" && params.CatalogRef == nil {
 		return &ToolResult{Text: "A book request requires the foreign_id from search_books."}, nil
 	}
-	if params.MediaType == "music" && strings.TrimSpace(params.ForeignID) == "" {
+	if params.MediaType == "music" && strings.TrimSpace(params.ForeignID) == "" && params.CatalogRef == nil {
 		return &ToolResult{Text: "A music request requires the foreign_id from search_music."}, nil
 	}
 	if params.MediaType != "book" && params.MediaType != "music" && params.TmdbID <= 0 {
@@ -965,15 +1089,24 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 	// The request service authorizes the selection; a library outside the
 	// user's granted set comes back as the benign "Request failed" text.
 	resp, err := s.request.CreateMediaRequest(userID, &request.CreateRequest{
+		SeasonScope:      params.SeasonScope,
+		Seasons:          params.Seasons,
+		CatalogRef:       params.CatalogRef,
 		TmdbID:           params.TmdbID,
 		MediaType:        params.MediaType,
 		ForeignID:        params.ForeignID,
 		BookFormat:       params.BookFormat,
 		Title:            params.Title,
+		SearchTerm:       params.SearchTerm,
 		QualityProfileID: params.QualityProfileID,
 		InstanceID:       params.InstanceID,
 	})
 	if err != nil {
+		var exceeded *requestquota.Exceeded
+		if errors.As(err, &exceeded) {
+			data, _ := json.Marshal(exceeded)
+			return &ToolResult{Text: string(data)}, nil
+		}
 		return &ToolResult{Text: fmt.Sprintf("Request failed: %s", err.Error())}, nil
 	}
 	data, _ := json.Marshal(resp)
@@ -991,11 +1124,13 @@ func (s *ToolServer) displayMedia(ctx context.Context, input json.RawMessage, us
 	}
 	var params struct {
 		Items []struct {
-			TmdbID    int    `json:"tmdb_id"`
-			MediaType string `json:"media_type"`
-			ForeignID string `json:"foreign_id"`
-			Title     string `json:"title"`
-			Year      string `json:"year"`
+			CatalogRef *request.CatalogRef `json:"catalog_ref"`
+			InstanceID string              `json:"instance_id"`
+			TmdbID     int                 `json:"tmdb_id"`
+			MediaType  string              `json:"media_type"`
+			ForeignID  string              `json:"foreign_id"`
+			Title      string              `json:"title"`
+			Year       string              `json:"year"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
@@ -1020,23 +1155,23 @@ func (s *ToolServer) displayMedia(ctx context.Context, input json.RawMessage, us
 		err     error
 	}
 	musicLookups := map[string]musicLookup{}
-	bookResultsFor := func(title string) bookLookup {
-		key := strings.ToLower(strings.TrimSpace(title))
+	bookResultsFor := func(title, instanceID string) bookLookup {
+		key := instanceID + ":" + strings.ToLower(strings.TrimSpace(title))
 		if cached, ok := bookLookups[key]; ok {
 			return cached
 		}
-		results, err := s.request.SearchBooksForUser(userID, title)
+		results, err := s.request.SearchBooksForUserInInstance(userID, title, instanceID)
 		looked := bookLookup{results: results, err: err}
 		bookLookups[key] = looked
 		return looked
 	}
 
-	musicResultsFor := func(title string) musicLookup {
-		key := strings.ToLower(strings.TrimSpace(title))
+	musicResultsFor := func(title, instanceID string) musicLookup {
+		key := instanceID + ":" + strings.ToLower(strings.TrimSpace(title))
 		if cached, ok := musicLookups[key]; ok {
 			return cached
 		}
-		results, err := s.request.SearchAlbumsForUser(userID, title)
+		results, err := s.request.SearchAlbumsForUserInInstance(userID, title, instanceID)
 		looked := musicLookup{results: results, err: err}
 		musicLookups[key] = looked
 		return looked
@@ -1053,6 +1188,30 @@ func (s *ToolServer) displayMedia(ctx context.Context, input json.RawMessage, us
 			failures = append(failures, fmt.Sprintf("%s %q: TMDB is not configured on the server", p.MediaType, p.Title))
 			continue
 		}
+		if p.CatalogRef != nil {
+			if p.MediaType == "book" {
+				return retiredBookCatalogResult(), nil
+			}
+			body, err := s.request.CatalogMetadata(ctx, userID, p.MediaType, p.InstanceID, p.CatalogRef)
+			if err != nil {
+				failures = append(failures, fmt.Sprintf("%s %q: could not read this catalog record", p.MediaType, p.Title))
+				continue
+			}
+			item := MediaResultItem{MediaType: p.MediaType, CatalogRef: p.CatalogRef, InstanceID: p.InstanceID}
+			{
+				var album musicdiscovery.Album
+				if json.Unmarshal(body, &album) != nil {
+					failures = append(failures, "Invalid album metadata")
+					continue
+				}
+				item.Title, item.ForeignID, item.Overview = album.Title, album.ForeignID, album.Artist
+				if len(album.ReleaseDate) >= 4 {
+					item.Year = album.ReleaseDate[:4]
+				}
+			}
+			items = append(items, item)
+			continue
+		}
 		switch p.MediaType {
 		case "book":
 			foreignID := strings.TrimSpace(p.ForeignID)
@@ -1060,10 +1219,10 @@ func (s *ToolServer) displayMedia(ctx context.Context, input json.RawMessage, us
 				failures = append(failures, fmt.Sprintf("book %q: missing foreign_id; copy it from search_books", p.Title))
 				continue
 			}
-			match, cached := s.request.CachedBookByForeignID(userID, foreignID)
+			match, cached := s.request.CachedBookByForeignIDInInstance(userID, foreignID, p.InstanceID)
 			var lookupErr error
 			if !cached {
-				looked := bookResultsFor(p.Title)
+				looked := bookResultsFor(p.Title, p.InstanceID)
 				lookupErr = looked.err
 				for i := range looked.results {
 					if looked.results[i].ForeignBookID == foreignID {
@@ -1091,7 +1250,7 @@ func (s *ToolServer) displayMedia(ctx context.Context, input json.RawMessage, us
 			}
 			items = append(items, MediaResultItem{
 				Title: match.Title, Year: year, Overview: match.Overview,
-				MediaType: "book", ForeignID: match.ForeignBookID, PosterURL: match.RemoteCover,
+				MediaType: "book", ForeignID: match.ForeignBookID, PosterURL: match.RemoteCover, InstanceID: p.InstanceID,
 			})
 		case "music":
 			foreignID := strings.TrimSpace(p.ForeignID)
@@ -1099,10 +1258,17 @@ func (s *ToolServer) displayMedia(ctx context.Context, input json.RawMessage, us
 				failures = append(failures, fmt.Sprintf("music %q: missing foreign_id; copy it from search_music", p.Title))
 				continue
 			}
-			match, cached := s.request.CachedAlbumByForeignID(userID, foreignID)
+			if body, err := s.request.CatalogMetadata(ctx, userID, "music", p.InstanceID, &request.CatalogRef{Provider: "musicbrainz", ID: foreignID}); err == nil {
+				var album musicdiscovery.Album
+				if json.Unmarshal(body, &album) == nil {
+					items = append(items, MediaResultItem{Title: album.Title, Year: strings.Split(album.ReleaseDate, "-")[0], MediaType: "music", ForeignID: album.ForeignID, InstanceID: p.InstanceID, PosterURL: album.Artwork})
+					continue
+				}
+			}
+			match, cached := s.request.CachedAlbumByForeignIDInInstance(userID, foreignID, p.InstanceID)
 			var lookupErr error
 			if !cached {
-				looked := musicResultsFor(p.Title)
+				looked := musicResultsFor(p.Title, p.InstanceID)
 				lookupErr = looked.err
 				for i := range looked.results {
 					if looked.results[i].ForeignAlbumID == foreignID {
@@ -1130,7 +1296,7 @@ func (s *ToolServer) displayMedia(ctx context.Context, input json.RawMessage, us
 			}
 			items = append(items, MediaResultItem{
 				Title: match.Title, Year: year, Overview: match.Overview,
-				MediaType: "music", ForeignID: match.ForeignAlbumID, PosterURL: match.RemoteCover,
+				MediaType: "music", ForeignID: match.ForeignAlbumID, PosterURL: match.RemoteCover, InstanceID: p.InstanceID,
 			})
 		case "movie":
 			tmdbID := p.TmdbID
@@ -1335,14 +1501,101 @@ func (s *ToolServer) listMyRequests(userID int64) (*ToolResult, error) {
 		// retrying, and on its own it tells the assistant the library has the
 		// title — so the assistant would reassure a requester about a record
 		// that does not exist. Say what the status word cannot.
-		if wait := r.BookFormatWait; wait != nil {
+		if wait := r.BookFormatWait; wait != nil && len(r.Delivery) == 0 {
 			detail := "the library is not ready for it yet"
 			if wait.Reason == request.BookWaitReasonAuthorImport {
 				detail = "the library is still importing its author"
 			}
 			fmt.Fprintf(&sb, " - Not in the library yet: %s. The library retries on its own and Cantinarr completes the request when it lands; nobody needs to approve anything.", detail)
 		}
+		for _, delivery := range r.Delivery {
+			fmt.Fprintf(&sb, " - Saved request %d, %s delivery: %s", delivery.RequestID, delivery.Format, delivery.Message)
+			if delivery.NextAttemptAt != nil {
+				fmt.Fprintf(&sb, " Next attempt: %s.", delivery.NextAttemptAt.Format(time.RFC3339))
+			}
+		}
 		sb.WriteByte('\n')
 	}
 	return &ToolResult{Text: sb.String()}, nil
+}
+
+// searchCatalogs returns independently labelled sections, retaining successful
+// results when the other provider is unavailable. Source IDs never masquerade
+// as native service IDs.
+func (s *ToolServer) searchCatalogs(input json.RawMessage, userID int64, mediaType string) (*ToolResult, error) {
+	var params struct {
+		Query      string `json:"query"`
+		Catalog    string `json:"catalog"`
+		Page       int    `json:"page"`
+		InstanceID string `json:"instance_id"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil {
+		return nil, err
+	}
+	if params.Page == 0 {
+		params.Page = 1
+	}
+	type section struct {
+		Source  string `json:"source"`
+		Results any    `json:"results,omitempty"`
+		Error   string `json:"error,omitempty"`
+		Scope   string `json:"scope"`
+	}
+	sections := []section{}
+	public := make(chan section, 1)
+	go func() {
+		body, err := s.request.SearchCatalog(userID, mediaType, params.Query, params.InstanceID, params.Page)
+		part := section{Source: "public", Scope: "Public metadata search; does not establish library availability"}
+		if err != nil {
+			part.Error = err.Error()
+		} else {
+			var data map[string]any
+			if json.Unmarshal(body, &data) != nil {
+				part.Error = "Invalid catalog response"
+			} else {
+				provider := "openlibrary"
+				if mediaType == "music" {
+					provider = "musicbrainz"
+				}
+				if items, ok := data["results"].([]any); ok {
+					for _, raw := range items {
+						if item, ok := raw.(map[string]any); ok {
+							id, _ := item["foreign_id"].(string)
+							item["catalog_ref"] = request.CatalogRef{Provider: provider, ID: strings.TrimPrefix(id, "ol:")}
+							delete(item, "foreign_id")
+						}
+					}
+				}
+				part.Results = data
+			}
+		}
+		public <- part
+	}()
+	if params.Catalog == "all" {
+		part := section{Source: "library", Scope: "Selected service catalog search; an empty result does not rule out another catalog"}
+		if mediaType == "book" {
+			rows, err := s.request.SearchBooksForUserInInstance(userID, params.Query, params.InstanceID)
+			if err != nil {
+				part.Error = err.Error()
+			} else {
+				part.Results = rows
+			}
+		} else {
+			rows, err := s.request.SearchAlbumsForUserInInstance(userID, params.Query, params.InstanceID)
+			if err != nil {
+				part.Error = err.Error()
+			} else {
+				part.Results = rows
+			}
+		}
+		sections = append(sections, part)
+	}
+	sections = append(sections, <-public)
+	body, _ := json.Marshal(sections)
+	return &ToolResult{Text: string(body)}, nil
+}
+
+func retiredBookCatalogResult() *ToolResult {
+	data, _ := json.Marshal(bookdiscovery.Retirement())
+	return &ToolResult{Text: string(data)}
 }

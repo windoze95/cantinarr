@@ -2,7 +2,7 @@ name: Deploy to TestFlight
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release/**']
     paths:
       - "app/**"
       - "!app/web/**"
@@ -18,6 +18,17 @@ on:
       - "!app/ios/fastlane/metadata/**"
       - "!app/ios/fastlane/screenshots/**"
       - ".github/workflows/testflight.yml"
+      - ".github/workflows/prepare-mobile.yml"
+      - "scripts/release_control.py"
+      - "scripts/testflight_distribute.py"
+  workflow_call:
+    inputs:
+      preview_pr:
+        type: string
+        default: ''
+      reviewed_sha:
+        type: string
+        default: ''
   workflow_dispatch:
 
 # Serialize TestFlight runs. The build number is latest_testflight_build_number + 1,
@@ -28,10 +39,24 @@ concurrency:
   group: testflight-deploy
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
 jobs:
+  source:
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/prepare-mobile.yml
+    with:
+      preview_pr: ${{ inputs.preview_pr || '' }}
+      reviewed_sha: ${{ inputs.reviewed_sha || '' }}
+
   # An upload is irreversible — it burns a build number and reaches testers —
   # so no IPA is built until CI has passed on this exact commit.
   gate:
+    needs: [source]
+    if: needs.source.outputs.enabled == 'true'
     # The repo's default token is contents/packages read only, and a called
     # workflow can't request a scope its caller doesn't hold — so the scope
     # that reads another workflow's run status is granted here.
@@ -40,10 +65,16 @@ jobs:
       contents: read
     uses: ./.github/workflows/require-ci-green.yml
     with:
-      sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      sha: ${{ needs.source.outputs.sha }}
+      ci-head: ${{ needs.source.outputs.ci_head }}
 
   deploy:
-    needs: [gate]
+    needs: [source, gate]
+    if: needs.source.outputs.enabled == 'true' && needs.gate.result == 'success'
+    environment: ${{ inputs.preview_pr && 'mobile-preview' || 'mobile-publishing' }}
+    env:
+      SOURCE_JSON: ${{ needs.source.outputs.source }}
+      GH_TOKEN: ${{ github.token }}
     runs-on: macos-26
 
     outputs:
@@ -59,6 +90,21 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          ref: ${{ needs.source.outputs.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Checkout publishing tools from the workflow revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-policy
+          persist-credentials: false
+
+      - name: Verify preview audience was configured
+        if: inputs.preview_pr != '' && inputs.preview_pr != null
+        env:
+          PREVIEW_READY: ${{ vars.MOBILE_PREVIEW_READY }}
+        run: test "$PREVIEW_READY" = 'true'
 
       - name: Calculate build number
         id: build_number
@@ -78,13 +124,18 @@ jobs:
         with:
           xcode-version: latest-stable
 
+      - name: Read Flutter version
+        id: flutter-version
+        run: echo "version=$(cat .flutter-version)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
           channel: stable
 
       - name: Install dependencies
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Import distribution certificate
         env:
@@ -94,40 +145,43 @@ jobs:
           KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
           CERT_PATH=$RUNNER_TEMP/dist_cert.p12
 
-          echo -n "$IOS_DIST_CERT_BASE64" | base64 --decode -o $CERT_PATH
+          echo -n "$IOS_DIST_CERT_BASE64" | base64 --decode -o "$CERT_PATH"
 
-          security create-keychain -p "" $KEYCHAIN_PATH
-          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
-          security unlock-keychain -p "" $KEYCHAIN_PATH
+          security create-keychain -p "" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "" "$KEYCHAIN_PATH"
 
-          security import $CERT_PATH -P "$IOS_DIST_CERT_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
-          security set-key-partition-list -S apple-tool:,apple: -k "" $KEYCHAIN_PATH
-          security list-keychain -d user -s $KEYCHAIN_PATH
+          security import "$CERT_PATH" -P "$IOS_DIST_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
 
       - name: Install provisioning profile
         env:
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
         run: |
           PP_PATH=$RUNNER_TEMP/cantinarr.mobileprovision
-          echo -n "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode -o $PP_PATH
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< $(/usr/bin/security cms -D -i $PP_PATH))
-          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/$UUID.mobileprovision
+          echo -n "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode -o "$PP_PATH"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< "$(/usr/bin/security cms -D -i "$PP_PATH")")
+          cp "$PP_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
 
       - name: Configure signing
         env:
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          INTERNAL_ONLY: ${{ needs.source.outputs.channel == 'preview' }}
         run: |
           PP_PATH=$RUNNER_TEMP/cantinarr.mobileprovision
-          UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< $(/usr/bin/security cms -D -i $PP_PATH))
+          UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< "$(/usr/bin/security cms -D -i "$PP_PATH")")
           TEAM_ID="2M54LKDR89"
 
           # Inject signing settings into Release.xcconfig
-          echo "" >> ios/Flutter/Release.xcconfig
-          echo "CODE_SIGN_STYLE=Manual" >> ios/Flutter/Release.xcconfig
-          echo "CODE_SIGN_IDENTITY=Apple Distribution" >> ios/Flutter/Release.xcconfig
-          echo "PROVISIONING_PROFILE_SPECIFIER=$UUID" >> ios/Flutter/Release.xcconfig
-          echo "DEVELOPMENT_TEAM=$TEAM_ID" >> ios/Flutter/Release.xcconfig
+          {
+            echo ""
+            echo "CODE_SIGN_STYLE=Manual"
+            echo "CODE_SIGN_IDENTITY=Apple Distribution"
+            echo "PROVISIONING_PROFILE_SPECIFIER=$UUID"
+            echo "DEVELOPMENT_TEAM=$TEAM_ID"
+          } >> ios/Flutter/Release.xcconfig
 
           # Generate ExportOptions.plist
           cat > ios/ExportOptions.plist << EOF
@@ -137,6 +191,10 @@ jobs:
           <dict>
             <key>method</key>
             <string>app-store</string>
+            <key>testFlightInternalTestingOnly</key>
+            <${INTERNAL_ONLY}/>
+            <key>manageAppVersionAndBuildNumber</key>
+            <false/>
             <key>teamID</key>
             <string>${TEAM_ID}</string>
             <key>signingStyle</key>
@@ -152,13 +210,17 @@ jobs:
 
       - name: Build IPA
         run: |
-          flutter build ipa \
+          flutter build ipa --no-pub \
             --build-number=${{ steps.build_number.outputs.build_number }} \
             --build-name=${{ steps.build_number.outputs.version }} \
             --export-options-plist=ios/ExportOptions.plist
 
+      - name: Recheck source before upload
+        run: python3 ../.release-policy/scripts/release_control.py current
+
       - name: Upload to TestFlight
         env:
+          BUILD_TEST_NOTES: ${{ format('{0} | PR {1} | commit {2}', needs.source.outputs.channel, inputs.preview_pr || 'merged', needs.source.outputs.sha) }}
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_API_KEY_B64: ${{ secrets.APP_STORE_CONNECT_API_KEY_B64 }}
@@ -166,10 +228,23 @@ jobs:
           cd ios
           fastlane beta
 
+      - name: Record uploaded build identity
+        working-directory: .
+        env:
+          BUILD_VERSION: ${{ steps.build_number.outputs.version }}
+          BUILD_NUMBER: ${{ steps.build_number.outputs.build_number }}
+        run: python3 .release-policy/scripts/release_control.py record --platform ios
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-release-record-${{ github.run_attempt }}
+          path: release.json
+          retention-days: 90
+
       - name: Cleanup keychain
         if: always()
         run: |
-          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
+          security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true
 
   # The upload alone reaches nobody outside the team. The internal group was created with
   # automatic distribution and picks every build up on its own; external groups never do, so
@@ -181,11 +256,14 @@ jobs:
   # now stays held while this waits, so the poll is capped rather than open-ended — a stalled
   # Apple ingestion fails this job instead of blocking the next merge's build indefinitely.
   distribute:
-    needs: [deploy]
+    needs: [source, deploy]
+    if: needs.source.outputs.channel != 'preview'
     runs-on: ubuntu-latest
     timeout-minutes: 50
 
     env:
+      SOURCE_JSON: ${{ needs.source.outputs.source }}
+      GH_TOKEN: ${{ github.token }}
       # The id addresses the group; the name is asserted against it before anything is
       # distributed, so a rename or a recreated group fails loudly instead of shipping a build
       # to an audience nobody chose.
@@ -200,6 +278,9 @@ jobs:
 
       - name: Install dependencies
         run: pip install --quiet "pyjwt[crypto]>=2.8"
+
+      - name: Recheck public beta ownership
+        run: python3 scripts/release_control.py current
 
       - name: Distribute to external testers
         env:

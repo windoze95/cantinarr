@@ -1,6 +1,9 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'hardcover_connection.dart';
+import '../../media_access/data/listening_apps.dart';
+import '../../media_access/data/video_apps.dart';
 import '../../../core/models/backend_connection.dart';
 
 /// Maps the path reported by one arr instance to the corresponding read-only
@@ -26,6 +29,44 @@ class MediaPathMapping {
       };
 }
 
+/// Whether a Chaptarr instance is connected to Hardcover. `supported` is
+/// false for every other service type (and for a response the client could
+/// not read), so the editor renders nothing rather than a wrong answer.
+class InstanceHardcoverStatus {
+  final bool supported;
+  final bool configured;
+  final bool oauthAvailable;
+  final String method;
+  final bool reconnectRequired;
+  final String connectionId;
+  final int revision;
+
+  const InstanceHardcoverStatus({
+    required this.supported,
+    required this.configured,
+    this.oauthAvailable = false,
+    this.method = 'none',
+    this.reconnectRequired = false,
+    this.connectionId = '',
+    this.revision = 0,
+  });
+
+  factory InstanceHardcoverStatus.fromJson(dynamic json) {
+    final map =
+        json is Map<String, dynamic> ? json : const <String, dynamic>{};
+    return InstanceHardcoverStatus(
+      supported: map['supported'] == true,
+      configured: map['configured'] == true,
+      oauthAvailable: map['oauth_available'] == true,
+      method: map['method'] as String? ??
+          (map['configured'] == true ? 'api_token' : 'none'),
+      reconnectRequired: map['reconnect_required'] == true,
+      connectionId: map['connection_id'] as String? ?? '',
+      revision: (map['revision'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
 /// One instance's live instant-updates state. `state` explains a
 /// not-configured answer ('missing', 'stale', 'credential_missing',
 /// 'no_public_url'); unknown values from a newer server render generically.
@@ -47,6 +88,8 @@ class InstanceWebhookStatus {
 class MediaServerConfig {
   final String publicAddress;
   final List<String> libraryIds;
+  final ListeningApps? listeningApps;
+  final VideoApps? videoApps;
 
   /// Plex only: the server (plex.tv machine identifier) whose shares the
   /// instance manages, and whether anyone who shares a Plex email is granted
@@ -57,6 +100,8 @@ class MediaServerConfig {
   const MediaServerConfig({
     this.publicAddress = '',
     this.libraryIds = const [],
+    this.listeningApps,
+    this.videoApps,
     this.machineIdentifier = '',
     this.autoApprove = false,
   });
@@ -64,6 +109,12 @@ class MediaServerConfig {
   factory MediaServerConfig.fromJson(Map<String, dynamic> json) =>
       MediaServerConfig(
         publicAddress: json['public_address'] as String? ?? '',
+        videoApps: json['video_apps'] is Map
+            ? VideoApps.fromJson(json['video_apps'])
+            : null,
+        listeningApps: json['listening_apps'] is Map
+            ? ListeningApps.fromJson(json['listening_apps'])
+            : null,
         libraryIds: (json['library_ids'] as List<dynamic>?)
                 ?.map((id) => id.toString())
                 .toList(growable: false) ??
@@ -75,6 +126,8 @@ class MediaServerConfig {
   Map<String, dynamic> toJson() => {
         'public_address': publicAddress,
         'library_ids': libraryIds,
+        if (listeningApps != null) 'listening_apps': listeningApps!.toJson(),
+        if (videoApps != null) 'video_apps': videoApps!.toJson(),
         if (machineIdentifier.isNotEmpty) 'machine_identifier': machineIdentifier,
         if (autoApprove) 'auto_approve': true,
       };
@@ -318,6 +371,71 @@ class InstanceApiService {
       configured: map['configured'] == true,
       state: map['state'] as String? ?? '',
     );
+  }
+
+  /// Whether this Chaptarr instance holds a Hardcover API token. The token
+  /// itself is write-only and never comes back. Older servers without the
+  /// route answer 404/405; that propagates for the caller to treat as unknown.
+  Future<InstanceHardcoverStatus> hardcoverStatus(String id) async {
+    final resp = await _dio.get('/api/instances/$id/hardcover');
+    return InstanceHardcoverStatus.fromJson(resp.data);
+  }
+
+  /// Connect a Hardcover account: the server verifies the token against
+  /// Hardcover before storing it encrypted. A rejected token is a 400 that
+  /// leaves any previous connection in place.
+  Future<InstanceHardcoverStatus> saveHardcoverToken(
+      String id, String token) async {
+    final resp = await _dio.put(
+      '/api/instances/$id/hardcover',
+      data: {'token': token},
+    );
+    return InstanceHardcoverStatus.fromJson(resp.data);
+  }
+
+  /// Disconnect Hardcover from this instance.
+  Future<InstanceHardcoverStatus> clearHardcoverToken(String id) async {
+    final resp = await _dio.delete('/api/instances/$id/hardcover');
+    return InstanceHardcoverStatus.fromJson(resp.data);
+  }
+
+  Future<HardcoverDeviceFlow> beginHardcoverDevice(String id) async {
+    final response =
+        await _dio.post('/api/instances/$id/hardcover/device/begin');
+    return HardcoverDeviceFlow.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  Future<HardcoverDeviceFlow> checkHardcoverDevice(
+      String id, String flowId) async {
+    final response =
+        await _dio.get('/api/instances/$id/hardcover/device/$flowId');
+    return HardcoverDeviceFlow.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  Future<HardcoverDeviceFlow> cancelHardcoverDevice(
+      String id, String flowId) async {
+    final response =
+        await _dio.delete('/api/instances/$id/hardcover/device/$flowId');
+    return HardcoverDeviceFlow.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  Future<List<HardcoverApplyResult>> applyHardcoverConnection(
+    String id,
+    String connectionId,
+    Map<String, int> revisions,
+  ) async {
+    final response =
+        await _dio.post('/api/instances/$id/hardcover/apply', data: {
+      'connection_id': connectionId,
+      'instances': [
+        for (final entry in revisions.entries)
+          {'instance_id': entry.key, 'revision': entry.value}
+      ],
+    });
+    return ((response.data as Map<String, dynamic>)['results'] as List<dynamic>)
+        .map((item) =>
+            HardcoverApplyResult.fromJson(item as Map<String, dynamic>))
+        .toList();
   }
 
   /// Per-user default pins for this instance's service type, keyed by user id.

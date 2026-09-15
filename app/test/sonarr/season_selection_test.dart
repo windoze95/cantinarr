@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cantinarr/core/network/backend_client.dart';
+import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/features/sonarr/data/sonarr_models.dart';
 import 'package:cantinarr/features/sonarr/logic/episode_selection.dart';
 import 'package:cantinarr/features/sonarr/ui/sonarr_season_screen.dart';
@@ -13,9 +14,10 @@ import 'package:flutter_test/flutter_test.dart';
 /// Fake Dio adapter routing by path: /episode and /queue get canned bodies,
 /// every request (command posts, monitor puts, file deletes) is recorded.
 class _FakeAdapter implements HttpClientAdapter {
-  _FakeAdapter({required this.episodes});
+  _FakeAdapter({required this.episodes, this.seriesMonitored = true});
 
   final List<Map<String, dynamic>> episodes;
+  bool seriesMonitored;
   final List<({String method, String path, dynamic body})> requests = [];
 
   @override
@@ -37,6 +39,15 @@ class _FakeAdapter implements HttpClientAdapter {
       response = episodes;
     }
     if (path.endsWith('/queue')) response = {'records': <dynamic>[]};
+    if (path.endsWith('/series/7')) {
+      response = {
+        'id': 7, 'title': 'Example', 'monitored': seriesMonitored,
+        'seasons': [
+          // Individually monitored episodes must work inside an off season.
+          {'seasonNumber': 1, 'monitored': false},
+        ],
+      };
+    }
     return ResponseBody.fromString(
       jsonEncode(response),
       200,
@@ -88,8 +99,10 @@ Future<_FakeAdapter> _pumpSeasonScreen(
   WidgetTester tester, {
   required List<Map<String, dynamic>> episodes,
   int? seasonNumber = 1,
+  bool seriesMonitored = true,
 }) async {
-  final adapter = _FakeAdapter(episodes: episodes);
+  final adapter = _FakeAdapter(
+      episodes: episodes, seriesMonitored: seriesMonitored);
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
     ..httpClientAdapter = adapter;
   await tester.pumpWidget(
@@ -340,6 +353,50 @@ void main() {
       expect(find.byIcon(Icons.bookmark), findsNothing);
       expect(find.byIcon(Icons.bookmark_border), findsNothing);
     });
+
+    for (final seasonNumber in <int?>[1, null]) {
+      testWidgets('unmonitored series disables episode monitoring '
+          'in ${seasonNumber == null ? "all seasons" : "one season"}',
+          (tester) async {
+        final adapter = await _pumpSeasonScreen(tester,
+          seasonNumber: seasonNumber,
+          seriesMonitored: false,
+          episodes: [_episodeJson(id: 101, episodeNumber: 1,
+            hasFile: false, aired: true, monitored: true)],
+        );
+        // The navigation seed is monitored; the live parent must override it.
+        final row = find.ancestor(of: find.text('Episode 1'),
+            matching: find.byType(InkWell)).first;
+        expect(tester.widgetList<Opacity>(find.descendant(
+          of: row, matching: find.byType(Opacity),
+        )).map((o) => o.opacity), everyElement(0.5));
+        await tester.longPress(find.text('Episode 1'));
+        await tester.pumpAndSettle();
+        final action = find.widgetWithText(ListTile, 'Unmonitor Episode');
+        expect(tester.widget<ListTile>(action).enabled, isFalse);
+        expect(tester.widget<Icon>(find.descendant(
+          of: action, matching: find.byType(Icon),
+        )).color, AppTheme.textSecondary);
+        await tester.tap(find.text('Unmonitor Episode'));
+        await tester.pump();
+        expect(ofMethod(adapter, 'PUT'), isEmpty);
+
+        Navigator.of(tester.element(action)).pop();
+        await tester.pumpAndSettle();
+        adapter.seriesMonitored = true;
+        tester.state<RefreshIndicatorState>(find.byType(RefreshIndicator)).show();
+        await tester.pumpAndSettle();
+        expect(tester.widgetList<Opacity>(find.descendant(
+          of: row, matching: find.byType(Opacity),
+        )).map((o) => o.opacity), everyElement(1.0));
+        await tester.longPress(find.text('Episode 1'));
+        await tester.pumpAndSettle();
+        expect(tester.widget<ListTile>(action).enabled, isTrue);
+        // Re-enabling the series restores the saved episode setting, even
+        // though its season remains off, without a child-monitoring write.
+        expect(ofMethod(adapter, 'PUT'), isEmpty);
+      });
+    }
 
     testWidgets('episode menu deletes a downloaded file after confirming',
         (tester) async {

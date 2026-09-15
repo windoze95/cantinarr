@@ -47,33 +47,17 @@ class LibraryArtistIndex {
       ];
 }
 
-/// The active Lidarr instance's own artist records, indexed by MusicBrainz
-/// id, for resolving search results to openable library records.
-///
-/// One unpaginated fetch per instance, issued only once a Music-tab search
-/// actually needs it and then held until the library itself changes
-/// (`DashboardMusicTab._refreshMusicTruth()` drops the browse rows' truth
-/// and the search overlay releases this index with it).
-///
-/// On failure this yields [LibraryArtistIndex.empty] rather than throwing: an
-/// album search must not fail because artist *linking* could not be resolved.
-/// Every artist then reads as metadata-only, which is the safe direction. The
-/// blank is deliberately not held: only a fetch that succeeded keeps the
-/// cache alive, so a Lidarr blip costs the search that saw it rather than
-/// every search until the app restarts.
+/// The selected instance's actual artists, loaded only while search needs
+/// library supplementation. Errors stay visible independently of catalog
+/// results; leaving search releases the cache.
 final libraryArtistIndexProvider =
     FutureProvider.autoDispose<LibraryArtistIndex>((ref) async {
   final instance = ref.watch(instanceProvider).activeLidarrInstance;
   if (instance == null) return LibraryArtistIndex.empty;
-  final cache = ref.keepAlive();
+
   final service = LidarrApiService(
     backendDio: ref.read(backendClientProvider),
     instanceId: instance.id,
   );
-  try {
-    return LibraryArtistIndex.from(await service.getArtists());
-  } catch (_) {
-    cache.close();
-    return LibraryArtistIndex.empty;
-  }
+  return LibraryArtistIndex.from(await service.getArtists());
 });

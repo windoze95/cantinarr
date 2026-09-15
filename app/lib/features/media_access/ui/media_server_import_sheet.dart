@@ -31,12 +31,13 @@ Future<int?> showMediaServerImportSheet(
 /// (a new user, an existing user of that name, or nothing because it is
 /// already linked), imports the picked ones, and shows each outcome with its
 /// connect link. The admin's pick is the mapping; nothing on the server
-/// changes but a switched-off account, which is switched on with its access.
+/// changes unless the admin explicitly opts into access management.
 class MediaServerImportSheet extends ConsumerStatefulWidget {
   final ServiceInstance server;
 
   /// Cantinarr usernames that already exist, to their ids: an account of the
-  /// same name is attached to that user rather than a new one.
+  /// same name is attached to that user for Jellyfin/Emby. Plex namesakes need
+  /// the administrator to select the intended user through Link account.
   final Map<String, int> existingUsers;
 
   /// Remote account ids already linked, to the Cantinarr username holding
@@ -60,6 +61,7 @@ class _MediaServerImportSheetState
   List<RemoteMediaServerUser>? _users;
   bool _failed = false;
   bool _busy = false;
+  bool _manageAccess = false;
   final Set<String> _picked = {};
   List<MediaServerImportResult>? _results;
 
@@ -87,12 +89,18 @@ class _MediaServerImportSheetState
   }
 
   bool _pickable(RemoteMediaServerUser user) =>
-      !widget.linkedTo.containsKey(user.id);
+      !widget.linkedTo.containsKey(user.id) &&
+      !(widget.server.serviceType == 'plex' &&
+          widget.existingUsers.containsKey(user.name));
 
   /// What importing this account would do, said before it happens.
   String? _subtitle(RemoteMediaServerUser user) {
     final holder = widget.linkedTo[user.id];
     if (holder != null) return 'Already linked to $holder';
+    if (widget.server.serviceType == 'plex' &&
+        widget.existingUsers.containsKey(user.name)) {
+      return 'Username already exists. Select the intended user with Link account.';
+    }
     final parts = <String>[
       if (user.isAdministrator) 'Administrator',
       if (user.isDisabled) 'Turned off on the server',
@@ -122,6 +130,7 @@ class _MediaServerImportSheetState
             instanceId: widget.server.id,
             remoteUserIds: _picked.toList(),
             serverUrl: conn.serverUrl,
+            manageAccess: conn.mediaAccountManagement ? _manageAccess : null,
           );
       if (!mounted) return;
       setState(() {
@@ -148,11 +157,16 @@ class _MediaServerImportSheetState
 
   /// One row's outcome in the admin's words.
   String _outcome(MediaServerImportResult r) {
+    if (r.plexIdentityError.isNotEmpty) {
+      return 'Media account linked. Plex sign-in needs review: ${r.plexIdentityError}';
+    }
     switch (r.error) {
       case '':
         return r.created
             ? 'New user ${r.username}, linked'
             : 'Existing user ${r.username}, linked';
+      case 'username_conflict':
+        return 'That username already exists. Choose its user explicitly with Link account.';
       case 'already_linked':
         return 'Already linked to another user';
       case 'not_found':
@@ -188,6 +202,12 @@ class _MediaServerImportSheetState
   }
 
   Widget _buildPicker(String name) {
+    final supportsManagement = ref
+            .watch(authProvider)
+            .valueOrNull
+            ?.connection
+            ?.mediaAccountManagement ??
+        false;
     final users = _users;
     final pickable =
         users?.where(_pickable).length ?? 0;
@@ -206,15 +226,26 @@ class _MediaServerImportSheetState
         const SizedBox(height: AppTheme.spaceSm),
         Text(
           'Each picked account gets a Cantinarr user with the same name, '
-          'access to $name, and the account linked. Nothing else on $name '
-          'changes: an account switched off there is switched back on, '
-          'since it gets access.',
+          'access to $name in Cantinarr, and the account linked. '
+          '${supportsManagement ? 'Accounts on $name stay as they are unless you choose to manage their access.' : 'This server manages linked accounts, enabling them on import and disabling them when their grant is removed.'}',
           style: const TextStyle(
             color: AppTheme.textSecondary,
             fontSize: 14,
             height: 1.4,
           ),
         ),
+        if (supportsManagement)
+          CheckboxListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _manageAccess,
+            onChanged: _busy
+                ? null
+                : (value) => setState(() => _manageAccess = value == true),
+            title: const Text('Manage imported accounts through Cantinarr'),
+            subtitle: const Text(
+                'Enables these accounts now. Removing their Cantinarr grant or deleting their user will turn off server access. Existing libraries stay the same. Administrators are protected.'),
+            controlAffinity: ListTileControlAffinity.leading,
+          ),
         const SizedBox(height: AppTheme.spaceLg),
         if (_failed)
           Row(

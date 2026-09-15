@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/windoze95/cantinarr-server/internal/audiobookshelf"
 	"github.com/windoze95/cantinarr-server/internal/emby"
 	"github.com/windoze95/cantinarr-server/internal/jellyfin"
 	"github.com/windoze95/cantinarr-server/internal/mediaserver"
@@ -19,9 +20,9 @@ import (
 
 // mediaServerTypes are the service types that are media servers Cantinarr
 // manages user access on. They follow the Chaptarr rule: never a global
-// default, granted per user, invisible to arr routing. Jellyfin and Emby
-// hold accounts Cantinarr creates; Plex holds shares Cantinarr sends.
-var mediaServerTypes = []string{"jellyfin", "emby", "plex"}
+// default, granted per user, invisible to arr routing. Jellyfin, Emby and
+// Audiobookshelf hold accounts Cantinarr creates; Plex holds shares Cantinarr sends.
+var mediaServerTypes = []string{"jellyfin", "emby", "plex", "audiobookshelf"}
 
 // PlexPublicAddress is where anyone signs in to any Plex server, so it is the
 // sign-in address a Plex instance shows unless the admin typed another.
@@ -54,13 +55,16 @@ func mediaServerTypeList() string {
 
 // MediaServerConfig is the per-instance configuration of a media server.
 // PublicAddress is the client-reachable address shown to granted users so
-// they know where to sign in — the only instance field a requester ever
-// receives, and only because the admin typed it. LibraryIDs are the server's
+// they know where to sign in. Requesters also receive their resolved listening
+// and video app choices, but never the connection URL or credentials. LibraryIDs are the server's
 // library identifiers new accounts may see; empty shares every library,
 // including ones added later.
 type MediaServerConfig struct {
 	PublicAddress string   `json:"public_address"`
 	LibraryIDs    []string `json:"library_ids"`
+	// ListeningApps (Audiobookshelf) supplies defaults users can override.
+	ListeningApps *ListeningApps `json:"listening_apps,omitempty"`
+	VideoApps     *VideoApps     `json:"video_apps,omitempty"`
 	// MachineIdentifier names the Plex Media Server whose shares the instance
 	// manages (plex.tv's machineIdentifier). Empty for every other type.
 	MachineIdentifier string `json:"machine_identifier,omitempty"`
@@ -85,9 +89,21 @@ type MediaServerConfig struct {
 }
 
 func (c MediaServerConfig) clone() MediaServerConfig {
+	var videoApps *VideoApps
+	if c.VideoApps != nil {
+		copy := *c.VideoApps
+		videoApps = &copy
+	}
+	var listeningApps *ListeningApps
+	if c.ListeningApps != nil {
+		copy := *c.ListeningApps
+		listeningApps = &copy
+	}
 	return MediaServerConfig{
 		PublicAddress:     c.PublicAddress,
 		LibraryIDs:        append([]string{}, c.LibraryIDs...),
+		ListeningApps:     listeningApps,
+		VideoApps:         videoApps,
 		MachineIdentifier: c.MachineIdentifier,
 		AutoApprove:       c.AutoApprove,
 		ClientID:          c.ClientID,
@@ -121,6 +137,8 @@ func (c *MediaServerConfig) setPlexOwner(owner plex.Account) {
 // case here plus an entry in mediaServerTypes.
 func NewMediaServerProvider(inst *Instance) (mediaserver.Provider, error) {
 	switch inst.ServiceType {
+	case "audiobookshelf":
+		return audiobookshelf.NewClient(inst.URL, inst.APIKey), nil
 	case "jellyfin":
 		return jellyfin.NewClient(inst.URL, inst.APIKey), nil
 	case "emby":
@@ -145,6 +163,12 @@ func normalizeMediaServerConfig(inst *Instance) {
 	inst.MediaServerConfig.PublicAddress = strings.TrimRight(strings.TrimSpace(inst.MediaServerConfig.PublicAddress), "/")
 	inst.MediaServerConfig.LibraryIDs = tidyLibraryIDs(inst.MediaServerConfig.LibraryIDs)
 	inst.MediaServerConfig.MachineIdentifier = strings.TrimSpace(inst.MediaServerConfig.MachineIdentifier)
+	if !IsVideoServerType(inst.ServiceType) {
+		inst.MediaServerConfig.VideoApps = nil
+	}
+	if inst.ServiceType != "audiobookshelf" {
+		inst.MediaServerConfig.ListeningApps = nil
+	}
 	if inst.ServiceType == "plex" && inst.MediaServerConfig.PublicAddress == "" {
 		inst.MediaServerConfig.PublicAddress = PlexPublicAddress
 	}
@@ -183,6 +207,20 @@ func encodeMediaServerConfig(inst *Instance) (string, error) {
 // normalized copy that will be stored.
 func validateMediaServerConfig(cfg MediaServerConfig) (MediaServerConfig, error) {
 	out := MediaServerConfig{LibraryIDs: []string{}}
+	if cfg.VideoApps != nil {
+		if err := cfg.VideoApps.Validate(); err != nil {
+			return out, err
+		}
+		copy := *cfg.VideoApps
+		out.VideoApps = &copy
+	}
+	if cfg.ListeningApps != nil {
+		if err := cfg.ListeningApps.Validate(); err != nil {
+			return out, err
+		}
+		copy := *cfg.ListeningApps
+		out.ListeningApps = &copy
+	}
 	address := strings.TrimSpace(cfg.PublicAddress)
 	if address != "" {
 		parsed, err := url.Parse(address)
@@ -229,6 +267,12 @@ func validateMediaServerConfig(cfg MediaServerConfig) (MediaServerConfig, error)
 // a present field replaces it after validation. Non-media types may only send
 // an empty config.
 func (h *Handler) applyMediaServerConfig(inst *Instance, provided *MediaServerConfig, existing *Instance) error {
+	if provided != nil && provided.VideoApps != nil && !IsVideoServerType(inst.ServiceType) {
+		return fmt.Errorf("video_apps is supported only for Plex, Jellyfin, and Emby")
+	}
+	if provided != nil && provided.ListeningApps != nil && inst.ServiceType != "audiobookshelf" {
+		return fmt.Errorf("listening_apps is supported only for Audiobookshelf")
+	}
 	if !IsMediaServerType(inst.ServiceType) {
 		if provided != nil && (strings.TrimSpace(provided.PublicAddress) != "" || len(provided.LibraryIDs) > 0) {
 			return fmt.Errorf("media_server_config is supported only for media servers (%s)", mediaServerTypeList())

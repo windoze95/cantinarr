@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
+import 'package:cantinarr/core/network/websocket_client.dart';
 import 'package:cantinarr/core/widgets/app_ambient_background.dart';
 import 'package:cantinarr/core/widgets/search_bar.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
@@ -16,6 +17,8 @@ import 'package:cantinarr/features/dashboard/ui/requester_album_detail_screen.da
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/features/discover/ui/browse_grid_screen.dart';
 import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
+import 'package:cantinarr/features/media_detail/ui/media_detail_screen.dart';
+import 'package:cantinarr/features/notifications/push_service.dart';
 import 'package:cantinarr/features/monitoring/ui/monitoring_module_shell.dart';
 import 'package:cantinarr/features/settings/ui/instance_edit_screen.dart';
 import 'package:cantinarr/features/shell/ui/app_shell.dart';
@@ -23,11 +26,79 @@ import 'package:cantinarr/features/sonarr/ui/sonarr_module_shell.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show MethodChannel, StandardMethodCodec, MethodCall;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
+  for (final cold in [true, false]) {
+    for (final restoringAuth in [true, false]) {
+      testWidgets('TV tap cold=$cold restoringAuth=$restoringAuth retains story and library', (tester) async {
+        final (:container, :router) = await _pumpRouter(tester,
+            restoringAuth ? const AuthState() : _authedState);
+        const channel = MethodChannel('codes.julian.cantinarr/push');
+        final payload = {'type': 'new_episode', 'media_type': 'tv',
+          'tmdb_id': 225634, 'instance_id': 'tv-importing'};
+        final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(channel, (call) async =>
+            call.method == 'getInitialNotification' ? payload : null);
+        addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+        final service = container.read(pushServiceProvider);
+        if (cold) {
+          await service.handleInitialNotification();
+        } else {
+          const codec = StandardMethodCodec();
+          await messenger.handlePlatformMessage(channel.name,
+              codec.encodeMethodCall(MethodCall('onNotificationTap', payload)), (_) {});
+        }
+        await tester.pumpAndSettle();
+        if (restoringAuth) {
+          expect(router.routerDelegate.currentConfiguration.uri.path, '/login');
+          (container.read(authProvider.notifier) as _FakeAuthNotifier).push(_authedState);
+          await tester.pumpAndSettle();
+        }
+        final screen = tester.widget<MediaDetailScreen>(find.byType(MediaDetailScreen));
+        expect(screen.id, 225634);
+        expect(screen.instanceId, 'tv-importing');
+        // The fixture has no such grant. It must still land on that library,
+        // visibly unavailable, rather than another library's detail state.
+        expect(find.text('Library unavailable'), findsOneWidget);
+      });
+    }
+  }
+  testWidgets('hidden Movies at login lands on the first visible tab',
+      (tester) async {
+    final (:container, :router) = await _pumpRouter(tester, const AuthState());
+    (container.read(authProvider.notifier) as _FakeAuthNotifier).push(
+        _authedState.copyWith(
+            connection: _authedState.connection!
+                .copyWith(hiddenDiscoverTabs: ['movie'])));
+    await tester.pumpAndSettle();
+    expect(
+        router.routerDelegate.currentConfiguration.uri.path, '/dashboard/tv');
+  });
+
+  testWidgets('settings edits block sidebar navigation but not session expiry',
+      (tester) async {
+    final (:router, :container) = await _pumpRouter(tester, _adminState,
+        surfaceSize: const Size(1200, 900));
+    router.go('/settings/password');
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, 'unsaved-password');
+    router.go('/dashboard/movies');
+    await tester.pumpAndSettle();
+    expect(find.text('Discard unsaved changes?'), findsOneWidget);
+    await tester.tap(find.text('Keep editing'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SetPasswordScreen), findsOneWidget);
+    (container.read(authProvider.notifier) as _FakeAuthNotifier)
+        .push(const AuthState());
+    await tester.pumpAndSettle();
+    expect(router.routerDelegate.currentConfiguration.uri.path, '/login');
+    expect(find.text('Discard unsaved changes?'), findsNothing);
+  });
+
   test('router instance stays stable across auth state changes', () {
     final container = ProviderContainer(
       overrides: [
@@ -125,8 +196,11 @@ void main() {
       '/settings/change-history/1',
       '/settings/users',
       '/settings/request-settings',
+      '/settings/discord-notifications',
+      '/settings/push-notifications/server',
       '/settings/agent-approval-rules',
       '/settings/devices',
+      '/settings/apple-tvs',
       '/settings/plex',
       '/settings/instance/new',
     ]) {
@@ -609,6 +683,8 @@ Future<({ProviderContainer container, GoRouter router})> _pumpRouter(
     overrides: [
       authProvider.overrideWith(() => _FakeAuthNotifier(authState)),
       backendClientProvider.overrideWithValue(_fakeDio()),
+      webSocketClientProvider.overrideWith((ref) => _QuietWebSocket()),
+      pushServiceProvider.overrideWith((ref) => PushService(ref, supported: true)),
     ],
   );
   addTearDown(container.dispose);
@@ -676,4 +752,11 @@ class _JsonAdapter implements HttpClientAdapter {
 
   @override
   void close({bool force = false}) {}
+}
+
+class _QuietWebSocket extends WebSocketClient {
+  _QuietWebSocket()
+      : super(getServerUrl: () => null, getAccessToken: () => null);
+  @override
+  void ensureConnected() {}
 }

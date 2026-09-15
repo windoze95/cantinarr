@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../chaptarr/logic/book_publication.dart';
 
 import '../../../core/layout/adaptive.dart';
 import '../../../core/providers/instance_provider.dart';
@@ -57,7 +58,8 @@ class RequesterAuthorDetailScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          (name != null && name.isNotEmpty ? name : nameHint?.trim()) ?? 'Author',
+          (name != null && name.isNotEmpty ? name : nameHint?.trim()) ??
+              'Author',
         ),
       ),
       body: RefreshIndicator(
@@ -70,7 +72,8 @@ class RequesterAuthorDetailScreen extends ConsumerWidget {
           loading: () => const Center(
             child: CircularProgressIndicator(color: AppTheme.accent),
           ),
-          error: (error, _) => _AuthorError(message: _authorErrorMessage(error)),
+          error: (error, _) =>
+              _AuthorError(message: _authorErrorMessage(error)),
           data: (data) => _AuthorBody(detail: data, instanceId: pinned),
         ),
       ),
@@ -241,7 +244,7 @@ class _AuthorBookTile extends ConsumerWidget {
         : chaptarrImageSource(ref, title.cover, instanceId!);
     final status = buildAuthorBookStatus(title);
     final fid = title.foreignBookId.trim();
-    final year = title.year > 0 ? '${title.year}' : null;
+    final year = title.year > 0 ? bookPublicationYearLabel(title.year) : null;
     final subtitle = <String>[
       if (year != null) year,
       if (status?.subtitle != null) status!.subtitle!,
@@ -299,7 +302,7 @@ class _AuthorBookTile extends ConsumerWidget {
           ? null
           : () => context.push(
                 '/detail/book/${Uri.encodeComponent(fid)}'
-                '?title=${Uri.encodeQueryComponent(title.title)}'
+                '?source=chaptarr&title=${Uri.encodeQueryComponent(title.title)}'
                 '${instanceId == null ? '' : '&instance_id=${Uri.encodeQueryComponent(instanceId!)}'}',
               ),
     );

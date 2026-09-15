@@ -185,7 +185,7 @@ func migratePlexInvites(tx *sql.Tx, instanceID string, logger *slog.Logger) (gra
 			return 0, 0, fmt.Errorf("plex migration: grant user %d: %w", u.userID, err)
 		}
 		if _, err := tx.Exec(
-			"INSERT INTO user_media_server_accounts (user_id, instance_id, remote_user_id, remote_username, created_by_cantinarr, created_at) VALUES (?, ?, ?, ?, 1, ?)",
+			"INSERT INTO user_media_server_accounts (user_id, instance_id, remote_user_id, remote_username, created_by_cantinarr, manage_access, created_at) VALUES (?, ?, ?, ?, 1, 1, ?)",
 			u.userID, instanceID, email, strings.TrimSpace(u.email), u.invitedAt,
 		); err != nil {
 			return 0, 0, fmt.Errorf("plex migration: record share for user %d: %w", u.userID, err)

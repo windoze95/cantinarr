@@ -22,6 +22,10 @@ final _menuPreferences = <({
     label: 'Agent fixes conditional visibility',
     provider: agentFixesMenuOnlyWhenAwaitingReviewProvider,
   ),
+  (
+    label: 'Profile approvals conditional visibility',
+    provider: profileApprovalsMenuOnlyWhenPendingProvider,
+  ),
 ];
 
 void main() {
@@ -32,25 +36,32 @@ void main() {
       final first = ProviderContainer();
       addTearDown(first.dispose);
 
-      first.read(preference.provider);
+      expect(first.read(preference.provider), isTrue,
+          reason: 'empty entries must not flash before preferences load');
       await pumpEventQueue();
-      expect(first.read(preference.provider), isFalse);
-
-      await first.read(preference.provider.notifier).set(true);
       expect(first.read(preference.provider), isTrue);
+
+      await first.read(preference.provider.notifier).set(false);
+      expect(first.read(preference.provider), isFalse);
 
       final restored = ProviderContainer();
       addTearDown(restored.dispose);
       restored.read(preference.provider);
 
       await _waitFor(
-        () => restored.read(preference.provider),
+        () => !restored.read(preference.provider),
       );
-      expect(restored.read(preference.provider), isTrue);
+      expect(restored.read(preference.provider), isFalse);
     });
   }
 
   test('conditional menu preferences update independently', () async {
+    SharedPreferences.setMockInitialValues({
+      'approvals_menu_only_when_pending': false,
+      'issues_menu_only_when_active': false,
+      'agent_fixes_menu_only_when_awaiting_review': false,
+      'profile_approvals_menu_only_when_pending': false,
+    });
     final container = ProviderContainer();
     addTearDown(container.dispose);
 

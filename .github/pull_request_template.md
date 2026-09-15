@@ -14,5 +14,6 @@ Docs are part of the change, not a follow-up. Tick what you updated, or tick the
 - [ ] `README.md` — pitch, feature list, configuration/env vars, quick start
 - [ ] `server/README.md` — routes, MCP tools, DB tables, env vars, package tree
 - [ ] `app/README.md` — screens/features, navigation, project structure
+- [ ] `docs/store-release.md` — release channels, store workflows, signing, or audiences
 - [ ] `AGENTS.md` — workflow, verification, or convention changes
 - [ ] No docs impact — explained above

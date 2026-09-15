@@ -5,23 +5,10 @@ import (
 	"fmt"
 )
 
-// Letting the person who reported a problem be the one who says it is fixed.
-//
-// A user-reported issue can never close itself. That is deliberate and correct:
-// "this is the wrong episode" is a judgment, and the server has no way to prove
-// a judgment satisfied — runner.go's conclusion gate refuses every non-auto
-// source for exactly that reason. But the consequence was that EVERY user
-// report ended at needs_admin, including the ones the agent diagnosed, repaired,
-// and verified. The admin's job became rubber-stamping someone else's opinion
-// about content they had not watched.
-//
-// The reporter is the one who can answer. The agent already tells them so —
-// "have a look, and close this out if the content is what you expected" — and
-// until now there was no way for them to do it. This is that way.
-//
-// It is an explicit action, never an inference from a reply. A free-text "yeah
-// looks good" read by a model is not a closure decision; a button the reporter
-// pressed is.
+// Admins review applied repairs, but a reporter who has already checked the
+// result may still voluntarily confirm their own report. This is an explicit
+// action, never an inference from a reply or proof that dispatch succeeded.
+// Their own confirmation needs no redundant success push.
 
 // reporterConfirmedResolution is the closing note. Server-authored: the reporter
 // supplies the decision, not the wording.

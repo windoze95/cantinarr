@@ -1,4 +1,6 @@
 import 'package:cantinarr/features/ai_assistant/data/ai_models.dart';
+import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/features/ai_assistant/ui/chat_bubble.dart';
 import 'package:cantinarr/features/config_changes/data/config_change_models.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +11,35 @@ import 'package:go_router/go_router.dart';
 import 'package:cantinarr/core/widgets/cached_image.dart';
 
 void main() {
+  testWidgets(
+      'music result artwork uses the authenticated selected-instance proxy',
+      (tester) async {
+    await tester.pumpWidget(ProviderScope(
+        overrides: [authProvider.overrideWith(_MusicArtAuth.new)],
+        child: MaterialApp(
+            home: Scaffold(
+                body: ChatBubble(
+                    message: ChatMessage(
+                        id: 'music',
+                        role: ChatRole.assistant,
+                        content: 'An album',
+                        timestamp: DateTime(2026),
+                        mediaResults: const [
+              MediaResultItem(
+                  id: 0,
+                  title: 'Single',
+                  mediaType: 'music',
+                  foreignId: 'group-id',
+                  instanceId: 'selected-library',
+                  posterUrl: '/api/discover/music/artwork/group-id')
+            ]))))));
+    await tester.pump();
+    final cover = tester.widget<CachedImage>(find.byType(CachedImage).first);
+    expect(cover.url,
+        'http://localhost/api/discover/music/artwork/group-id?instance_id=selected-library');
+    expect(cover.headers, {'Authorization': 'Bearer test-token'});
+  });
+
   testWidgets('shows media carousel while assistant message is streaming',
       (tester) async {
     await tester.pumpWidget(
@@ -101,7 +132,8 @@ void main() {
       ),
     );
 
-    expect(find.widgetWithText(OutlinedButton, 'Review change'), findsOneWidget);
+    expect(
+        find.widgetWithText(OutlinedButton, 'Review change'), findsOneWidget);
     expect(
       find.widgetWithText(TextButton, 'Restore previous settings'),
       findsOneWidget,
@@ -130,7 +162,8 @@ void main() {
       ),
     );
 
-    expect(find.widgetWithText(OutlinedButton, 'Review change'), findsOneWidget);
+    expect(
+        find.widgetWithText(OutlinedButton, 'Review change'), findsOneWidget);
     expect(
       find.widgetWithText(TextButton, 'Restore previous settings'),
       findsNothing,
@@ -270,3 +303,12 @@ ConfigChange _change({
       'created_at': '2026-07-20T21:57:00Z',
       if (canRevert != null) 'can_revert': canRevert,
     });
+
+class _MusicArtAuth extends AuthNotifier {
+  @override
+  Future<AuthState> build() async => const AuthState(
+      connection: BackendConnection(
+          serverUrl: 'http://localhost',
+          accessToken: 'test-token',
+          refreshToken: 'test-refresh'));
+}

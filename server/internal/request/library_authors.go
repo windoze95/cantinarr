@@ -335,16 +335,24 @@ func stampAuthorName(titles []LibraryTitle, name string) {
 // sortAuthorTitles orders a bibliography newest-first. Undated records sort
 // last rather than leading the page as year zero.
 func sortAuthorTitles(titles []LibraryTitle) {
+	currentYear := time.Now().Year()
 	sort.SliceStable(titles, func(i, j int) bool {
 		a, b := titles[i], titles[j]
-		if (a.Year > 0) != (b.Year > 0) {
-			return a.Year > 0
-		}
-		if a.Year != b.Year {
-			return a.Year > b.Year
+		ay, by := confirmedPublicationYear(a.Year, currentYear), confirmedPublicationYear(b.Year, currentYear)
+		if ay != by {
+			return ay > by
 		}
 		return strings.ToLower(a.Title) < strings.ToLower(b.Title)
 	})
+}
+
+// Keep upstream years intact, but a distant placeholder is not a publication
+// date. Ordinary announced books up to five years ahead retain their ordering.
+func confirmedPublicationYear(year, currentYear int) int {
+	if year <= 0 || year > currentYear+5 {
+		return 0
+	}
+	return year
 }
 
 // clientReachableAuthorImage returns an author image the app can load, under

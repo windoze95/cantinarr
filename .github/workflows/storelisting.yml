@@ -4,7 +4,7 @@ name: Sync Store Listings
 # them pushes the listings to the consoles. No binaries are uploaded here.
 on:
   push:
-    branches: [main]
+    branches: [main, 'release/**']
     paths:
       - "app/android/fastlane/metadata/**"
       - "app/ios/fastlane/metadata/**"
@@ -22,9 +22,27 @@ concurrency:
   group: storelisting
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
+  source:
+    uses: ./.github/workflows/prepare-mobile.yml
+
+  gate:
+    needs: [source]
+    if: needs.source.outputs.enabled == 'true'
+    uses: ./.github/workflows/require-ci-green.yml
+    with:
+      sha: ${{ needs.source.outputs.sha }}
+
   play-listing:
-    if: github.event_name == 'push' || inputs.platform == 'both' || inputs.platform == 'android'
+    needs: [source, gate]
+    if: needs.source.outputs.enabled == 'true' && (github.event_name == 'push' || inputs.platform == 'both' || inputs.platform == 'android')
+    concurrency:
+      group: playstore-deploy
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -57,10 +75,13 @@ jobs:
         if: steps.play.outputs.available == 'true'
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_JSON: ${{ needs.source.outputs.source }}
         run: |
           printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
           export PLAY_JSON_KEY_PATH="$RUNNER_TEMP/play-service-account.json"
           gem install fastlane
+          python3 ../../scripts/release_control.py current
           fastlane listing
 
       - name: Cleanup credentials
@@ -68,7 +89,11 @@ jobs:
         run: rm -f "$RUNNER_TEMP/play-service-account.json"
 
   appstore-listing:
-    if: github.event_name == 'push' || inputs.platform == 'both' || inputs.platform == 'ios'
+    needs: [source, gate]
+    if: needs.source.outputs.enabled == 'true' && (github.event_name == 'push' || inputs.platform == 'both' || inputs.platform == 'ios')
+    concurrency:
+      group: testflight-deploy
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -89,7 +114,10 @@ jobs:
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_API_KEY_B64: ${{ secrets.APP_STORE_CONNECT_API_KEY_B64 }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_JSON: ${{ needs.source.outputs.source }}
         run: |
           VERSION=$(grep '^version:' ../pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
           gem install fastlane
+          python3 ../../scripts/release_control.py current
           APP_VERSION=$VERSION fastlane metadata

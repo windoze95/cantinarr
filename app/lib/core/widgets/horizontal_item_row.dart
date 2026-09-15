@@ -11,6 +11,9 @@ class HorizontalItemRow<T> extends StatefulWidget {
   final void Function(T item)? onItemAppear;
   final double height;
   final double itemSpacing;
+  final double artworkAspectRatio;
+  final double paginationExtent;
+  final double? cacheExtent;
 
   const HorizontalItemRow({
     super.key,
@@ -20,6 +23,9 @@ class HorizontalItemRow<T> extends StatefulWidget {
     this.onItemAppear,
     this.height = 218,
     this.itemSpacing = 14,
+    this.artworkAspectRatio = 2 / 3,
+    this.paginationExtent = 520,
+    this.cacheExtent,
   });
 
   @override
@@ -81,7 +87,7 @@ class _HorizontalItemRowState<T> extends State<HorizontalItemRow<T>> {
     if (widget.onItemAppear != null &&
         !widget.isLoading &&
         widget.items.isNotEmpty &&
-        position.extentAfter < 520 &&
+        position.extentAfter < widget.paginationExtent &&
         _lastPrefetchedLength != widget.items.length) {
       _lastPrefetchedLength = widget.items.length;
       widget.onItemAppear!(widget.items.last);
@@ -115,7 +121,8 @@ class _HorizontalItemRowState<T> extends State<HorizontalItemRow<T>> {
           padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
           itemCount: 6,
           separatorBuilder: (_, __) => SizedBox(width: widget.itemSpacing),
-          itemBuilder: (_, __) => const ShimmerCard(width: 100),
+          itemBuilder: (_, __) => ShimmerCard(
+              width: 100, artworkAspectRatio: widget.artworkAspectRatio),
         ),
       );
     }
@@ -126,6 +133,7 @@ class _HorizontalItemRowState<T> extends State<HorizontalItemRow<T>> {
         children: [
           ListView.separated(
             controller: _controller,
+            cacheExtent: widget.cacheExtent,
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(
               parent: AlwaysScrollableScrollPhysics(),
@@ -135,7 +143,8 @@ class _HorizontalItemRowState<T> extends State<HorizontalItemRow<T>> {
             separatorBuilder: (_, __) => SizedBox(width: widget.itemSpacing),
             itemBuilder: (context, index) {
               if (index >= widget.items.length) {
-                return const ShimmerCard(width: 100);
+                return ShimmerCard(
+                    width: 100, artworkAspectRatio: widget.artworkAspectRatio);
               }
               return widget.itemBuilder(widget.items[index]);
             },

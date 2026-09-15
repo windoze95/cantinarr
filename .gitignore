@@ -15,7 +15,6 @@ app/.flutter-plugins-dependencies
 app/.packages
 app/build/
 app/.metadata
-app/pubspec.lock
 
 # IDE
 .idea/

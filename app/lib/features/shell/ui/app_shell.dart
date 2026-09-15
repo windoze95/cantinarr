@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../discover/logic/discovery_access.dart';
+import '../../../core/providers/config_sync_provider.dart';
 import '../../../core/automation/web_semantics.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/models/app_module.dart';
@@ -26,6 +28,7 @@ import '../../discover/ui/music_search_results_view.dart';
 import '../../discover/ui/search_results_view.dart';
 import '../../issues/logic/issues_provider.dart';
 import '../../media_access/data/media_access_service.dart';
+import '../../media_access/logic/media_access_guide_provider.dart';
 import '../../profile_proposals/logic/profile_proposals_provider.dart';
 import '../../radarr/data/radarr_api_service.dart';
 import '../../radarr/logic/radarr_movies_provider.dart';
@@ -34,6 +37,7 @@ import '../../settings/logic/plex_invites_provider.dart';
 import '../../settings/logic/setup_status_provider.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/logic/sonarr_series_provider.dart';
+import '../../discover/logic/book_discovery_provider.dart';
 import '../logic/shell_book_search_provider.dart';
 import '../logic/shell_music_search_provider.dart';
 import '../logic/shell_search_provider.dart';
@@ -332,8 +336,8 @@ class _AppShellState extends ConsumerState<AppShell>
   /// The Music tab's twin of [_booksAiHandoffPrefix] — the same compile-time
   /// literal rule (T-04-01: nothing interpolated; user text only appended).
   static const String _musicAiHandoffPrefix = 'Context: this question was '
-      'asked from the Music tab of Cantinarr, which searches the user\'s '
-      'music library. Treat it as a question about albums, artists and '
+      'asked from the Music tab of Cantinarr, which searches the music '
+      'catalog with live library availability. Treat it as a question about albums, artists and '
       'listening.\n\n';
 
   /// Shows the books of an author the library does not hold, by running the
@@ -344,28 +348,11 @@ class _AppShellState extends ConsumerState<AppShell>
   /// this same overlay, are the useful destination: each row is already a
   /// requestable book. Setting the field programmatically does not fire
   /// `onChanged` (see `_exitAiMode`), so the notifier is fed explicitly.
-  /// Shows the albums of an artist the library does not hold, by running the
-  /// search the user could have typed themselves — the music sibling of
-  /// [_searchAuthorBooks], for the same reason: a metadata-only artist has no
-  /// detail screen to open.
-  void _searchArtistAlbums(String artistName) {
-    final term = artistName.trim();
-    if (term.isEmpty) return;
-    _searchController.text = term;
-    _searchController.selection =
-        TextSelection.collapsed(offset: term.length);
-    // Treat it as a fresh keystroke: the Ask AI pill's idle timer restarts
-    // rather than firing off the tap that just happened.
-    _resetAskAiIdle();
-    ref.read(shellMusicSearchProvider.notifier).updateSearch(term);
-  }
-
   void _searchAuthorBooks(String authorName) {
     final term = authorName.trim();
     if (term.isEmpty) return;
     _searchController.text = term;
-    _searchController.selection =
-        TextSelection.collapsed(offset: term.length);
+    _searchController.selection = TextSelection.collapsed(offset: term.length);
     // Treat it as a fresh keystroke: the Ask AI pill's idle timer restarts
     // rather than firing off the tap that just happened.
     _resetAskAiIdle();
@@ -534,33 +521,32 @@ class _AppShellState extends ConsumerState<AppShell>
         });
       },
     );
-    // The music sibling of the listener above, for the same reason: an
-    // instance switch re-runs the typed search against the new Lidarr.
-    ref.listen(
-      instanceProvider.select((state) => state.activeLidarrInstance?.id),
-      (previous, next) {
-        if (previous == next) return;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          ref.read(shellMusicSearchProvider.notifier).rerunForInstance();
-        });
-      },
-    );
 
     final searchState = ref.watch(shellSearchProvider);
     final searchNotifier = ref.read(shellSearchProvider.notifier);
     final bookSearchState = ref.watch(shellBookSearchProvider);
+    final bookSeed = ref.watch(bookDiscoverySearchSeedProvider);
+    if (_isBooksTab(widget.currentPath) && bookSeed != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || ref.read(bookDiscoverySearchSeedProvider) != bookSeed) {
+          return;
+        }
+        ref.read(bookDiscoverySearchSeedProvider.notifier).state = null;
+        if (bookSeed.instanceId != null) {
+          ref
+              .read(instanceProvider.notifier)
+              .setActiveChaptarrInstance(bookSeed.instanceId!);
+        }
+        _searchAuthorBooks(bookSeed.query);
+      });
+    }
     final bookSearchNotifier = ref.read(shellBookSearchProvider.notifier);
     final musicSearchState = ref.watch(shellMusicSearchProvider);
     final musicSearchNotifier = ref.read(shellMusicSearchProvider.notifier);
     final hasAi =
         ref.watch(authProvider).valueOrNull?.connection?.services.ai ?? false;
-    final hasChaptarrService =
-        ref.watch(authProvider).valueOrNull?.connection?.services.chaptarr ??
-            false;
-    final hasLidarrService =
-        ref.watch(authProvider).valueOrNull?.connection?.services.lidarr ??
-            false;
+    ref.watch(configSyncProvider);
+    final discoveryAccess = ref.watch(discoveryAccessProvider);
     // Admin approval queue depth — drives the hamburger dot (here) and the
     // drawer "Approvals" entry. Always 0 for non-admins.
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
@@ -623,8 +609,7 @@ class _AppShellState extends ConsumerState<AppShell>
     if (isAiReady) {
       contextIcon = Icons.auto_awesome_rounded;
     } else if (_moduleTypeForPath(widget.currentPath) == ModuleType.dashboard) {
-      final dashboardPages = modulePagesFor(ModuleType.dashboard,
-          includeBooks: hasChaptarrService, includeMusic: hasLidarrService);
+      final dashboardPages = discoveryAccess.pages;
       for (final page in dashboardPages) {
         if (page.route == widget.currentPath) {
           contextIcon = page.activeIcon;
@@ -933,6 +918,7 @@ class _AppShellState extends ConsumerState<AppShell>
                                     searchState.isLoadingSearch)
                                   Expanded(
                                     child: SearchResultsView(
+                                      resolveTVStatus: true,
                                       results: searchState.searchResults,
                                       isLoading: searchState.isLoadingSearch,
                                       query: searchState.searchQuery,
@@ -968,6 +954,8 @@ class _AppShellState extends ConsumerState<AppShell>
                                 ? BookSearchResultsView(
                                     results: bookSearchState.results,
                                     authors: bookSearchState.authors,
+                                    authorsLoading:
+                                        bookSearchState.authorsLoading,
                                     query: bookSearchState.searchQuery,
                                     isLoading: bookSearchState.isLoadingSearch,
                                     searched: bookSearchState.searched,
@@ -978,27 +966,30 @@ class _AppShellState extends ConsumerState<AppShell>
                                     onAuthorDrillDown: _searchAuthorBooks,
                                   )
                                 : musicTab
-                                ? MusicSearchResultsView(
-                                    results: musicSearchState.results,
-                                    artists: musicSearchState.artists,
-                                    query: musicSearchState.searchQuery,
-                                    isLoading:
-                                        musicSearchState.isLoadingSearch,
-                                    searched: musicSearchState.searched,
-                                    error: musicSearchState.error,
-                                    artistsUnavailable:
-                                        musicSearchState.artistsUnavailable,
-                                    onResultTap: _dismissKeyboard,
-                                    onArtistDrillDown: _searchArtistAlbums,
-                                  )
-                                : SearchResultsView(
-                                    results: searchState.searchResults,
-                                    isLoading: searchState.isLoadingSearch,
-                                    query: searchState.searchQuery,
-                                    onLoadMore: searchNotifier.loadMoreSearch,
-                                    libraryStatus: libraryStatus,
-                                    onResultTap: _dismissKeyboard,
-                                  ),
+                                    ? MusicSearchResultsView(
+                                        results: musicSearchState.results,
+                                        artists: musicSearchState.artists,
+                                        query: musicSearchState.searchQuery,
+                                        isLoading:
+                                            musicSearchState.isLoadingSearch,
+                                        searched: musicSearchState.searched,
+                                        error: musicSearchState.error,
+                                        artistsUnavailable:
+                                            musicSearchState.artistsUnavailable,
+                                        onResultTap: _dismissKeyboard,
+                                        artistsLoading:
+                                            musicSearchState.artistsLoading,
+                                      )
+                                    : SearchResultsView(
+                                        resolveTVStatus: true,
+                                        results: searchState.searchResults,
+                                        isLoading: searchState.isLoadingSearch,
+                                        query: searchState.searchQuery,
+                                        onLoadMore:
+                                            searchNotifier.loadMoreSearch,
+                                        libraryStatus: libraryStatus,
+                                        onResultTap: _dismissKeyboard,
+                                      ),
                           ),
                         ),
                       // Floating "Ask AI" pill: the explicit door into AI
@@ -1038,7 +1029,9 @@ class _AppShellState extends ConsumerState<AppShell>
                                       final visible =
                                           _searchFocusNode.hasFocus &&
                                               _searchIdle &&
-                                              _searchController.text.trim().isNotEmpty;
+                                              _searchController.text
+                                                  .trim()
+                                                  .isNotEmpty;
                                       final duration = reduceMotion
                                           ? Duration.zero
                                           : AppTheme.motionFast;
@@ -1059,8 +1052,7 @@ class _AppShellState extends ConsumerState<AppShell>
                                       );
                                     },
                                     child: TextFieldTapRegion(
-                                      child:
-                                          _AskAiPill(onTap: _enterAiMode),
+                                      child: _AskAiPill(onTap: _enterAiMode),
                                     ),
                                   ),
                                 ),
@@ -1157,18 +1149,10 @@ class _AppShellState extends ConsumerState<AppShell>
     // Highlight the module that owns the current route; fall back to the
     // last drawer selection for locations outside the module shells.
     final pathModule = _moduleTypeForPath(widget.currentPath);
-    final hasChaptarrService =
-        ref.watch(authProvider).valueOrNull?.connection?.services.chaptarr ??
-            false;
-    final hasLidarrService =
-        ref.watch(authProvider).valueOrNull?.connection?.services.lidarr ??
-            false;
-    // The backend lists a media server only for users an admin granted it,
-    // so its presence alone decides whether the access guide is offered —
-    // plus a Plex server the user can still ask for.
+    final discoveryAccess = ref.watch(discoveryAccessProvider);
     final connection = ref.watch(authProvider).valueOrNull?.connection;
     final mediaAccessGuideVisible =
-        connection?.mediaAccessGuideVisible ?? false;
+        ref.watch(mediaAccessGuideNavigationVisibleProvider);
     final mediaAccessGuideTypes =
         connection?.mediaAccessGuideTypes ?? const <String>{};
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
@@ -1251,7 +1235,7 @@ class _AppShellState extends ConsumerState<AppShell>
           count: plexInvitesWaiting,
           route: '/settings/users',
         ),
-      // Setup reminder: how many features are still unconfigured. Muteable
+      // Setup reminder: how many features remain to set up or skip. Muteable
       // from the checklist; the Settings tile always remains.
       if (showSetupReminder)
         _AttentionEntry(
@@ -1341,9 +1325,9 @@ class _AppShellState extends ConsumerState<AppShell>
       );
 
       final pages = !isOverlay && isActive
-          ? modulePagesFor(module.type,
-              includeBooks: hasChaptarrService,
-              includeMusic: hasLidarrService)
+          ? (module.type == ModuleType.dashboard
+              ? discoveryAccess.pages
+              : modulePagesFor(module.type))
           : const <ModulePage>[];
       if (pages.isEmpty) return item;
 

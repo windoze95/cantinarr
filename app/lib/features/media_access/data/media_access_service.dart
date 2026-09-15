@@ -4,6 +4,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../../core/network/backend_client.dart';
+import 'listen_links.dart';
+import 'listening_apps.dart';
+import 'video_apps.dart';
 
 /// The live state of one user's account on a media server, as the server
 /// answered just now. [verified] is false when the backend could not reach
@@ -17,6 +20,8 @@ class MediaServerAccountStatus {
   final bool pending;
   final bool administrator;
   final bool verified;
+  final bool manageAccess;
+  final bool accessSyncPending;
 
   const MediaServerAccountStatus({
     required this.username,
@@ -24,6 +29,8 @@ class MediaServerAccountStatus {
     this.pending = false,
     this.administrator = false,
     this.verified = true,
+    this.manageAccess = true,
+    this.accessSyncPending = false,
   });
 
   factory MediaServerAccountStatus.fromJson(Map<String, dynamic> json) =>
@@ -33,16 +40,19 @@ class MediaServerAccountStatus {
         pending: json['pending'] as bool? ?? false,
         administrator: json['administrator'] as bool? ?? false,
         verified: json['verified'] as bool? ?? true,
+        manageAccess: json['manage_access'] as bool? ?? true,
+        accessSyncPending: json['access_sync_pending'] as bool? ?? false,
       );
 }
 
 /// One requested account's outcome from an import: [created] says a
-/// Cantinarr user was made for it (an existing user of the same name is
-/// reused and gets no new link), [linked] says the account is now that
+/// Cantinarr user was made for it (Jellyfin/Emby/Audiobookshelf can reuse a namesake;
+/// Plex requires an explicit link for existing users), [linked] says the account is now that
 /// user's, [link] is the connect link to hand out, and [error] is the
 /// server's code when a step was refused (`not_found`, `already_linked`,
 /// `user_failed`, `user_has_account`, `link_failed`).
 class MediaServerImportResult {
+  final String plexIdentityError;
   final String remoteUserId;
   final String remoteUsername;
   final int? userId;
@@ -54,6 +64,7 @@ class MediaServerImportResult {
   final String error;
 
   const MediaServerImportResult({
+    this.plexIdentityError = '',
     required this.remoteUserId,
     required this.remoteUsername,
     this.userId,
@@ -67,6 +78,7 @@ class MediaServerImportResult {
 
   factory MediaServerImportResult.fromJson(Map<String, dynamic> json) =>
       MediaServerImportResult(
+        plexIdentityError: json['plex_identity_error'] as String? ?? '',
         remoteUserId: json['remote_user_id']?.toString() ?? '',
         remoteUsername: json['remote_username'] as String? ?? '',
         userId: (json['user_id'] as num?)?.toInt(),
@@ -80,25 +92,29 @@ class MediaServerImportResult {
 }
 
 /// How a media server grants access: an account Cantinarr creates with a
-/// password the user picks (Jellyfin, Emby), or an invite sent to the email
+/// password the user picks (Jellyfin, Emby, Audiobookshelf), or an invite sent to the email
 /// the user shares (Plex).
 enum MediaServerKind { account, invite }
 
 /// What a media server answered about one title: it holds it and the account
 /// can see it ([found]), it confirmed it has no such title the account can
 /// see ([missing]: not imported yet, or in a library not shared), or it
-/// could not answer ([unreachable]), which is never read as absence.
-enum WatchLinkState { found, missing, unreachable }
+/// could not answer ([unreachable]), or could not verify an exact match
+/// ([unverified]). Neither uncertain state is read as absence.
+enum WatchLinkState { found, missing, unreachable, unverified }
 
 /// Where one title can be watched on one media server, as the server
-/// answered just now. [url] is the title's page at the admin-typed sign-in
-/// address, set only when [state] is [WatchLinkState.found].
+/// answered just now. [url] is the title's page (hosted Plex Web or the
+/// admin-typed sign-in address), set only when [state] is [WatchLinkState.found].
+/// [fallbackUrl] is a generic sign-in shortcut, never proof of availability.
 class WatchLink {
   final String instanceId;
   final String name;
   final String serviceType;
   final WatchLinkState state;
   final String url;
+  final String fallbackUrl;
+  final VideoApps videoApps;
 
   const WatchLink({
     required this.instanceId,
@@ -106,6 +122,8 @@ class WatchLink {
     required this.serviceType,
     required this.state,
     this.url = '',
+    this.fallbackUrl = '',
+    this.videoApps = const VideoApps(),
   });
 
   factory WatchLink.fromJson(Map<String, dynamic> json) => WatchLink(
@@ -115,21 +133,26 @@ class WatchLink {
         state: switch (json['state']) {
           'found' => WatchLinkState.found,
           'missing' => WatchLinkState.missing,
+          'unverified' => WatchLinkState.unverified,
           _ => WatchLinkState.unreachable,
         },
         url: json['url'] as String? ?? '',
+        fallbackUrl: json['fallback_url'] as String? ?? '',
+        videoApps: VideoApps.fromJson(json['video_apps']),
       );
 }
 
 /// One media server the signed-in user was granted, with their account on it
-/// (null = no account yet). Carries the admin-typed sign-in address only,
-/// never the instance URL the backend dials.
+/// (null = no account yet). Carries the admin-typed sign-in address and resolved
+/// listening app choices, never the instance URL the backend dials.
 class MediaServerAccess {
   final String instanceId;
   final String serviceType;
   final String name;
   final MediaServerKind kind;
   final String publicAddress;
+  final ListeningApps listeningApps;
+  final VideoApps videoApps;
   final MediaServerAccountStatus? account;
 
   /// The server confirmed an account named like this user that nobody is
@@ -138,6 +161,7 @@ class MediaServerAccess {
   /// match was confirmed (the server may have been unreachable), so the
   /// card never claims there is no such account.
   final bool existingAccount;
+  final bool autoLinkSuppressed;
 
   const MediaServerAccess({
     required this.instanceId,
@@ -145,8 +169,11 @@ class MediaServerAccess {
     required this.name,
     this.kind = MediaServerKind.account,
     this.publicAddress = '',
+    this.listeningApps = const ListeningApps(),
+    this.videoApps = const VideoApps(),
     this.account,
     this.existingAccount = false,
+    this.autoLinkSuppressed = false,
   });
 
   bool get isInvite => kind == MediaServerKind.invite;
@@ -166,12 +193,15 @@ class MediaServerAccess {
           ? MediaServerKind.invite
           : MediaServerKind.account,
       publicAddress: json['public_address'] as String? ?? '',
+      listeningApps: ListeningApps.fromJson(json['listening_apps']),
+      videoApps: VideoApps.fromJson(json['video_apps']),
       account: rawAccount is Map
           ? MediaServerAccountStatus.fromJson(
               Map<String, dynamic>.from(rawAccount),
             )
           : null,
       existingAccount: json['existing_account'] as bool? ?? false,
+      autoLinkSuppressed: json['auto_link_suppressed'] as bool? ?? false,
     );
   }
 }
@@ -229,12 +259,14 @@ class PlexSignInStart {
 /// retries it), or empty (nobody has granted this user Plex yet, and the
 /// admins were told).
 class PlexSignInState {
+  final String identityError;
   final bool linked;
   final String username;
   final String email;
   final String inviteState;
 
   const PlexSignInState({
+    this.identityError = '',
     required this.linked,
     this.username = '',
     this.email = '',
@@ -243,6 +275,7 @@ class PlexSignInState {
 
   factory PlexSignInState.fromJson(Map<String, dynamic> json) =>
       PlexSignInState(
+        identityError: json['identity_error'] as String? ?? '',
         linked: json['linked'] as bool? ?? false,
         username: json['username'] as String? ?? '',
         email: json['email'] as String? ?? '',
@@ -251,9 +284,10 @@ class PlexSignInState {
 }
 
 /// Admin view of one linked account: which Cantinarr user is which account
-/// on which server. Rows are an action log; the media server stays the live
-/// truth, so [disabled] is what the backend last reconciled.
+/// on which server. [verified] distinguishes live remote state from the stored
+/// link; [pending] is unknown on older servers that omit invitation state.
 class MediaServerAccountRow {
+  final String plexIdentityError;
   final int userId;
   final String instanceId;
   final String instanceName;
@@ -262,9 +296,17 @@ class MediaServerAccountRow {
   final String remoteUsername;
   final bool createdByCantinarr;
   final bool disabled;
+  final bool manageAccess;
+  final bool granted;
+  final bool accessSyncPending;
+  final bool administrator;
+  final bool verified;
+  // Null means an older server did not report invitation state.
+  final bool? pending;
   final String? createdAt;
 
   const MediaServerAccountRow({
+    this.plexIdentityError = '',
     required this.userId,
     required this.instanceId,
     required this.instanceName,
@@ -273,11 +315,36 @@ class MediaServerAccountRow {
     required this.remoteUsername,
     this.createdByCantinarr = true,
     this.disabled = false,
+    this.manageAccess = true,
+    bool? granted,
+    this.accessSyncPending = false,
+    this.administrator = false,
+    this.verified = false,
+    this.pending,
     this.createdAt,
-  });
+  }) : granted = granted ?? !disabled;
+
+  String get managementLabel => administrator
+      ? 'Protected administrator'
+      : manageAccess
+          ? 'Managed by Cantinarr'
+          : 'Linked only';
+
+  String get accessLabel => accessSyncPending
+      ? 'Access change pending'
+      : !verified
+          ? 'Server access unconfirmed'
+          : disabled
+              ? 'Off on server'
+              : serviceType == 'plex' && pending == null
+                  ? 'Server access unconfirmed'
+                  : pending == true
+                      ? 'Awaiting Plex acceptance'
+                      : 'Active on server';
 
   factory MediaServerAccountRow.fromJson(Map<String, dynamic> json) =>
       MediaServerAccountRow(
+        plexIdentityError: json['plex_identity_error'] as String? ?? '',
         userId: (json['user_id'] as num?)?.toInt() ?? 0,
         instanceId: json['instance_id'] as String? ?? '',
         instanceName: json['instance_name'] as String? ?? '',
@@ -289,6 +356,12 @@ class MediaServerAccountRow {
         // as the same fact.
         disabled: json['disabled'] as bool? ?? json['disabled_at'] != null,
         createdAt: json['created_at'] as String?,
+        manageAccess: json['manage_access'] as bool? ?? true,
+        granted: json['granted'] as bool?,
+        accessSyncPending: json['access_sync_pending'] as bool? ?? false,
+        administrator: json['administrator'] as bool? ?? false,
+        verified: json['verified'] as bool? ?? false,
+        pending: json['pending'] as bool?,
       );
 }
 
@@ -389,6 +462,45 @@ class MediaAccessService {
 
   MediaAccessService({required Dio backendDio}) : _dio = backendDio;
 
+  Future<Map<String, VideoApps>> getVideoAppPreferences() async {
+    final response = await _dio.get('/api/me/video-apps');
+    return _readVideoAppPreferences(response.data);
+  }
+
+  Future<Map<String, VideoApps>> saveVideoAppPreferences(
+      Map<String, VideoApps> apps) async {
+    final response = await _dio.put('/api/me/video-apps', data: {
+      for (final entry in apps.entries) entry.key: entry.value.toJson(),
+    });
+    return _readVideoAppPreferences(response.data);
+  }
+
+  Map<String, VideoApps> _readVideoAppPreferences(dynamic data) {
+    if (data is! Map || VideoApps.serviceTypes.any((service) =>
+        data[service] is! Map || data[service]['ios'] is! String)) {
+      throw const FormatException('Invalid video app preferences');
+    }
+    return {for (final service in VideoApps.serviceTypes)
+      service: VideoApps.fromJson(data[service])};
+  }
+
+  Future<ListeningApps> getListeningAppPreferences() async {
+    final response = await _dio.get('/api/me/listening-apps');
+    return _readListeningAppPreferences(response.data);
+  }
+
+  Future<ListeningApps> saveListeningAppPreferences(ListeningApps apps) async {
+    final response = await _dio.put('/api/me/listening-apps', data: apps.toJson());
+    return _readListeningAppPreferences(response.data);
+  }
+
+  ListeningApps _readListeningAppPreferences(dynamic data) {
+    if (data is! Map || data['ios'] is! String || data['android'] is! String) {
+      throw const FormatException('Invalid listening app preferences');
+    }
+    return ListeningApps.fromJson(data);
+  }
+
   /// The media servers the signed-in user was granted, each with their live
   /// account state. Re-read on every open: the rows behind it are an action
   /// log and the media server is the truth.
@@ -396,6 +508,19 @@ class MediaAccessService {
     final resp = await _dio.get('/api/media-servers');
     return _list(resp.data)
         .map((raw) => MediaServerAccess.fromJson(raw))
+        .toList(growable: false);
+  }
+
+  /// Resolves current audio identifiers from this authorized Chaptarr book.
+  Future<List<ListenLink>> listenLinks(
+      {required String instanceId, required String foreignBookId}) async {
+    final response =
+        await _dio.get('/api/media-servers/listen', queryParameters: {
+      'instance_id': instanceId,
+      'foreign_book_id': foreignBookId,
+    });
+    return _list(response.data)
+        .map(ListenLink.fromJson)
         .toList(growable: false);
   }
 
@@ -544,10 +669,15 @@ class MediaAccessService {
     required String instanceId,
     required List<String> remoteUserIds,
     required String serverUrl,
+    bool? manageAccess,
   }) async {
     final resp = await _dio.post(
       '/api/admin/media-servers/$instanceId/import',
-      data: {'remote_user_ids': remoteUserIds, 'server_url': serverUrl},
+      data: {
+        'remote_user_ids': remoteUserIds,
+        'server_url': serverUrl,
+        if (manageAccess != null) 'manage_access': manageAccess
+      },
     );
     dynamic data = resp.data;
     if (data is Map && data['results'] is List) data = data['results'];
@@ -562,11 +692,32 @@ class MediaAccessService {
     required int userId,
     required String instanceId,
     required String remoteUserId,
+    bool? manageAccess,
   }) async {
     try {
       final resp = await _dio.put(
         '/api/admin/users/$userId/media-servers/$instanceId/account',
-        data: {'remote_user_id': remoteUserId},
+        data: {
+          'remote_user_id': remoteUserId,
+          if (manageAccess != null) 'manage_access': manageAccess
+        },
+      );
+      return MediaServerAccountRow.fromJson(_map(resp.data));
+    } on DioException catch (e) {
+      throw MediaAccessException.fromDio(e);
+    }
+  }
+
+  /// Changes who manages access, keeping the identity link intact.
+  Future<MediaServerAccountRow> setManagement({
+    required int userId,
+    required String instanceId,
+    required bool manageAccess,
+  }) async {
+    try {
+      final resp = await _dio.patch(
+        '/api/admin/users/$userId/media-servers/$instanceId/account/management',
+        data: {'manage_access': manageAccess},
       );
       return MediaServerAccountRow.fromJson(_map(resp.data));
     } on DioException catch (e) {
@@ -615,6 +766,8 @@ String mediaServerTypeLabel(String serviceType) {
   switch (serviceType) {
     case 'plex':
       return 'Plex';
+    case 'audiobookshelf':
+      return 'Audiobookshelf';
     case 'jellyfin':
       return 'Jellyfin';
     case 'emby':
@@ -628,7 +781,7 @@ String mediaServerTypeLabel(String serviceType) {
 /// The product names of the granted media-server types, distinct and in a
 /// fixed order: Plex, Jellyfin, then Emby, then anything unknown as typed.
 List<String> mediaServerTypeLabels(Iterable<String> serviceTypes) {
-  const order = ['plex', 'jellyfin', 'emby'];
+  const order = ['plex', 'jellyfin', 'emby', 'audiobookshelf'];
   final distinct = serviceTypes.toSet();
   return [
     for (final type in order)
@@ -659,6 +812,11 @@ String mediaServerNamesPhrase(Iterable<String> serviceTypes) {
 /// or Emby". Static surfaces (Settings row, breadcrumb, search index) say
 /// "Media server access" instead, because they cannot know the set.
 String mediaServerGuideTitle(Iterable<String> serviceTypes) {
+  if (serviceTypes.contains('audiobookshelf')) {
+    return serviceTypes.toSet().length == 1
+        ? 'Audiobookshelf access'
+        : 'Media server access';
+  }
   final names = mediaServerNamesPhrase(serviceTypes);
   return names.isEmpty ? 'Watch on your media server' : 'Watch on $names';
 }

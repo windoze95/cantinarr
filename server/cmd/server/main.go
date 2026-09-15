@@ -15,6 +15,7 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/ai"
 	"github.com/windoze95/cantinarr-server/internal/api"
+	"github.com/windoze95/cantinarr-server/internal/appletv"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/cache"
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
@@ -22,9 +23,11 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
+	"github.com/windoze95/cantinarr-server/internal/discordnotify"
 	"github.com/windoze95/cantinarr-server/internal/discover"
 	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/grokoauth"
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/mediaaccess"
@@ -97,6 +100,30 @@ func main() {
 	)
 	credHandler := credentials.NewHandler(creds)
 
+	// Server settings: the admin-configured management-portal URL the app's
+	// version warnings link to, the external address outward links are built
+	// from, the discovery preferences the rows read per request, and the
+	// outbound proxy. The Trakt probe is read per call, so adding or removing
+	// that credential moves the default row source without a restart. The
+	// cipher is for the proxy row, the one setting that carries a secret.
+	serverSettings := serversettings.NewService(database, func() bool { return creds.Trakt() != nil }, serversettings.WithCipher(cipher))
+
+	// Outbound proxy for internet-bound traffic, installed before anything
+	// dials out (push enrollment, the update check, the AI health monitor). A
+	// stored value the server cannot use is fatal: a privacy proxy must never
+	// silently degrade into direct egress.
+	outboundProxy, err := serverSettings.OutboundProxy()
+	if err != nil {
+		log.Fatalf("Stored outbound proxy is unusable: %v", err)
+	}
+	if err := httpx.SetOutboundProxyString(outboundProxy.ProxyURL()); err != nil {
+		log.Fatalf("Stored outbound proxy is unusable: %v", err)
+	}
+	if outboundProxy.Configured() {
+		// The address only; credentials never reach the log.
+		log.Printf("Outbound proxy for internet-bound traffic: %s", outboundProxy.URL)
+	}
+
 	// Shared TTL cache for discovery payloads and the kids-account rating
 	// lookups; both key it themselves.
 	apiCache := cache.New()
@@ -142,7 +169,7 @@ func main() {
 		}
 	}()
 
-	// Downloads handler (SABnzbd / qBittorrent / NZBGet / Transmission queue management)
+	// Downloads handler (SABnzbd / qBittorrent / NZBGet / Transmission / Deluge / ruTorrent queue management)
 	downloadsHandler := downloads.NewHandler(instanceStore, registry)
 
 	// Watch-history handler (Tautulli and Tracearr monitoring)
@@ -153,9 +180,9 @@ func main() {
 	ctx := context.Background()
 	logger := slog.Default()
 
-	// Media-server accounts (Jellyfin, Emby): a granted user creates their own
-	// account from the app; grant changes and user deletion switch accounts
-	// off and on through the two hooks below.
+	// Media-server access (Plex, Jellyfin, Emby, Audiobookshelf): new access
+	// alerts guide users through account setup or invitation acceptance;
+	// grant changes and user deletion reconcile managed remote accounts.
 	// The pre-instance Plex integration (a linked account in the settings
 	// table) becomes a Plex instance on first boot, with everyone it had
 	// invited granted; idempotent, marker-guarded.
@@ -166,8 +193,19 @@ func main() {
 	// An import creates the Cantinarr users it names through the auth
 	// service, the same find-or-create the connect-link route uses.
 	mediaAccessService.SetUserCreator(authService)
+	mediaAccessService.SetPlexAuth(authService)
 	mediaAccessHandler := mediaaccess.NewHandler(mediaAccessService, logger)
+	appleTVHandler := appletv.NewHandler(database, cipher, appletv.ProcessRunner{}, authService.AuthorizePermission, mediaAccessHandler.AuthorizeAppleTVTitle)
+	mediaAccessHandler.SetAppleTV(appleTVHandler)
+	defer appleTVHandler.Close()
+	mediaAccessHandler.SetWatchContentPolicy(contentPolicy, func() contentpolicy.RawGetter {
+		if client := creds.TMDB(); client != nil {
+			return client
+		}
+		return nil
+	})
 	instanceHandler.SetGrantObserver(mediaAccessService.OnGrantsChanged)
+	instanceStore.SetGrantAddedObserver(mediaAccessService.OnGrantAdded)
 	instanceHandler.SetSharedLibrariesObserver(mediaAccessService.OnSharedLibrariesChanged)
 	authHandler.SetUserDeleteHook(mediaAccessService.BeforeUserDelete)
 
@@ -181,8 +219,10 @@ func main() {
 	var pushManager *push.Manager
 	if cfg.PushGatewayURL != "" {
 		pushManager = push.NewManager(database, cipher, cfg.PushGatewayURL, cfg.PushAPIKey, cfg.PushEnrollToken, cfg.ServerName, logger)
-		// Try once now (non-blocking) and keep retrying in the background until
-		// the gateway is reachable; both are no-ops once enrolled.
+		// Try once now (non-blocking) and keep the background retry running for
+		// the life of the process: it re-enrolls, on a backoff, after a gateway
+		// that was down at boot or a stored key the gateway later refuses, and
+		// costs one mutex read per tick while a client exists.
 		go pushManager.Ensure(ctx)
 		pushManager.StartRetry(ctx)
 		log.Printf("Push notifications enabled via %s", cfg.PushGatewayURL)
@@ -232,7 +272,12 @@ func main() {
 	mediaAccessService.SetNotifier(notifier)
 	authHandler.SetAccessRequestHook(mediaAccessService.OnPlexEmailShared)
 	requestService := request.NewService(database, registry, bridge, notifier)
+	wsHub.SetTVImportResolver(requestService)
+	discordNotifications := discordnotify.NewService(database, cipher, func() string { return serverSettings.Get().ExternalURL })
+	requestService.SetCreationObserver(request.CreationObservers{discordNotifications, pushNotifier})
+	discordNotifications.Start(ctx)
 	requestHandler := request.NewHandler(requestService)
+	mediaAccessHandler.SetListeningBooks(requestService)
 
 	// Remediation (issue reporting) service + handler. Records/threads issues, runs
 	// the read-only agent, and (Wave 5) accepts auto-dispatched issues from the
@@ -246,6 +291,7 @@ func main() {
 	// store lives in remediation.
 	requestService.SetBookImportStallSink(remediationService)
 	requestService.StartBookParkMaintenance(ctx)
+	requestService.StartDispatchMaintenance(ctx)
 
 	// A grant write never fails because a media server is down, so a
 	// switch-off decided during an outage can be owed to the server. This
@@ -328,14 +374,10 @@ func main() {
 	wsHub.SetIssueOpener(autoDispatcher)
 	go wsHub.Run(ctx)
 
-	// Server settings: the admin-configured management-portal URL the app's
-	// version warnings link to, plus the discovery preferences the rows read
-	// per request.
-	// The Trakt probe is read per call, so adding or removing that credential
-	// moves the default row source without a restart.
-	serverSettings := serversettings.NewService(database, func() bool { return creds.Trakt() != nil })
-	// Read per call so a settings change reaches the next link without a
-	// restart. Wired late for the same reason as the access-request hook.
+	// External address sources: read per call so a settings change reaches the
+	// next link without a restart. Wired late for the same reason as the
+	// access-request hook.
+	authService.SetOIDCCipher(cipher)
 	authHandler.SetExternalURLSource(func() string { return serverSettings.Get().ExternalURL })
 	mediaAccessHandler.SetExternalURLSource(func() string { return serverSettings.Get().ExternalURL })
 
@@ -369,7 +411,7 @@ func main() {
 	updateChecker := update.NewChecker(version.Version, cfg.DisableUpdateCheck)
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, watchHistoryHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, mediaAccessHandler, updateChecker, serverSettings, contentPolicyHandler)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, watchHistoryHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, mediaAccessHandler, updateChecker, serverSettings, contentPolicyHandler, discordNotifications)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)

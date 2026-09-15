@@ -140,6 +140,9 @@ class UserRequestSettings {
 
 /// One row of the admin approval queue.
 class PendingRequestItem {
+  final String catalogProvider;
+  final String catalogId;
+  final List<Map<String, dynamic>> delivery;
   final int id;
   final int userId;
   final String username;
@@ -178,6 +181,9 @@ class PendingRequestItem {
   final String addFailureReason;
 
   const PendingRequestItem({
+    this.catalogProvider = '',
+    this.catalogId = '',
+    this.delivery = const [],
     required this.id,
     required this.userId,
     required this.username,
@@ -211,7 +217,8 @@ class PendingRequestItem {
   /// Why this row is in the queue when it isn't a routine yes/no, and what the
   /// admin would actually do about it. Null for an ordinary decision — most
   /// rows — so the queue stays quiet unless there is something to say.
-  ({String reason, String action})? get addFailure => switch (addFailureReason) {
+  ({String reason, String action})? get addFailure =>
+      switch (addFailureReason) {
         '' => null,
         'metadata_unresolved' => (
             reason: 'The library couldn’t match this book',
@@ -253,6 +260,8 @@ class PendingRequestItem {
   bool get isTv => mediaType == 'tv';
   bool get isBook => mediaType == 'book';
   bool get isMusic => mediaType == 'music';
+  bool get isCatalogRetired =>
+      isBook && delivery.any((d) => d['code'] == 'catalog_retired');
 
   /// Route to the content this request is for, or null when the row can't
   /// address one (a legacy book row stored without its foreign id, a movie row
@@ -261,9 +270,12 @@ class PendingRequestItem {
   /// instance.
   String? get detailRoute {
     if (isBook || isMusic) {
-      final id = foreignId.trim();
+      final id = isCatalogRetired && catalogId.isNotEmpty
+          ? 'ol:$catalogId'
+          : foreignId.trim();
       if (id.isEmpty) return null;
       final query = <String>[
+        if (isBook) 'source=${isCatalogRetired ? 'openlibrary' : 'chaptarr'}',
         if (title.trim().isNotEmpty)
           'title=${Uri.encodeQueryComponent(title.trim())}',
         if (instanceId.trim().isNotEmpty)
@@ -276,6 +288,7 @@ class PendingRequestItem {
     if (tmdbId <= 0) return null;
     return '/detail/${isTv ? 'tv' : 'movie'}/$tmdbId';
   }
+
   String get mediaLabel => switch (mediaType) {
         'tv' => 'TV',
         'book' => 'Book',
@@ -295,6 +308,11 @@ class PendingRequestItem {
       PendingRequestItem(
         id: json['id'] as int? ?? 0,
         userId: json['user_id'] as int? ?? 0,
+        catalogProvider:
+            (json['catalog_ref'] as Map?)?['provider'] as String? ?? '',
+        catalogId: (json['catalog_ref'] as Map?)?['id'] as String? ?? '',
+        delivery:
+            ((json['delivery'] as List?) ?? []).cast<Map<String, dynamic>>(),
         username: json['username'] as String? ?? '',
         tmdbId: json['tmdb_id'] as int? ?? 0,
         tvdbId: json['tvdb_id'] as int? ?? 0,
@@ -312,9 +330,9 @@ class PendingRequestItem {
         requestedAt:
             DateTime.tryParse(json['requested_at'] as String? ?? '')?.toLocal(),
         waitReason: json['wait_reason'] as String? ?? '',
-        lastAttemptAt: DateTime.tryParse(
-                json['last_attempt_at'] as String? ?? '')
-            ?.toLocal(),
+        lastAttemptAt:
+            DateTime.tryParse(json['last_attempt_at'] as String? ?? '')
+                ?.toLocal(),
         addFailureReason: json['add_failure_reason'] as String? ?? '',
       );
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/ai"
 	"github.com/windoze95/cantinarr-server/internal/config"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
@@ -22,15 +23,11 @@ type setupItem struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	Configured  bool   `json:"configured"`
-	// Optional separates "the app doesn't work without this" (Radarr/Sonarr/
-	// TMDB) from features an admin may deliberately skip.
+	// Optional is retained for older clients and is true for every item.
+	// The checklist guides setup; feature requirements belong to their actions.
 	Optional bool `json:"optional"`
-	// Skipped marks an optional item an admin acknowledged and dismissed, so
-	// clients can stop counting it as unfinished without a persistent nag.
-	// Only optional items ever carry it — an essential in the stored skip set
-	// is ignored rather than silenced — and a skipped item that later becomes
-	// configured simply reads as configured. Stored server-wide (the
-	// checklist grades the server, not a device) and reversible in place.
+	// Skipped records an admin's server-wide, reversible choice to stop counting
+	// an unconfigured feature. Configured state takes precedence in clients.
 	Skipped bool `json:"skipped,omitempty"`
 }
 
@@ -89,10 +86,9 @@ func discoveryDescription(f setupFacts) string {
 	return "Pick which feed backs the headline rows on Movies and TV, and whether to hide non-English titles."
 }
 
-// buildSetupItems maps configuration facts to the ordered checklist:
-// essentials first, then optional features in rough order of impact.
+// buildSetupItems maps configuration facts to the ordered checklist.
 func buildSetupItems(f setupFacts) []setupItem {
-	return []setupItem{
+	items := []setupItem{
 		{
 			Key:         "radarr",
 			Title:       "Movies (Radarr)",
@@ -114,44 +110,38 @@ func buildSetupItems(f setupFacts) []setupItem {
 		{
 			Key:         "push",
 			Title:       "Push notifications",
-			Description: "Approval, issue, and new-content alerts on devices. Set CANTINARR_PUSH_GATEWAY_URL on the server.",
+			Description: "For device alerts, set CANTINARR_PUSH_GATEWAY_URL on the server to https://push.cantinarr.com. It's free to use.",
 			Configured:  f.Push,
-			Optional:    true,
 		},
 		{
 			Key:         "media_servers",
 			Title:       "Media server access",
 			Description: "Connect Plex, Jellyfin, or Emby so users can get access from the app: a Plex invite, or an account they create themselves.",
 			Configured:  f.HasMediaServer,
-			Optional:    true,
 		},
 		{
 			Key:         "trakt",
 			Title:       "Trakt discovery",
 			Description: "Trending, popular lists, and the release calendar run on Cantinarr's built-in Trakt app out of the box; add your own client ID in the Discover settings to use yours instead.",
 			Configured:  f.Trakt,
-			Optional:    true,
 		},
 		{
 			Key:         "discovery_prefs",
 			Title:       "Discovery rows",
 			Description: discoveryDescription(f),
 			Configured:  f.DiscoveryChosen,
-			Optional:    true,
 		},
 		{
 			Key:         "download_client",
 			Title:       "Download activity",
-			Description: "See and manage the live download queue (SABnzbd, qBittorrent, NZBGet, or Transmission).",
+			Description: "See and manage the live download queue (SABnzbd, qBittorrent, NZBGet, Transmission, Deluge, or ruTorrent).",
 			Configured:  f.HasDownloadClient,
-			Optional:    true,
 		},
 		{
 			Key:         "media_downloads",
 			Title:       "Completed media downloads",
 			Description: "Mount media read-only on the server, then map paths inside each Radarr, Sonarr, Chaptarr, or Lidarr instance.",
 			Configured:  f.MediaDownloads,
-			Optional:    true,
 		},
 		{
 			// The key predates Tracearr and stays: admins' dismissals are
@@ -160,37 +150,36 @@ func buildSetupItems(f setupFacts) []setupItem {
 			Title:       "Monitoring (Tautulli or Tracearr)",
 			Description: "See live streams, watch history, and stats in the Monitoring module. Tautulli covers Plex; Tracearr covers Plex, Jellyfin, and Emby.",
 			Configured:  f.HasWatchHistory,
-			Optional:    true,
 		},
 		{
 			Key:         "books",
 			Title:       "Books (Chaptarr)",
 			Description: "Let users request ebooks and audiobooks; access is granted per user.",
 			Configured:  f.HasChaptarr,
-			Optional:    true,
 		},
 		{
 			Key:         "music",
 			Title:       "Music (Lidarr)",
 			Description: "Let users request albums; access is granted per user.",
 			Configured:  f.HasLidarr,
-			Optional:    true,
 		},
 		{
 			Key:         "ai",
 			Title:       "AI assistant",
 			Description: "Conversational discovery, requests, and server management. Configure a shared provider; users may override it with their own credentials.",
 			Configured:  f.AI,
-			Optional:    true,
 		},
 		{
 			Key:         "remediation",
 			Title:       "Automatic problem detection",
 			Description: remediationDescription(f),
 			Configured:  f.RemediationDecided,
-			Optional:    true,
 		},
 	}
+	for i := range items {
+		items[i].Optional = true
+	}
+	return items
 }
 
 // setupStatusHandler answers the admin setup checklist: which features are
@@ -214,10 +203,10 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 					facts.HasLidarr = true
 				case "tautulli", "tracearr":
 					facts.HasWatchHistory = true
-				case "sabnzbd", "qbittorrent", "nzbget", "transmission":
-					facts.HasDownloadClient = true
 				default:
-					if instance.IsMediaServerType(inst.ServiceType) {
+					if downloads.IsDownloadClientType(inst.ServiceType) {
+						facts.HasDownloadClient = true
+					} else if instance.IsMediaServerType(inst.ServiceType) {
 						facts.HasMediaServer = true
 					}
 				}
@@ -246,11 +235,7 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 				skipped[key] = true
 			}
 			for i := range items {
-				// Optional-only: a skip stored against an essential (a
-				// downgraded build, a hand-edited row) fails toward showing
-				// the item rather than silencing something the server cannot
-				// work without.
-				items[i].Skipped = items[i].Optional && skipped[items[i].Key]
+				items[i].Skipped = skipped[items[i].Key]
 			}
 		}
 		configured := 0
@@ -270,9 +255,8 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 }
 
 // setupSkipHandler records or clears one checklist skip. Only keys the
-// current build's checklist actually contains may be written, and only
-// optional ones: an essential can never be acknowledged away, because the
-// alarm it carries is about capability, not tidiness.
+// current build's checklist actually contains may be written. Skipping changes
+// checklist progress only, never configuration, navigation, or permissions.
 func setupSkipHandler(serverSettings *serversettings.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if serverSettings == nil {
@@ -287,16 +271,11 @@ func setupSkipHandler(serverSettings *serversettings.Service) http.HandlerFunc {
 			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
 			return
 		}
-		// Keys and optionality are static facts about the item list, so an
-		// empty facts build enumerates them without touching configuration.
+		// An empty facts build enumerates the known keys without reading config.
 		valid := false
 		for _, item := range buildSetupItems(setupFacts{}) {
 			if item.Key != body.Key {
 				continue
-			}
-			if !item.Optional {
-				http.Error(w, `{"error":"only optional setup items can be skipped"}`, http.StatusBadRequest)
-				return
 			}
 			valid = true
 			break

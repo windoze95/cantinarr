@@ -6,8 +6,13 @@ import '../theme/app_theme.dart';
 class ShimmerCard extends StatelessWidget {
   final double width;
   final double? height;
+  final double artworkAspectRatio;
 
-  const ShimmerCard({super.key, required this.width, this.height});
+  const ShimmerCard(
+      {super.key,
+      required this.width,
+      this.height,
+      this.artworkAspectRatio = 2 / 3});
 
   @override
   Widget build(BuildContext context) {
@@ -17,7 +22,7 @@ class ShimmerCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           AspectRatio(
-            aspectRatio: 2 / 3,
+            aspectRatio: artworkAspectRatio,
             child: Container(
               decoration: BoxDecoration(
                 color: AppTheme.surfaceVariant,

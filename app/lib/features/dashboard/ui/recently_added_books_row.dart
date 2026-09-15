@@ -104,7 +104,7 @@ class RecentlyAddedBooksRow extends ConsumerWidget {
                 onTap: canOpen
                     ? () => context.push(
                           '/detail/book/${Uri.encodeComponent(book.foreignBookId)}'
-                          '?title=${Uri.encodeQueryComponent(book.title)}'
+                          '?source=chaptarr&title=${Uri.encodeQueryComponent(book.title)}'
                           '&instance_id=${Uri.encodeQueryComponent(instanceId)}',
                         )
                     : null,

@@ -4,8 +4,7 @@
 `upload_to_testflight` hands the IPA to Apple and stops. Internal groups created with
 "Enable automatic distribution" pick the build up on their own; external groups never do —
 somebody has to add the build to the group, in the console or through the API. This script is
-that step, so a merge to `main` reaches external testers without a human opening App Store
-Connect.
+that step, so the public-beta owner's builds reach external testers without a console step.
 
 It runs after the upload, off the macOS runner: fastlane can do this inline, but only with
 `skip_waiting_for_build_processing: false`, which parks a 10x-billed macOS runner for the whole
@@ -32,6 +31,7 @@ import urllib.parse
 import urllib.request
 
 import jwt
+from release_control import ReleaseError, current
 
 API = "https://api.appstoreconnect.apple.com"
 
@@ -221,7 +221,18 @@ def wait_for_processing(client, build_id, deadline):
         time.sleep(POLL_SECONDS)
 
 
+def check_publishing_source():
+    # Apple's processing can take most of an hour. A check at job start is
+    # too early: a new head or release freeze may now own this public group.
+    if source := os.environ.get("SOURCE_JSON"):
+        try:
+            current(json.loads(source))
+        except ReleaseError as error:
+            raise ApiError(str(error)) from error
+
+
 def submit_for_beta_review(client, build_id):
+    check_publishing_source()
     body = {
         "data": {
             "type": "betaAppReviewSubmissions",
@@ -244,6 +255,7 @@ def already_in_group(client, group_id, build_id):
 
 
 def add_to_group(client, group_id, build_id):
+    check_publishing_source()
     client.request(
         "POST",
         f"/v1/betaGroups/{urllib.parse.quote(group_id)}/relationships/builds",

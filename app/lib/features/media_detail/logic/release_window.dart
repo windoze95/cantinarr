@@ -1,6 +1,7 @@
 import 'package:intl/intl.dart';
 
 import '../../request/data/request_service.dart';
+import 'release_schedule.dart';
 
 /// One release milestone that hasn't happened yet.
 class PendingRelease {
@@ -16,7 +17,9 @@ class PendingRelease {
 
 DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
-/// The release milestones still ahead of [now], soonest first.
+/// The cinema and digital milestones still ahead of [now], soonest first,
+/// from the same regional schedule as the detail page's full release list.
+/// Disc releases remain in the full list only.
 ///
 /// The "collapse" behaviour asked for on the detail page falls out of this
 /// rather than being special-cased: before the theatrical date both milestones
@@ -34,17 +37,16 @@ DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 /// (A file can land before the digital date — an early web release — so this
 /// is a real case, not a theoretical one.)
 List<PendingRelease> pendingReleases(
-  MovieReleaseDates releases, {
+  ReleaseSchedule? schedule, {
   required RequestStatus status,
   DateTime? now,
 }) {
-  if (status == RequestStatus.available) return const [];
+  if (status == RequestStatus.available || schedule == null) return const [];
   final today = _dateOnly(now ?? DateTime.now());
   final out = <PendingRelease>[
-    if (releases.inCinemas != null)
-      PendingRelease(label: 'In cinemas', date: _dateOnly(releases.inCinemas!)),
-    if (releases.digital != null)
-      PendingRelease(label: 'Digital', date: _dateOnly(releases.digital!)),
+    for (final milestone in schedule.milestones)
+      if (milestone.type == 2 || milestone.type == 3 || milestone.type == 4)
+        PendingRelease(label: milestone.label, date: _dateOnly(milestone.date)),
   ]..removeWhere((r) => r.date.isBefore(today));
   out.sort((a, b) => a.date.compareTo(b.date));
   return out;

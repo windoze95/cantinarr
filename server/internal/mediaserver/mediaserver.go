@@ -67,10 +67,10 @@ type ItemQuery struct {
 }
 
 // Item is a library item the media server holds. WebPath is the path and
-// fragment of its page under the server's root (for example
+// fragment of its page under the web client's root (for example
 // "/web/#/details?id=…&serverId=…"); the caller joins it to the admin-typed
-// public address, so the client never learns the address Cantinarr dials and
-// the caller never learns the server's URL scheme.
+// public address, or hosted Plex Web for Plex. Private connection addresses
+// and credentials never belong in this value.
 type Item struct {
 	ID      string
 	WebPath string
@@ -80,10 +80,16 @@ type Item struct {
 // account can see: absence, as opposed to a server that could not answer.
 var ErrItemNotFound = errors.New("media server has no such item")
 
-// ItemFinder is implemented by account servers that can look a title up by
+// ErrItemUnverified means a bounded lookup could not establish one exact
+// match (or the account cannot be checked). It makes no absence claim.
+var ErrItemUnverified = errors.New("media server item could not be verified")
+
+// ItemFinder is implemented by media servers that can look a title up by
 // its provider ids. The lookup runs as the linked account, so the server
 // applies that account's library access, and a match is by provider id,
-// never by name alone.
+// never by name alone. Implementations also verify the account is currently
+// enabled (or its share accepted): an administrator-key item query alone
+// does not prove that the linked person can access the server.
 type ItemFinder interface {
 	FindItem(ctx context.Context, remoteUserID string, q ItemQuery) (Item, error)
 }

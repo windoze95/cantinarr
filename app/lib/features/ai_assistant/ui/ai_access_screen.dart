@@ -7,6 +7,7 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
 import '../../../core/widgets/settings_highlight.dart';
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../settings/settings_anchors.dart';
 import '../data/ai_provider_models.dart';
@@ -30,6 +31,12 @@ class AiAccessScreen extends ConsumerStatefulWidget {
 }
 
 class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
+  final _draft = SettingsDraft();
+  Object get _draftValues => [
+        _provider,
+        _model,
+        if (_model == _customModel) _customModelController.text,
+      ];
   static const _customModel = '__custom__';
 
   late final TextEditingController _apiKeyController;
@@ -85,6 +92,7 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
       _model =
           serverDefaultModel ?? option?.models.firstOrNull?.id ?? _customModel;
     }
+    _draft.markSaved(_draftValues);
   }
 
   void _selectProvider(AiSettings settings, String provider) {
@@ -126,6 +134,7 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
         apiKey: saveKey ? _apiKeyController.text.trim() : null,
       );
       _apiKeyController.clear();
+      _draft.markSaved(_draftValues);
       await _refresh();
       _message(
         'Personal ${settings.providerLabel(provider)} passed its test and is now active.',
@@ -221,7 +230,15 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+        hasChanges: () =>
+            _apiKeyController.text.isNotEmpty ||
+            _draft.hasChanges(_draftValues),
+        isSaving: _saving || _clearing,
+        child: _buildPage(context),
+      );
+
+  Widget _buildPage(BuildContext context) {
     final settings = ref.watch(aiSettingsProvider);
     return Scaffold(
       appBar: AppBar(

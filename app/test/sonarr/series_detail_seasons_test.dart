@@ -17,10 +17,12 @@ import 'package:flutter_test/flutter_test.dart';
 /// asked — but the two unaired episodes must be named in the suffix, or the
 /// card claims "100% • 11/11 Episodes Available" for a season the episode
 /// list shows 13 rows for.
-Map<String, dynamic> _seriesJson({bool season22Monitored = true}) => {
+Map<String, dynamic> _seriesJson({
+  bool season22Monitored = true, bool monitored = true,
+}) => {
       'id': 7,
       'title': 'American Dad!',
-      'monitored': true,
+      'monitored': monitored,
       'status': 'continuing',
       'statistics': {
         'seasonCount': 2,
@@ -98,7 +100,8 @@ class _SeriesAdapter implements HttpClientAdapter {
   final bool queueFails;
   final List<Map<String, dynamic>> episodes;
   final bool episodesFail;
-  final Map<String, dynamic>? seriesJson;
+  Map<String, dynamic>? seriesJson;
+  final writes = <Map<String, dynamic>>[];
 
   /// Every request the screen made, so a test can prove what it refetched.
   final List<({String method, String path})> requests = [];
@@ -108,6 +111,10 @@ class _SeriesAdapter implements HttpClientAdapter {
       Future<void>? __) async {
     const json = Headers.jsonContentType;
     requests.add((method: options.method, path: options.path));
+    if (options.method == 'PUT' && options.path.endsWith('/series/7')) {
+      seriesJson = Map<String, dynamic>.from(options.data as Map);
+      writes.add(seriesJson!);
+    }
     if (options.path.endsWith('/queue/details')) {
       if (queueFails) {
         return ResponseBody.fromString('{"message":"boom"}', 500,
@@ -216,7 +223,7 @@ void main() {
         for (final e in [12, 13])
           _queueRow(e,
               season: 22,
-              airDate: '2026-09-13T04:00:00Z',
+              airDate: DateTime.now().toUtc().add(const Duration(days: 1)).toIso8601String(),
               state: 'importPending'),
       ]),
     );
@@ -250,6 +257,52 @@ void main() {
       for (var e = 12; e <= 13; e++)
         _episodeJson(id: 2200 + e, season: 22, monitored: false),
     ];
+
+    testWidgets('series monitoring greys every season and preserves its flags',
+        (tester) async {
+      final adapter = _SeriesAdapter(episodes: episodes);
+      await _pump(tester, adapter);
+      await tester.tap(find.byTooltip('Series actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Unmonitor Series'));
+      await tester.pumpAndSettle();
+
+      expect(adapter.writes, hasLength(1));
+      expect(adapter.writes.single['monitored'], isFalse);
+      expect(adapter.writes.single['seasons'], _seriesJson()['seasons']);
+      for (final title in ['Season 21', 'Season 22']) {
+        final bookmark = find.descendant(
+          of: _card(title), matching: find.byType(MonitorBookmark),
+        );
+        expect(tester.widget<MonitorBookmark>(bookmark).enabled, isFalse);
+        expect(tester.widgetList<Icon>(find.descendant(
+          of: bookmark, matching: find.byType(Icon),
+        )).map((i) => i.color), everyElement(AppTheme.textSecondary));
+        expect(_opacitiesOf(tester, title), everyElement(0.5));
+        final button = find.descendant(
+          of: _card(title), matching: find.byType(IconButton),
+        );
+        expect(tester.widget<IconButton>(button).onPressed, isNull);
+        await tester.tap(button);
+      }
+      expect(find.byTooltip('Series is unmonitored'), findsNWidgets(2));
+      expect(_fillOf(tester, 'Season 21'), MonitorFill.full);
+      expect(_fillOf(tester, 'Season 22'), MonitorFill.partial);
+      expect(adapter.writes, hasLength(1));
+
+      await tester.tap(find.byTooltip('Series actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Monitor Series'));
+      await tester.pumpAndSettle();
+      expect(adapter.writes, hasLength(2));
+      expect(adapter.writes.last['monitored'], isTrue);
+      expect(adapter.writes.last['seasons'], _seriesJson()['seasons']);
+      expect(_fillOf(tester, 'Season 21'), MonitorFill.full);
+      expect(_fillOf(tester, 'Season 22'), MonitorFill.partial);
+      expect(_opacitiesOf(tester, 'Season 22'), everyElement(1.0));
+      expect(tester.widgetList<MonitorBookmark>(find.byType(MonitorBookmark))
+          .every((bookmark) => bookmark.enabled), isTrue);
+    });
 
     /// The same list after season 22 is switched off: Sonarr cascades a
     /// season's monitored flag onto its episodes, so they all come back
@@ -405,7 +458,8 @@ void main() {
       await tester.pageBack();
       await tester.pumpAndSettle();
 
-      expect(seriesFetches(), 2);
+      // The episode route also refreshes the parent series on entry.
+      expect(seriesFetches(), 3);
     });
   });
 }

@@ -7,11 +7,13 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
 import '../../../core/widgets/settings_highlight.dart';
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../ai_assistant/data/codex_oauth_service.dart';
 import '../../ai_assistant/data/grok_oauth_service.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/credentials_service.dart';
+import '../logic/outbound_proxy_provider.dart';
 import '../settings_anchors.dart';
 import 'credential_section.dart';
 
@@ -28,6 +30,26 @@ class CredentialsScreen extends ConsumerStatefulWidget {
 
 class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   late final CredentialsService _service;
+  final _draft = SettingsDraft();
+  Object get _draftValues => [
+        _selectedProvider,
+        _selectedModel,
+        _healthCheckEnabled,
+        if (_selectedModel == _customModelValue) _customModelController.text,
+        if (_showOpenAiReasoningEffort) _openaiReasoningEffort,
+        if (_localProviderSelected) ...[
+          _localBaseUrlController.text,
+          _localReasoningEffort,
+          if (_showLocalProxyOptIn) _localUseProxy,
+        ],
+      ];
+  bool get _hasPendingKeys => [
+        _anthropicController,
+        _openAIController,
+        _geminiController,
+        _grokController,
+        _localKeyController,
+      ].any((controller) => controller.text.isNotEmpty);
   CredentialsStatus? _status;
   bool _isLoading = true;
   String? _error;
@@ -44,6 +66,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   // The local provider's scoped endpoint pair.
   final _localBaseUrlController = TextEditingController();
   String _localReasoningEffort = '';
+  bool _localUseProxy = false;
   final _localKeyController = TextEditingController();
   String _selectedProvider = 'anthropic';
   String _selectedModel = 'claude-opus-4-8';
@@ -62,7 +85,8 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     });
   }
 
-  Future<void> _loadStatus() async {
+  Future<void> _loadStatus({bool preserveDraft = false}) async {
+    final keepDraft = preserveDraft && _draft.hasChanges(_draftValues);
     setState(() {
       _isLoading = true;
       _error = null;
@@ -71,7 +95,10 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       final status = await _service.getStatus();
       setState(() {
         _status = status;
-        _syncAISelection(status);
+        if (!keepDraft) {
+          _syncAISelection(status);
+          _draft.markSaved(_draftValues);
+        }
         _isLoading = false;
       });
     } catch (e) {
@@ -146,6 +173,11 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
         creds['local_openai_reasoning_effort'] = _localReasoningEffort;
         aiChanged = true;
       }
+      if (_showLocalProxyOptIn &&
+          _localUseProxy != (_status?.ai.localOpenaiUseProxy ?? false)) {
+        creds['local_openai_use_proxy'] = _localUseProxy.toString();
+        aiChanged = true;
+      }
     }
     if (_status == null ||
         _healthCheckEnabled != _status!.ai.healthCheckEnabled) {
@@ -170,6 +202,8 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       _openAIController.clear();
       _geminiController.clear();
       _grokController.clear();
+      _localKeyController.clear();
+      _draft.markSaved(_draftValues);
       await _loadStatus();
       // Provider selection and scoped OAuth availability are separate live
       // server facts. Refresh both so the underlying Settings screen and the
@@ -229,7 +263,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
 
     try {
       await _service.delete(key);
-      await _loadStatus();
+      await _loadStatus(preserveDraft: true);
       ref.invalidate(aiSettingsProvider);
       ref.read(authProvider.notifier).refreshConfig();
       if (mounted) {
@@ -276,6 +310,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     _openaiReasoningEffort = status.ai.openaiReasoningEffort;
     _localBaseUrlController.text = status.ai.localOpenaiBaseUrl;
     _localReasoningEffort = status.ai.localOpenaiReasoningEffort;
+    _localUseProxy = status.ai.localOpenaiUseProxy;
   }
 
   /// Effort is openai-only among hosted providers, capability-flagged so
@@ -291,6 +326,14 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     final provider =
         _providerFor(_selectedProvider, _status?.ai.providers ?? const []);
     return provider?.id == 'local_openai';
+  }
+
+  /// The endpoint's transport class is the admin's to declare, so the control
+  /// only appears on servers that accept the key.
+  bool get _showLocalProxyOptIn {
+    final provider =
+        _providerFor(_selectedProvider, _status?.ai.providers ?? const []);
+    return provider?.id == 'local_openai' && provider!.supportsProxyOptIn;
   }
 
   String _friendlySaveError(Object error) {
@@ -342,12 +385,18 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     ref.invalidate(adminCodexConnectionStatusProvider);
     ref.invalidate(adminGrokConnectionStatusProvider);
     ref.invalidate(aiSettingsProvider);
-    await _loadStatus();
+    await _loadStatus(preserveDraft: true);
     await ref.read(authProvider.notifier).refreshConfig();
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+        hasChanges: () => _hasPendingKeys || _draft.hasChanges(_draftValues),
+        isSaving: _isSaving,
+        child: _buildPage(context),
+      );
+
+  Widget _buildPage(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Providers & Credentials')),
       body: CenteredContent(
@@ -500,6 +549,21 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                                   () => _localReasoningEffort = value ?? ''),
                             ),
                           ),
+                          if (_showLocalProxyOptIn) ...[
+                            const SizedBox(height: 12),
+                            _LocalProxyOptInSection(
+                              enabled: _localUseProxy,
+                              proxyConfigured: ref
+                                      .watch(outboundProxyProvider)
+                                      ?.url
+                                      .isNotEmpty ??
+                                  false,
+                              onChanged: _isSaving
+                                  ? null
+                                  : (value) =>
+                                      setState(() => _localUseProxy = value),
+                            ),
+                          ],
                         ],
                         const SizedBox(height: 14),
                         _anchor(
@@ -822,6 +886,54 @@ class _AISelectionSection extends StatelessWidget {
       if (provider.id == selectedProvider) return provider;
     }
     return providers.isNotEmpty ? providers.first : null;
+  }
+}
+
+/// Declares whether the local endpoint is an internet host. Cantinarr never
+/// guesses that from the URL: a split-horizon name or a Tailscale address
+/// would be read wrong, and reading it wrong is silent either way.
+class _LocalProxyOptInSection extends StatelessWidget {
+  final bool enabled;
+  final bool proxyConfigured;
+  final ValueChanged<bool>? onChanged;
+
+  const _LocalProxyOptInSection({
+    required this.enabled,
+    required this.proxyConfigured,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppTheme.surfaceVariant.withValues(alpha: 0.45),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+        side: const BorderSide(color: AppTheme.border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: SwitchListTile.adaptive(
+        key: const ValueKey('local-openai-use-proxy'),
+        value: enabled,
+        onChanged: onChanged,
+        title: const Text(
+          'Route through the outbound proxy',
+          style: TextStyle(
+            color: AppTheme.textPrimary,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        subtitle: Text(
+          'Turn this on when the endpoint is on the internet instead of your '
+          'own network. ${proxyConfigured ? 'A server on your own network is always dialed directly.' : 'No outbound proxy is set yet, so add one under Settings > Outbound Proxy first.'}',
+          style: const TextStyle(
+            color: AppTheme.textSecondary,
+            fontSize: 12,
+            height: 1.38,
+          ),
+        ),
+      ),
+    );
   }
 }
 

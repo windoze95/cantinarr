@@ -101,6 +101,8 @@ enum IssueResolutionKind {
   // release on its own.
   removedNoReplacement(
       'removed_no_replacement', 'Dead download removed; no copy available yet'),
+  removedWaitingForAir(
+      'removed_waiting_for_air', 'Bad download removed; episode has not aired yet'),
   legacyUnknown('legacy_unknown', 'How it closed is unknown'),
   unknown('', 'How it closed is unknown');
 

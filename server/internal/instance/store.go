@@ -30,13 +30,16 @@ const (
 	legacyMediaDownloadModeIdentity = "identity"
 )
 
-// Instance represents a configured service instance (Radarr, Sonarr, SABnzbd,
-// or qBittorrent). Radarr/Sonarr/SABnzbd authenticate with an API key;
-// qBittorrent with either an API key (5.2 and newer) or a username and
-// password, and a row holds one shape or the other, never both.
+// Instance represents a configured service instance (an arr, a download
+// client, a watch-history provider, or a media server). Radarr/Sonarr/SABnzbd
+// authenticate with an API key; qBittorrent with either an API key (5.2 and
+// newer) or a username and password, and a row holds one shape or the other,
+// never both; NZBGet and Transmission with a username and password; Deluge
+// with its web UI password alone; ruTorrent with optional Basic-auth
+// credentials.
 type Instance struct {
 	ID          string `json:"id"`
-	ServiceType string `json:"service_type"` // "radarr", "sonarr", "sabnzbd", or "qbittorrent"
+	ServiceType string `json:"service_type"` // "radarr", "sonarr", "sabnzbd", "deluge", …
 	Name        string `json:"name"`
 	URL         string `json:"url"`
 	APIKey      string `json:"api_key"`
@@ -89,13 +92,51 @@ func (inst *Instance) MediaDownloadsConfigured(roots []string) bool {
 // Store provides CRUD operations for service instances. API keys and
 // passwords are encrypted at rest; legacy plaintext rows decrypt as-is.
 type Store struct {
-	db     *sql.DB
-	cipher *secrets.Cipher
+	db         *sql.DB
+	cipher     *secrets.Cipher
+	grantAdded func(userID int64, instanceID string)
 }
 
 // NewStore creates a new instance store.
 func NewStore(db *sql.DB, cipher *secrets.Cipher) *Store {
 	return &Store{db: db, cipher: cipher}
+}
+
+// SetGrantAddedObserver installs a startup-only hook for newly committed grant
+// rows. Unlike the handler's reconciliation hook, unchanged grants and removals
+// are silent. Calling it after commit also covers grants made by account links.
+func (s *Store) SetGrantAddedObserver(observer func(int64, string)) {
+	s.grantAdded = observer
+}
+
+type grant struct {
+	userID     int64
+	instanceID string
+}
+
+func existingGrants(tx *sql.Tx, where string, arg any) (map[grant]bool, error) {
+	rows, err := tx.Query("SELECT user_id, instance_id FROM user_instance_grants WHERE "+where, arg)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	previous := make(map[grant]bool)
+	for rows.Next() {
+		var g grant
+		if err := rows.Scan(&g.userID, &g.instanceID); err != nil {
+			return nil, err
+		}
+		previous[g] = true
+	}
+	return previous, rows.Err()
+}
+
+func (s *Store) notifyAddedGrants(added []grant) {
+	if s.grantAdded != nil {
+		for _, g := range added {
+			s.grantAdded(g.userID, g.instanceID)
+		}
+	}
 }
 
 // decryptSecrets resolves stored secret fields to plaintext for callers.
@@ -609,6 +650,12 @@ func (s *Store) Delete(id string) error {
 	if _, err := tx.Exec("DELETE FROM arr_queue_witness WHERE instance_id = ?", id); err != nil {
 		return fmt.Errorf("delete instance queue witness: %w", err)
 	}
+	if _, err := tx.Exec("DELETE FROM hardcover_instance_connections WHERE instance_id=?", id); err != nil {
+		return err
+	}
+	if err := cleanupHardcoverConnections(tx); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit instance deletion: %w", err)
 	}
@@ -961,6 +1008,11 @@ func (s *Store) SetUserGrants(userID int64, grants map[string][]string) error {
 		return fmt.Errorf("set user instance grants: %w", err)
 	}
 	defer tx.Rollback()
+	previous, err := existingGrants(tx, "user_id = ?", userID)
+	if err != nil {
+		return fmt.Errorf("read previous user grants: %w", err)
+	}
+	var added []grant
 	for serviceType, ids := range grants {
 		if _, err := tx.Exec(
 			`DELETE FROM user_instance_grants WHERE user_id = ? AND instance_id IN (
@@ -978,11 +1030,17 @@ func (s *Store) SetUserGrants(userID int64, grants map[string][]string) error {
 				// Covers unknown user ids too (the user_id foreign key rejects them).
 				return fmt.Errorf("grant instance for user %d: %w", userID, err)
 			}
+			g := grant{userID, instanceID}
+			if !previous[g] {
+				added = append(added, g)
+				previous[g] = true
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("set user instance grants: %w", err)
 	}
+	s.notifyAddedGrants(added)
 	return nil
 }
 
@@ -1034,6 +1092,11 @@ func (s *Store) SetInstanceGrantUsers(instanceID string, userIDs []int64) error 
 		return fmt.Errorf("set instance grant users: %w", err)
 	}
 	defer tx.Rollback()
+	previous, err := existingGrants(tx, "instance_id = ?", instanceID)
+	if err != nil {
+		return fmt.Errorf("read previous instance grants: %w", err)
+	}
+	var added []grant
 	if _, err := tx.Exec(
 		"DELETE FROM user_instance_grants WHERE instance_id = ?", instanceID,
 	); err != nil {
@@ -1065,10 +1128,16 @@ func (s *Store) SetInstanceGrantUsers(instanceID string, userIDs []int64) error 
 			// Covers unknown user ids too (the user_id foreign key rejects them).
 			return fmt.Errorf("grant instance for user %d: %w", userID, err)
 		}
+		g := grant{userID, instanceID}
+		if !previous[g] {
+			added = append(added, g)
+			previous[g] = true
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("set instance grant users: %w", err)
 	}
+	s.notifyAddedGrants(added)
 	return nil
 }
 

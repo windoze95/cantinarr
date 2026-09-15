@@ -17,10 +17,10 @@ import (
 func TestHandleDeleteUser_RunsCommittedHookOnlyOnSuccess(t *testing.T) {
 	svc := setupTestService(t)
 	handler := NewHandler(svc)
-	var prepared, committed []int64
-	handler.SetUserDeleteHook(func(userID int64) func() {
+	var prepared, committed, released []int64
+	handler.SetUserDeleteHook(func(userID int64) (func(), func()) {
 		prepared = append(prepared, userID)
-		return func() { committed = append(committed, userID) }
+		return func() { committed = append(committed, userID) }, func() { released = append(released, userID) }
 	})
 
 	connect, err := svc.CreateConnectToken(1, "guest", "http://example.com")
@@ -47,7 +47,7 @@ func TestHandleDeleteUser_RunsCommittedHookOnlyOnSuccess(t *testing.T) {
 	if rec := del(1, "1"); rec.Code != http.StatusBadRequest {
 		t.Fatalf("self delete = %d, want 400", rec.Code)
 	}
-	if len(prepared) != 1 || len(committed) != 0 {
+	if len(prepared) != 1 || len(committed) != 0 || len(released) != 1 {
 		t.Fatalf("after refused delete: prepared=%v committed=%v", prepared, committed)
 	}
 
@@ -56,7 +56,7 @@ func TestHandleDeleteUser_RunsCommittedHookOnlyOnSuccess(t *testing.T) {
 	if rec := del(1, itoa(target)); rec.Code != http.StatusOK {
 		t.Fatalf("delete guest = %d %s", rec.Code, rec.Body.String())
 	}
-	if len(prepared) != 2 || prepared[1] != target || len(committed) != 1 || committed[0] != target {
+	if len(released) != 2 || len(prepared) != 2 || prepared[1] != target || len(committed) != 1 || committed[0] != target {
 		t.Fatalf("after delete: prepared=%v committed=%v", prepared, committed)
 	}
 }

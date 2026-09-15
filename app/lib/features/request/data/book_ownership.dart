@@ -51,8 +51,8 @@ class BookOwnership {
 }
 
 /// One parsed row of the ownership digest: a title the user already has in some
-/// form, with the normalized fields used for fuzzy matching against search
-/// lookup results.
+/// form. Identifier keys bind library state to catalog records without title
+/// matching or merging distinct native records.
 class OwnedTitle {
   final String title;
   final String author;
@@ -84,6 +84,7 @@ class OwnedTitle {
   /// missing format (the backend completes the existing record). Empty when the
   /// record has none.
   final String foreignBookId;
+  final List<String> identityKeys;
   final BookOwnership ownership;
 
   /// Whether Chaptarr could resolve format truth for this title. Older
@@ -101,6 +102,7 @@ class OwnedTitle {
     this.seriesPosition = '',
     this.cover = '',
     this.foreignBookId = '',
+    this.identityKeys = const [],
     required this.ownership,
     this.statusKnown = true,
   });
@@ -117,9 +119,12 @@ class OwnedTitle {
         seriesPosition: json['series_position'] as String? ?? '',
         cover: json['cover'] as String? ?? '',
         foreignBookId: json['foreign_book_id'] as String? ?? '',
+        identityKeys:
+            (json['identity_keys'] as List?)?.whereType<String>().toList() ??
+                const [],
         ownership: BookOwnership(
-          ebook: FormatOwnership.fromJson(
-              json['ebook'] as Map<String, dynamic>?),
+          ebook:
+              FormatOwnership.fromJson(json['ebook'] as Map<String, dynamic>?),
           audiobook: FormatOwnership.fromJson(
               json['audiobook'] as Map<String, dynamic>?),
         ),

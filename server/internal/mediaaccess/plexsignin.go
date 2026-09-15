@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/mediaserver"
 	"github.com/windoze95/cantinarr-server/internal/plex"
 )
@@ -39,17 +40,21 @@ type PlexSignInStart struct {
 // row here; an admin has to sort out whose it is), or "" (nobody has granted
 // this user Plex yet, and the admins were told).
 type PlexSignInResult struct {
-	Linked      bool   `json:"linked"`
-	Username    string `json:"username,omitempty"`
-	Email       string `json:"email,omitempty"`
-	InviteState string `json:"invite_state,omitempty"`
+	IdentityState string `json:"identity_state,omitempty"`
+	IdentityError string `json:"identity_error,omitempty"`
+	Linked        bool   `json:"linked"`
+	Username      string `json:"username,omitempty"`
+	Email         string `json:"email,omitempty"`
+	InviteState   string `json:"invite_state,omitempty"`
 }
 
 // plexSignIn is one sign-in in flight, owned by the user who began it.
 type plexSignIn struct {
-	userID   int64
-	clientID string
-	expires  time.Time
+	actor      *auth.Claims
+	generation uint64
+	userID     int64
+	clientID   string
+	expires    time.Time
 	// mu serializes checks of one pin: a poll that arrives while another is
 	// linking answers "not yet" instead of linking twice.
 	mu     sync.Mutex
@@ -97,7 +102,20 @@ func (s *Service) SetPlexBaseURL(baseURL string) {
 // PlexSignInBegin mints the PIN a user approves with their own Plex account.
 // Each sign-in gets its own client identifier: plex.tv ties the token to it,
 // and SignOut removes exactly that device again.
-func (s *Service) PlexSignInBegin(ctx context.Context, userID int64) (PlexSignInStart, error) {
+func (s *Service) PlexSignInBegin(ctx context.Context, userID int64, actors ...*auth.Claims) (PlexSignInStart, error) {
+	var actor *auth.Claims
+	var generation uint64
+	if s.plexAuth != nil {
+		if len(actors) != 1 || actors[0] == nil || actors[0].UserID != userID {
+			return PlexSignInStart{}, auth.ErrInvalidCredentials
+		}
+		actor = actors[0]
+		var err error
+		generation, err = s.plexAuth.BeginPlexIdentityProof(actor)
+		if err != nil {
+			return PlexSignInStart{}, err
+		}
+	}
 	clientID := uuid.NewString()
 	client := plex.NewClientAt(s.plexBaseURL)
 	ctx, cancel := context.WithTimeout(ctx, plexTVTimeout)
@@ -106,7 +124,7 @@ func (s *Service) PlexSignInBegin(ctx context.Context, userID int64) (PlexSignIn
 	if err != nil {
 		return PlexSignInStart{}, fmt.Errorf("%w: %v", ErrUpstream, err)
 	}
-	s.signIns.put(pin.ID, &plexSignIn{userID: userID, clientID: clientID, expires: time.Now().Add(plexSignInTTL)})
+	s.signIns.put(pin.ID, &plexSignIn{actor: actor, generation: generation, userID: userID, clientID: clientID, expires: time.Now().Add(plexSignInTTL)})
 	return PlexSignInStart{PinID: pin.ID, Code: pin.Code, URL: client.AuthURL(clientID, pin.Code)}, nil
 }
 
@@ -145,21 +163,29 @@ func (s *Service) PlexSignInCheck(ctx context.Context, userID int64, pinID int64
 	}
 	acctCtx, cancel := context.WithTimeout(ctx, plexTVTimeout)
 	account, err := client.GetUser(acctCtx, entry.clientID, pin.AuthToken)
-	if err == nil {
-		// The token has done its one job. A sign-out that fails leaves an
-		// idle "Cantinarr" device on the person's plex.tv account, which
-		// they can remove themselves; nothing here keeps the token.
-		removed, signOutErr := client.SignOut(acctCtx, entry.clientID, pin.AuthToken)
-		switch {
-		case signOutErr != nil:
-			s.logger.Warn("mediaaccess: plex sign-in: could not sign the token out", "err", signOutErr, "user_id", userID)
-		case !removed:
-			s.logger.Info("mediaaccess: plex sign-in: token revoked, but plex.tv never listed the device to remove; an idle Cantinarr entry stays on the account", "user_id", userID)
-		}
+	// Cleanup is owed even when account verification fails or the initiating
+	// request is cancelled. Keep provider tokens out of logs and storage.
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), plexTVTimeout)
+	_, cleanupErr := client.SignOut(cleanupCtx, entry.clientID, pin.AuthToken)
+	cleanupCancel()
+	if cleanupErr != nil {
+		s.logger.Warn("mediaaccess: Plex sign-in token cleanup failed", "user_id", userID)
 	}
+
 	cancel()
 	if err != nil {
 		return PlexSignInResult{}, fmt.Errorf("%w: %v", ErrUpstream, err)
+	}
+	identityState, identityError := "", ""
+	if s.plexAuth != nil {
+		if identityErr := s.plexAuth.CompletePlexIdentityProof(entry.actor, entry.generation, *account); identityErr != nil {
+			if identityErr != auth.ErrPlexConflict {
+				return PlexSignInResult{}, identityErr
+			}
+			identityState, identityError = "conflict", identityErr.Error()
+		} else {
+			identityState = "linked"
+		}
 	}
 	email := mediaserver.CanonicalEmail(account.Email)
 	if !mediaserver.ValidEmail(email) {
@@ -174,7 +200,7 @@ func (s *Service) PlexSignInCheck(ctx context.Context, userID int64, pinID int64
 	shareCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), plexSignInShareBudget)
 	defer cancel()
 	outcome := s.handleEmailShared(shareCtx, userID, username)
-	result := PlexSignInResult{Linked: true, Username: account.Username, Email: email, InviteState: outcome.userState()}
+	result := PlexSignInResult{IdentityState: identityState, IdentityError: identityError, Linked: true, Username: account.Username, Email: email, InviteState: outcome.userState()}
 	entry.result = &result
 	s.logger.Info("mediaaccess: plex sign-in linked a verified email", "user_id", userID, "invite_state", result.InviteState)
 	return result, nil

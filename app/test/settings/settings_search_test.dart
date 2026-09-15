@@ -140,9 +140,9 @@ void main() {
   testWidgets('a root row result reveals the row in place', (tester) async {
     await _pump(tester, isAdmin: true);
 
-    await tester.enterText(_searchField(), 'request updates');
+    await tester.enterText(_searchField(), 'profile approvals');
     await tester.pumpAndSettle();
-    final result = find.text('Request updates');
+    final result = find.text('Profile approvals');
     await _huntResult(tester, result);
     await tester.tap(result);
     await tester.pumpAndSettle();
@@ -150,8 +150,8 @@ void main() {
     // Search dismissed (breadcrumb subtitles gone), browsing resumed, and
     // SettingsHighlight scrolled the revealed row into view — which puts the
     // top-of-list sections offstage, proving the scroll happened.
-    expect(find.text('Settings › Notifications'), findsNothing);
-    expect(find.text('Request updates'), findsOneWidget);
+    expect(find.text('Settings › Needs attention menu'), findsNothing);
+    expect(find.text('Profile approvals'), findsOneWidget);
     expect(
       tester
           .state<ScrollableState>(find.byType(Scrollable).first)

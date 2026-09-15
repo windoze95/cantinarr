@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/windoze95/cantinarr-server/internal/secrets"
@@ -32,6 +33,10 @@ type AIProfile struct {
 	// openai profile, with the same shared-only scoping as BaseURL. Empty
 	// means auto.
 	ReasoningEffort string
+	// UseProxy says the local provider's endpoint is an internet host, so
+	// its turns take the proxied transport class instead of the direct one.
+	// Same shared-only scoping as BaseURL: personal loads leave it false.
+	UseProxy bool
 }
 
 // LoadUserAIProfile resolves selection and matching key from one read
@@ -181,6 +186,12 @@ func (r *Registry) loadSharedAIProfileTx(tx *sql.Tx) (AIProfile, error) {
 			return profile, err
 		}
 		profile.ReasoningEffort = effort
+		useProxy, _, err := settingTx(tx, KeyLocalOpenAIUseProxy)
+		if err != nil {
+			return profile, err
+		}
+		parsed, parseErr := strconv.ParseBool(useProxy)
+		profile.UseProxy = parseErr == nil && parsed
 	}
 	key := AIKeyCredentialKey(provider)
 	if key == "" {

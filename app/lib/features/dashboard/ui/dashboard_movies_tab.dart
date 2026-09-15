@@ -44,6 +44,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       ref.read(movieDiscoverProvider.notifier).bootstrap();
       _loadLibraryPreview();
     });
@@ -274,7 +275,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
           HorizontalItemRow<RadarrMovie>(
             items: items,
             isLoading: _isLoadingLibrary,
-            height: cardWidth * 1.5 + MediaCard.plainRowExtraHeight,
+            height: cardWidth * 1.5 + MediaCard.rowExtraHeight(context, withSubtitle: false),
             itemBuilder: (movie) {
               final badge = badgeBuilder(movie);
               return MediaCard(
