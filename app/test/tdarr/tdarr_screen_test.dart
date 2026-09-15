@@ -10,6 +10,7 @@ import 'package:cantinarr/features/tdarr/ui/tdarr_screen.dart';
 import 'package:cantinarr/features/tdarr/ui/tdarr_module_shell.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -88,9 +89,11 @@ Future<ProviderContainer> _pump(WidgetTester tester, _Adapter adapter,
         onTabChanged: (_) {}, child: screen);
   }
   await tester.pumpWidget(UncontrolledProviderScope(container: container,
-    child: MaterialApp(theme: AppTheme.dark, home: Scaffold(body: visible == null ? screen :
+    child: RepaintBoundary(key: const ValueKey('tdarr-golden'),
+      child: MaterialApp(theme: AppTheme.dark, debugShowCheckedModeBanner: false,
+        home: Scaffold(body: visible == null ? screen :
       ValueListenableBuilder<bool>(valueListenable: visible, child: screen,
-        builder: (_, enabled, child) => TickerMode(enabled: enabled, child: child!)))),
+        builder: (_, enabled, child) => TickerMode(enabled: enabled, child: child!))))),
   ));
   await tester.pumpAndSettle();
   return container;
@@ -113,8 +116,18 @@ void main() {
       }
       await _pump(tester, adapter, activity: activity, shell: true);
       expect(tester.takeException(), isNull);
-      await expectLater(find.byType(MaterialApp), matchesGoldenFile(
-          'goldens/tdarr_${activity ? "activity" : "libraries"}_phone.png'));
+      // Capture at a phone's 3x density: one-pixel Ahem glyph-edge differences
+      // between macOS and Linux then remain raster noise, without changing
+      // the shared comparator's tolerance or masking any content/layout.
+      final boundary = tester.renderObject<RenderRepaintBoundary>(
+          find.byKey(const ValueKey('tdarr-golden')));
+      final capture = boundary.toImage(pixelRatio: 3);
+      try {
+        await expectLater(capture, matchesGoldenFile(
+            'goldens/tdarr_${activity ? "activity" : "libraries"}_phone.png'));
+      } finally {
+        (await capture).dispose();
+      }
       await _dispose(tester);
     });
   }
