@@ -137,6 +137,12 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **Live badges** -- Approvals / actionable Issues / Agent fixes counts in the drawer, kept current over WebSocket; quietly observed or actively retrying arr issues are tracked without adding alert pressure. A **Plex invites** entry appears (with count) only while someone shared a Plex email and holds no Plex share yet -- the persistent surface behind the miss-able push -- and lands on the Users screen, where those users carry an "Asked for Plex access" tag and the grant toggle is the one tap. A **Setup checklist** entry appears for admins with the count of items still to set up or skip. It disappears when every item is configured or skipped, or when the admin mutes it from the checklist. Its status loads when Discover opens and retries after sign-in or session validation, so the reminder does not require a visit to Settings or the checklist first.
 - **Focused attention menu** -- admins can independently keep Approvals, Issues, Agent fixes, and Profile approvals pinned or show each only while requests await approval, an issue needs attention or is being tracked, a fix awaits review, or an external settings change awaits a decision. These queues default to hidden while empty; saved visibility choices are preserved. The device-local switches appear on the queue screens and in Settings, so a hidden entry can always be restored; passive tracking keeps the Issues entry available without inflating its actionable badge. Hiding every entry hides the "Needs attention" row itself, since there is then nothing behind it.
 
+### Tdarr progress
+
+Admins with a Tdarr instance get a separate **Tdarr** module with **Activity** and **Libraries** tabs and an instance selector when needed. Activity groups workers by node, shows filenames with expandable source paths, transcode/health-check and CPU/GPU labels, and Tdarr's current-step progress, FPS, and ETA when reported. Idle nodes and no connected nodes have distinct empty states. Libraries defaults to all-library totals and fetches only the selected library's status counts; unknown counts say **Unavailable**, and removed libraries require an explicit new selection. There is no fabricated overall progress or ETA.
+
+Refreshes run only while the tab is visible and the app is foregrounded (10 seconds for Activity; 30 for Libraries). The last successful timestamp stays visible, failures show **Showing stale data** with Retry, and switching instances clears the previous snapshot. Setup uses Settings > Add Instance > Tdarr, the server API URL (normally port 8266), and an optional API key. Blank saved-key edits preserve it; **Remove saved API key** explicitly tests/saves an unauthenticated connection. The module is read-only, has no user grants, job controls, or media-title matching, and never calls Tdarr directly from the device.
+
 ### AI assistant
 - **Multi-provider chat** with incremental SSE streaming on native and web, visible tool activity, and a poster carousel for results. Every user can bring a personal Anthropic, OpenAI, Gemini, or xAI Grok API key, or link a subscription account with a browser device code -- OpenAI (OAuth) via ChatGPT or xAI Grok (OAuth) via SuperGrok / X Premium+. Admins can configure the same choices as an included server profile and grant it per user. Personal overrides fail closed instead of silently spending shared quota.
 - **Server-side tools** -- the assistant searches (movies, TV, books, and music), checks availability, and requests on your behalf; book and album results ride the same carousel and open the matching detail page with their catalog identity and selected instance. Admins can triage queues conversationally.
@@ -307,6 +313,7 @@ app/lib/
 │   ├── setup_wizard/             # Live setup checklist wizard
 │   ├── shell/                    # App shell: navigation + search-to-AI hand-off
 │   ├── sonarr/                   # TV management + episode tools + import doctor engine
+│   ├── tdarr/                    # Read-only worker activity and library statistics
 │   └── monitoring/               # Watch activity/history/stats from Tautulli or Tracearr
 └── navigation/app_router.dart    # GoRouter: shell + module tab shells + guards
 ```
@@ -324,6 +331,7 @@ One authenticated shell hosts both module pages and secondary work screens over 
 | `/lidarr` | Library · Queue · History · Wanted · Calendar | admin |
 | `/downloads` | Queue · History | admin |
 | `/monitoring` | Activity · History · Stats | admin |
+| `/tdarr` | Activity · Libraries | admin |
 
 ¹ Requesters need a Chaptarr grant for Books. ² Requesters need a Lidarr grant for Music. Admins can browse both before setup. All four catalog tabs also follow the server’s conditional hide preferences; Releases is visible while any of Movies, TV Shows, or Music is visible. Visible navigation maps to fixed router branches, including when only Music is granted.
 

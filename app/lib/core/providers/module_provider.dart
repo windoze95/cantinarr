@@ -117,6 +117,13 @@ class ModuleNotifier extends Notifier<ModuleState> {
         ));
       }
 
+      // Read-only processing activity, separate from playback monitoring.
+      if (isAdmin && connection.tdarrInstances.isNotEmpty) {
+        modules.add(const AppModule(
+          type: ModuleType.tdarr, label: 'Tdarr', icon: Icons.sync,
+        ));
+      }
+
       // AI Assistant
       if (connection.services.ai) {
         modules.add(const AppModule(

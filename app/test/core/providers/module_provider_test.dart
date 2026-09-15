@@ -30,6 +30,7 @@ void main() {
     expect(_labels(modules), isNot(contains('Chaptarr')));
     expect(_labels(modules), isNot(contains('Downloads')));
     expect(_labels(modules), isNot(contains('Monitoring')));
+    expect(_labels(modules), isNot(contains('Tdarr')));
     expect(_labels(modules), isNot(contains('Tautulli')));
     // A granted media server is a guide, never a module.
     expect(_labels(modules), isNot(contains('Jellyfin')));
@@ -91,6 +92,7 @@ void main() {
         'Chaptarr',
         'Downloads',
         'Monitoring',
+        'Tdarr',
       ]),
     );
     expect(_labels(modules), isNot(contains('Tautulli')));
@@ -152,6 +154,8 @@ AuthState _authState({required bool isAdmin}) {
           name: 'Main Radarr',
           isDefault: true,
         ),
+        ServiceInstance(id: 'tdarr-one', serviceType: 'tdarr', name: 'Tdarr One'),
+        ServiceInstance(id: 'tdarr-two', serviceType: 'tdarr', name: 'Tdarr Two'),
         ServiceInstance(
           id: 'radarr-4k',
           serviceType: 'radarr',

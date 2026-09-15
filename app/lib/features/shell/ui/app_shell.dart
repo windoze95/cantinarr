@@ -406,6 +406,7 @@ class _AppShellState extends ConsumerState<AppShell>
     if (path.startsWith('/lidarr')) return ModuleType.lidarr;
     if (path.startsWith('/downloads')) return ModuleType.downloads;
     if (path.startsWith('/monitoring')) return ModuleType.monitoring;
+    if (path.startsWith('/tdarr')) return ModuleType.tdarr;
     return null;
   }
 
@@ -1550,6 +1551,8 @@ class _AppShellState extends ConsumerState<AppShell>
         return state.downloadInstances;
       case ModuleType.monitoring:
         return state.watchHistoryInstances;
+      case ModuleType.tdarr:
+        return state.tdarrInstances;
       case ModuleType.chaptarr:
         return state.chaptarrInstances;
       case ModuleType.lidarr:
@@ -1572,6 +1575,8 @@ class _AppShellState extends ConsumerState<AppShell>
         return state.activeDownloadInstance;
       case ModuleType.monitoring:
         return state.activeWatchHistoryInstance;
+      case ModuleType.tdarr:
+        return state.activeTdarrInstance;
       case ModuleType.chaptarr:
         return state.activeChaptarrInstance;
       case ModuleType.lidarr:
@@ -1616,6 +1621,8 @@ class _AppShellState extends ConsumerState<AppShell>
           instances.setActiveDownloadInstance(instanceId);
         case ModuleType.monitoring:
           instances.setActiveWatchHistoryInstance(instanceId);
+        case ModuleType.tdarr:
+          instances.setActiveTdarrInstance(instanceId);
         case ModuleType.chaptarr:
           instances.setActiveChaptarrInstance(instanceId);
         case ModuleType.lidarr:
@@ -1639,6 +1646,8 @@ class _AppShellState extends ConsumerState<AppShell>
         context.go('/downloads/queue');
       case ModuleType.monitoring:
         context.go('/monitoring/activity');
+      case ModuleType.tdarr:
+        context.go('/tdarr/activity');
       case ModuleType.assistant:
         context.push('/assistant');
     }

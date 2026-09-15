@@ -16,12 +16,14 @@ class InstanceState {
   final List<ServiceInstance> lidarrInstances;
   final List<ServiceInstance> downloadInstances;
   final List<ServiceInstance> watchHistoryInstances;
+  final List<ServiceInstance> tdarrInstances;
   final String? activeRadarrInstanceId;
   final String? activeSonarrInstanceId;
   final String? activeChaptarrInstanceId;
   final String? activeLidarrInstanceId;
   final String? activeDownloadInstanceId;
   final String? activeWatchHistoryInstanceId;
+  final String? activeTdarrInstanceId;
 
   const InstanceState({
     this.radarrInstances = const [],
@@ -30,12 +32,14 @@ class InstanceState {
     this.lidarrInstances = const [],
     this.downloadInstances = const [],
     this.watchHistoryInstances = const [],
+    this.tdarrInstances = const [],
     this.activeRadarrInstanceId,
     this.activeSonarrInstanceId,
     this.activeChaptarrInstanceId,
     this.activeLidarrInstanceId,
     this.activeDownloadInstanceId,
     this.activeWatchHistoryInstanceId,
+    this.activeTdarrInstanceId,
   });
 
   InstanceState copyWith({
@@ -45,12 +49,14 @@ class InstanceState {
     List<ServiceInstance>? lidarrInstances,
     List<ServiceInstance>? downloadInstances,
     List<ServiceInstance>? watchHistoryInstances,
+    List<ServiceInstance>? tdarrInstances,
     String? activeRadarrInstanceId,
     String? activeSonarrInstanceId,
     String? activeChaptarrInstanceId,
     String? activeLidarrInstanceId,
     String? activeDownloadInstanceId,
     String? activeWatchHistoryInstanceId,
+    String? activeTdarrInstanceId,
   }) =>
       InstanceState(
         radarrInstances: radarrInstances ?? this.radarrInstances,
@@ -59,6 +65,7 @@ class InstanceState {
         lidarrInstances: lidarrInstances ?? this.lidarrInstances,
         downloadInstances: downloadInstances ?? this.downloadInstances,
         watchHistoryInstances: watchHistoryInstances ?? this.watchHistoryInstances,
+        tdarrInstances: tdarrInstances ?? this.tdarrInstances,
         activeRadarrInstanceId:
             activeRadarrInstanceId ?? this.activeRadarrInstanceId,
         activeSonarrInstanceId:
@@ -71,6 +78,7 @@ class InstanceState {
             activeDownloadInstanceId ?? this.activeDownloadInstanceId,
         activeWatchHistoryInstanceId:
             activeWatchHistoryInstanceId ?? this.activeWatchHistoryInstanceId,
+        activeTdarrInstanceId: activeTdarrInstanceId ?? this.activeTdarrInstanceId,
       );
 
   /// Get the active Radarr instance, falling back to default.
@@ -145,6 +153,13 @@ class InstanceState {
         orElse: () => downloadInstances.first);
   }
 
+  ServiceInstance? get activeTdarrInstance {
+    if (tdarrInstances.isEmpty) return null;
+    return tdarrInstances.firstWhere((i) => i.id == activeTdarrInstanceId,
+        orElse: () => tdarrInstances.firstWhere((i) => i.isDefault,
+            orElse: () => tdarrInstances.first));
+  }
+
   /// Get the active watch-history (Tautulli or Tracearr) instance, falling
   /// back to the first default in server order.
   ServiceInstance? get activeWatchHistoryInstance {
@@ -173,6 +188,7 @@ class InstanceNotifier extends Notifier<InstanceState> {
     final lidarr = connection.lidarrInstances;
     final downloads = connection.downloadInstances;
     final watchHistory = connection.watchHistoryInstances;
+    final tdarr = connection.tdarrInstances;
 
     return InstanceState(
       radarrInstances: radarr,
@@ -181,6 +197,9 @@ class InstanceNotifier extends Notifier<InstanceState> {
       lidarrInstances: lidarr,
       downloadInstances: downloads,
       watchHistoryInstances: watchHistory,
+      tdarrInstances: tdarr,
+      activeTdarrInstanceId: tdarr.isEmpty ? null :
+          tdarr.firstWhere((i) => i.isDefault, orElse: () => tdarr.first).id,
       activeRadarrInstanceId: radarr.isNotEmpty
           ? (radarr.firstWhere((i) => i.isDefault, orElse: () => radarr.first))
               .id
@@ -234,6 +253,10 @@ class InstanceNotifier extends Notifier<InstanceState> {
 
   void setActiveWatchHistoryInstance(String instanceId) {
     state = state.copyWith(activeWatchHistoryInstanceId: instanceId);
+  }
+
+  void setActiveTdarrInstance(String instanceId) {
+    state = state.copyWith(activeTdarrInstanceId: instanceId);
   }
 }
 

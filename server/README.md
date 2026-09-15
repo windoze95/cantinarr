@@ -720,6 +720,22 @@ GET    /api/tautulli/{instanceID}/activity|history|stats   # alias of the three 
 
 The watch-history routes serve both providers through one handler with one wire shape. Streams and history items carry `media_type`, `server`, and `server_type` (empty when the provider does not know them; Tautulli names no server because it only ever has one), and history and stats carry a `coverage` block (`plays`, `since`, `until`, `truncated`, `note`) saying what the answer was computed from, so an empty list reads as absence rather than blindness. Tracearr has no ranked-stats endpoint, so its stats are derived from paged history (`since` = now minus the window, at most 20 pages of 100 plays, every row one play as Tautulli's `total_plays` counts) and cached per window for five minutes; the note says when the walk was capped and the counts are a floor.
 
+### Tdarr progress (admin)
+
+```
+GET    /api/tdarr/{instanceID}/activity
+GET    /api/tdarr/{instanceID}/libraries
+GET    /api/tdarr/{instanceID}/stats?library_id=...
+```
+
+All three routes require `monitoring:read` (admin-only) and a `tdarr` instance. Activity returns normalized nodes/workers, filename/source path, job kind, CPU/GPU, current-step progress, FPS, ETA, and flow status. Libraries returns only IDs and names. Stats omits `library_id` for all libraries, or reads the selected library's status counts. Each response includes `observed_at`; missing measurements/counts remain null, never invented zeroes. Global transcode success includes not-required files, and errors include cancelled files, as their labels state. Per-library statuses retain Tdarr's separate labels. These counts describe current state, not an overall percentage or completion ETA.
+
+Tdarr uses the existing `service_instances` table with encrypted credentials, not a separate state database. Instance create/update/test accept the server API URL (normally port 8266) and optional `api_key`. Blank edits preserve a saved key; Tdarr-only `clear_api_key: true` explicitly removes it in both test and save. Instance responses expose only `has_api_key`, never the key. Connection tests check server status and every supported read shape, including one library's stats when available. Older or incompatible responses and upstream failures return readable errors instead of empty success.
+
+The server uses the internal/unproxied transport and fixed read operations only: `get-nodes`, `cruddb` reads of `LibrarySettingsJSONDB` and `StatisticsJSONDB`, and `stats/get-pies`. No generic instance proxy is available for Tdarr, even to admins. Concurrent reads coalesce; activity expires after 5 seconds and libraries/stats after 30 seconds. Editing/deleting the instance invalidates its client and caches, including isolation from old in-flight reads. The app polls visible foreground Activity every 10 seconds and Libraries every 30 seconds, retains a timestamped stale snapshot on failure, and cancels obsolete selections. There are no Tdarr writes, AI tools, job controls, or Radarr/Sonarr title matching.
+
+Stats also includes a `note` explaining its scope: global queue/category counts need not add up to the file total (active/staged files can be absent), and per-library saved statuses can still say Queued while a file is processing or awaiting acceptance. Staging acceptance remains in Tdarr; an idle Activity view does not mean the library is finished.
+
 ### Push & notification preferences (user)
 ```
 POST   /api/devices/push-token               # register this device's push token (APNs or FCM;
@@ -1158,6 +1174,7 @@ server/
 │   ├── sonarr/               # Sonarr API v3 client
 │   ├── tautulli/             # Tautulli client + watch-history provider
 │   ├── tmdb/                 # TMDB client + ID bridge
+│   ├── tdarr/                # Read-only processing activity, libraries and status counts
 │   ├── tracearr/             # Tracearr public-API client + watch-history provider (derived stats)
 │   ├── trakt/                # Trakt client (discovery + fallback ID resolver)
 │   ├── transmission/         # Transmission RPC client

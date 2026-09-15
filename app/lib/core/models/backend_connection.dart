@@ -193,6 +193,9 @@ class BackendConnection {
     ];
   }
 
+  List<ServiceInstance> get tdarrInstances =>
+      instances.where((i) => i.serviceType == 'tdarr').toList();
+
   /// Get all watch-history (Tautulli, Tracearr) instances, in server order.
   List<ServiceInstance> get watchHistoryInstances => instances
       .where((i) => watchHistoryServiceTypes.contains(i.serviceType))

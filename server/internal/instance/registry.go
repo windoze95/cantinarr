@@ -15,6 +15,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/rutorrent"
 	"github.com/windoze95/cantinarr-server/internal/sabnzbd"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
+	"github.com/windoze95/cantinarr-server/internal/tdarr"
 	"github.com/windoze95/cantinarr-server/internal/transmission"
 	"github.com/windoze95/cantinarr-server/internal/watchhistory"
 )
@@ -37,6 +38,7 @@ type Registry struct {
 	// Tracearr provider carries a stats cache, which InvalidateClient drops
 	// with it whenever the instance is edited.
 	watchHistoryProviders map[string]watchhistory.Provider
+	tdarrClients          map[string]*tdarr.Client
 }
 
 // NewRegistry creates a new client registry.
@@ -55,6 +57,7 @@ func NewRegistry(store *Store) *Registry {
 		rutorrentClients:    make(map[string]*rutorrent.Client),
 
 		watchHistoryProviders: make(map[string]watchhistory.Provider),
+		tdarrClients:          make(map[string]*tdarr.Client),
 	}
 }
 
@@ -655,6 +658,7 @@ func (r *Registry) InvalidateClient(instanceID string) {
 	delete(r.delugeClients, instanceID)
 	delete(r.rutorrentClients, instanceID)
 	delete(r.watchHistoryProviders, instanceID)
+	delete(r.tdarrClients, instanceID)
 	r.mu.Unlock()
 }
 

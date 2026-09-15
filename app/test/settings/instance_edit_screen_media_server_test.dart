@@ -315,6 +315,47 @@ Iterable<({String method, String path, dynamic body})> _libraryProbes(
         r.path == '/api/instances/media-server/libraries');
 
 void main() {
+  testWidgets('Tdarr accepts optional authentication without media configuration', (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter,
+        screen: const InstanceEditScreen(initialServiceType: 'tdarr'));
+    await tester.enterText(find.widgetWithText(TextField, 'Name'), 'Progress');
+    await tester.enterText(find.widgetWithText(TextField, 'URL'), 'http://tdarr:8266');
+    expect(find.textContaining('normally port 8266'), findsOneWidget);
+    expect(find.text('Address users open'), findsNothing);
+    await _testConnection(tester);
+    await _tapSave(tester, 'Add Instance');
+    final create = adapter.requests.singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
+    expect(create.body['service_type'], 'tdarr');
+    expect(create.body['api_key'], '');
+    expect(_libraryProbes(adapter), isEmpty);
+    expect(adapter.requests.where((r) => r.path.endsWith('/webhook')), isEmpty);
+  });
+
+  testWidgets('Tdarr explicitly removes the saved key in both test and save', (tester) async {
+    final adapter = _FakeAdapter(instances: [{
+      'id': 'tdarr', 'service_type': 'tdarr', 'name': 'Progress',
+      'url': 'http://tdarr:8266', 'has_api_key': true,
+    }]);
+    await _pumpEdit(tester, adapter: adapter,
+        screen: const InstanceEditScreen(instanceId: 'tdarr'));
+    await _testConnection(tester);
+    var tested = adapter.requests.lastWhere((r) => r.path == '/api/instances/test');
+    expect(tested.body['clear_api_key'], isNull);
+    final remove = find.widgetWithText(CheckboxListTile, 'Remove saved API key');
+    await tester.ensureVisible(remove);
+    await tester.tap(remove);
+    await tester.pumpAndSettle();
+    await _testConnection(tester);
+    tested = adapter.requests.lastWhere((r) => r.path == '/api/instances/test');
+    expect(tested.body['clear_api_key'], true);
+    expect(tested.body['api_key'], '');
+    await _tapSave(tester, 'Save Changes');
+    final saved = adapter.requests.singleWhere((r) => r.method == 'PUT' && r.path == '/api/instances/tdarr');
+    expect(saved.body['clear_api_key'], true);
+    expect(saved.body['api_key'], '');
+  });
+
   for (final type in ['plex', 'jellyfin', 'emby']) {
     for (final editLibraries in [false, true]) {
       testWidgets('$type app-only and combined library edits persist (libraries=$editLibraries)', (tester) async {

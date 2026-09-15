@@ -38,6 +38,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
+	"github.com/windoze95/cantinarr-server/internal/tdarr"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 	"github.com/windoze95/cantinarr-server/internal/trakt"
 	"github.com/windoze95/cantinarr-server/internal/update"
@@ -174,6 +175,7 @@ func main() {
 
 	// Watch-history handler (Tautulli and Tracearr monitoring)
 	watchHistoryHandler := watchhistory.NewHandler(instanceStore, registry)
+	tdarrHandler := tdarr.NewHandler(instanceStore, registry)
 
 	// Server-lifetime context: drives the WebSocket hub and the push manager's
 	// background enrollment retry.
@@ -411,7 +413,7 @@ func main() {
 	updateChecker := update.NewChecker(version.Version, cfg.DisableUpdateCheck)
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, watchHistoryHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, mediaAccessHandler, updateChecker, serverSettings, contentPolicyHandler, discordNotifications)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, watchHistoryHandler, tdarrHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, mediaAccessHandler, updateChecker, serverSettings, contentPolicyHandler, discordNotifications)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)
