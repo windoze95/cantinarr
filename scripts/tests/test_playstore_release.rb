@@ -53,6 +53,14 @@ class PlayReleaseTest < Minitest::Test
       @edit[name] ? [Marshal.load(Marshal.dump(@edit[name]))] : []
     end
 
+    def track_version_codes(name)
+      tracks(name).flat_map(&:releases).flat_map(&:version_codes).map(&:to_i)
+    end
+
+    def abort_current_edit
+      @edit = nil
+    end
+
     def update_track(name, track)
       @update_attempts << name
       raise "Play rejected #{name}" if name == fail_track
@@ -92,7 +100,7 @@ class PlayReleaseTest < Minitest::Test
     bundle = File.join(@tmp, "build/app/outputs/bundle/release/app-release.aab")
     FileUtils.mkdir_p(File.dirname(bundle))
     File.write(bundle, "Bundle bytes are handled by the fake Play client")
-    %w[PLAY_TRACK PLAY_VERSION_CODE PLAY_RELEASE_STATUS PLAY_JSON_KEY_PATH].each { |key| ENV.delete(key) }
+    %w[PLAY_TRACK PLAY_VERSION_CODE PLAY_RELEASE_STATUS PLAY_JSON_KEY_PATH PLAY_OWNER_CANDIDATE].each { |key| ENV.delete(key) }
   end
 
   def teardown
@@ -136,6 +144,23 @@ class PlayReleaseTest < Minitest::Test
     assert_release("alpha", status: "draft")
     assert_release("beta", status: "draft")
     assert_equal 1, @play.bundle_uploads
+  end
+
+  def test_candidate_reaches_owner_and_both_public_tracks_from_one_upload
+    ENV["PLAY_OWNER_CANDIDATE"] = "true"
+    publish
+    %w[alpha beta internal].each do |track|
+      release = assert_release(track)
+      assert_equal "Release notes for this build", release.release_notes.first.text
+    end
+    assert_equal 1, @play.bundle_uploads
+    assert_equal 3, @play.commits
+  end
+
+  def test_candidate_cannot_skip_public_testing
+    ENV["PLAY_OWNER_CANDIDATE"] = "true"
+    assert_raises(FastlaneCore::Interface::FastlaneError) { publish(track: "internal") }
+    assert_equal 0, @play.bundle_uploads
   end
 
   %w[alpha beta internal].each do |track|
@@ -200,5 +225,48 @@ class PlayReleaseTest < Minitest::Test
     assert_release("beta", code: 243)
     assert_equal 1, @play.bundle_uploads
     assert_equal 1, @play.commits
+  end
+
+  def promote_to_production(code = VERSION_CODE.to_s)
+    ENV["PLAY_VERSION_CODE"] = code
+    Dir.chdir(@android) do
+      capture_subprocess_io do
+        @@fastfile ||= Fastlane::FastFile.new.parse(File.read(FASTFILE))
+        @@fastfile.runner.execute(:release, :android)
+      end
+    end
+  end
+
+  def test_production_uses_selected_candidate_without_another_bundle_upload
+    @play.published["alpha"] = @play.release(VERSION_CODE)
+    promote_to_production
+    assert_release("production")
+    assert_equal 0, @play.bundle_uploads
+  end
+
+  def test_production_retry_is_a_no_op
+    @play.published["production"] = @play.release(VERSION_CODE)
+    promote_to_production
+    assert_empty @play.update_attempts
+    assert_equal 0, @play.bundle_uploads
+  end
+
+  def test_old_release_cannot_replace_newer_production
+    @play.published["production"] = @play.release(VERSION_CODE + 1)
+    assert_raises(FastlaneCore::Interface::FastlaneError) { promote_to_production }
+    assert_empty @play.update_attempts
+  end
+
+  def test_missing_candidate_is_not_replaced_with_latest
+    assert_raises(FastlaneCore::Interface::FastlaneError) { promote_to_production("999") }
+    assert_empty @play.update_attempts
+    assert_equal 0, @play.bundle_uploads
+  end
+
+  def test_production_requires_exact_version_code
+    [nil, "", "latest", "0", "42\n43"].each do |value|
+      assert_raises(FastlaneCore::Interface::FastlaneError) { promote_to_production(value) }
+    end
+    assert_empty @play.update_attempts
   end
 end

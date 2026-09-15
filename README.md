@@ -87,10 +87,24 @@ cd cantinarr
 docker compose up -d
 ```
 
-This pulls the published image (`ghcr.io/windoze95/cantinarr:latest`); updating later
+This pulls the stable release (`ghcr.io/windoze95/cantinarr:latest`); updating later
 is `docker compose pull && docker compose up -d`. To build the image from your
 checkout instead, layer the dev override:
 `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`.
+
+Image channels:
+
+| Tag | Receives |
+|---|---|
+| `latest` | Deliberate stable releases; recommended for normal installs |
+| `X.Y.Z` | One fixed release |
+| `edge` | Green development builds from `main`; use when testing new work |
+| `X.Y.Z-rc.<run>` | A frozen release candidate |
+| `pr-N` | An individual PR preview (amd64 only) |
+
+Stable, edge, and candidate images support amd64 and arm64. Public mobile betas follow
+main development until a release candidate is frozen. See the [release playbook](docs/store-release.md)
+for matching mobile builds, owner-only phone previews, and promotion to production.
 
 Or add Cantinarr to an existing stack (Portainer, Dockhand, etc.) -- no clone
 needed; this minimal service is the whole setup:

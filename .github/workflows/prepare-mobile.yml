@@ -1,0 +1,41 @@
+name: Resolve mobile publishing source
+
+on:
+  workflow_call:
+    inputs:
+      preview_pr:
+        type: string
+        default: ''
+      reviewed_sha:
+        type: string
+        default: ''
+    outputs:
+      enabled:
+        value: ${{ jobs.source.outputs.enabled }}
+      sha:
+        value: ${{ jobs.source.outputs.sha }}
+      ci_head:
+        value: ${{ jobs.source.outputs.ci_head }}
+      channel:
+        value: ${{ jobs.source.outputs.channel }}
+      source:
+        value: ${{ jobs.source.outputs.source }}
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.source.outputs.enabled }}
+      sha: ${{ steps.source.outputs.sha }}
+      ci_head: ${{ steps.source.outputs.ci_head }}
+      channel: ${{ steps.source.outputs.channel }}
+      source: ${{ steps.source.outputs.source }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve the current publishing source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_PR: ${{ inputs.preview_pr }}
+          REVIEWED_SHA: ${{ inputs.reviewed_sha }}
+        run: python3 scripts/release_control.py prepare

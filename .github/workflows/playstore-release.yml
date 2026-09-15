@@ -1,0 +1,72 @@
+name: Publish Play Production Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run:
+        description: 'Successful android candidate workflow run ID (dispatch from main)'
+        required: true
+        type: string
+      confirm:
+        description: 'Type "publish" to release this exact tested build'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: playstore-deploy
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate release selection
+        id: build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN: ${{ inputs.build_run }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          test "$CONFIRM" = publish
+          python3 scripts/release_control.py select --platform android --run-id "$BUILD_RUN"
+
+      - name: Verify CI and frozen candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_SHA: ${{ steps.build.outputs.sha }}
+        run: |
+          python3 scripts/release_control.py ci --sha "$BUILD_SHA"
+          SOURCE_JSON="$(cat release.json)" python3 scripts/release_control.py current
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Promote the tested AAB to production
+        working-directory: app/android
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          PLAY_VERSION_CODE: ${{ steps.build.outputs.build_number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
+          export PLAY_JSON_KEY_PATH="$RUNNER_TEMP/play-service-account.json"
+          gem install fastlane --no-document
+          SOURCE_JSON="$(cat ../../release.json)" python3 ../../scripts/release_control.py current
+          fastlane release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: play-production-${{ github.run_attempt }}
+          path: release.json
+          retention-days: 90
+
+      - name: Remove credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/play-service-account.json"
