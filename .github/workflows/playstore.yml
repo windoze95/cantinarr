@@ -55,7 +55,7 @@ on:
 # duplicate. Queue instead of racing, and never cancel an in-flight upload.
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('playstore-pr-{0}', github.event.pull_request.number) || 'playstore-deploy' }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
