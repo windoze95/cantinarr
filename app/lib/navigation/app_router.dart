@@ -104,6 +104,8 @@ import '../features/monitoring/ui/monitoring_activity_screen.dart';
 import '../features/monitoring/ui/monitoring_history_screen.dart';
 import '../features/monitoring/ui/monitoring_module_shell.dart';
 import '../features/monitoring/ui/monitoring_stats_screen.dart';
+import '../features/tdarr/ui/tdarr_module_shell.dart';
+import '../features/tdarr/ui/tdarr_screen.dart';
 import '../core/widgets/app_ambient_background.dart';
 import '../core/widgets/unsaved_changes_guard.dart';
 
@@ -627,6 +629,22 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               ),
             ],
           ),
+          StatefulShellRoute.indexedStack(
+            pageBuilder: (context, state, navigationShell) => _fadeSurfacePage(
+              key: state.pageKey,
+              child: TdarrModuleShell(
+                currentIndex: navigationShell.currentIndex,
+                onTabChanged: (index) => navigationShell.goBranch(index),
+                child: navigationShell,
+              ),
+            ),
+            branches: [
+              StatefulShellBranch(routes: [GoRoute(path: '/tdarr/activity',
+                  builder: (_, __) => const TdarrScreen(activity: true))]),
+              StatefulShellBranch(routes: [GoRoute(path: '/tdarr/libraries',
+                  builder: (_, __) => const TdarrScreen(activity: false))]),
+            ],
+          ),
           // Authenticated secondary routes stay inside the same shell. On
           // desktop this preserves the command sidebar through details,
           // settings, approvals, and issue work; compact layouts still use
@@ -1069,6 +1087,7 @@ bool _isAdminOnlyRoute(String path) {
     '/lidarr',
     '/downloads',
     '/monitoring',
+    '/tdarr',
     '/approvals',
     '/agent-actions',
     '/agent-runs',

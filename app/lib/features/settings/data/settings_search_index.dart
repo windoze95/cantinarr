@@ -289,6 +289,8 @@ const List<SettingsSearchEntry> _rootEntries = [
       'download client',
       'tautulli',
       'tracearr',
+      'tdarr',
+      'transcoding',
       'monitoring',
       'audiobookshelf',
       'jellyfin',

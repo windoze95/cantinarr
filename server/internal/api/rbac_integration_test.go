@@ -41,6 +41,7 @@ import (
 	requestsvc "github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
+	"github.com/windoze95/cantinarr-server/internal/tdarr"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 	"github.com/windoze95/cantinarr-server/internal/update"
 	"github.com/windoze95/cantinarr-server/internal/watchhistory"
@@ -89,6 +90,7 @@ func TestRouterRBACMatrixWithAdminAndRequesterTokens(t *testing.T) {
 		{http.MethodGet, "/api/downloads/missing/queue"},
 		{http.MethodGet, "/api/tautulli/missing/activity"},
 		{http.MethodGet, "/api/watch-history/missing/activity"},
+		{http.MethodGet, "/api/tdarr/missing/activity"},
 		{http.MethodGet, "/api/admin/media-servers/accounts"},
 		{http.MethodGet, "/api/admin/plex-auth"},
 		{http.MethodGet, "/api/admin/plex-auth/candidates"},
@@ -335,6 +337,7 @@ func privilegedRoutes(t *testing.T, router http.Handler) []rbacRoute {
 			strings.HasPrefix(pattern, "/api/downloads/") ||
 			strings.HasPrefix(pattern, "/api/tautulli/") ||
 			strings.HasPrefix(pattern, "/api/watch-history/") ||
+			strings.HasPrefix(pattern, "/api/tdarr/") ||
 			(strings.HasPrefix(pattern, "/api/instances") && !strings.HasSuffix(pattern, "/*"))
 		if privileged {
 			out = append(out, rbacRoute{method: method, pattern: pattern})
@@ -512,6 +515,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		downloadsHandler,
 		mediaFilesHandler,
 		watchHistoryHandler,
+		tdarr.NewHandler(store, instanceRegistry),
 		registry,
 		credentialHandler,
 		toolServer,

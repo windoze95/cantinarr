@@ -38,13 +38,14 @@ var allowedServiceTypes = map[string]bool{
 	"rutorrent":      true,
 	"tautulli":       true,
 	"tracearr":       true,
+	"tdarr":          true,
 	"audiobookshelf": true,
 	"jellyfin":       true,
 	"emby":           true,
 	"plex":           true,
 }
 
-const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'lidarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'deluge', 'rutorrent', 'tautulli', 'tracearr', 'jellyfin', 'emby', 'plex', 'audiobookshelf'"}`
+const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'lidarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'deluge', 'rutorrent', 'tautulli', 'tracearr', 'tdarr', 'jellyfin', 'emby', 'plex', 'audiobookshelf'"}`
 
 // grantableServiceTypes is the subset a user can hold access-grant rows for.
 // Download clients and watch-history providers (Tautulli, Tracearr) are admin
@@ -70,9 +71,8 @@ type instanceResponse struct {
 	Name        string `json:"name"`
 	URL         string `json:"url"`
 	Username    string `json:"username,omitempty"`
-	// HasAPIKey says which of qBittorrent's two credential shapes is stored
-	// (a key, or the username above with a password) without revealing the
-	// key. Only qBittorrent rows carry it.
+	// HasAPIKey supports qBittorrent's auth mode and Tdarr's explicit key
+	// removal without ever revealing the stored write-only credential.
 	HasAPIKey         bool                `json:"has_api_key,omitempty"`
 	IsDefault         bool                `json:"is_default"`
 	SortOrder         int                 `json:"sort_order"`
@@ -93,6 +93,9 @@ type instanceRequest struct {
 	// whose token this Plex instance should use. The token itself never
 	// travels through the app.
 	PlexLinkPin int64 `json:"plex_link_pin"`
+	// Tdarr permits unauthenticated servers. Blank edits retain a key;
+	// clearing it is an explicit, separate choice shared by test and save.
+	ClearAPIKey bool `json:"clear_api_key"`
 }
 
 func (h *Handler) toResponse(inst *Instance) instanceResponse {
@@ -111,7 +114,7 @@ func (h *Handler) toResponse(inst *Instance) instanceResponse {
 		MediaDownloads:    inst.MediaDownloadsConfigured(h.mediaRoots),
 		MediaPathMappings: mappings,
 	}
-	if inst.ServiceType == "qbittorrent" {
+	if inst.ServiceType == "qbittorrent" || inst.ServiceType == "tdarr" {
 		resp.HasAPIKey = inst.APIKey != ""
 	}
 	if IsMediaServerType(inst.ServiceType) {
@@ -275,6 +278,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, serviceTypeListError, http.StatusBadRequest)
 		return
 	}
+	if clearErr := applyClearAPIKey(&inst, &request); clearErr != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, clearErr), http.StatusBadRequest)
+		return
+	}
 	plexCred, err := h.applyPlexLink(&inst, request.PlexLinkPin, nil)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
@@ -353,6 +360,10 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		inst.Password = existing.Password
 	}
 	applyQbittorrentAuthMode(&inst, &request.Instance)
+	if err := applyClearAPIKey(&inst, &request); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
 	plexCred, err := h.applyPlexLink(&inst, request.PlexLinkPin, existing)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
@@ -462,6 +473,10 @@ func (h *Handler) resolveTestInstance(w http.ResponseWriter, r *http.Request) (*
 
 	if !allowedServiceTypes[inst.ServiceType] {
 		http.Error(w, serviceTypeListError, http.StatusBadRequest)
+		return nil, false
+	}
+	if err := applyClearAPIKey(&inst, &request); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return nil, false
 	}
 	// A Plex test needs the server the candidate names (the machine
@@ -849,9 +864,9 @@ func validateRequiredFields(inst *Instance) error {
 		if inst.Username == "" || inst.Password == "" {
 			return fmt.Errorf("username and password are required for %s", inst.ServiceType)
 		}
-	case "transmission", "rutorrent":
-		// Username/password are optional: Transmission RPC may run without
-		// auth, and ruTorrent is only protected when its web server asks.
+	case "transmission", "rutorrent", "tdarr":
+		// These services can run without authentication. Tdarr uses an optional
+		// API key; Transmission and ruTorrent use optional username/password.
 	case "deluge":
 		// Deluge's web UI has a password and no username.
 		if inst.Password == "" {
@@ -924,6 +939,8 @@ func validateConnection(inst *Instance) error {
 		return err
 	case "tautulli", "tracearr":
 		return validateWatchHistoryConnection(inst)
+	case "tdarr":
+		return validateTdarr(inst)
 	default:
 		if IsMediaServerType(inst.ServiceType) {
 			return validateMediaServerConnection(inst)

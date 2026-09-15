@@ -11,6 +11,10 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `INST-020` · P0 · LIVE — Configure instant updates on a real Chaptarr; verify the managed `Cantinarr` record appears under Connect with an import event enabled, and that a fork exposing no import toggle fails the configure call with a readable message instead of saving a webhook that never fires.
 - [ ] `INST-021` · P1 · LIVE — Confirm the Chaptarr webhook installs against the Readarr-lineage `/api/v1` notification API and that repeating the configure call updates the same record rather than adding a duplicate.
 
+## Tdarr processing progress
+
+- [ ] `TDARR-001` · P1 · LIVE/UI — Connect a disposable Tdarr server by its API port with generated sample media only; cover authentication disabled and API-key authentication. Compare a real CPU transcode and health check against Tdarr's own worker view (GPU/flow workers when that environment provides them), including filename, node, current-step progress/FPS/ETA, and transitions back to idle. Compare all-library and selected-library counts, including queued, held, not-required, successful, errored, and cancelled files where present. Record the Tdarr version and whether each case was actually available; don't treat an empty test library as proof of active processing. Run `CANTINARR_TEST_TDARR_URL=<disposable-api-url> go test ./internal/tdarr -run TestLiveTdarrReadContract -v` from `server/` for the read-contract check; supply `CANTINARR_TEST_TDARR_KEY` privately when required. Cantinarr must not change Tdarr jobs or settings.
+
 ## Realtime convergence
 
 - [ ] `RT-007` · P0 · LIVE — Import a movie and several episodes; verify availability/events and new-content notification once despite webhook + poll overlap.

@@ -57,6 +57,10 @@ func (h *Handler) InstanceProxy() http.HandlerFunc {
 			http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
 			return
 		}
+		if inst.ServiceType == "tdarr" {
+			http.Error(w, `{"error":"Tdarr is available through its read-only monitoring routes"}`, http.StatusForbidden)
+			return
+		}
 
 		target, err := url.Parse(inst.URL)
 		if err != nil {

@@ -184,6 +184,8 @@ void main() {
 
     for (final path in [
       '/monitoring/activity',
+      '/tdarr/activity',
+      '/tdarr/libraries',
       // The old module path stays admin-only through its redirect.
       '/tautulli/activity',
       '/approvals',

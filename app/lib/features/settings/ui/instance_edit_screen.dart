@@ -88,6 +88,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   final _mappingsDraft = SettingsDraft();
   final _defaultDraft = SettingsDraft();
   int? _savedPlexPinId;
+  bool _tdarrHasKey = false;
+  bool _clearTdarrKey = false;
 
   Map<String, Object?> get _detailValues => {
         'type': _serviceType,
@@ -97,6 +99,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         'username': _usernameController.text,
         'password': _passwordController.text,
         'qbitAuth': _qbitAuth.name,
+        'clearTdarrKey': _isTdarr && _clearTdarrKey,
       };
   Object get _mediaValues => [
         _publicAddressController.text,
@@ -257,6 +260,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     ('rutorrent', 'ruTorrent'),
     ('tautulli', 'Tautulli'),
     ('tracearr', 'Tracearr'),
+    ('tdarr', 'Tdarr'),
     ('jellyfin', 'Jellyfin'),
     ('emby', 'Emby'),
     ('audiobookshelf', 'Audiobookshelf'),
@@ -308,6 +312,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   bool get _isChaptarr => _serviceType == 'chaptarr';
 
   bool get _isLidarr => _serviceType == 'lidarr';
+  bool get _isTdarr => _serviceType == 'tdarr';
 
   /// Media servers (Jellyfin, Emby, Plex): users sign in there to watch, so
   /// the form carries a sign-in address and a shared-library choice instead
@@ -683,6 +688,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             ? _QbitAuth.apiKey
             : _QbitAuth.password;
         _qbitAuth = _storedQbitAuth;
+        _tdarrHasKey = _isTdarr && details['has_api_key'] == true;
         // Loading must not count a value typed during the request as saved.
         _detailsDraft.markSaved({
           ..._detailValues,
@@ -1075,6 +1081,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         serviceType: _serviceType,
         url: _urlController.text.trim(),
         apiKey: _apiKeyController.text.trim(),
+        clearApiKey: _isTdarr && _clearTdarrKey,
         username: _usernameController.text.trim(),
         password: _passwordController.text,
         plexLinkPin: _isPlex && _plexAccount.isNotEmpty ? _plexPinId : null,
@@ -1152,7 +1159,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           _passwordController.text.isEmpty) {
         return 'Username and password are required';
       }
-    } else if (_apiKeyController.text.trim().isEmpty) {
+    } else if (!_isTdarr && _apiKeyController.text.trim().isEmpty) {
       return 'API key is required';
     }
     return null;
@@ -1456,6 +1463,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             name: _nameController.text.trim(),
             url: _urlController.text.trim(),
             apiKey: _apiKeyController.text.trim(),
+            clearApiKey: _isTdarr && _clearTdarrKey,
             username: _usernameController.text.trim(),
             password: _passwordController.text,
             isDefault: isDefault,
@@ -1620,6 +1628,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           refreshed.watchHistoryInstances
               .any((instance) => instance.id == watchHistoryId)) {
         notifier.setActiveWatchHistoryInstance(watchHistoryId);
+      }
+      final tdarrId = activeBefore.activeTdarrInstanceId;
+      if (tdarrId != null && refreshed.tdarrInstances.any((i) => i.id == tdarrId)) {
+        notifier.setActiveTdarrInstance(tdarrId);
       }
     } catch (_) {
       // The instance itself is already saved. The normal resume/config refresh
@@ -1991,6 +2003,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'http://tautulli:8181';
       case 'tracearr':
         return 'http://tracearr:3000';
+      case 'tdarr':
+        return 'http://tdarr:8266';
       case 'audiobookshelf':
         return 'http://audiobookshelf:80';
       case 'jellyfin':
@@ -2009,6 +2023,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'e.g. Tautulli';
       case 'tracearr':
         return 'e.g. Tracearr';
+      case 'tdarr':
+        return 'e.g. Tdarr';
       case 'audiobookshelf':
         return 'e.g. Home Audiobookshelf';
       case 'jellyfin':
@@ -2077,6 +2093,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'Your Tautulli API key';
       case 'tracearr':
         return 'Your Tracearr API key (Settings > General, starts with trr_pub_)';
+      case 'tdarr':
+        return 'Tools > API Keys (only when authentication is enabled)';
       case 'chaptarr':
         return 'Your Chaptarr API key';
       case 'lidarr':
@@ -3101,12 +3119,31 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           ] else
             TextField(
               controller: _apiKeyController,
+              enabled: !(_isTdarr && _clearTdarrKey),
               decoration: InputDecoration(
-                labelText: 'API Key',
+                labelText: _isTdarr ? 'API Key (optional)' : 'API Key',
                 hintText: _apiKeyHint,
               ),
               obscureText: true,
             ),
+          if (_isTdarr) ...[
+            const SizedBox(height: 12),
+            const Text('Use the Tdarr server API URL (normally port 8266). '
+                'If authentication is enabled, create a key in Tdarr under Tools > API Keys.',
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+            if (widget.isEditing && _tdarrHasKey)
+              CheckboxListTile(contentPadding: EdgeInsets.zero,
+                title: const Text('Remove saved API key'),
+                subtitle: const Text('For a Tdarr server with authentication disabled.'),
+                value: _clearTdarrKey,
+                onChanged: (value) => setState(() {
+                  _clearTdarrKey = value ?? false;
+                  if (_clearTdarrKey) _apiKeyController.clear();
+                  _testSucceeded = false;
+                  _testResult = null;
+                }),
+              ),
+          ],
           // User links use an address the admin chose explicitly, either
           // entered here or copied from the connection URL.
           if (_isMediaServer) ...[

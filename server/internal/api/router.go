@@ -29,6 +29,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/remediation"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
+	"github.com/windoze95/cantinarr-server/internal/tdarr"
 	"github.com/windoze95/cantinarr-server/internal/update"
 	"github.com/windoze95/cantinarr-server/internal/version"
 	"github.com/windoze95/cantinarr-server/internal/watchhistory"
@@ -53,6 +54,7 @@ func NewRouter(
 	downloadsHandler *downloads.Handler,
 	mediaFilesHandler *mediafiles.Handler,
 	watchHistoryHandler *watchhistory.Handler,
+	tdarrHandler *tdarr.Handler,
 	creds *credentials.Registry,
 	credHandler *credentials.Handler,
 	toolServer *mcp.ToolServer,
@@ -690,6 +692,14 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionDownloadsManage)).Post("/downloads/{instanceID}/pause", downloadsHandler.PauseAll)
 			r.With(auth.RequirePermission(auth.PermissionDownloadsManage)).Post("/downloads/{instanceID}/resume", downloadsHandler.ResumeAll)
 			r.With(auth.RequirePermission(auth.PermissionDownloadsRead)).Get("/downloads/{instanceID}/history", downloadsHandler.GetHistory)
+		})
+
+		r.Group(func(r chi.Router) {
+			r.Use(authService.AuthMiddleware)
+			r.Use(auth.RequirePermission(auth.PermissionMonitoringRead))
+			for _, view := range []string{"activity", "libraries", "stats"} {
+				r.Get("/tdarr/{instanceID}/"+view, tdarrHandler.Serve)
+			}
 		})
 
 		// Watch-history (Tautulli, Tracearr) routes (admin only). The
