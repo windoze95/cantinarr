@@ -45,7 +45,10 @@ type msvAccount struct {
 	// accepted it yet.
 	Pending       bool
 	Administrator bool
-	CreatedAt     time.Time
+	// ManageAccess is false for a "linked only" row: Cantinarr keeps the
+	// identity link and stops writing access on the media server.
+	ManageAccess bool
+	CreatedAt    time.Time
 }
 
 // msvRemoteUser is one account that exists ON a media server, as the server
@@ -107,7 +110,7 @@ func init() {
 	// user (2) already has the Jellyfin account Cantinarr made for them.
 	acct := &msvAccount{
 		UserID: 2, InstanceID: instJellyfin, RemoteUserID: "jf-2",
-		Username: "user", CreatedByCantinarr: true,
+		Username: "user", CreatedByCantinarr: true, ManageAccess: true,
 		CreatedAt: now.Add(-18 * 24 * time.Hour),
 	}
 	msvAccounts[msvKey(acct.UserID, acct.InstanceID)] = acct
@@ -200,6 +203,7 @@ func msvAccountView(a *msvAccount) map[string]any {
 		"pending":       a.Pending,
 		"administrator": a.Administrator,
 		"verified":      true,
+		"manage_access": a.ManageAccess,
 	}
 }
 
@@ -278,6 +282,11 @@ func msvAdminAccountRow(a *msvAccount) map[string]any {
 		"username":             a.Username,
 		"created_by_cantinarr": a.CreatedByCantinarr,
 		"disabled":             a.Disabled,
+		"manage_access":        a.ManageAccess,
+		"granted":              !a.Disabled,
+		"pending":              a.Pending,
+		"administrator":        a.Administrator,
+		"verified":             true,
 		"created_at":           a.CreatedAt.Format(time.RFC3339),
 	}
 }
@@ -543,7 +552,8 @@ func msvCreateAccount(u *DemoUser, inst *DemoInstance, remote *msvRemoteUser, us
 		UserID: u.ID, InstanceID: inst.ID, RemoteUserID: remote.ID,
 		Username: username, CreatedByCantinarr: byCantinarr, Pending: pending,
 		Disabled: remote.IsDisabled, Administrator: remote.IsAdministrator,
-		CreatedAt: time.Now(),
+		ManageAccess: !remote.IsAdministrator,
+		CreatedAt:    time.Now(),
 	}
 	msvAccounts[msvKey(u.ID, inst.ID)] = a
 	out := *a

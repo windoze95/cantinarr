@@ -104,8 +104,10 @@ func buildRouter() chi.Router {
 		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		})
-		registerAuth(r)       // /auth/* — public + its own requireAuth subgroup
-		registerMediaFiles(r) // /media-files/* — applies requireAuth itself so
+		registerAuth(r)        // /auth/* — public + its own requireAuth subgroup
+		registerSSOPublic(r)   // /auth/oidc/*, /auth/plex/* — the public flow halves
+		registerArrWebhooks(r) // /webhooks/arr/{id} — Basic auth, no session
+		registerMediaFiles(r)  // /media-files/* — applies requireAuth itself so
 		// the self-authorizing GET|HEAD /media-files/download/{ticket} stays public.
 
 		// Everything else requires a session. Domain register functions
@@ -114,15 +116,24 @@ func buildRouter() chi.Router {
 		r.Group(func(r chi.Router) {
 			r.Use(requireAuth)
 			registerConfig(r)
+			registerSSO(r)
+			registerAdminSettings(r)
 			registerUsersAdmin(r)
 			registerContentPolicy(r)
 			registerExternalAddress(r)
 			registerMediaAccess(r)
+			registerMediaApps(r)
 			registerNotifications(r)
 			registerRequests(r)
 			registerRequestsAdmin(r)
+			registerRequestQuotas(r)
+			registerDelivery(r)
+			registerTVMatches(r)
 			registerBooks(r)
+			registerBookDiscovery(r)
+			registerHardcover(r)
 			registerMusic(r)
+			registerMusicDiscovery(r)
 			registerDiscover(r)
 			registerTrakt(r)
 			registerAI(r)

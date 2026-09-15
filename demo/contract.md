@@ -8,10 +8,10 @@ shared type lacks a field you need, add a domain-local supplementary map keyed
 by the entity id in your own file — do NOT edit `types.go`, `state.go`,
 `ws.go`, `auth.go`, or `main.go`.
 
-The 2026-09-04 parity refresh was one integrated pass rather than a parallel
-Stage B build, so it edited the frozen files where this document says so
-(§2 constants, §3 seeds, §4 the `child` decoration, §5 the register list).
-The no-edit rule stands for any future parallel build.
+The 2026-09-04 and 2026-09-15 parity refreshes were integrated passes rather
+than parallel Stage B builds, so they edited the frozen files where this
+document says so (§2 constants, §3 seeds, §4 the `child` decoration, §5 the
+register list). The no-edit rule stands for any future parallel build.
 
 Package facts: single package `main`, module `github.com/windoze95/cantinarr-demo`,
 go 1.25, port **8484** (`DEMO_PORT` overrides it for side-by-side local runs;
@@ -63,13 +63,13 @@ default; the per-user pin IS the grant). The watch-history providers are
 `watchHistoryTypes()` (tautulli, tracearr; `isWatchHistoryType(st)`): admin
 surfaces with a global default, never granted per user.
 
-Media servers (`jellyfin`, `emby`, `plex`) are the types Cantinarr manages user
-ACCESS on, never library routing. They follow the Chaptarr rule: **never a
+Media servers (`jellyfin`, `emby`, `plex`, `audiobookshelf`) are the types
+Cantinarr manages user ACCESS on, never library routing. They follow the Chaptarr rule: **never a
 global default, granted per user, invisible to arr routing.** Helpers in
 types.go: `mediaServerTypes()`, `isMediaServerType(st)`,
-`mediaServerKindFor(st)` (→ `mediaServerKindAccount` for Jellyfin/Emby,
-`mediaServerKindInvite` for Plex), and `plexPublicAddress`
-(`https://app.plex.tv`).
+`mediaServerKindFor(st)` (→ `mediaServerKindAccount` for
+Jellyfin/Emby/Audiobookshelf, `mediaServerKindInvite` for Plex), and
+`plexPublicAddress` (`https://app.plex.tv`).
 
 Request statuses (every REST surface): `statusUnavailable` `statusRequested`
 `statusPending` `statusDenied` `statusDownloading` `statusPartial` (`"partial"`)
@@ -83,7 +83,8 @@ WS event name constants: `evtDownloadProgress` `evtRequestStatusChanged`
 `evtDownloadsQueue` `evtArrQueueChanged` `evtRequestPending`
 `evtRequestDecision` `evtIssueCreated` `evtIssueUpdated`
 `evtAgentActionPending` `evtAgentActionDecided` `evtAgentAutoapprovalPaused`
-`evtRemediationAutodispatchDisabled` `evtPlexAccessRequest` `evtPlexInviteSent`.
+`evtRemediationAutodispatchDisabled` `evtPlexAccessRequest` `evtPlexInviteSent`
+`evtRequestQuotaChanged`.
 
 Auth/session constants (state.go): `demoJWTSecret` = `"demo-jwt-secret-cantinarr"`,
 `demoConnectTokenStr` = `"demo0000000000000000000000000000000000000000000000000000connect1"`
@@ -109,6 +110,7 @@ Auth/session constants (state.go): `demoJWTSecret` = `"demo-jwt-secret-cantinarr
 | `instQbittorrent` | `qbittorrent-4b5c6d7e` | qbittorrent | qBittorrent | http://qbittorrent:8081 | true | false | `[]` |
 | `instTracearr` | `tracearr-8e9f0a1b` | tracearr | Tracearr | http://tracearr:3000 | true | false | `[]` |
 | `instLidarr` | `lidarr-4d5e6f7a` | lidarr | Lidarr | http://lidarr:8686 | **false — lidarr is never default** | true | `/music` → `/media/music` |
+| `instAudiobookshelf` | `abs-2c3d4e5f` | audiobookshelf | Audiobookshelf | http://audiobookshelf:13378 | **false — never default** | false | `[]` |
 
 `instQbittorrent` is stored in qBittorrent's API-key credential shape
 (`instMgmtQbitKeyed` in instances.go), so its `/api/instances` row carries
@@ -118,7 +120,8 @@ Auth/session constants (state.go): `demoJWTSecret` = `"demo-jwt-secret-cantinarr
 `plexDemoMachineIdentifier` = `d3m0p1exmach1ne0000000000000001` — the Plex
 Media Server the seeded Plex instance shares. `instJellyfin` shares libraries
 `jf-lib-movies` and `jf-lib-shows`; `instEmby` shares every library (empty
-list); `instPlex` shares sections `1` and `2`.
+list); `instPlex` shares sections `1` and `2`; `instAudiobookshelf` shares
+`absLibAudiobooks` and `absLibPodcasts` (mediaapps.go).
 
 Media-server instances carry `DemoInstance.MediaServerConfig`
 (`PublicAddress`, `LibraryIDs`, `MachineIdentifier`, `AutoApprove`), nil for
@@ -148,7 +151,9 @@ Each media server holds a roster independent of Cantinarr. `instJellyfin`:
 `jf-1 jellyfin-admin` (administrator), `jf-2 user`, `jf-3 morgan`,
 `jf-4 sasha` (disabled). `instEmby`: `emby-1 emby-admin` (administrator),
 `emby-2 admin`, `emby-3 jules`. `instPlex`: `plex-1 demoplex` (the owner),
-`plex-2 casey`. Exactly one Cantinarr link is seeded: user 2 ↔ `jf-2`.
+`plex-2 casey`. `instAudiobookshelf`: `abs-1 abs-admin` (administrator),
+`abs-2 user`, `abs-3 rowan`. Two Cantinarr links are seeded: user 2 ↔ `jf-2`
+and user 2 ↔ `abs-2` (the latter is what the Listen links resolve against).
 
 New users minted by connect-token get ids 5+ (`demoNextUserID`).
 
@@ -284,8 +289,14 @@ Register functions `main.go` mounts (must exist, exact names):
 `registerIssues`, `registerRemediation`, `registerProposals`,
 `registerInstances`, `registerDownloads`, `registerWatchHistory` (formerly
 `registerTautulli`; serves `/api/watch-history/{id}/*` and the `/api/tautulli`
-alias for both provider types), `registerMediaFiles` (public — see rule 1).
-Stage A provides `registerAuth` + `registerWS`. (`registerPlex` is gone: the
+alias for both provider types), `registerMediaFiles` (public — see rule 1),
+`registerSSO`, `registerAdminSettings`, `registerMediaApps`,
+`registerRequestQuotas`, `registerDelivery`, `registerTVMatches`,
+`registerBookDiscovery`, `registerHardcover`, `registerMusicDiscovery`.
+Two more mount on the PUBLIC `/api` router beside `registerAuth`:
+`registerSSOPublic` (the unauthenticated OIDC/Plex flow halves) and
+`registerArrWebhooks` (`POST /webhooks/arr/{id}` — Basic auth from an arr,
+never a session). Stage A provides `registerAuth` + `registerWS`. (`registerPlex` is gone: the
 real server deleted the `/api/admin/plex/*` console when Plex became an
 instance, and `plex.go` is now only the shared PIN simulation.)
 `registerInstances` also owns the proxy dispatcher `/instances/{instanceID}/*`
@@ -549,3 +560,45 @@ Additional Stage A notes: the WS upgrader's `CheckOrigin` allows every origin
 (consistent with the permissive-CORS decision); trakt artwork strings are
 scheme-less `image.tmdb.org/t/p/w500/...` (the app prefixes `https://`; never
 emit trakt.tv-hosted URLs); timestamps are Go `time.Time` → RFC3339.
+
+---
+
+## 12. Deliberate divergences from the real server (2026-09-15)
+
+These are choices, not gaps. Each one is the honest answer for a server that
+contacts nothing.
+
+- **Federated sign-in never federates.** `/api/auth/oidc/*` and
+  `/api/auth/plex/*` answer 503 with one verbatim sentence naming the demo.
+  The admin configuration round-trips and reflects into `/api/auth/status`, so
+  the sign-in screen and the settings screen always agree — except `sso_only`,
+  which is refused outright (`ssoOnlyRefused`): a stored SSO-only would lock
+  every visitor out of a server nobody can reconfigure.
+- **Passkeys stay disabled**, and every ceremony half — begin *and* finish,
+  plus setup-link and delete — answers the same 403. A 404 on the finish half
+  would read as a broken server rather than a disabled feature.
+- **Connection tests pass on shape alone.** `POST /api/instances/test` and
+  `POST /api/admin/outbound-proxy/test` validate the candidate and return
+  success; nothing is dialled. The Discord test says so in its own `detail`
+  rather than claiming a message somebody could go looking for.
+- **The Trakt image relay is absent on purpose.** The demo's Trakt rows carry
+  TMDB-hosted image paths (`trakt.go`), so `/api/trakt/images/{host}/*` is
+  never called. It is the one real-server route with no demo counterpart.
+- **Trending book covers reach web clients only.** `image_url` names
+  `assets.hardcover.app`, which the web client rewrites to the same-origin
+  relay this server answers with generated PNGs — the layering the real relay
+  exists for. Native clients pass the URL through to the real CDN, where the
+  demo's invented paths do not exist, and fall back to the book placeholder.
+- **`hc:<id>` ids alias the seeded Chaptarr books.** A trending card's tap
+  opens `/detail/book/hc:<id>`, so `hardcover.go` registers that id in
+  `chapBooksByFID` against the same record the library already holds — the
+  alias-to-canonical-sibling rule the book lookup already follows.
+- **Books have no admin-browses-without-a-library bypass; music does.** The
+  trending list is read through a Chaptarr instance's own Hardcover
+  connection, so with no instance there is nothing to read and everyone is
+  told so (403). Music discovery is public catalog metadata, so an admin may
+  browse it before any Lidarr exists. Both mirror the real handlers.
+- **Request allowances really charge.** `POST /api/requests` calls
+  `rqCharge` before accepting; a spent allowance answers 429 with the
+  `request_quota_exceeded` envelope and writes nothing. Counters are computed
+  from spend timestamps, so they replenish on their own instead of drifting.

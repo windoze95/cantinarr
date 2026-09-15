@@ -45,21 +45,22 @@ const (
 	// routing: they follow the Chaptarr rule (never a global default, granted
 	// per user, invisible to arr routing). Jellyfin and Emby hold accounts
 	// Cantinarr creates; Plex holds shares Cantinarr sends.
-	serviceJellyfin = "jellyfin"
-	serviceEmby     = "emby"
-	servicePlex     = "plex"
+	serviceJellyfin       = "jellyfin"
+	serviceEmby           = "emby"
+	servicePlex           = "plex"
+	serviceAudiobookshelf = "audiobookshelf"
 )
 
 // mediaServerTypes are the service types that are media servers, in the
 // server's stable order. Mirrors instance.MediaServerTypes().
 func mediaServerTypes() []string {
-	return []string{serviceJellyfin, serviceEmby, servicePlex}
+	return []string{serviceJellyfin, serviceEmby, servicePlex, serviceAudiobookshelf}
 }
 
 // isMediaServerType reports whether serviceType is a media server.
 func isMediaServerType(serviceType string) bool {
 	switch serviceType {
-	case serviceJellyfin, serviceEmby, servicePlex:
+	case serviceJellyfin, serviceEmby, servicePlex, serviceAudiobookshelf:
 		return true
 	}
 	return false
@@ -82,7 +83,8 @@ func isWatchHistoryType(serviceType string) bool {
 }
 
 // mediaServerKindFor maps a media-server type to the access kind the app
-// renders: Jellyfin/Emby hand out accounts, Plex hands out invites.
+// renders: Jellyfin/Emby/Audiobookshelf hand out accounts, Plex hands out
+// invites.
 func mediaServerKindFor(serviceType string) string {
 	if serviceType == servicePlex {
 		return mediaServerKindInvite
@@ -143,6 +145,7 @@ const (
 	evtRemediationAutodispatchDisabled = "remediation_autodispatch_disabled"
 	evtPlexAccessRequest               = "plex_access_request"
 	evtPlexInviteSent                  = "plex_invite_sent"
+	evtRequestQuotaChanged             = "request_quota_changed"
 )
 
 // ─── JSON helpers ───────────────────────────────────────

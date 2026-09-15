@@ -1212,3 +1212,26 @@ func instMgmtProxyAllowed(serviceType, rest string) bool {
 	}
 	return false
 }
+
+// registerArrWebhooks mounts the arr webhook receiver on the PUBLIC router:
+// no session, because a real Radarr/Sonarr/Chaptarr/Lidarr presents the
+// server-only per-instance credential in Basic Auth instead. Nothing in the
+// demo posts here — the fake arrs push their events straight onto the
+// WebSocket hub — but the route exists so an admin who pastes a callback URL
+// into a real arr gets the refusal a real server would give, not a 404 that
+// reads like a missing feature.
+func registerArrWebhooks(r chi.Router) {
+	r.Post("/webhooks/arr/{instanceID}", instMgmtHandleArrWebhook)
+}
+
+// instMgmtHandleArrWebhook answers the arr webhook receiver. The demo stores
+// no callback credential, so every delivery is refused for the same reason a
+// real server refuses one with the wrong token.
+func instMgmtHandleArrWebhook(w http.ResponseWriter, r *http.Request) {
+	inst := instanceByID(chi.URLParam(r, "instanceID"))
+	if inst == nil || !instMgmtIsArrType(inst.ServiceType) {
+		writeErr(w, http.StatusNotFound, "unknown instance")
+		return
+	}
+	writeErr(w, http.StatusUnauthorized, "invalid token")
+}

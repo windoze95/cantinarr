@@ -67,7 +67,54 @@ func discSettingsJSON() map[string]any {
 		"english_only":     englishOnly,
 		"sources":          []string{"tmdb_trending", "trakt_trending", "tmdb_popular"},
 		"trakt_configured": true,
+		// Which Discover tabs an admin chose to hide while their service is
+		// unconfigured. Every service IS configured in the demo, so the
+		// derived config list (cfgHiddenDiscoverTabs) stays empty whatever is
+		// stored here — the preference is real, the condition never fires.
+		"hidden_when_unconfigured": discHiddenWhenUnconfigured(),
 	}
+}
+
+// discHiddenSetting is the stored per-media-type preference. All four keys
+// are always present: a missing key would read as "never decided" rather
+// than "shown".
+var discHiddenSetting = map[string]bool{
+	mediaTypeMovie: false,
+	mediaTypeTV:    false,
+	mediaTypeBook:  false,
+	mediaTypeMusic: false,
+}
+
+func discHiddenWhenUnconfigured() map[string]bool {
+	discSettingsMu.Lock()
+	defer discSettingsMu.Unlock()
+	out := map[string]bool{}
+	for mediaType, hidden := range discHiddenSetting {
+		out[mediaType] = hidden
+	}
+	return out
+}
+
+// cfgHiddenDiscoverTabs is what /api/config derives: a tab is hidden only
+// when the admin asked for it AND its service is absent. The demo configures
+// every service, so this is always empty — and empty here means "nothing is
+// hidden", not "this was not read".
+func cfgHiddenDiscoverTabs() []string {
+	services := map[string]string{
+		mediaTypeMovie: serviceRadarr, mediaTypeTV: serviceSonarr,
+		mediaTypeBook: serviceChaptarr, mediaTypeMusic: serviceLidarr,
+	}
+	configured := map[string]bool{}
+	for _, inst := range allInstances() {
+		configured[inst.ServiceType] = true
+	}
+	out := []string{}
+	for _, mediaType := range []string{mediaTypeMovie, mediaTypeTV, mediaTypeBook, mediaTypeMusic} {
+		if discHiddenWhenUnconfigured()[mediaType] && !configured[services[mediaType]] {
+			out = append(out, mediaType)
+		}
+	}
+	return out
 }
 
 // ─── Route registration ─────────────────────────────────────────────────
@@ -1437,8 +1484,9 @@ func discHandleSettingsGet(w http.ResponseWriter, _ *http.Request) {
 
 func discHandleSettingsPut(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Source      string `json:"source"`
-		EnglishOnly bool   `json:"english_only"` // absent = false: full-replace semantics
+		Source                 string          `json:"source"`
+		EnglishOnly            bool            `json:"english_only"` // absent = false: full-replace semantics
+		HiddenWhenUnconfigured map[string]bool `json:"hidden_when_unconfigured"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
@@ -1456,9 +1504,22 @@ func discHandleSettingsPut(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "discovery_source must be one of tmdb_trending, trakt_trending, tmdb_popular")
 		return
 	}
+	for mediaType := range body.HiddenWhenUnconfigured {
+		switch mediaType {
+		case mediaTypeMovie, mediaTypeTV, mediaTypeBook, mediaTypeMusic:
+		default:
+			writeErr(w, http.StatusBadRequest, "unknown discovery media type")
+			return
+		}
+	}
 	discSettingsMu.Lock()
 	discSource = source
 	discEnglishOnly = body.EnglishOnly
+	// A patch: only the keys sent move, so an older client saving the source
+	// cannot clear a hide the admin set from a newer one.
+	for mediaType, hidden := range body.HiddenWhenUnconfigured {
+		discHiddenSetting[mediaType] = hidden
+	}
 	discSettingsMu.Unlock()
 	writeJSON(w, http.StatusOK, discSettingsJSON())
 }

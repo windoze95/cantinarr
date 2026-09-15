@@ -11,45 +11,53 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// notifPrefsRow is the flat 13-boolean preferences object (Go push.Prefs
-// JSON tags). Field order matches the real server's serialization, and PUT
-// is a full-row replace, so every key the app can toggle must be here or the
-// toggle silently reverts on reload. The agent_autoapproval_paused category
-// deliberately shares the agent_action_pending preference and never appears
-// in this JSON.
+// notifPrefsRow is the flat preferences object (Go push.Prefs JSON tags).
+// Field order matches the real server's serialization, and PUT is a full-row
+// replace, so every key the app can toggle must be here or the toggle
+// silently reverts on reload. The agent_autoapproval_paused and
+// profile_change_pending categories deliberately share the
+// agent_action_pending preference and never appear in this JSON.
+// media_server_access replaced the old plex_invite_sent spelling when
+// Jellyfin, Emby, and Audiobookshelf joined Plex under one switch; the server
+// emits only the new key, so the demo does too.
 type notifPrefsRow struct {
-	RequestDecision    bool `json:"request_decision"`
-	RequestPending     bool `json:"request_pending"`
-	NewMovie           bool `json:"new_movie"`
-	NewEpisode         bool `json:"new_episode"`
-	NewBook            bool `json:"new_book"`
-	NewMusic           bool `json:"new_music"`
-	IssueCreated       bool `json:"issue_created"`
-	AgentActionPending bool `json:"agent_action_pending"`
-	PlexAccessRequest  bool `json:"plex_access_request"`
-	PlexInviteSent     bool `json:"plex_invite_sent"`
-	IssueReportUpdate  bool `json:"issue_report_update"`
-	AgentDigest        bool `json:"agent_digest"`
-	ContentUpgraded    bool `json:"content_upgraded"`
+	PushEnabled         bool `json:"push_enabled"`
+	RequestAutoApproved bool `json:"request_auto_approved"`
+	RequestDecision     bool `json:"request_decision"`
+	RequestPending      bool `json:"request_pending"`
+	NewMovie            bool `json:"new_movie"`
+	NewEpisode          bool `json:"new_episode"`
+	NewBook             bool `json:"new_book"`
+	NewMusic            bool `json:"new_music"`
+	IssueCreated        bool `json:"issue_created"`
+	AgentActionPending  bool `json:"agent_action_pending"`
+	PlexAccessRequest   bool `json:"plex_access_request"`
+	MediaServerAccess   bool `json:"media_server_access"`
+	IssueReportUpdate   bool `json:"issue_report_update"`
+	AgentDigest         bool `json:"agent_digest"`
+	ContentUpgraded     bool `json:"content_upgraded"`
 }
 
-// notifDefaultPrefs — request_decision and content_upgraded off, everything
-// else on (push.defaultPrefs).
+// notifDefaultPrefs — request_decision, request_auto_approved, and
+// content_upgraded off, the master and everything else on
+// (push.defaultPrefs).
 func notifDefaultPrefs() notifPrefsRow {
 	return notifPrefsRow{
-		RequestDecision:    false,
-		RequestPending:     true,
-		NewMovie:           true,
-		NewEpisode:         true,
-		NewBook:            true,
-		NewMusic:           true,
-		IssueCreated:       true,
-		AgentActionPending: true,
-		PlexAccessRequest:  true,
-		PlexInviteSent:     true,
-		IssueReportUpdate:  true,
-		AgentDigest:        true,
-		ContentUpgraded:    false,
+		PushEnabled:         true,
+		RequestAutoApproved: false,
+		RequestDecision:     false,
+		RequestPending:      true,
+		NewMovie:            true,
+		NewEpisode:          true,
+		NewBook:             true,
+		NewMusic:            true,
+		IssueCreated:        true,
+		AgentActionPending:  true,
+		PlexAccessRequest:   true,
+		MediaServerAccess:   true,
+		IssueReportUpdate:   true,
+		AgentDigest:         true,
+		ContentUpgraded:     false,
 	}
 }
 

@@ -1,6 +1,6 @@
 # Cantinarr Demo Server
 
-A self-contained mock backend for App Store distribution review and product demos. It simulates the full current Cantinarr API with in-memory data — no external services, arr instances, or databases required. All seeded content is public-domain works or fiction invented for the demo.
+A self-contained mock backend for public demos and store distribution review. It simulates the full current Cantinarr API with in-memory data — no external services, arr instances, or databases required. All seeded content is public-domain works or fiction invented for the demo.
 
 ## Running
 
@@ -41,11 +41,18 @@ Full parity with the current Cantinarr API surface:
 - **Kids accounts** — one seeded requester is a kids account with a content policy (rating caps, unrated and genre blocks); every title surface hides what it may not see, a hidden title's page reads "not available to your account", and its requests are refused; admins see the Child tag on the Users screen and edit the policy from that user's request settings, with the real certification catalog (US and GB)
 - **Multiple libraries** — two Radarr and two Sonarr instances, reached through additive per-user grants, so the Library chooser, the per-library status chips, and instance-scoped quality profiles all have something to show
 - **Books browsing** — the Chaptarr library by author and by series, with per-format ownership on every title, and book pages that link out to Goodreads and Open Library (the classics carry their real Goodreads and Open Library work ids; the invented titles carry none and show no Links line)
+- **Trending Books** — a Hardcover-connected trending row on the seeded Chaptarr instance, with typed identity keys so an owned book carries its availability badge; the retired Open Library discovery routes answer `catalog_retired` instead of an empty shelf. Admins connect Hardcover per instance by API token or device sign-in, and can share one connection across instances
 - **Music browsing** — the Lidarr library by artist, Recently Added, owned-aware search, requestable albums that walk pending → requested → downloading → available, and the admin Music module (library, queue with the Import Doctor, wanted, calendar, history, release search)
-- **Media-server access** — Jellyfin, Emby, and Plex as instances: create your own account, link one you already have, sign in with Plex, ask where a title can be watched; admins tag the Users screen, link/unlink, and import a server's existing accounts
+- **Music discovery** — public catalog browsing independent of the library: Popular and New Releases feeds, twelve genres, album and artist search, artist pages with their albums, and same-origin cover artwork. Grant-only for requesters; admins may browse before a library exists
+- **Request allowances** — per-category rolling limits (movies, TV seasons, eBooks, audiobooks, albums) with live counters and replenishment times, server defaults plus per-user overrides and resets, and a preview that answers "would this fit?" without charging. Admins are exempt; a spent allowance refuses with the app's `request_quota_exceeded` envelope
+- **TV matching corrections** — one bundled correction where a Sonarr series numbers its seasons differently from TMDB, the editor that maps them, a Sonarr series search, and the repair that re-sends an already-delivered request to the corrected target
+- **Media-server access** — Jellyfin, Emby, Plex, and Audiobookshelf as instances: create your own account, link one you already have, sign in with Plex, ask where a title can be watched or listened to; admins tag the Users screen, link/unlink, hand access management back ("linked only"), import a server's existing accounts, and assign Audiobookshelf libraries per user
+- **Player preferences** — which app a Watch or Listen link opens, per media server and per platform (Infuse on iOS; Audiobookshelf, ShelfPlayer, or TheShelf for audiobooks)
+- **Federated sign-in, configured but never federated** — OpenID Connect and Plex sign-in round-trip their admin settings and reflect into the sign-in screen, but every flow endpoint answers one clear refusal: the demo contacts no identity provider. SSO-only is refused outright so the published credentials always work
 - **AI chat** — streaming SSE assistant with tool calls and media results (kid-safe for the kids account), plus AI settings/credentials surfaces, the 41-tool registry, and the Codex and xAI Grok OAuth device flows
 - **Admin console** — instance management (arrs incl. Lidarr, download clients incl. a qBittorrent in API-key mode, Tautulli and Tracearr, media servers), per-user library grants, arr library browsing and editing (fake Radarr/Sonarr/Chaptarr/Lidarr proxies; Radarr Edit Movie, tags, refresh), download-client queue/history for two clients, Monitoring with both providers, issues + AI remediation (agent actions, runs, approval rules, music included), configuration change history, the external address invite links are built from, users/devices, the 14-item setup checklist with skippable items, and update status
-- **Live updates** — WebSocket hub pushing download progress, request status changes, queue snapshots, approvals, issues, agent actions, and Plex invite events to the right audiences
+- **Live updates** — WebSocket hub pushing download progress, request status changes, queue snapshots, approvals, issues, agent actions, allowance changes, and Plex invite events to the right audiences
+- **Server settings** — the outbound proxy the server would route its own internet traffic through (password write-only), Discord request alerts with a recent-delivery log, and the master push-notification policy with a switch per category
 
 ## File Map
 
@@ -83,6 +90,14 @@ Full parity with the current Cantinarr API surface:
 | `watchhistory.go` | `/api/watch-history/{instanceID}/*` and the `/api/tautulli/{instanceID}/*` alias — activity, history, stats for Tautulli and Tracearr |
 | `mediafiles.go` | Media-file coverage, tickets, ticketed downloads |
 | `notifications.go` | Push tokens + notification preferences |
+| `sso.go` | OpenID Connect and Plex sign-in: admin configuration, linked identities, and the refusals every flow endpoint answers |
+| `adminsettings.go` | Outbound proxy, Discord request alerts, master push-notification policy |
+| `requestquotas.go` | Request allowances: defaults, per-user overrides, live counters, preview, reset |
+| `tvmatches.go` | TV matching corrections, the Sonarr series search behind the editor, and request repairs |
+| `mediaapps.go` | Video/listening app preferences, resolved Audiobookshelf listen links, per-user audiobook library access, link management |
+| `hardcover.go` | Hardcover connections per Chaptarr instance, the trending books feed and its cover relay, and the retired Open Library routes |
+| `discovermusic.go` | Public music discovery: feeds, search, artists, genres, albums, artwork |
+| `delivery.go` | Saved request receipts and their delivery states, including saved music |
 | `data_movies.go` | 18-film public-domain catalog with poster/backdrop maps |
 | `data_tv.go` | 6 fictional shows with seasons/episodes fixtures |
 | `data_people.go` | Every person named on a title page (real cast, crew, and creators for the films; invented for the shows); credits are derived from `data_credits.go` |
@@ -96,7 +111,7 @@ Full parity with the current Cantinarr API surface:
 | `data_music.go` | Public-domain artists/albums/tracks/track files, Lidarr queue and history fixtures, the music cross-domain hooks |
 | `data_misc.go` | Genres and Trakt list fixtures |
 | `assets/` | `go:embed` — sample download file, landing HTML (covers are generated PNGs, not files) |
-| `tools/smoke.sh` | Read-mostly parity smoke test (about 220 checks; `--mutate` adds the create/approve/deny flows). Run it against a local or the live demo |
+| `tools/smoke.sh` | Read-mostly parity smoke test (about 310 checks; `--mutate` adds the create/approve/deny flows). Run it against a local or the live demo |
 
 ## Branch Workflow
 

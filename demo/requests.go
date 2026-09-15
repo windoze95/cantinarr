@@ -110,6 +110,12 @@ func reqCreateHandler(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Request allowances are charged before the request is accepted
+	// (requestquotas.go). Admins are exempt; a spent allowance answers 429
+	// with the envelope the app recognises, and nothing is written.
+	if !reqChargeAllowance(w, u, &body) {
+		return
+	}
 	switch body.MediaType {
 	case "":
 		writeErr(w, http.StatusBadRequest, "media_type required")
@@ -1126,4 +1132,39 @@ func reqSeasonRows(show *DemoShow, st *reqTitleState) []map[string]any {
 		})
 	}
 	return out
+}
+
+// reqChargeAllowance charges this request against the caller's allowance and
+// reports whether it may proceed. A book asking for both formats is charged
+// as both, because that is what it asks the library for.
+func reqChargeAllowance(w http.ResponseWriter, u *DemoUser, body *reqCreateBody) bool {
+	units := 1
+	formats := []string{""}
+	switch body.MediaType {
+	case mediaTypeBook:
+		switch reqNormalizeBookFormat(body.BookFormat) {
+		case bookFormatEbook:
+			formats = []string{bookFormatEbook}
+		case bookFormatAudiobook:
+			formats = []string{bookFormatAudiobook}
+		default:
+			formats = []string{bookFormatEbook, bookFormatAudiobook}
+		}
+	case mediaTypeTV:
+		// One unit per season actually asked for; a coarse scope ("all",
+		// "latest", …) is one request and charges one.
+		if len(body.Seasons) > 0 {
+			units = len(body.Seasons)
+		}
+	case mediaTypeMovie, mediaTypeMusic:
+	default:
+		return true
+	}
+	for _, format := range formats {
+		if !rqCharge(u, body.MediaType, format, units) {
+			rqExceeded(w, u, rqKey{MediaType: body.MediaType, BookFormat: format})
+			return false
+		}
+	}
+	return true
 }

@@ -63,9 +63,10 @@ const (
 	instLidarr = "lidarr-4d5e6f7a"
 
 	// Media servers. Granted per user, never a global default.
-	instJellyfin = "jellyfin-1f2e3d4c"
-	instEmby     = "emby-5b6a7988"
-	instPlex     = "plex-0a1b2c3d"
+	instAudiobookshelf = "abs-2c3d4e5f"
+	instJellyfin       = "jellyfin-1f2e3d4c"
+	instEmby           = "emby-5b6a7988"
+	instPlex           = "plex-0a1b2c3d"
 )
 
 // plexDemoMachineIdentifier names the Plex Media Server the seeded Plex
@@ -222,9 +223,10 @@ func seedCoreState() {
 		// ALONGSIDE the global defaults, which is what puts the Library
 		// chooser and the sibling status chips on screen.
 		InstanceGrants: map[string][]string{
-			serviceRadarr:   {instRadarr4K},
-			serviceSonarr:   {instSonarrAnime},
-			serviceJellyfin: {instJellyfin},
+			serviceRadarr:         {instRadarr4K},
+			serviceSonarr:         {instSonarrAnime},
+			serviceJellyfin:       {instJellyfin},
+			serviceAudiobookshelf: {instAudiobookshelf},
 		},
 		RequireApproval: &requireApproval,
 	}
@@ -356,6 +358,15 @@ func seedCoreState() {
 			MediaServerConfig: &DemoMediaServerConfig{
 				PublicAddress: "https://emby.demo.example",
 				LibraryIDs:    []string{},
+			},
+		},
+		{
+			ID: instAudiobookshelf, ServiceType: serviceAudiobookshelf, Name: "Audiobookshelf",
+			URL: "http://audiobookshelf:13378", IsDefault: false, MediaDownloads: false,
+			MediaPathMappings: []map[string]string{},
+			MediaServerConfig: &DemoMediaServerConfig{
+				PublicAddress: "https://audiobooks.demo.example",
+				LibraryIDs:    []string{absLibAudiobooks, absLibPodcasts},
 			},
 		},
 		{

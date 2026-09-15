@@ -352,7 +352,7 @@ func bookLibraryHandler(w http.ResponseWriter, r *http.Request) {
 // it marshals as a JSON integer; the app parses it as an int and a float
 // throws.
 func bookLibraryTitleJSON(b *DemoBook) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"title":           b.Title,
 		"author":          b.AuthorName,
 		"year":            b.Year,
@@ -362,6 +362,13 @@ func bookLibraryTitleJSON(b *DemoBook) map[string]any {
 		"ebook":           bookOwnershipJSON(b.Formats[bookFormatEbook]),
 		"audiobook":       bookOwnershipJSON(b.Formats[bookFormatAudiobook]),
 	}
+	// Typed identity keys (hardcover.go) let a trending card match an owned
+	// book by key instead of by title. Absent for a book no external
+	// provider knows — which is the honest answer, not a weaker guess.
+	if keys := hcIdentityKeys(b.ForeignID); len(keys) > 0 {
+		out["identity_keys"] = keys
+	}
+	return out
 }
 
 // bookOwnershipJSON renders one {monitored,downloaded} block — ALWAYS

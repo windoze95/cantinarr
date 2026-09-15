@@ -21,10 +21,14 @@ func registerAuth(r chi.Router) {
 		r.Post("/setup", authSetupHandler)
 
 		// Passkeys are disabled demo-wide (auth/status reports
-		// webauthn_available:false + native_passkeys all-false); the begin
-		// ceremonies answer the 403 shape the app already handles.
+		// webauthn_available:false + native_passkeys all-false); every
+		// ceremony answers the 403 shape the app already handles, including
+		// the finish halves — a 404 there would read as a broken server
+		// rather than a disabled feature.
 		r.Post("/passkey/login/begin", authPasskeysDisabledHandler)
+		r.Post("/passkey/login/finish", authPasskeysDisabledHandler)
 		r.Post("/passkey/setup/begin", authPasskeysDisabledHandler)
+		r.Post("/passkey/setup/finish", authPasskeysDisabledHandler)
 
 		r.Group(func(r chi.Router) {
 			r.Use(requireAuth)
@@ -33,7 +37,10 @@ func registerAuth(r chi.Router) {
 			r.Post("/password", authPasswordHandler)
 			r.Post("/plex-email", authPlexEmailHandler)
 			r.Get("/passkeys", authListPasskeysHandler)
+			r.Delete("/passkeys/{credentialID}", authPasskeysDisabledHandler)
 			r.Post("/passkey/register/begin", authPasskeysDisabledHandler)
+			r.Post("/passkey/register/finish", authPasskeysDisabledHandler)
+			r.Post("/passkey/setup-link", authPasskeysDisabledHandler)
 		})
 	})
 }
@@ -41,7 +48,7 @@ func registerAuth(r chi.Router) {
 // GET /api/auth/status — public. needs_setup MUST be false (absence defaults
 // to true and the app shows the setup wizard).
 func authStatusHandler(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"needs_setup":        false,
 		"webauthn_available": false,
 		"native_passkeys": map[string]any{
@@ -49,7 +56,11 @@ func authStatusHandler(w http.ResponseWriter, _ *http.Request) {
 			"android_configured":     false,
 			"windows_origin_trusted": false,
 		},
-	})
+	}
+	// Federated sign-in advertises itself only when an admin turned it on,
+	// so the sign-in screen and the settings screen never disagree (sso.go).
+	ssoStatusFlags(out)
+	writeJSON(w, http.StatusOK, out)
 }
 
 type authSessionRequest struct {

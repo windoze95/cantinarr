@@ -145,6 +145,14 @@ func cfgHandleConfig(w http.ResponseWriter, r *http.Request) {
 		// True when a Plex server exists at all, so a user without the grant
 		// can still ask for access from the guide.
 		"plex_access_requestable": plexRequestable,
+		// Capability flags. Each one advertises that this server knows a
+		// surface at all — never that the caller is authorized for it.
+		"admin_catalog_browsing":   true,
+		"request_quotas":           true,
+		"tv_match_corrections":     true,
+		"media_account_management": true,
+		"apple_tv_remote":          false,
+		"hidden_discover_tabs":     cfgHiddenDiscoverTabs(),
 	})
 }
 

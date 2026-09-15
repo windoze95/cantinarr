@@ -196,7 +196,7 @@ chk "GET" "/api/requests/music-status?foreign_id=b0000000-d3a0-4000-8000-0000000
 chk "GET" "/api/requests/music-status?foreign_id=b0000000-d3a0-4000-8000-000000000099" user 200 '.status=="pending"'
 chk "GET" "/api/requests/music-status" user 400 '.error=="foreign_id required"'
 # ── instances / proxies ──────────────────────────────────
-chk GET /api/instances admin 200 'type=="array" and length==13 and ([.[]|select(.service_type=="qbittorrent")][0].has_api_key==true) and (all(.[]|select(.service_type!="qbittorrent"); has("has_api_key")|not)) and (all(.[]; has("id") and has("service_type") and has("name") and has("url") and has("username") and has("is_default") and has("media_path_mappings")))'
+chk GET /api/instances admin 200 'type=="array" and length==14 and ([.[]|select(.service_type=="qbittorrent")][0].has_api_key==true) and (all(.[]|select(.service_type!="qbittorrent"); has("has_api_key")|not)) and (all(.[]; has("id") and has("service_type") and has("name") and has("url") and has("username") and has("is_default") and has("media_path_mappings")))'
 chk GET /api/instances user 403 ''
 chk GET /api/instances/media-roots admin 200 '.==["/media"]'
 chk POST /api/instances/test admin 400 '.error=="an API key, or a username and password, is required for qbittorrent"' '{"service_type":"qbittorrent","name":"q","url":"http://q:8081","username":"a"}'
@@ -284,7 +284,7 @@ chk GET /api/watch-history/radarr-1a2b3c4d/activity admin 400 '.error|test("is n
 chk GET /api/watch-history/nope/activity admin 404 '.error=="instance not found"'
 chk GET /api/watch-history/tracearr-8e9f0a1b/activity user 403 ''
 # ── notifications / media servers / issues / ai / misc ───
-chk GET /api/notifications/preferences user 200 '(keys|length)==13 and .new_music==true and .content_upgraded==false'
+chk GET /api/notifications/preferences user 200 '(keys|length)==15 and .push_enabled==true and .new_music==true and .media_server_access==true and .request_auto_approved==false and .content_upgraded==false and (has("plex_invite_sent")|not)'
 chk GET /api/media-servers user 200 'type=="array"'
 chk "GET" "/api/media-servers/watch?media_type=movie&tmdb_id=961" user 200 'type=="array"'
 chk GET /api/admin/media-servers/accounts admin 200 'type=="array"'
@@ -301,6 +301,113 @@ chk GET /api/ai/available user 200 'type=="object"'
 chk GET /api/ai/settings user 200 'type=="object"'
 chk GET /api/admin/external-settings-changes admin 200 'type=="array" or type=="object"'
 chk POST /api/media-files/coverage user 200 '.covered|type=="array"' '{"instance_id":"lidarr-4d5e6f7a","paths":["/music/Enrico Caruso/x.flac"]}'
+
+# ── request allowances ───────────────────────────────────
+chk GET /api/me/request-quotas user 200 '.exempt==false and (.allowances|length)==5 and ([.allowances[]|select(.media_type=="movie")][0]|.source=="user" and .count==20 and .used==3 and .remaining==17) and ([.allowances[]|select(.book_format=="audiobook")][0]|.window_days==30) and (.as_of|type=="string")'
+chk GET /api/me/request-quotas admin 200 '.exempt==true'
+chk GET /api/admin/request-quotas admin 200 '(.allowances|length)==5 and (all(.allowances[]; has("media_type") and has("window_days") and has("count"))) and (all(.allowances[]; has("used")|not))'
+chk GET /api/admin/users/2/request-quotas admin 200 '([.allowances[]|select(.media_type=="tv")][0].source=="default")'
+chk GET /api/admin/users/2/request-quotas user 403 ''
+chk GET /api/me/request-quotas none 401 ''
+chk POST /api/requests/preview user 200 '.fits==true and .reduce_selection==false and ([.allowances[]|select(.media_type=="movie")][0].requested_units==1)' '{"media_type":"movie","tmdb_id":961}'
+chk POST /api/requests/preview user 200 '.fits==true and ([.allowances[]|select(.media_type=="tv")][0].requested_units==3)' '{"media_type":"tv","tmdb_id":90001,"seasons":[1,2,3]}'
+
+# ── TV matching corrections ──────────────────────────────
+chk GET /api/admin/tv-matches admin 200 'type=="array" and length>=1 and (.[0]|.provenance=="bundled" and .tmdb_id==90005 and (.season_map|type=="object") and (.revision|type=="string"))'
+chk GET /api/admin/tv-matches user 403 ''
+chk GET /api/admin/tv-matches/90005 admin 200 '(.match.provenance=="bundled") and (.source_seasons|length)>=2 and (.target_seasons|length)>=3 and (.instance_id|type=="string")'
+chk GET /api/admin/tv-matches/90001 admin 200 '.match.provenance=="default" and (.match.season_map|type=="object")'
+chk GET "/api/admin/tv-matches/candidates?q=lantern" admin 200 'type=="array" and length==1 and (.[0]|.tvdbId==390007 and (.seasons|type=="array"))'
+chk GET /api/admin/tv-matches/90005/repairs admin 200 'type=="array"'
+
+# ── SSO: OIDC + Plex sign-in ─────────────────────────────
+chk GET /api/admin/oidc admin 200 '.enabled==false and .sso_only==false and (.callback_url|endswith("/api/auth/oidc/callback")) and (.additional_scopes|type=="array") and (has("client_secret")|not)'
+chk GET /api/admin/oidc user 403 ''
+chk PUT /api/admin/oidc admin 400 '(.error|startswith("The demo server keeps password sign-in"))' '{"enabled":true,"sso_only":true,"issuer":"https://idp.example","client_id":"x"}'
+chk POST /api/auth/oidc/begin none 503 '(.error|test("demo server never contacts an identity provider"))' '{"client":"web"}'
+chk GET /api/auth/oidc/identities user 200 '.identities==[]'
+chk GET /api/admin/users/2/oidc admin 200 '.identities==[]'
+chk GET /api/admin/plex-auth admin 200 '.enabled==false and .auto_create==false'
+chk GET /api/admin/plex-auth/candidates admin 200 '(.candidates|type=="array")'
+chk POST /api/auth/plex/begin none 503 '(.error|test("demo server never contacts plex.tv"))' '{"client":"web","challenge":"c"}'
+chk GET /api/auth/plex/identities user 200 '.identities==[]'
+chk GET /api/auth/status none 200 '(has("sso_available")|not) and (has("plex_available")|not)'
+
+# ── admin server settings ────────────────────────────────
+chk GET /api/admin/outbound-proxy admin 200 '.url=="" and .username=="" and .has_password==false'
+chk GET /api/admin/outbound-proxy user 403 ''
+chk POST /api/admin/outbound-proxy/test admin 200 '.status=="ok"' '{"url":"http://proxy.lan:3128","username":"","password":""}'
+chk POST /api/admin/outbound-proxy/test admin 400 '(.error|test("scheme://host:port"))' '{"url":"proxy.lan:3128"}'
+chk GET /api/admin/discord-notifications admin 200 '.enabled==true and .has_webhook==true and (.recent|length)==3 and (.recent[0]|.status=="sent" and (.updated_at|type=="number"))'
+chk POST /api/admin/discord-notifications/test admin 200 '.status=="sent" and (.detail|test("never contacts Discord"))' '{}'
+chk POST /api/admin/discord-notifications/test admin 400 '(.error|test("discord.com/api/webhooks"))' '{"webhook_url":"https://example.com/hook"}'
+chk GET /api/admin/push-notifications admin 200 '.enabled==true and (.categories|length)==14 and .categories.media_server_access==true and .categories.request_auto_approved==true'
+chk GET /api/admin/push-notifications user 403 ''
+
+# ── media apps + audiobook access ────────────────────────
+chk GET /api/me/video-apps user 200 '(keys|sort)==["emby","jellyfin","plex"] and (.plex.ios=="")'
+chk GET /api/me/listening-apps user 200 '.ios=="" and .android==""'
+chk GET "/api/media-servers/listen?instance_id=chaptarr-9c0d1e2f&foreign_book_id=1885" user 200 'type=="array" and length==1 and (.[0]|.instance_id=="abs-2c3d4e5f" and (.state|test("resolved|not_found")) and (.listening_apps|type=="object"))'
+chk GET "/api/media-servers/listen?instance_id=chaptarr-9c0d1e2f" user 400 ''
+chk GET /api/admin/instances/abs-2c3d4e5f/media-access admin 200 '(.user_ids|index(2))!=null and (.default_library_ids==["abs-lib-audiobooks"]) and (.policies["2"]|.mode=="selected" and .manages_libraries==true)'
+chk GET /api/admin/instances/radarr-1a2b3c4d/media-access admin 404 ''
+chk GET /api/admin/instances/abs-2c3d4e5f/media-access user 403 ''
+
+# ── Hardcover + book discovery ───────────────────────────
+chk GET /api/instances/chaptarr-9c0d1e2f/hardcover admin 200 '.supported==true and .configured==true and .method=="api_token" and .revision==1 and (.connection_id|type=="string")'
+chk GET /api/instances/radarr-1a2b3c4d/hardcover admin 400 ''
+chk GET /api/instances/chaptarr-9c0d1e2f/hardcover user 403 ''
+chk GET "/api/discover/books/trending?instance_id=chaptarr-9c0d1e2f" user 200 '.connected==true and .instance_id=="chaptarr-9c0d1e2f" and (.books|length)==8 and (.books[0]|.hardcover_id>0 and (.foreign_id|startswith("hc:")) and (.title|length)>0 and (.authors|type=="array") and (.isbn13s|length)==1 and (.image_url|startswith("https://assets.hardcover.app/")))'
+chk GET "/api/discover/books/images/editions/demo-440001.png" user 200 ''
+chk GET "/api/discover/books/images/editions/demo-999999.png" user 404 ''
+chk GET /api/discover/books/search user 410 '.code=="catalog_retired" and (.error|test("Open Library"))'
+chk GET /api/discover/books/popular user 410 '.code=="catalog_retired"'
+chk GET /api/genres/book user 410 '.code=="catalog_retired"'
+chk GET /api/media/book/OL66554W user 410 '.code=="catalog_retired"'
+chk GET /api/media/book/OL66554W/request-target user 410 '.code=="catalog_retired"'
+chk GET "/api/requests/book-library?instance_id=chaptarr-9c0d1e2f" user 200 '([.titles[]|select(.foreign_book_id=="1885")][0].identity_keys|index("hc-book:440001"))!=null'
+
+# ── music discovery ──────────────────────────────────────
+chk GET "/api/discover/music/popular?instance_id=lidarr-4d5e6f7a&period=this_week" user 200 '.page==1 and (.results|length)>0 and (.results[0]|(.foreign_id|length)>0 and (.title|length)>0 and (.artists|type=="array") and (.release_type|type=="string"))'
+chk GET "/api/discover/music/popular?instance_id=lidarr-4d5e6f7a&period=nonsense" user 400 ''
+chk GET "/api/discover/music/new-releases?instance_id=lidarr-4d5e6f7a" user 200 '(.results|length)>0'
+chk GET "/api/discover/music/genre?instance_id=lidarr-4d5e6f7a&genre=nope" user 400 ''
+chk GET "/api/discover/music/search?instance_id=lidarr-4d5e6f7a&query=caruso" user 200 '.page==1 and (.results|type=="array")'
+chk GET "/api/discover/music/artists?instance_id=lidarr-4d5e6f7a&query=caruso" user 200 '.page==1 and (.results|length)>=1 and (.results[0]|(.foreign_id|length)>0 and (.name|length)>0)'
+chk GET "/api/genres/music?instance_id=lidarr-4d5e6f7a" user 200 '(.genres|length)==12 and (.genres[0]|.id=="pop" and .name=="Pop" and (.tag|type=="string"))'
+chk GET "/api/media/music/b0000000-d3a0-4000-8000-000000000003?instance_id=lidarr-4d5e6f7a" user 200 '(.foreign_id|length)>0 and (.title|length)>0 and (.artwork|length)>0'
+chk GET "/api/media/music/a0000000-0000-0000-0000-000000000000?instance_id=lidarr-4d5e6f7a" user 404 ''
+chk GET "/api/media/music/artists/a0000000-d3a0-4000-8000-000000000001?instance_id=lidarr-4d5e6f7a" user 200 '(.foreign_id|length)>0 and (.name|length)>0'
+chk GET "/api/media/music/artists/a0000000-d3a0-4000-8000-000000000001/albums?instance_id=lidarr-4d5e6f7a" user 200 '.page==1 and (.results|type=="array")'
+chk GET "/api/discover/music/artwork/b0000000-d3a0-4000-8000-000000000003?instance_id=lidarr-4d5e6f7a" user 200 ''
+chk GET "/api/discover/music/popular?instance_id=radarr-1a2b3c4d" user 400 ''
+
+# ── discovery refusals: grant-only, never a server error ─
+chk GET /api/discover/books/trending kid 403 '.error=="books are not available to you"'
+chk GET /api/genres/music kid 403 '.error=="music is not available to you"'
+chk GET /api/discover/music/popular kid 403 '.error=="music is not available to you"'
+chk GET /api/media/music/b0000000-d3a0-4000-8000-000000000003 kid 403 ''
+# Books have no admin-without-a-library bypass (the connection IS the
+# instance's), so the admin — who holds no Chaptarr grant — is refused too.
+chk GET /api/discover/books/trending admin 403 '.error=="books are not available to you"'
+chk GET /api/discover/books/trending?instance_id=chaptarr-9c0d1e2f admin 200 '.connected==true and (.books|length)==8'
+chk GET /api/genres/music admin 200 '(.genres|length)==12'
+
+# ── delivery receipts ────────────────────────────────────
+chk GET "/api/requests/delivery-status?media_type=music&foreign_id=b0000000-d3a0-4000-8000-000000000003&instance_id=lidarr-4d5e6f7a&include_live=false" user 200 '(.delivery|type=="array") and (has("success"))'
+chk GET "/api/requests/delivery-status?media_type=book&foreign_id=1885&instance_id=chaptarr-9c0d1e2f&include_live=false" user 200 '(.delivery|type=="array")'
+chk GET "/api/requests/delivery-status?media_type=nope" user 400 ''
+chk GET "/api/requests/music-saved?instance_id=lidarr-4d5e6f7a" user 200 '(.requests|type=="array")'
+
+# ── arr webhook receiver (public, Basic auth) ────────────
+chk POST /api/webhooks/arr/radarr-1a2b3c4d none 401 '.error=="invalid token"' '{"eventType":"Test"}'
+chk POST /api/webhooks/arr/nope none 404 '.error=="unknown instance"' '{"eventType":"Test"}'
+
+# ── passkeys stay disabled, never 404 ────────────────────
+chk POST /api/auth/passkey/login/finish none 403 ''
+chk POST /api/auth/passkey/register/finish user 403 ''
+chk POST /api/auth/passkey/setup-link user 403 ''
+chk DELETE /api/auth/passkeys/abc user 403 ''
 
 if [ $MUTATE = 1 ]; then
   # setup skip round-trip
