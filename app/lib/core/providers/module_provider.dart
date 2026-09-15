@@ -117,10 +117,11 @@ class ModuleNotifier extends Notifier<ModuleState> {
         ));
       }
 
-      // Read-only processing activity, separate from playback monitoring.
+      // One Transcoding row groups Tdarr instances, separate from playback
+      // monitoring. Keep the service identity and routes provider-specific.
       if (isAdmin && connection.tdarrInstances.isNotEmpty) {
         modules.add(const AppModule(
-          type: ModuleType.tdarr, label: 'Tdarr', icon: Icons.sync,
+          type: ModuleType.tdarr, label: 'Transcoding', icon: Icons.sync,
         ));
       }
 

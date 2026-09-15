@@ -30,6 +30,7 @@ void main() {
     expect(_labels(modules), isNot(contains('Chaptarr')));
     expect(_labels(modules), isNot(contains('Downloads')));
     expect(_labels(modules), isNot(contains('Monitoring')));
+    expect(_labels(modules), isNot(contains('Transcoding')));
     expect(_labels(modules), isNot(contains('Tdarr')));
     expect(_labels(modules), isNot(contains('Tautulli')));
     // A granted media server is a guide, never a module.
@@ -92,10 +93,17 @@ void main() {
         'Chaptarr',
         'Downloads',
         'Monitoring',
-        'Tdarr',
+        'Transcoding',
       ]),
     );
     expect(_labels(modules), isNot(contains('Tautulli')));
+    expect(_labels(modules), isNot(contains('Tdarr')));
+    expect(_labels(modules), isNot(contains('Tdarr One')));
+    expect(_labels(modules), isNot(contains('Tdarr Two')));
+    expect(
+      modules.where((module) => module.type == ModuleType.tdarr),
+      hasLength(1),
+    );
     expect(
       modules.where((module) => module.type == ModuleType.radarr),
       hasLength(1),
