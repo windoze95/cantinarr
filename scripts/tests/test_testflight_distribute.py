@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import sys
+import json
+import os
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS_DIR))
@@ -101,6 +104,18 @@ class ProcessingStateTests(unittest.TestCase):
 
 
 class DistributionTests(unittest.TestCase):
+    def test_freeze_during_apple_processing_stops_both_external_writes(self) -> None:
+        source = {"sha": "a" * 40, "ref": "refs/heads/main", "channel": "beta"}
+        client = FakeClient()
+        with patch.dict(os.environ, {"SOURCE_JSON": json.dumps(source)}), \
+                patch("release_control.branch_state", return_value={"main": "a" * 40, "release/1.0.0": "b" * 40}):
+            self.assertEqual(td.wait_for_processing(client, BUILD_ID, deadline=0), "READY_FOR_BETA_SUBMISSION")
+            with self.assertRaises(td.ApiError):
+                td.submit_for_beta_review(client, BUILD_ID)
+            with self.assertRaises(td.ApiError):
+                td.add_to_group(client, GROUP_ID, BUILD_ID)
+            self.assertEqual(client.mutations(), [])
+
     def test_already_distributed_build_is_a_no_op(self) -> None:
         client = FakeClient(group_builds=[{"type": "builds", "id": BUILD_ID}])
         self.assertTrue(td.already_in_group(client, GROUP_ID, BUILD_ID))

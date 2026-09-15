@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'release/**']
   push:
-    branches: [main]
+    branches: [main, 'release/**']
   schedule:
     - cron: '23 5 * * 1'
 
@@ -26,6 +26,15 @@ jobs:
 
       - name: Validate automation traceability
         run: make check-test-automation
+
+      - name: Record the checkout tested by this CI run
+        run: printf '{"sha":"%s"}\n' "$(git rev-parse HEAD)" > ci-source.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-source-${{ github.run_attempt }}
+          path: ci-source.json
+          retention-days: 90
 
   go:
     name: Go
@@ -127,3 +136,23 @@ jobs:
 
       - name: Build web
         run: flutter build web --release --no-pub
+
+  release-tooling:
+    name: Release tooling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache: false
+      - name: Test store submission and promotion boundaries
+        run: |
+          gem install fastlane minitest --no-document
+          ruby scripts/tests/test_appstore_release.rb
+          ruby scripts/tests/test_playstore_release.rb
+      - name: Validate workflow wiring
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck=''

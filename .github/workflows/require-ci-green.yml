@@ -1,7 +1,7 @@
 name: Require CI green
 
 # GitHub has no `needs:` across workflows, so anything that ships calls this to
-# hold its irreversible step — pushing `latest` to GHCR, uploading an IPA to
+# hold its irreversible step — publishing an image to GHCR, uploading an IPA to
 # TestFlight, uploading an AAB to Play — until the CI suite has finished green
 # on the exact commit being shipped. Without it the shipping workflows and CI
 # fire on the same `push` event and simply race: an upload that outruns the
@@ -9,20 +9,22 @@ name: Require CI green
 # permanently when it does.
 #
 # The gate always finds a run to wait for: `ci.yml` has no path filters, and
-# branch protection routes every `main` commit through a PR, so every shipping
-# commit has a CI run of its own. A `v*` tag resolves against the CI run from
-# the `main` push of the same SHA, so tag releases are gated without CI having
-# to re-run on the tag.
+# main/release branch pushes have a CI run of their own. A `v*` tag reuses that
+# evidence. Phone previews additionally verify the tested PR merge checkout,
+# rather than trusting a green verdict associated only with the PR head SHA.
 
 on:
   workflow_call:
     inputs:
       sha:
         description: >
-          Commit that must have a successful CI run. For a pull_request event
-          pass the PR head SHA — that is what CI records as the run's head.
+          Exact checkout commit that CI must have tested successfully.
         type: string
         required: true
+      ci-head:
+        description: PR head SHA when sha is its tested merge checkout
+        type: string
+        default: ''
       enforce:
         description: >
           Set false for events that ship nothing (a PR's build-only checks), so
@@ -49,56 +51,16 @@ jobs:
         if: ${{ !inputs.enforce }}
         run: echo "This event publishes nothing, so it does not wait on CI."
 
-      - name: Wait for CI to pass on ${{ inputs.sha }}
+      - uses: actions/checkout@v4
+        if: ${{ inputs.enforce }}
+
+      - name: Wait for evidence of the exact tested checkout
         if: ${{ inputs.enforce }}
         env:
           GH_TOKEN: ${{ github.token }}
-          SHA: ${{ inputs.sha }}
+          BUILD_SHA: ${{ inputs.sha }}
+          CI_HEAD: ${{ inputs.ci-head || inputs.sha }}
           WAIT_MINUTES: ${{ inputs.wait-minutes }}
-          # A run for the commit is created with the push itself, so absence
-          # this long means no run is coming (e.g. a dispatch on a ref CI never
-          # saw) — fail fast instead of burning the full wait.
-          STARTUP_GRACE_MINUTES: 5
         run: |
-          set -euo pipefail
-
-          started=$(date +%s)
-          deadline=$(( started + WAIT_MINUTES * 60 ))
-          startup_deadline=$(( started + STARTUP_GRACE_MINUTES * 60 ))
-
-          while :; do
-            # Any CI run for this exact commit is proof: the push to `main`, the
-            # pull_request run that produced it, or the weekly schedule. A rerun
-            # updates the existing run in place, so a fixed rerun counts too.
-            runs=$(gh api \
-              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=100" \
-              --jq '.workflow_runs[] | "\(.status)/\(.conclusion // "pending") \(.event) \(.html_url)"')
-
-            if printf '%s\n' "$runs" | grep -q '^completed/success '; then
-              echo "CI is green on $SHA:"
-              printf '%s\n' "$runs" | grep '^completed/success '
-              exit 0
-            fi
-
-            if [ -n "$runs" ] && ! printf '%s\n' "$runs" | grep -qv '^completed/'; then
-              echo "::error::CI did not pass on $SHA — refusing to ship it."
-              printf '%s\n' "$runs"
-              exit 1
-            fi
-
-            now=$(date +%s)
-
-            if [ -z "$runs" ] && [ "$now" -ge "$startup_deadline" ]; then
-              echo "::error::No CI run exists for $SHA after ${STARTUP_GRACE_MINUTES}m. Nothing has proved this commit — refusing to ship it."
-              exit 1
-            fi
-
-            if [ "$now" -ge "$deadline" ]; then
-              echo "::error::CI never reached a conclusion on $SHA within ${WAIT_MINUTES}m."
-              printf '%s\n' "$runs"
-              exit 1
-            fi
-
-            echo "CI has not concluded on $SHA yet; checking again in 20s."
-            sleep 20
-          done
+          python3 scripts/release_control.py ci --sha "$BUILD_SHA" \
+            --ci-head "$CI_HEAD" --minutes "$WAIT_MINUTES"

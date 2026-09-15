@@ -2,28 +2,30 @@ name: Build and Push Docker Image
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release/**']
     tags: ["v*"]
     paths:
       - "app/**"
       - "server/**"
       - "Dockerfile"
       - ".github/workflows/docker.yml"
+      - "scripts/release_control.py"
   pull_request:
-    branches: [main]
+    branches: [main, 'release/**']
     paths:
       - "app/**"
       - "server/**"
       - "Dockerfile"
       - ".github/workflows/docker.yml"
+      - "scripts/release_control.py"
   workflow_dispatch:
 
 # Keyed on the ref rather than the SHA for pushes: back-to-back merges must not
-# race to publish `latest`, and cancelling the older run is what keeps the
+# race to publish `edge`, and cancelling the older run is what keeps the
 # newest commit's image the one that wins.
 concurrency:
-  group: docker-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: docker-${{ startsWith(github.ref, 'refs/tags/v') && 'stable' || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   # Nothing reaches GHCR until CI has passed on this exact commit. A pull
@@ -43,10 +45,12 @@ jobs:
       enforce: ${{ github.event_name != 'pull_request' }}
 
   build:
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') || contains(github.ref_name, '-') }}
     needs: [gate]
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       packages: write
     steps:
       - name: Checkout
@@ -70,15 +74,22 @@ jobs:
         # above (git describe wants the tags). Tag builds resolve to the exact
         # tag (v0.1.0); main/PR builds after a tag exists resolve to
         # v0.1.0-N-gSHA, which the server's update checker parses as 0.1.0 —
-        # so the `latest` channel compares itself against releases and nags on
+        # so the `edge` channel compares itself against releases on
         # release cadence, not per merge. Before any v* tag this falls back to
         # a bare SHA and the checker stays dormant. --match keeps a future
         # non-version tag from hijacking the version and silently disabling
         # the checker.
         run: |
-          echo "version=$(git describe --tags --always --match 'v[0-9]*')" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF_NAME" == release/* ]]; then
+            version="${GITHUB_REF_NAME#release/}"
+            BUILD_VERSION="$version" python3 -c 'import os, sys; sys.path.insert(0,"scripts"); from release_control import VERSION; assert VERSION.fullmatch(os.environ["BUILD_VERSION"])'
+            echo "version=v${version}" >> "$GITHUB_OUTPUT"
+            echo "candidate=${version}-rc.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$(git describe --tags --always --match 'v[0-9]*')" >> "$GITHUB_OUTPUT"
+          fi
 
-      # Every published channel — `latest` on main pushes as much as version
+      # Every published channel — `edge` on main pushes as much as version
       # tags — is multi-arch, so arm64 deployments track the same updates as
       # amd64 ones. Only pr-N preview images stay amd64-only: they exist to be
       # poked at during review, and the emulated arm64 build would slow every
@@ -102,8 +113,10 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/windoze95/cantinarr
+          flavor: latest=false
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ steps.version.outputs.candidate }},enable=${{ startsWith(github.ref, 'refs/heads/release/') }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
@@ -284,7 +297,22 @@ jobs:
           # spend minutes for nothing.
           compression-level: 0
 
+      - name: Recheck branch before publishing
+        if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/heads/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYCODE'
+          import os, sys
+          sys.path.insert(0, 'scripts')
+          from release_control import branch_state, channel_for, current
+          ref, sha = os.environ['GITHUB_REF'], os.environ['GITHUB_SHA']
+          source = {'ref': ref, 'sha': sha, 'channel': channel_for(ref, sha, branch_state())}
+          current(source, server=True)
+          PYCODE
+
       - name: Build and push
+        id: publish
         # Fork PRs can't push from this run (read-only GITHUB_TOKEN); their
         # preview is published by pr-preview-publish.yml from the artifact
         # saved above.
@@ -302,18 +330,73 @@ jobs:
           cache-from: type=gha,scope=published
           cache-to: type=gha,mode=max,scope=published
 
+      - name: Record server candidate identity
+        if: startsWith(github.ref, 'refs/heads/release/')
+        env:
+          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          export BUILD_VERSION="${GITHUB_REF_NAME#release/}"
+          SOURCE_JSON="$(python3 -c 'import json,os; print(json.dumps({"sha":os.environ["GITHUB_SHA"],"ref":os.environ["GITHUB_REF"],"channel":"candidate"}))')"
+          export SOURCE_JSON
+          python3 scripts/release_control.py record --platform server
+
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/heads/release/')
+        with:
+          name: server-release-record-${{ github.run_attempt }}
+          path: release.json
+          retention-days: 90
+
+  promote:
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    needs: [gate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    outputs:
+      artifact_id: ${{ steps.receipt.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Select the tested candidate and promote its image digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/release_control.py server
+          python3 scripts/release_control.py promote-server
+      - uses: actions/upload-artifact@v4
+        id: receipt
+        with:
+          name: stable-release-record-${{ github.run_attempt }}
+          path: |
+            release.json
+            release-candidate.json
+          retention-days: 90
+
   # The GitHub Release is what the server's update checker polls
   # (releases/latest) and where admins read what changed. It must
   # never precede the image it announces, so it waits on the publish job; the
   # gate already held everything until CI was green on this exact commit (a
-  # v* tag reuses the CI verdict from the main push of the same commit).
+  # v* tag reuses the CI verdict from the branch push of the same commit).
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build]
+    if: always() && startsWith(github.ref, 'refs/tags/v') && (needs.build.result == 'success' || needs.promote.result == 'success')
+    needs: [build, promote]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/download-artifact@v4
+        if: needs.promote.result == 'success'
+        with:
+          artifact-ids: ${{ needs.promote.outputs.artifact_id }}
+          merge-multiple: true
       - name: Create GitHub Release for ${{ github.ref_name }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -357,3 +440,10 @@ jobs:
           done
           echo "::error::Could not create the GitHub Release for ${TAG} after 6 attempts."
           exit 1
+
+      - name: Archive the stable build receipt with the release
+        if: needs.promote.result == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" release.json release-candidate.json --clobber --repo "$GITHUB_REPOSITORY"

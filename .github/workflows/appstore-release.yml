@@ -1,44 +1,81 @@
 name: Submit App Store Release
 
-# Manual, deliberate step: submits the latest processed TestFlight build of the
-# current pubspec version for App Store review (phased release, manual rollout).
 on:
   workflow_dispatch:
     inputs:
-      confirm:
-        description: 'Type "submit" to confirm submitting for App Store review'
+      build_run:
+        description: 'Successful ios candidate workflow run ID (dispatch from main)'
         required: true
+        type: string
+      confirm:
+        description: 'Type "submit" to release this exact tested build'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: testflight-deploy
+  cancel-in-progress: false
 
 jobs:
-  submit:
+  release:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: app/ios
     steps:
-      - name: Validate confirmation
+      - uses: actions/checkout@v4
+      - name: Validate release selection
+        id: build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN: ${{ inputs.build_run }}
+          CONFIRM: ${{ inputs.confirm }}
         run: |
-          if [ "${{ inputs.confirm }}" != "submit" ]; then
-            echo "Confirmation input was not 'submit' - aborting."
-            exit 1
-          fi
+          test "$GITHUB_REF" = refs/heads/main
+          test "$CONFIRM" = submit
+          python3 scripts/release_control.py select --platform ios --run-id "$BUILD_RUN"
 
-      - name: Checkout
+      - name: Verify CI and frozen candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_SHA: ${{ steps.build.outputs.sha }}
+        run: |
+          python3 scripts/release_control.py ci --sha "$BUILD_SHA"
+          SOURCE_JSON="$(cat release.json)" python3 scripts/release_control.py current
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Checkout the selected candidate's store listing
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          ref: ${{ steps.build.outputs.sha }}
+          path: .release-source
+          persist-credentials: false
 
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.3"
-
-      - name: Submit for review
+      - name: Submit the tested build for review with manual release
+        working-directory: app/ios
         env:
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_API_KEY_B64: ${{ secrets.APP_STORE_CONNECT_API_KEY_B64 }}
+          APP_VERSION: ${{ steps.build.outputs.version }}
+          APP_BUILD_NUMBER: ${{ steps.build.outputs.build_number }}
+          APP_STORE_METADATA_PATH: ${{ github.workspace }}/.release-source/app/ios/fastlane/metadata
+          APP_STORE_SCREENSHOTS_PATH: ${{ github.workspace }}/.release-source/app/ios/fastlane/screenshots
+          GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION=$(grep '^version:' ../pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
-          gem install fastlane
-          APP_VERSION=$VERSION fastlane release
+          gem install fastlane --no-document
+          export SOURCE_JSON="$(cat ../../release.json)"
+          python3 ../../scripts/release_control.py current
+          fastlane metadata
+          python3 ../../scripts/release_control.py current
+          fastlane release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appstore-submission-${{ github.run_attempt }}
+          path: release.json
+          retention-days: 90
