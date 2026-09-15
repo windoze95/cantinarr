@@ -122,7 +122,10 @@ requiring a mobile update users cannot obtain.
 Verify the GHCR digests, GitHub Release assets, store availability, and the recorded versions on
 real installations. Update the Umbrel catalog's version and `tag@<multi-arch digest>` in a small
 PR; the other catalogs either follow stable `latest` or have tag-update bots (details in
-`AGENTS.md`). Merge release fixes back to main before deleting the release branch. Then dispatch
+`AGENTS.md`). If the release branch gained fixes, merge it back to main through a PR using
+**Create a merge commit**. This retains the released commit and its tag in main's history,
+so `git describe` on subsequent edge builds recognizes the release. Verify the candidate SHA
+is an ancestor of main before deleting the release branch. Then dispatch
 main's TestFlight, Play, and listing workflows once to resume immediately, or let the next
 relevant push do it. Stable `latest` stays on the released version while `edge` continues forward.
 
