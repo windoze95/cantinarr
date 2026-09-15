@@ -508,9 +508,9 @@ type ActionDenyRequest struct {
 	Note string `json:"note"`
 }
 
-// AdminIssueResolutionRequest is POST /api/admin/issues/{id}/resolve. Note is
-// required human evidence/judgment; it is stored in the terminal issue and its
-// append-only thread audit.
+// AdminIssueResolutionRequest is POST /api/admin/issues/{id}/resolve. A supplied
+// note is stored in the terminal issue and its append-only thread audit; an
+// omitted or blank note receives disposition-specific canonical audit text.
 type AdminIssueResolutionRequest struct {
 	Disposition AdminIssueDisposition `json:"disposition"`
 	Note        string                `json:"note"`

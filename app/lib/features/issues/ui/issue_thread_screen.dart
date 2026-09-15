@@ -756,8 +756,8 @@ class _AdminCompletionPanel extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             needsReview
-                ? 'Verify the current arr state, then record the honest outcome and what you checked.'
-                : 'Record a final human judgment and required note. This is separate from dismissing the report.',
+                ? 'Verify the current arr state, then record the honest outcome. You can add a note about what you checked.'
+                : 'Record a final human judgment, with an optional note for context. This is separate from dismissing the report.',
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 12,
@@ -827,7 +827,6 @@ class _AdminResolutionDialogState extends State<_AdminResolutionDialog> {
   @override
   Widget build(BuildContext context) {
     final resolved = widget.disposition == AdminIssueDisposition.resolved;
-    final noteReady = _controller.text.trim().isNotEmpty;
     return AlertDialog(
       backgroundColor: AppTheme.surface,
       title: Text(
@@ -876,14 +875,13 @@ class _AdminResolutionDialogState extends State<_AdminResolutionDialog> {
             const SizedBox(height: 14),
             TextField(
               controller: _controller,
-              autofocus: true,
+              autofocus: false,
               minLines: 2,
               maxLines: 5,
               maxLength: maxNoteLength,
-              onChanged: (_) => setState(() {}),
               style: const TextStyle(color: AppTheme.textPrimary),
               decoration: const InputDecoration(
-                labelText: 'Completion note (required)',
+                labelText: 'Completion note (optional)',
                 hintText: 'What did you verify, or why is no fix appropriate?',
                 border: OutlineInputBorder(),
               ),
@@ -897,9 +895,7 @@ class _AdminResolutionDialogState extends State<_AdminResolutionDialog> {
           child: const Text('Cancel'),
         ),
         ElevatedButton(
-          onPressed: noteReady
-              ? () => Navigator.of(context).pop(_controller.text.trim())
-              : null,
+          onPressed: () => Navigator.of(context).pop(_controller.text.trim()),
           style: ElevatedButton.styleFrom(
             backgroundColor: resolved ? AppTheme.available : AppTheme.error,
             foregroundColor: AppTheme.background,

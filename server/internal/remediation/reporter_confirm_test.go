@@ -602,7 +602,7 @@ func TestConfirmFixedEndpointRefusesADifferentRequester(t *testing.T) {
 // An administrator who is not the reporter is refused DELIBERATELY, and not for
 // lack of privilege: this endpoint is the one place where more authority is the
 // wrong qualification. Admins have /api/admin/issues/{id}/resolve, which records
-// their own name and their own required note. Letting the same admin through
+// their own name and their own completion judgment. Letting the same admin through
 // here would file their verdict as the reporter's — a lie in the audit trail
 // about who watched the content and judged it right.
 func TestConfirmFixedEndpointRefusesAnAdminWhoIsNotTheReporter(t *testing.T) {

@@ -72,6 +72,41 @@ func TestAdminResolutionClosesAggregateWithDistinctAudit(t *testing.T) {
 	}
 }
 
+func TestAdminResolutionSuppliesDefaultAuditWhenNoteBlank(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		disposition AdminIssueDisposition
+		note        string
+		wantStatus  string
+		wantNote    string
+	}{
+		{"resolved omitted", AdminDispositionResolved, "", IssueResolved, defaultAdminResolvedNote},
+		{"wont fix whitespace", AdminDispositionWontFix, " \n\t ", IssueWontFix, defaultAdminWontFixNote},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _, issueID, _ := approvalFixture(t)
+
+			issue, err := svc.ResolveIssueByAdmin(
+				context.Background(), testAdminID, issueID, tc.disposition, tc.note,
+			)
+			if err != nil {
+				t.Fatalf("ResolveIssueByAdmin: %v", err)
+			}
+			if issue.Status != tc.wantStatus || issue.Resolution != tc.wantNote || issue.ResolutionKind != ResolutionAdminCompleted || issue.ClosedAt == nil || !issue.Read {
+				t.Fatalf("completed issue = %+v", issue)
+			}
+
+			thread, err := svc.IssueThread(issueID)
+			if err != nil {
+				t.Fatalf("IssueThread: %v", err)
+			}
+			if len(thread) != 1 || thread[0].AuthorKind != AuthorAdmin || thread[0].AuthorName == nil || *thread[0].AuthorName != "admin" || thread[0].Body != tc.wantNote {
+				t.Fatalf("default completion audit = %+v", thread)
+			}
+		})
+	}
+}
+
 func TestAdminResolutionAllowsVerifiedUnknownOutcome(t *testing.T) {
 	svc, _, issueID, actionID := approvalFixture(t)
 	if _, err := svc.db.Exec(
@@ -119,7 +154,6 @@ func TestAdminResolutionValidatesAndRollsBackAuditFailure(t *testing.T) {
 		note        string
 	}{
 		"invalid disposition": {AdminIssueDisposition("dismissed"), "Reviewed"},
-		"missing note":        {AdminDispositionResolved, "   "},
 		"oversized note":      {AdminDispositionResolved, strings.Repeat("x", maxAdminResolutionNoteBytes+1)},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -213,6 +247,23 @@ func TestAdminResolutionAPIAndConflictStatus(t *testing.T) {
 	second := postAdminResolution(t, h, issueID, `{"disposition":"wont_fix","note":"Too late."}`)
 	if second.Code != http.StatusConflict {
 		t.Fatalf("raced resolution status = %d, body %s; want 409", second.Code, second.Body.String())
+	}
+}
+
+func TestAdminResolutionAPIAllowsOmittedNote(t *testing.T) {
+	svc, _, issueID, _ := approvalFixture(t)
+	h := NewHandler(svc)
+
+	rec := postAdminResolution(t, h, issueID, `{"disposition":"resolved"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resolution status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var issue Issue
+	if err := json.NewDecoder(rec.Body).Decode(&issue); err != nil {
+		t.Fatalf("decode resolution response: %v", err)
+	}
+	if issue.Status != IssueResolved || issue.Resolution != defaultAdminResolvedNote || issue.ResolutionKind != ResolutionAdminCompleted {
+		t.Fatalf("resolution response = %+v", issue)
 	}
 }
 

@@ -12,7 +12,11 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
-const maxAdminResolutionNoteBytes = maxIssueReplyBytes
+const (
+	maxAdminResolutionNoteBytes = maxIssueReplyBytes
+	defaultAdminResolvedNote    = "Marked resolved."
+	defaultAdminWontFixNote     = "Closed without a fix."
+)
 
 // ErrIssueCompletionConflict means another close or an in-flight approved
 // mutation won the race with an admin completion attempt. The handler maps it
@@ -117,15 +121,20 @@ type issueClosureOptions struct {
 }
 
 // ResolveIssueByAdmin records a human-reviewed terminal disposition. It is
-// intentionally separate from DismissIssue: the required note and admin actor
-// are committed with aggregate closure under ResolutionAdminCompleted.
+// intentionally separate from DismissIssue: an optional note (or a canonical
+// fallback) and the admin actor are committed with aggregate closure under
+// ResolutionAdminCompleted.
 func (s *Service) ResolveIssueByAdmin(ctx context.Context, adminID, issueID int64, disposition AdminIssueDisposition, note string) (*Issue, error) {
 	note = strings.TrimSpace(note)
 	if disposition != AdminDispositionResolved && disposition != AdminDispositionWontFix {
 		return nil, fmt.Errorf("disposition must be resolved or wont_fix")
 	}
 	if note == "" {
-		return nil, fmt.Errorf("resolution note is required")
+		if disposition == AdminDispositionResolved {
+			note = defaultAdminResolvedNote
+		} else {
+			note = defaultAdminWontFixNote
+		}
 	}
 	if len(note) > maxAdminResolutionNoteBytes {
 		return nil, fmt.Errorf("resolution note is too long")

@@ -125,6 +125,11 @@ enum AdminIssueDisposition {
 
   const AdminIssueDisposition(this.value);
   final String value;
+
+  String get defaultNote => switch (this) {
+        resolved => 'Marked resolved.',
+        wontFix => 'Closed without a fix.',
+      };
 }
 
 /// One reported (or auto-detected) problem. Media-scoped like a media request

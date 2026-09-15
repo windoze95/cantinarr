@@ -92,7 +92,7 @@ void main() {
     expect(adapter.body, isEmpty);
   });
 
-  test('admin resolution sends typed disposition and required note', () async {
+  test('admin resolution sends typed disposition and optional note', () async {
     final adapter = _CaptureAdapter(response: {
       'id': 42,
       'status': 'wont_fix',
@@ -116,6 +116,50 @@ void main() {
     });
     expect(issue.status, IssueStatus.wontFix);
     expect(issue.resolutionKind, IssueResolutionKind.adminCompleted);
+  });
+
+  test('admin resolution supplies stable audit text when note is blank',
+      () async {
+    final resolvedAdapter = _CaptureAdapter(response: {
+      'id': 42,
+      'status': 'resolved',
+      'media_type': 'movie',
+      'resolution': 'Marked resolved.',
+      'resolution_kind': 'admin_completed',
+    });
+    final resolvedDio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = resolvedAdapter;
+
+    await IssuesService(backendDio: resolvedDio).resolveIssue(
+      42,
+      disposition: AdminIssueDisposition.resolved,
+    );
+
+    expect(resolvedAdapter.body, {
+      'disposition': 'resolved',
+      'note': 'Marked resolved.',
+    });
+
+    final wontFixAdapter = _CaptureAdapter(response: {
+      'id': 43,
+      'status': 'wont_fix',
+      'media_type': 'tv',
+      'resolution': 'Closed without a fix.',
+      'resolution_kind': 'admin_completed',
+    });
+    final wontFixDio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = wontFixAdapter;
+
+    await IssuesService(backendDio: wontFixDio).resolveIssue(
+      43,
+      disposition: AdminIssueDisposition.wontFix,
+      note: '  \n ',
+    );
+
+    expect(wontFixAdapter.body, {
+      'disposition': 'wont_fix',
+      'note': 'Closed without a fix.',
+    });
   });
 }
 

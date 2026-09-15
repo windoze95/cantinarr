@@ -187,7 +187,7 @@ class _FakeIssuesService extends IssuesService {
   Future<Issue> resolveIssue(
     int id, {
     required AdminIssueDisposition disposition,
-    required String note,
+    String note = '',
   }) async {
     resolveCalls++;
     lastDisposition = disposition;
@@ -199,9 +199,11 @@ class _FakeIssuesService extends IssuesService {
     }
     final status =
         disposition == AdminIssueDisposition.resolved ? 'resolved' : 'wont_fix';
+    final storedNote =
+        note.trim().isEmpty ? disposition.defaultNote : note.trim();
     final issue = Issue.fromJson(_issueJson(
       status: status,
-      resolution: note,
+      resolution: storedNote,
       resolutionKind: 'admin_completed',
       closedAt: '2026-07-10T11:00:00Z',
     ));
@@ -294,7 +296,7 @@ void main() {
         findsOneWidget);
   });
 
-  testWidgets('admin completion requires a note and records resolved outcome',
+  testWidgets('admin completion allows a blank optional note',
       (tester) async {
     final service = _FakeIssuesService(
       thread: IssueThread.fromJson({
@@ -320,28 +322,24 @@ void main() {
             of: dialog, matching: find.text('Mark this issue resolved?')),
         findsOneWidget);
     expect(find.textContaining('must be verified manually'), findsOneWidget);
+    final noteField = tester.widget<TextField>(
+      find.descendant(of: dialog, matching: find.byType(TextField)),
+    );
+    expect(noteField.autofocus, isFalse);
+    expect(find.text('Completion note (optional)'), findsOneWidget);
     final confirm = find.descendant(
       of: dialog,
       matching: find.widgetWithText(ElevatedButton, 'Mark resolved'),
     );
-    expect(tester.widget<ElevatedButton>(confirm).onPressed, isNull);
-
-    const note =
-        'Checked Sonarr: the replacement episode is imported and plays correctly.';
-    await tester.enterText(
-      find.descendant(of: dialog, matching: find.byType(TextField)),
-      note,
-    );
-    await tester.pump();
     expect(tester.widget<ElevatedButton>(confirm).onPressed, isNotNull);
     await tester.tap(confirm);
     await tester.pumpAndSettle();
 
     expect(service.resolveCalls, 1);
     expect(service.lastDisposition, AdminIssueDisposition.resolved);
-    expect(service.lastResolutionNote, note);
+    expect(service.lastResolutionNote, '');
     expect(find.textContaining('Completed after review'), findsOneWidget);
-    expect(find.text(note), findsOneWidget);
+    expect(find.text('Marked resolved.'), findsOneWidget);
     expect(find.text('Complete after admin review'), findsNothing);
     expect(find.text('Issue marked resolved.'), findsOneWidget);
   });
@@ -398,6 +396,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(service.resolveCalls, 1);
+    expect(service.lastResolutionNote,
+        'Reviewed manually; no safe fix remains.');
     expect(find.textContaining('Media became available'), findsOneWidget);
     expect(
       find.text(

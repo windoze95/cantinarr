@@ -363,7 +363,7 @@ func (h *Handler) Dismiss(w http.ResponseWriter, r *http.Request) {
 }
 
 // ResolveIssue handles POST /api/admin/issues/{id}/resolve. This is a human
-// completion with an explicit resolved/wont_fix disposition and required audit
+// completion with an explicit resolved/wont_fix disposition and optional audit
 // note; it is deliberately distinct from dismissal.
 func (h *Handler) ResolveIssue(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
