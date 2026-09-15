@@ -89,7 +89,7 @@ jobs:
   deploy:
     needs: [source, gate]
     if: >-
-      always() && (github.event_name == 'pull_request' ||
+      !cancelled() && (github.event_name == 'pull_request' ||
       (needs.source.outputs.enabled == 'true' && needs.gate.result == 'success'))
     environment: ${{ inputs.preview_pr && 'mobile-preview' || 'mobile-publishing' }}
     env:
