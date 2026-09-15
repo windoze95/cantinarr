@@ -93,6 +93,7 @@ const observationNeedsCloserLook = "We couldn't confirm the latest status from t
 var errStaleObservation = errors.New("stale observation")
 
 type observationRecord struct {
+	manualReview     bool
 	issue            *Issue
 	serviceType      string
 	scopeKey         string
@@ -426,6 +427,11 @@ func (s *Service) observeQueueSnapshot(serviceType, instanceID string, items []a
 
 	for _, record := range records {
 		group, matched := groups[record.scopeKey]
+		// A reopened report still occupies its scope (preventing duplicate auto
+		// incidents), but an administrator now owns its next transition.
+		if record.manualReview {
+			continue
+		}
 		if !matched && record.issue.Source == SourceUser {
 			for _, candidate := range groups {
 				for _, item := range candidate.items {
@@ -691,7 +697,7 @@ func (s *Service) loadObservationRecords(serviceType, instanceID string, now tim
 		`SELECT o.issue_id, o.service_type, o.scope_key, o.state, o.signature,
 		        o.first_seen_at, o.problem_since_at, o.last_activity_at,
 		        o.settling_since, o.promoted_at, o.baseline_has_file,
-		        o.baseline_file_id, o.baseline_captured_at
+		        o.baseline_file_id, o.baseline_captured_at, i.reopened_at IS NOT NULL
 		 FROM issue_observations o JOIN issues i ON i.id = o.issue_id
 		 WHERE o.service_type = ? AND i.instance_id = ? AND i.closed_at IS NULL
 		 ORDER BY o.issue_id`, serviceType, instanceID,
@@ -707,7 +713,7 @@ func (s *Service) loadObservationRecords(serviceType, instanceID string, now tim
 			&record.state, &record.signature, &record.firstSeen,
 			&record.problemSince, &record.lastActivity, &record.settlingSince,
 			&record.promotedAt, &record.baselineHasFile, &record.baselineFileID,
-			&record.baselineCaptured); err != nil {
+			&record.baselineCaptured, &record.manualReview); err != nil {
 			rows.Close()
 			return nil, err
 		}

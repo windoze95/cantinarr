@@ -230,6 +230,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	// the reporter viewing their own issue must NOT. Reflect it in this payload
 	// too so the caller sees the new state immediately.
 	if auth.HasPermission(claims.Role, auth.PermissionRemediationManage) {
+		issue.CanReopen = canReopenIssue(issue)
 		_ = h.service.MarkIssueRead(id)
 		issue.Read = true
 	}
@@ -388,6 +389,38 @@ func (h *Handler) ResolveIssue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, issue)
+}
+
+// ReopenIssue handles POST /api/admin/issues/{id}/reopen. No body is required.
+func (h *Handler) ReopenIssue(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	if !auth.HasPermission(claims.Role, auth.PermissionRemediationManage) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid issue id"})
+		return
+	}
+	issue, err := h.service.ReopenIssueByAdmin(r.Context(), claims.UserID, id)
+	if err != nil {
+		var conflict *IssueReopenConflict
+		switch {
+		case errors.As(err, &conflict):
+			writeJSON(w, http.StatusConflict, map[string]interface{}{"error": conflict.Reason, "existing_issue_id": conflict.ExistingIssueID})
+		case errors.Is(err, errReopenIssueNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		default:
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Could not reopen this issue."})
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, issue)

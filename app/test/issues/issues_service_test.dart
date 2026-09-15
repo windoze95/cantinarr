@@ -7,6 +7,20 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('admin reopen requires no body and reads the reopened issue', () async {
+    final adapter = _CaptureAdapter(response: {
+      'id': 42, 'status': 'needs_admin', 'closed_at': null,
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    final issue = await IssuesService(backendDio: dio).reopenIssue(42);
+    expect(adapter.path, '/api/admin/issues/42/reopen');
+    expect(adapter.body, isEmpty);
+    expect(issue.id, 42);
+    expect(issue.status, IssueStatus.needsAdmin);
+    expect(issue.closedAt, isNull);
+  });
+
   test('problem report sends the exact arr instance id', () async {
     final adapter = _CaptureAdapter();
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))

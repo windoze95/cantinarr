@@ -167,7 +167,7 @@ void main() {
       expect(confirmable.canConfirmFixed, isTrue);
 
       // Absent on every list read and on an older server: never offer an
-      // irreversible close the server would refuse.
+      // close the server would refuse.
       final listRead = Issue.fromJson({
         'id': 14,
         'source': 'user',

@@ -873,6 +873,7 @@ class AgentRun {
         'user_unresponsive' => 'Closed after no reply',
         'external_resolution' => 'The issue changed outside this run',
         'admin_dismissed' => 'Dismissed by an admin',
+        'admin_reopened' => 'Reopened for administrator review',
         'admin_completed' => 'Completed after admin review',
         'issue_closed' => 'Stopped because the issue closed',
         'server_restarted' => 'Interrupted by a server restart',

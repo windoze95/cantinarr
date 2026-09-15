@@ -169,6 +169,14 @@ class IssuesService {
     await _dio.post('/api/admin/issues/$id/dismiss');
   }
 
+  /// Restore a closed thread for administrator review, with no typed details.
+  Future<Issue> reopenIssue(int id) async {
+    final resp = await _dio.post<Map<String, dynamic>>(
+      '/api/admin/issues/$id/reopen',
+    );
+    return Issue.fromJson(resp.data!);
+  }
+
   /// Complete an issue after human review. The server atomically closes the
   /// aggregate and records the optional note/admin provenance. A canonical
   /// fallback keeps blank-note completion compatible with older servers that

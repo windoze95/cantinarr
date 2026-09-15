@@ -227,12 +227,14 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 		`UPDATE issues SET status = ?, resolution = ?, resolution_kind = ?, read = ?,
 		 active_run_id = NULL, closed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ? AND closed_at IS NULL
+		   AND (reopened_at IS NULL OR ? IN (?, ?))
 		   AND (? = '' OR status = ?)
 		   AND (? = 0 OR (status = ? AND active_run_id = ? AND EXISTS (
 		     SELECT 1 FROM agent_runs r WHERE r.id = ? AND r.issue_id = issues.id AND r.status = 'running'
 		   )))
 		   AND (? = '' OR updated_at <= datetime('now', ?))`,
 		status, resolution, resolutionKind, read, issueID,
+		resolutionKind, ResolutionAdminCompleted, ResolutionAdminDismissed,
 		opts.expectedStatus, opts.expectedStatus,
 		opts.expectedRunID, IssueInvestigating, opts.expectedRunID, opts.expectedRunID,
 		opts.ageModifier, opts.ageModifier,
