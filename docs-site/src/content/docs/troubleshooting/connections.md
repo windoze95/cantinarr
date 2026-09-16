@@ -38,7 +38,7 @@ A saved secret often appears blank when editing because it is write-only. Do not
 
 Open **Instant updates** on the instance. Check the callback origin from the library manager's side. A proxy login page, unresolvable container name, or blocked route can prevent callbacks while the forward API connection succeeds.
 
-Set the explicit callback environment value, restart Cantinarr, and re-run **Configure instant updates**.
+Set the explicit callback environment value, [apply the environment change](/install/configuration/#apply-a-change), and re-run **Configure instant updates**. With Compose, use `docker compose up -d cantinarr`; a restart alone keeps the old container environment.
 
 ## The page opens, but streaming or live status fails
 

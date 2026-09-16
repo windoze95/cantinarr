@@ -24,7 +24,7 @@ Set this in the Cantinarr server's environment when the direct request origin is
 
 That example assumes all the library managers can resolve and reach `cantinarr` on the same network. Use the correct reachable origin for your deployment. It has a scheme and optional port, without an extra path.
 
-Restart or recreate Cantinarr after changing the environment, then reconfigure each affected instance's instant updates.
+[Apply the environment change](/install/configuration/#apply-a-change), then reconfigure each affected instance's instant updates. With Compose, use `docker compose up -d cantinarr`; a restart alone keeps the old container environment.
 
 Forwarded proxy headers are deliberately not trusted to choose a credential-bearing callback destination. Set the value explicitly behind a reverse proxy.
 
