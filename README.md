@@ -2,9 +2,11 @@
 
 **Your media server just learned to run itself.**
 
-**[cantinarr.com](https://cantinarr.com)** · **[Discord](https://discord.gg/zAgRwGwmVB)** · **[Live demo](https://demo.cantinarr.com)** · **[iPhone beta](https://testflight.apple.com/join/bCPDwCsD)** · **[Android beta](https://cantinarr.com/#android-beta)** · **[Request a feature](https://cantinarr.com/roadmap/)**
+**[cantinarr.com](https://cantinarr.com)** · **[Documentation](https://docs.cantinarr.com)** · **[Discord](https://discord.gg/zAgRwGwmVB)** · **[Live demo](https://demo.cantinarr.com)** · **[iPhone beta](https://testflight.apple.com/join/bCPDwCsD)** · **[Android beta](https://cantinarr.com/#android-beta)** · **[Request a feature](https://cantinarr.com/roadmap/)**
 
 Discover and request movies, TV shows, books, and music. Get push notifications. Manage Radarr, Sonarr, Chaptarr, Lidarr, and your download clients. When downloads get stuck, Cantinarr diagnoses the cause and recommends the next step. You set the agent's operating boundaries. Your household gets the simple experience; you keep control of access, approvals, and quality.
+
+Start with the [setup guide](https://docs.cantinarr.com/start/quickstart/), share the [household guide](https://docs.cantinarr.com/start/for-households/), or [find help by symptom](https://docs.cantinarr.com/troubleshooting/). The [documentation map](https://docs.cantinarr.com/reference/coverage/) includes installation, administration, integrations, settings, API routes, and contribution guides. Documentation source and build instructions live in [`docs-site/`](docs-site/README.md).
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -118,11 +120,12 @@ services:
       - "8585:8585"
     volumes:
       - ./config:/config
-    # Optional: enables push notifications (see Configuration)
-    # environment:
-    #   - CANTINARR_PUSH_GATEWAY_URL=https://push.cantinarr.com
+    environment:
+      - CANTINARR_PUSH_GATEWAY_URL=https://push.cantinarr.com
     restart: unless-stopped
 ```
+
+The gateway URL enables phone push through the community relay, with automatic registration and no manually supplied API key. Remove the environment block to disable push. The server has no default gateway; this example sets it explicitly. See [environment configuration](https://docs.cantinarr.com/install/configuration/) for optional settings, `.env` files, and applying changes.
 
 Update it later with `docker compose pull && docker compose up -d`. The container
 runs as root unless you set `PUID`/`PGID` in its environment (see Configuration
@@ -274,7 +277,7 @@ Optional server env vars for deployment tuning:
 | `CANTINARR_MCP_ALLOWED_ORIGINS` | unset | Comma-separated additional browser origins allowed to call `/mcp`. If neither this nor `CANTINARR_OAUTH_ISSUER` is configured, requests that supply `Origin` are rejected; native and server-side MCP clients need no entry |
 | `CANTINARR_JWT_SECRET` | auto-generated | HMAC secret for signing short-lived access tokens. Device sessions do not depend on it: changing it never signs anyone out |
 | `CANTINARR_ENCRYPTION_KEY` | auto-generated key file | Base64 32-byte key for secrets-at-rest (default: `/config/encryption.key`) |
-| `CANTINARR_AI_PROVIDER` | `codex` | Fallback provider for the included server AI profile when none is saved in the admin UI (`anthropic`, `openai`, `gemini`, `grok`, `codex`, or `grok_oauth`) |
+| `CANTINARR_AI_PROVIDER` | `codex` | Fallback provider for the included server AI profile when none is saved in the admin UI (`anthropic`, `openai`, `gemini`, `grok`, `codex`, `grok_oauth`, or `local_openai`). Local AI also needs a saved endpoint and an explicit model |
 | `CANTINARR_AI_MODEL` | provider default | Fallback model for the included server AI profile when none is saved in the admin UI |
 | `CANTINARR_CODEX_BIN` | auto-discovered | Optional path to `codex-app-server` or the full `codex` CLI; container images bundle the tested 0.144.3 app-server at `/usr/local/bin/codex-app-server` |
 | `CANTINARR_CODEX_RUNTIME_DIR` | `/dev/shm/cantinarr-codex` | Absolute Linux tmpfs/ramfs directory used for server-owned, ephemeral per-session Codex state; if it already exists, it must be owned by the server user with mode `0700` |

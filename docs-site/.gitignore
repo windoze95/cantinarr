@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.astro/
+src/content/docs/reference/generated/
+src/content/docs/integrations/guides/
+src/content/docs/contributing/generated/
+src/generated.json
+.wrangler/
+.env
+.env.*
+!.env.example

@@ -17,6 +17,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  documentation:
+    name: Documentation
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs-site
+    env:
+      ASTRO_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install locked documentation dependencies
+        run: npm ci
+      - name: Build and verify documentation
+        run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: documentation-${{ github.run_attempt }}
+          path: docs-site/dist
+          retention-days: 14
+
   test-catalog:
     name: Test catalog
     runs-on: ubuntu-latest

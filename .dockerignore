@@ -7,3 +7,5 @@ app/.packages
 app/.pub/
 app/.pub-cache/
 app/build/
+# Documentation is published separately and is not part of the server image.
+docs-site/
