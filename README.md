@@ -2,9 +2,11 @@
 
 **Your media server just learned to run itself.**
 
-**[cantinarr.com](https://cantinarr.com)** · **[Discord](https://discord.gg/zAgRwGwmVB)** · **[Live demo](https://demo.cantinarr.com)** · **[iPhone beta](https://testflight.apple.com/join/bCPDwCsD)** · **[Android beta](https://cantinarr.com/#android-beta)** · **[Request a feature](https://cantinarr.com/roadmap/)**
+**[cantinarr.com](https://cantinarr.com)** · **[Documentation](https://docs.cantinarr.com)** · **[Discord](https://discord.gg/zAgRwGwmVB)** · **[Live demo](https://demo.cantinarr.com)** · **[iPhone beta](https://testflight.apple.com/join/bCPDwCsD)** · **[Android beta](https://cantinarr.com/#android-beta)** · **[Request a feature](https://cantinarr.com/roadmap/)**
 
 Discover and request movies, TV shows, books, and music. Get push notifications. Manage Radarr, Sonarr, Chaptarr, Lidarr, and your download clients. When downloads get stuck, Cantinarr diagnoses the cause and recommends the next step. You set the agent's operating boundaries. Your household gets the simple experience; you keep control of access, approvals, and quality.
+
+Start with the [setup guide](https://docs.cantinarr.com/start/quickstart/), share the [household guide](https://docs.cantinarr.com/start/for-households/), or [find help by symptom](https://docs.cantinarr.com/troubleshooting/). The [documentation map](https://docs.cantinarr.com/reference/coverage/) includes installation, administration, integrations, settings, API routes, and contribution guides. Documentation source and build instructions live in [`docs-site/`](docs-site/README.md).
 
 ```
 ┌──────────────────────────────────────────────────────────────┐

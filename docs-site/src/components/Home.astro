@@ -1,0 +1,29 @@
+---
+const routes = [
+  { title: 'Set up a server', text: 'Install Cantinarr, connect your first library, and check that a request reaches it.', href: '/start/quickstart/', label: 'Start the setup guide', icon: '01' },
+  { title: 'Join your household', text: 'Open an invitation, find something you want, and follow it from request to ready.', href: '/start/for-households/', label: 'Find your way around', icon: '02' },
+  { title: 'Get something unstuck', text: 'Missing tabs, stalled requests, sign-in trouble, and downloads that will not import.', href: '/troubleshooting/', label: 'Find your symptom', icon: '03' },
+];
+const groups = [
+  { title: 'Movies & TV', links: [['Connect Radarr and Sonarr', '/integrations/radarr-sonarr/'], ['Discover and request', '/use/discovery/'], ['Choose seasons and quality', '/use/requests/']] },
+  { title: 'Books & music', links: [['Set up Chaptarr', '/integrations/guides/books/'], ['Connect Lidarr', '/integrations/guides/music/'], ['Listen with Audiobookshelf', '/integrations/audiobookshelf/']] },
+  { title: 'Your household', links: [['Accounts and invitations', '/admin/users/'], ['Kids accounts and ratings', '/admin/kids/'], ['Approvals and allowances', '/admin/request-policy/']] },
+  { title: 'A healthy server', links: [['Back up and restore', '/install/backups/'], ['Update Cantinarr', '/install/updates/'], ['Connections and addresses', '/install/networking/']] },
+  { title: 'Playback & notifications', links: [['Plex, Jellyfin, and Emby', '/integrations/media-servers/'], ['Phone notifications', '/integrations/push/'], ['Infuse on Apple TV', '/integrations/guides/apple-tv/']] },
+  { title: 'Tools for admins', links: [['Issues and supervised repairs', '/admin/issues/'], ['AI providers and access', '/admin/ai/'], ['Connect an MCP client', '/integrations/mcp/']] },
+];
+---
+<section class="start-paths" aria-label="Choose where to start">
+  {routes.map((item) => <a class="start-path" href={item.href}>
+    <h2>{item.title}</h2><p>{item.text}</p><span>{item.label}<span aria-hidden="true">↗</span></span>
+  </a>)}
+</section>
+<aside class="quick-help"><strong>Looking for a setting?</strong><p>Use the search at the top of these docs, or search inside Cantinarr's Settings. Try “push notifications”, “Plex”, or the error you see.</p></aside>
+<section class="topic-directory" aria-labelledby="topics-heading">
+  <h2 id="topics-heading">Help for every part of your setup</h2>
+  <div class="topic-grid">{groups.map((group) => <div><h3>{group.title}</h3><ul>{group.links.map(([text, href]) => <li><a href={href}>{text}</a></li>)}</ul></div>)}</div>
+</section>
+<section class="reference-shelf" aria-labelledby="reference-heading">
+  <div><h2 id="reference-heading">Need the exact details?</h2><p>Settings, environment variables, API routes, and tool behavior, with links to the source.</p></div>
+  <div><a href="/reference/settings/">Settings directory</a><a href="/reference/generated/environment/">Environment variables</a><a href="/reference/generated/api/">API reference</a><a href="/reference/glossary/">Plain-language glossary</a></div>
+</section>

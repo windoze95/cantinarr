@@ -1,0 +1,6 @@
+---
+import Default from '@astrojs/starlight/components/PageTitle.astro';
+const { entry } = Astro.locals.starlightRoute;
+---
+<Default><slot /></Default>
+{entry.data.description && <p class="page-lede">{entry.data.description}</p>}
