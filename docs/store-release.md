@@ -110,6 +110,12 @@ partial release. Only then does it create the GitHub Release. Linux tarballs are
 the promoted image rather than rebuilt. The server receipt and combined candidate record are
 attached automatically; verify both appear with the release assets.
 
+Binary extraction resolves each architecture's child manifest from the pinned image index
+before pulling it, so classic Docker image stores never have to replace one platform under
+the same index digest. It checks both the source revision and platform before packaging.
+If packaging needs a workflow repair after publication, leave the tag and image immutable;
+dispatch the repaired **Attach Release Binaries** workflow from main with the existing tag.
+
 **Order by compatibility.** Ship additive server support first if old clients continue working.
 If a server change raises the minimum app version, make the new app available in both stores
 first, including Apple's approval and manual release, then release the server. Approval alone

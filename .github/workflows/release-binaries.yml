@@ -97,13 +97,24 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           release_epoch=$(git show -s --format=%ct HEAD)
+          # The classic Docker image store cannot retain two platforms under
+          # one index digest. Resolve each child from the pinned index first.
+          docker buildx imagetools inspect "$IMAGE" --raw > "$RUNNER_TEMP/release-index.json"
           for arch in amd64 arm64; do
             stage="dist/cantinarr-linux-${arch}"
             mkdir -p "$stage/licenses/codex-app-server"
-            docker pull --platform "linux/${arch}" "$IMAGE"
-            revision=$(docker image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+            digest=$(jq -er --arg arch "$arch" '
+              [.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest]
+              | if length == 1 and (.[0] | test("^sha256:[a-f0-9]{64}$"))
+                then .[0] else error("Expected exactly one valid Linux platform digest") end
+            ' "$RUNNER_TEMP/release-index.json")
+            platform_image="${IMAGE%@*}@${digest}"
+            docker pull --platform "linux/${arch}" "$platform_image"
+            revision=$(docker image inspect "$platform_image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
             test "$revision" = "$SHA"
-            cid=$(docker create --platform "linux/${arch}" "$IMAGE")
+            platform=$(docker image inspect "$platform_image" --format '{{.Os}}/{{.Architecture}}')
+            test "$platform" = "linux/${arch}"
+            cid=$(docker create --platform "linux/${arch}" "$platform_image")
             docker cp "$cid:/usr/local/bin/cantinarr" "$stage/cantinarr"
             docker cp "$cid:/usr/local/bin/codex-app-server" "$stage/codex-app-server"
             docker cp "$cid:/usr/share/licenses/codex-app-server/LICENSE" "$stage/licenses/codex-app-server/LICENSE"
