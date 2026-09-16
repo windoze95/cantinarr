@@ -52,7 +52,7 @@ The [complete searchable-settings catalog](/reference/generated/settings/) is bu
 
 ## Deployment-only choices
 
-Ports, persistent storage, encryption keys, callback origin, native passkey association values, and filesystem allowlists are configured outside the app. See the [environment-variable reference](/reference/generated/environment/).
+Ports, persistent storage, encryption keys, callback origin, native passkey association values, and filesystem allowlists are configured outside the app. Start with [environment variables and configuration](/install/configuration/) to choose the settings you need, then use the [complete variable reference](/reference/generated/environment/) for defaults and formats.
 
 ## A missing or differently named control
 

@@ -2,7 +2,7 @@
 title: Updates and release channels
 description: Know which channel you run, update without losing data, and check both app and server versions.
 sidebar:
-  order: 7
+  order: 8
 ---
 
 The server and phone apps update separately. **Settings > About** shows both versions. Updating the app on your phone does not update the server in your home.

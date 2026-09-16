@@ -2,7 +2,7 @@
 title: Back up and restore
 description: Preserve accounts, settings, requests, and the key needed to read your saved credentials.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 Back up the **whole `/config` directory**, together with your deployment configuration. The database and encryption key belong together. Copying only `cantinarr.db` can leave a restored server unable to read its saved service credentials.

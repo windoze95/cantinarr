@@ -43,6 +43,22 @@ Dependencies are locked in `pubspec.lock`. Intentional dependency or SDK upgrade
 
 `make` builds Flutter web, copies it into the server's embedded assets, and builds the server. Mobile release builds run in CI.
 
+## Build and test variables
+
+These affect development or source builds. They are separate from [runtime deployment variables](/reference/generated/environment/):
+
+| Name | Purpose |
+| --- | --- |
+| `CANTINARR_E2E_WEB_SEMANTICS` | Docker build argument and Flutter compile-time flag, default `false`. The private disposable lab enables it for deterministic automation labels. Setting it on an already built container has no effect |
+| `APP_BUILD_NUMBER` | Root Docker build argument that sets the Flutter web build number when supplied |
+| `VERSION` | Docker build argument for the stamped server version, default `dev` in source builds |
+| `CODEX_VERSION` | Docker build argument for the bundled helper version. Keep it aligned with the checksums and tested protocol; it is not a runtime upgrade switch |
+| `TARGETARCH` | BuildKit's target architecture, used to select the matching helper artifact |
+| `XAI_BASE_URL` | Test-only endpoint override used by the Go provider contract tests. Leave it unset in deployments; configure self-hosted models through the Local AI provider in Settings |
+| `CANTINARR_CODEX_APP_SERVER_SMOKE_BINARY` | Test-only path enabling the real pinned helper protocol smoke in CI |
+
+Provider credentials and personal overrides are configured through Cantinarr's supported settings. Do not copy test endpoint overrides into production examples.
+
 ## Documentation site
 
 Use Node 22.12 or newer and Python 3.9 or newer. From `docs-site/`:

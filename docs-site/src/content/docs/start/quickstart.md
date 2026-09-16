@@ -25,8 +25,14 @@ services:
       - "8585:8585"
     volumes:
       - ./config:/config
+    environment:
+      CANTINARR_PUSH_GATEWAY_URL: "https://push.cantinarr.com"
     restart: unless-stopped
 ```
+
+The push gateway setting enables phone notifications through Cantinarr's community relay. The server registers itself automatically, so you do not need an API key. If you do not want push notifications, remove the `environment` block. Leaving the variable unset disables push; the server does not choose a relay by default.
+
+For optional names, callback addresses, media access, or other deployment settings, see [environment variables and configuration](/install/configuration/). Most settings are configured inside Cantinarr after first boot.
 
 Open a terminal in that folder and run:
 

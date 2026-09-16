@@ -93,7 +93,7 @@ for path, page in pages.items():
 
 required = [
     'start/overview', 'start/quickstart', 'start/for-households',
-    'install/docker', 'install/platforms', 'install/linux', 'install/networking',
+    'install/docker', 'install/platforms', 'install/linux', 'install/configuration', 'install/networking',
     'install/remote-access', 'install/backups', 'install/updates',
     'use/discovery', 'use/requests', 'use/status', 'use/books-music', 'use/playback',
     'use/apps', 'use/account', 'use/assistant', 'use/report-problem',
@@ -127,10 +127,34 @@ for record in generated['sources']:
 environment_page = pages.get('/reference/generated/environment/')
 if environment_page:
     environment = ''.join(environment_page.content)
-    config = (ROOT / 'server/internal/config/config.go').read_text()
-    for name in sorted(set(re.findall(r'"(CANTINARR_[A-Z_]+)"', config))):
+    deployment_names = set()
+    # Some values are read by credentials/secrets rather than config.Load.
+    # Include constants passed to os.Getenv as well as direct literal reads.
+    test_only_names = {'XAI_BASE_URL'}
+    development = ''.join(pages['/contributing/development/'].content)
+    for file in (ROOT / 'server').rglob('*.go'):
+        if file.name.endswith('_test.go'):
+            continue
+        source = file.read_text()
+        deployment_names.update(re.findall(r'"(CANTINARR_[A-Z0-9_]+)"', source))
+        for name in re.findall(r'os\.(?:Getenv|LookupEnv)\(\s*"([A-Z][A-Z0-9_]+)"', source):
+            if name in test_only_names:
+                if name not in development:
+                    errors.append(f'Unclassified test-only environment variable: {name}')
+            else:
+                deployment_names.add(name)
+    entrypoint = (ROOT / 'server/docker/entrypoint.sh').read_text()
+    deployment_names.update(re.findall(r'\$\{([A-Z][A-Z0-9_]*)', entrypoint))
+    # net/http reads these for the external transport, outside application code.
+    proxy_source = (ROOT / 'server/internal/httpx/httpx.go').read_text()
+    deployment_names.update(re.findall(r'\b(?:HTTP_PROXY|HTTPS_PROXY|NO_PROXY)\b', proxy_source))
+    for name in sorted(deployment_names):
         if name not in environment:
-            errors.append(f'Undocumented server configuration: {name}')
+            errors.append(f'Undocumented deployment variable: {name}')
+    for file in (ROOT / 'Dockerfile', ROOT / 'server/Dockerfile'):
+        for name in re.findall(r'^ARG\s+([A-Z][A-Z0-9_]*)', file.read_text(), re.M):
+            if name not in development:
+                errors.append(f'Undocumented build argument: {name}')
 
 tool_doc = ''.join(pages['/reference/generated/architecture/mcp-tools/'].content)
 for file in (ROOT / 'server/internal/mcp').glob('*.go'):

@@ -2,7 +2,7 @@
 title: Remote access and HTTPS
 description: Give phones and browsers a stable address while preserving callbacks, sign-in, and live updates.
 sidebar:
-  order: 5
+  order: 6
 ---
 
 Choose how users will reach Cantinarr outside your home: a private-network connection they join, or a public HTTPS address routed through your reverse proxy. Use a dedicated hostname, such as `media.example.com`, rather than placing the app under an extra URL path.
@@ -60,7 +60,7 @@ This location block does not install a certificate or configure your whole Nginx
 3. Set `CANTINARR_ARR_CALLBACK_URL` to an origin the library managers can reach. This may remain `http://cantinarr:8585` internally.
 4. Set each media server's **Address users open** to that service's own reachable address.
 
-Restart or recreate the container after environment changes, then reconfigure affected instant-update webhooks. These fields serve different callers. See [the address reference](/install/networking/).
+[Apply environment changes](/install/configuration/#apply-a-change) by recreating the Compose container, then reconfigure affected instant-update webhooks. These fields serve different callers. See [the address reference](/install/networking/).
 
 ## Extra authentication in front of the app
 

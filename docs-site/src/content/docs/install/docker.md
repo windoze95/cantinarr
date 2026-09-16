@@ -25,7 +25,9 @@ services:
     restart: unless-stopped
 ```
 
-The push gateway setting is optional. Remove it if you do not want phone push notifications. Everything else needed for first boot is included.
+The push gateway setting enables phone notifications through Cantinarr's community relay. The server registers itself automatically; you do not need an API key. Remove the setting if you do not want push notifications. With no gateway URL, push is disabled. Everything else needed for first boot is included.
+
+See [environment variables and configuration](/install/configuration/) for additional settings, `.env` behavior, and applying changes.
 
 ```sh
 docker compose up -d
@@ -45,8 +47,11 @@ docker run -d \
   --restart unless-stopped \
   -p 8585:8585 \
   -v "$(pwd)/config:/config" \
+  -e CANTINARR_PUSH_GATEWAY_URL=https://push.cantinarr.com \
   ghcr.io/windoze95/cantinarr:latest
 ```
+
+The push gateway option has the same behavior as in the Compose example. Omit the `-e CANTINARR_PUSH_GATEWAY_URL=...` line if you do not want push notifications.
 
 Keep a copy of your full command, including later mounts and environment variables. You will need the same settings when recreating the container.
 

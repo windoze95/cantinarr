@@ -41,7 +41,7 @@ The site follows development main. Every page explains that stable installations
 
 ## Verification
 
-`npm run build` synchronizes references, builds every page and the search index, then validates the final HTML. It fails on broken local links or fragments, missing assets, missing metadata, more or fewer than one H1, em dashes in visible text, stale imported sources, missing required topics, undocumented server configuration names, missing MCP tool names, or settings omitted from the live search registry. External availability is checked separately when links change, so an unrelated provider outage cannot block a build.
+`npm run build` synchronizes references, builds every page and the search index, then validates the final HTML. It fails on broken local links or fragments, missing assets, missing metadata, more or fewer than one H1, em dashes in visible text, stale imported sources, missing required topics, undocumented server configuration names, missing MCP tool names, or settings omitted from the live search registry. The environment audit scans production Go files, the container entrypoint, proxy conventions, and both Dockerfiles; build arguments and the explicit provider test override must be classified in the development guide. External availability is checked separately when links change, so an unrelated provider outage cannot block a build.
 
 The `Documentation` job in the repository CI runs this build for every PR and main/release push and uploads the static output as an artifact. Application code is unaffected by the docs build; `docs-site/` is excluded from Docker build contexts.
 

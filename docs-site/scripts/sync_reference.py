@@ -98,12 +98,18 @@ config = section(readme, '## Configuration')
 environment = config.split('Optional server env vars for deployment tuning:', 1)[1].split('Source image builds also accept', 1)[0]
 write('reference/generated/environment', 'Environment variables',
       'Deployment settings, their defaults, and which address each part of Cantinarr needs.',
-      'Most settings belong in the app. These variables configure the server process. Restart or recreate the container after changing them.\n\n'
+      'Most settings belong in the app. These variables configure the server process. '
+      'The defaults below describe the server with no override; an installation example can explicitly choose another value. '
+      'See [environment variables and configuration](/install/configuration/) for choosing values, `.env` files, '
+      'and applying changes. With Compose, run `docker compose up -d cantinarr` to apply environment changes; '
+      '`docker compose restart` does not update the container environment.\n\n'
       + environment + '\n\n## Compatibility aliases\n\n'
-      '`CANTINARR_PUBLIC_URL` remains an alias for `CANTINARR_ARR_CALLBACK_URL`; the new name wins. '
-      '`CANTINARR_ANDROID_CERT_SHA256` remains an alias for `CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS`; the plural name wins. '
+      '`CANTINARR_PUBLIC_URL` remains an alias for `CANTINARR_ARR_CALLBACK_URL`; a nonempty new value wins. '
+      '`CANTINARR_ANDROID_CERT_SHA256` remains an alias for `CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS`; a nonempty plural value wins. '
       'Kubernetes may inject `CANTINARR_SERVICE_HOST` and `CANTINARR_SERVICE_PORT`; these are platform values, not settings to add by hand.\n\n'
-      'The database lives at `/config/cantinarr.db`. There is no supported `CANTINARR_DB_PATH` setting. Preserve the whole `/config` directory and its encryption key. '
+      'The database lives at `/config/cantinarr.db`. There is no supported `CANTINARR_DB_PATH` setting, '
+      'and current startup does not read `CANTINARR_ADMIN_PASSWORD`; create the first administrator in the setup screen. '
+      'Preserve the whole `/config` directory and its encryption key. '
       'See [backups](/install/backups/) and [networking](/install/networking/) for worked examples.', 'README.md', 1)
 
 server = (ROOT / 'server/README.md').read_text()

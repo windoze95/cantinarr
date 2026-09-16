@@ -9,12 +9,22 @@ Push notifications are optional. They can tell people when content is ready, whe
 
 ## Enable a gateway
 
-For the community relay, add this to the server's environment and recreate or restart it:
+The server has no default gateway. Without `CANTINARR_PUSH_GATEWAY_URL`, push notifications are disabled.
+
+For the community relay, add this under the `cantinarr` service in your Compose file, or add the variable to its existing `environment` block:
 
 ```yaml
     environment:
       CANTINARR_PUSH_GATEWAY_URL: https://push.cantinarr.com
 ```
+
+Apply the change from the directory containing your Compose file:
+
+```sh
+docker compose up -d cantinarr
+```
+
+Compose recreates the container with its updated environment. `docker compose restart` alone does not apply changes to the Compose file. If your deployment uses another container manager, edit the environment there and recreate the container while keeping its existing `/config` volume.
 
 With no explicit key, the server enrolls automatically and keeps its issued key in the database. Keep `/config` persistent. `CANTINARR_PUSH_API_KEY` is for an intentionally pinned gateway key, and `CANTINARR_PUSH_ENROLL_TOKEN` is for a gateway that requires enrollment authorization.
 

@@ -2,7 +2,7 @@
 title: Networking and addresses
 description: Choose the right address for the app, connected services, instant updates, and sign-in.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 Most connection problems come from using an address that works from one place but not another. There are several independent connections in a Cantinarr setup.
@@ -44,9 +44,9 @@ For a private certificate authority, add its CA certificate to the server image'
 
 Being able to connect from Cantinarr to Radarr does not prove that Radarr can call back to Cantinarr.
 
-Set `CANTINARR_ARR_CALLBACK_URL` to an origin reachable by all connected library managers. An origin includes the scheme, hostname, and optional port, such as `http://cantinarr:8585`. It has no extra path. Restart Cantinarr after changing the variable, then configure instant updates on each affected instance.
+Set `CANTINARR_ARR_CALLBACK_URL` to an origin reachable by all connected library managers. An origin includes the scheme, hostname, and optional port, such as `http://cantinarr:8585`. It has no extra path. [Apply the environment change](/install/configuration/#apply-a-change), then configure instant updates on each affected instance.
 
-The old `CANTINARR_PUBLIC_URL` name is still accepted for compatibility. It retains the callback meaning. If both names are present, the newer one wins.
+The old `CANTINARR_PUBLIC_URL` name is still accepted for compatibility. It retains the callback meaning. A nonempty `CANTINARR_ARR_CALLBACK_URL` takes precedence over the old name.
 
 ## A reverse proxy does not change every address
 
