@@ -624,8 +624,6 @@ class _ConnectionView extends StatelessWidget {
             labelText: 'Link or Cantinarr address',
             floatingLabelBehavior: FloatingLabelBehavior.always,
             hintText: 'http://192.168.1.10:8585',
-            helperText: 'Use the Cantinarr address, not Radarr, Sonarr, or Plex.',
-            helperMaxLines: 3,
             prefixIcon: Icon(Icons.link),
           ),
           keyboardType: TextInputType.url,

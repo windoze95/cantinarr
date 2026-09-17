@@ -100,6 +100,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(native.checks, isEmpty);
     expect(find.widgetWithText(TextField, 'Link or Cantinarr address'), findsOneWidget);
+    final connectionField = tester.widget<TextField>(
+      find.byKey(const ValueKey('connection-entry')),
+    );
+    expect(connectionField.decoration?.helperText, isNull);
     expect(find.textContaining('computer or NAS'), findsOneWidget);
     expect(find.text('Set up a Cantinarr server'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
