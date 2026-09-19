@@ -52,6 +52,38 @@ void main() {
         '/dashboard/tv');
   });
 
+  testWidgets('direct book detail Back returns to Books Discover',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _booksState);
+
+    router.go('/detail/book/29749107?source=chaptarr&title=Ahsoka');
+    await tester.pumpAndSettle();
+
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/detail/book/29749107');
+    expect(router.canPop(), isFalse);
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/dashboard/books');
+  });
+
+  testWidgets('direct album detail Back returns to Music Discover',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _musicState);
+
+    router.go('/detail/album/mb-1234?title=Pinkerton');
+    await tester.pumpAndSettle();
+
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/detail/album/mb-1234');
+    expect(router.canPop(), isFalse);
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/dashboard/music');
+  });
+
   for (final cold in [true, false]) {
     for (final restoringAuth in [true, false]) {
       testWidgets('TV tap cold=$cold restoringAuth=$restoringAuth retains story and library', (tester) async {
