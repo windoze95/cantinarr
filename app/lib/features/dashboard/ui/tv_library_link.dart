@@ -33,9 +33,13 @@ class _TVLibraryLinkState extends ConsumerState<TVLibraryLink> {
   bool _choosing = false;
 
   Future<void> _open() async {
+    if (_loading) return;
     final auth = ref.read(authProvider).valueOrNull;
     final router = GoRouter.of(context);
-    final location = router.routeInformationProvider.value.uri;
+    // The browser URL can stay unchanged for imperative pushes. Inspect the
+    // actual route stack too, so a covered card cannot navigate over a page.
+    final location = router.routerDelegate.currentConfiguration.uri;
+    final route = ModalRoute.of(context);
     final instanceId = widget.instanceId;
     final seriesId = widget.seriesId;
     final season = widget.seasonNumber;
@@ -43,7 +47,8 @@ class _TVLibraryLinkState extends ConsumerState<TVLibraryLink> {
         identical(ref.read(authProvider).valueOrNull, auth) &&
         widget.instanceId == instanceId && widget.seriesId == seriesId &&
         widget.seasonNumber == season &&
-        router.routeInformationProvider.value.uri == location;
+        router.routerDelegate.currentConfiguration.uri == location &&
+        route?.isCurrent != false;
     void openTitle(int id) => router.push(
         '/detail/tv/$id?instance_id=${Uri.encodeQueryComponent(instanceId)}');
 

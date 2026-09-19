@@ -101,19 +101,25 @@ void main() {
     });
   }
 
-  testWidgets('late response after navigation does not open a detail', (tester) async {
+  for (final push in [false, true]) {
+  testWidgets('late response after navigation push=$push does not open a detail', (tester) async {
     final gate = Completer<void>();
     final adapter = _Adapter(gate: gate);
     final (:router, :container) = await _pump(tester, adapter);
     await tester.tap(find.text('Monster (2022)'));
     await tester.pump();
-    router.go('/away');
+    if (push) {
+      router.push('/away');
+    } else {
+      router.go('/away');
+    }
     await tester.pumpAndSettle();
     gate.complete();
     await tester.pumpAndSettle();
     expect(find.text('Away'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+  }
 
   testWidgets('late response after account change is discarded', (tester) async {
     final gate = Completer<void>();
