@@ -83,6 +83,7 @@ class BackendConnection {
   /// Server supports paired Apple TV handoffs.
   final bool appleTvRemote;
   final bool tvMatchCorrections;
+  final bool tvLibraryNavigation;
   final bool requestQuotas;
 
   /// Null means the server predates Discover visibility preferences.
@@ -108,6 +109,7 @@ class BackendConnection {
     this.mediaAccountManagement = false,
     this.appleTvRemote = false,
     this.tvMatchCorrections = false,
+    this.tvLibraryNavigation = false,
     this.requestQuotas = false,
     this.hiddenDiscoverTabs,
     this.configConfirmed = false,
@@ -129,6 +131,7 @@ class BackendConnection {
     bool? mediaAccountManagement,
     bool? appleTvRemote,
     bool? tvMatchCorrections,
+    bool? tvLibraryNavigation,
     bool? requestQuotas,
     List<String>? hiddenDiscoverTabs,
     bool clearHiddenDiscoverTabs = false,
@@ -144,6 +147,7 @@ class BackendConnection {
         adminCatalogBrowsing: adminCatalogBrowsing ?? this.adminCatalogBrowsing,
         appleTvRemote: appleTvRemote ?? this.appleTvRemote,
         tvMatchCorrections: tvMatchCorrections ?? this.tvMatchCorrections,
+        tvLibraryNavigation: tvLibraryNavigation ?? this.tvLibraryNavigation,
         requestQuotas: requestQuotas ?? this.requestQuotas,
         mediaAccountManagement:
             mediaAccountManagement ?? this.mediaAccountManagement,

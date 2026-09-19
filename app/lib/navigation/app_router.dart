@@ -1234,7 +1234,7 @@ bool _hasValidMediaDetailParameters(GoRouterState state) {
 /// Route-level guard for `/detail/:type/:id`. Books, authors, albums and
 /// artists use a string foreign id and a series uses its name, so the only
 /// malformed shape is a blank id — degrade to that media's own tab. Movie/TV
-/// keep the positive-TMDB-id validation and their movies-dashboard fallback.
+/// keep positive-TMDB-id validation and return to their own dashboard tab.
 String? _mediaDetailRedirect(GoRouterState state) {
   final type = state.pathParameters['type'];
   if (type == 'book' || type == 'author' || type == 'series') {
@@ -1245,7 +1245,9 @@ String? _mediaDetailRedirect(GoRouterState state) {
     final id = state.pathParameters['id']?.trim() ?? '';
     return id.isEmpty ? '/dashboard/music' : null;
   }
-  return _hasValidMediaDetailParameters(state) ? null : '/dashboard/movies';
+  return _hasValidMediaDetailParameters(state)
+      ? null
+      : type == 'tv' ? '/dashboard/tv' : '/dashboard/movies';
 }
 
 /// Defensive fallback for a malformed parameter if a future router version

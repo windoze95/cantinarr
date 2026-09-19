@@ -33,6 +33,14 @@ Review the affected-request preview. It distinguishes recorded and intended targ
 
 Confirming a correction creates a linked corrective request through the normal request and approval path. The original history, files, and monitoring remain intact. Inspect those separately before removing anything from Sonarr.
 
+## Open a combined library series
+
+Sonarr can keep several separately listed TMDB titles under one series, such as **Monster (2022)**. Opening that series from **TV Shows > Recently Downloaded** or **Airing Next** displays **Choose a title** when its seasons map to several titles. Choose the story you want. A TV episode in **Releases** already identifies a season, so it opens that season's mapped title directly. Both keep the library the entry came from.
+
+These links use the current mappings on each tap. If resolution fails, you stay on the current tab. Retry after checking library access and the mappings in **TV matches**. Paused, overlapping, or unmapped seasons must be resolved before Cantinarr can offer a complete title list. Rating limits still apply to each title.
+
+This navigation requires a server that supports TV library resolution. With an older server, cards without a usable catalog ID cannot be opened.
+
 ## If an edit is rejected
 
 Another edit may have changed the mapping since you opened it. Refresh and review the latest revision. Do not repeatedly submit a stale mapping or use a different title to bypass an unresolved match.

@@ -397,6 +397,12 @@ GET    /api/requests                       # user: own request history (a kids a
                                            #   movie/show rows are left out)
 GET    /api/requests/options               # user: what this user may choose (seasons, quality);
                                            #   optional instance_id scopes quality profiles to that library
+GET    /api/requests/tv-library-titles     # user: live catalog destinations for a Sonarr card;
+                                           #   required instance_id, series_id; optional season_number.
+                                           #   Returns instance_id and titles [{tmdb_id,title}]; applies
+                                           #   current mappings, library grants and kids-account limits.
+                                           #   Unverified mappings fail without partial destinations.
+                                           #   Advertised by /api/config tv_library_navigation:true.
 GET    /api/requests/book-status           # user: per-format live state by foreign_id; optional instance_id, title, q (exact lookup context)
 GET    /api/requests/book-library          # user: title/format digest with typed identity_keys and complete author summaries
                                            #   (name/position) and author (name + the library's own

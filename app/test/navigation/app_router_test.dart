@@ -472,6 +472,29 @@ void main() {
     expect(router.routeInformationProvider.value.uri.path, '/dashboard/books');
   });
 
+  testWidgets('invalid TV links stay on TV and both dashboard tabs remain usable',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _adminState);
+    for (final id in ['0', '-1', 'not-a-number']) {
+      router.go('/dashboard/tv');
+      await tester.pumpAndSettle();
+      router.push('/detail/tv/$id');
+      await tester.pumpAndSettle();
+      expect(router.routerDelegate.currentConfiguration.uri.path, '/dashboard/tv');
+      expect(tester.takeException(), isNull);
+      for (final index in [0, 1, 0, 1]) {
+        tester.widget<DashboardShell>(find.byType(DashboardShell).last)
+            .onTabChanged(index);
+        await tester.pumpAndSettle();
+        final shell = tester.widget<DashboardShell>(find.byType(DashboardShell).last);
+        expect(shell.currentIndex, index);
+        expect(router.routerDelegate.currentConfiguration.uri.path,
+            index == 0 ? '/dashboard/movies' : '/dashboard/tv');
+        expect(tester.takeException(), isNull);
+      }
+    }
+  });
+
   testWidgets('malformed parameter routes redirect without throwing',
       (tester) async {
     final (:router, container: _) = await _pumpRouter(tester, _adminState);

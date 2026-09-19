@@ -127,6 +127,23 @@ func TestRouterRBACMatrixWithAdminAndRequesterTokens(t *testing.T) {
 	}
 }
 
+func TestTVLibraryNavigationRouteRequiresAuthentication(t *testing.T) {
+	harness := newRBACRouterHarness(t, false)
+	for _, tc := range []struct {
+		token  string
+		status int
+	}{
+		{"", http.StatusUnauthorized},
+		{harness.requesterToken, http.StatusBadRequest},
+		{harness.adminToken, http.StatusBadRequest},
+	} {
+		response := serveRBACRequest(harness.router, http.MethodGet, "/api/requests/tv-library-titles", tc.token)
+		if response.Code != tc.status {
+			t.Fatalf("status %d, want %d: %s", response.Code, tc.status, response.Body.String())
+		}
+	}
+}
+
 func TestMediaFileRouterTicketAuthAndPublicDownloadRoutes(t *testing.T) {
 	harness := newRBACRouterHarness(t, false)
 
