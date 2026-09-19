@@ -413,7 +413,16 @@ class _RequesterBookDetailScreenState
         ? const AsyncData(<OwnedTitle>[])
         : ref.watch(ownedBooksForInstanceProvider(_instanceId));
     return Scaffold(
-      appBar: AppBar(title: const Text('Book details')),
+      appBar: AppBar(
+        leading: BackButton(onPressed: () {
+          if (context.canPop()) {
+            context.pop();
+            return;
+          }
+          context.go('/dashboard/books');
+        }),
+        title: const Text('Book details'),
+      ),
       // Metadata renders immediately; ownership and request truth resolve in
       // their own rows instead of blanking the whole page behind one digest.
       body: _resolved(digest.valueOrNull ?? const []),
