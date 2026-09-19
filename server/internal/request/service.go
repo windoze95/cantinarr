@@ -552,16 +552,19 @@ func (s *Service) resolveSonarr(userID int64, instanceID string) (*sonarr.Client
 }
 
 type CreateRequest struct {
-	quotaFree    map[string]string
-	quotaKey     string
-	previewOnly  bool
-	quotaPreview *requestquota.Preview
-	authority    string
-	CatalogRef   *CatalogRef `json:"catalog_ref,omitempty"`
-	TmdbID       int         `json:"tmdb_id"`
-	MediaType    string      `json:"media_type"`
-	Title        string      `json:"title"`
-	TvdbID       int         `json:"tvdb_id"`
+	// Only the library-series intake can set this proof. Public catalog
+	// requests cannot bypass season-choice policy or supply native IDs.
+	tvLibraryScope *tvLibraryScope
+	quotaFree      map[string]string
+	quotaKey       string
+	previewOnly    bool
+	quotaPreview   *requestquota.Preview
+	authority      string
+	CatalogRef     *CatalogRef `json:"catalog_ref,omitempty"`
+	TmdbID         int         `json:"tmdb_id"`
+	MediaType      string      `json:"media_type"`
+	Title          string      `json:"title"`
+	TvdbID         int         `json:"tvdb_id"`
 	// ForeignID is the arr-native metadata id for requests with no TMDB id:
 	// the Chaptarr/Readarr foreignBookId for books, the MusicBrainz
 	// release-group id for music. Required when media_type is "book" or
@@ -868,6 +871,7 @@ type effective struct {
 
 // resolvedRequest is a request whose options have all been resolved server-side.
 type resolvedRequest struct {
+	tvLibraryScope       *tvLibraryScope
 	quotaPreview         *requestquota.Preview
 	previewOnly          bool
 	authority            string
@@ -1145,17 +1149,18 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 	}
 
 	resolved := &resolvedRequest{
-		previewOnly:   req.previewOnly,
-		authority:     req.authority,
-		newSubmission: true,
-		userID:        userID,
-		tmdbID:        req.TmdbID,
-		tvdbID:        req.TvdbID,
-		foreignID:     req.ForeignID,
-		searchTerm:    strings.TrimSpace(req.SearchTerm),
-		instanceID:    strings.TrimSpace(req.InstanceID),
-		mediaType:     req.MediaType,
-		title:         req.Title,
+		tvLibraryScope: req.tvLibraryScope,
+		previewOnly:    req.previewOnly,
+		authority:      req.authority,
+		newSubmission:  true,
+		userID:         userID,
+		tmdbID:         req.TmdbID,
+		tvdbID:         req.TvdbID,
+		foreignID:      req.ForeignID,
+		searchTerm:     strings.TrimSpace(req.SearchTerm),
+		instanceID:     strings.TrimSpace(req.InstanceID),
+		mediaType:      req.MediaType,
+		title:          req.Title,
 	}
 	if resolved.mediaType == "movie" || resolved.mediaType == "tv" {
 		// Resolve and authorize the target library up front so a pending row
@@ -1223,6 +1228,10 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		resolved.qualityProfileID = req.QualityProfileID
 	}
 	if req.MediaType == "tv" {
+		if scope := req.tvLibraryScope; scope != nil {
+			resolved.seasonNumbers = append([]int(nil), req.Seasons...)
+			resolved.seasonScope = encodeSeasonNumbers(req.Seasons)
+		}
 		return s.createTVRequest(resolved, eff.RequiresApproval)
 	}
 

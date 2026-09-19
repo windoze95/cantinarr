@@ -741,6 +741,9 @@ class RequestOptions {
 /// The backend handles all TMDB-to-TVDB bridging and Radarr/Sonarr
 /// communication transparently.
 class RequestService {
+  /// A multi-source write can partially succeed (or lose its response).
+  /// Refresh those scopes before allowing another selection.
+  bool get refreshStatusAfterFailure => false;
   final Dio _backendDio;
   String? lastRequestError;
   bool lastRequestQuotaExceeded = false;

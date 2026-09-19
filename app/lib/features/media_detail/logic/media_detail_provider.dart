@@ -126,6 +126,7 @@ class MediaDetailNotifier extends ChangeNotifier {
   final DiscoverApiService _api;
   final int _id;
   final MediaType _mediaType;
+  final Future<TVDetail> Function()? libraryLoader;
 
   MediaDetailState _state = const MediaDetailState();
   MediaDetailState get state => _state;
@@ -138,6 +139,7 @@ class MediaDetailNotifier extends ChangeNotifier {
     required DiscoverApiService api,
     required int id,
     required MediaType mediaType,
+    this.libraryLoader,
   })  : _api = api,
         _id = id,
         _mediaType = mediaType;
@@ -145,6 +147,10 @@ class MediaDetailNotifier extends ChangeNotifier {
   Future<void> load() async {
     state = state.copyWith(isLoading: true);
     try {
+      if (libraryLoader != null) {
+        state = MediaDetailState(tvDetail: await libraryLoader!());
+        return;
+      }
       if (_mediaType == MediaType.movie) {
         final detail = await _api.movieDetail(_id);
         final recs = await _api.movieRecommendations(_id);

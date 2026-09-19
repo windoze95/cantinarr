@@ -31,6 +31,7 @@ type correctionLab struct {
 	extraSource   bool
 	missingTarget bool
 	mutations     int
+	lookupTVDB    int
 }
 
 func (l *correctionLab) seasonMetadata() []map[string]any {
@@ -98,7 +99,11 @@ func newCorrectionLab(t *testing.T) (*Service, int64, int64, *correctionLab) {
 			}
 			write(map[string]any{"id": id, "name": fmt.Sprintf("Selected TMDB %d", id), "first_air_date": "2026-01-01", "seasons": seasons})
 		case r.Method == "GET" && r.URL.Path == "/api/v3/series/lookup":
-			write([]map[string]any{{"tvdbId": 389492, "title": "Monster (2022)", "year": 2022, "seasons": l.seasonMetadata()}})
+			tvdbID := l.lookupTVDB
+			if tvdbID == 0 {
+				tvdbID = 389492
+			}
+			write([]map[string]any{{"tvdbId": tvdbID, "title": "Monster (2022)", "year": 2022, "seasons": l.seasonMetadata()}})
 		case r.Method == "GET" && r.URL.Path == "/api/v3/series":
 			if l.parent == nil {
 				write([]any{})

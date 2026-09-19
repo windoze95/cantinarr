@@ -137,9 +137,11 @@ func TestTVLibraryNavigationRouteRequiresAuthentication(t *testing.T) {
 		{harness.requesterToken, http.StatusBadRequest},
 		{harness.adminToken, http.StatusBadRequest},
 	} {
-		response := serveRBACRequest(harness.router, http.MethodGet, "/api/requests/tv-library-titles", tc.token)
-		if response.Code != tc.status {
-			t.Fatalf("status %d, want %d: %s", response.Code, tc.status, response.Body.String())
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			response := serveRBACRequest(harness.router, method, "/api/requests/tv-library", tc.token)
+			if response.Code != tc.status {
+				t.Fatalf("%s status %d, want %d: %s", method, response.Code, tc.status, response.Body.String())
+			}
 		}
 	}
 }

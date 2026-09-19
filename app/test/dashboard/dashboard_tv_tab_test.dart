@@ -22,7 +22,7 @@ import 'package:go_router/go_router.dart';
 /// see: that the tab asks Sonarr for import history at all, and that the row
 /// on screen is the one those builders produced.
 void main() {
-  testWidgets('zero-ID Monster library card opens the mapped title chooser', (tester) async {
+  testWidgets('zero-ID Monster library card opens its complete series page', (tester) async {
     final adapter = _SonarrAdapter(
       series: [_series(id: 42, title: 'Monster (2022)', files: 10, episodes: 30)..['tmdbId'] = 0],
       history: [_import(seriesId: 42, date: '2026-09-19T01:00:00Z')],
@@ -33,11 +33,8 @@ void main() {
     await tester.ensureVisible(find.text('Monster (2022)'));
     await tester.tap(find.text('Monster (2022)'));
     await tester.pumpAndSettle();
-    expect(find.text('Choose a title'), findsOneWidget);
-    expect(adapter.libraryQuery, {'instance_id': 'tv', 'series_id': 42});
-    await tester.tap(find.text('Menendez'));
-    await tester.pumpAndSettle();
-    expect(opened.last.toString(), '/detail/tv/225634?instance_id=tv');
+    expect(find.text('Choose a title'), findsNothing);
+    expect(opened.last.toString(), '/detail/tv-library/42?instance_id=tv');
     router.pop();
     await tester.pumpAndSettle();
     expect(find.text('Recently Downloaded'), findsOneWidget);
@@ -426,6 +423,10 @@ Future<({List<Uri> opened, GoRouter router})> _pumpTvTabWithRouter(
         opened.add(state.uri);
         return const Scaffold(body: Text('detail'));
       }),
+      GoRoute(path: '/detail/tv-library/:id', builder: (_, state) {
+        opened.add(state.uri);
+        return const Scaffold(body: Text('library detail'));
+      }),
     ],
   );
 
@@ -605,7 +606,6 @@ class _SonarrAdapter implements HttpClientAdapter {
   final List<int> topRatedPagesRequested = [];
   final List<Map<String, dynamic>> genres;
   Map<String, dynamic> historyQuery = const {};
-  Map<String, dynamic> libraryQuery = const {};
 
   static const _base = '/api/instances/tv/api/v3';
 
@@ -616,13 +616,7 @@ class _SonarrAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     Object body;
-    if (options.path == '/api/requests/tv-library-titles') {
-      libraryQuery = Map<String, dynamic>.from(options.queryParameters);
-      body = {'instance_id': 'tv', 'titles': [
-        {'tmdb_id': 113988, 'title': 'Dahmer'},
-        {'tmdb_id': 225634, 'title': 'Menendez'},
-      ]};
-    } else if (options.path == '$_base/series') {
+    if (options.path == '$_base/series') {
       body = series;
     } else if (options.path == '$_base/history') {
       historyQuery = Map<String, dynamic>.from(options.queryParameters);

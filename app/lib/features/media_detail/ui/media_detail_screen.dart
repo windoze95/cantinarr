@@ -50,6 +50,7 @@ import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/data/sonarr_models.dart';
 import '../../sonarr/ui/sonarr_series_detail_screen.dart';
 import '../logic/arr_deep_link.dart';
+import '../data/tv_library_service.dart';
 import '../logic/media_detail_provider.dart';
 import '../logic/title_links.dart';
 import '../logic/release_schedule.dart';
@@ -65,12 +66,14 @@ class MediaDetailScreen extends ConsumerStatefulWidget {
   final int id;
   final MediaType mediaType;
   final String? instanceId;
+  final TVLibraryService? librarySeries;
 
   const MediaDetailScreen({
     super.key,
     required this.id,
     required this.mediaType,
     this.instanceId,
+    this.librarySeries,
   });
 
   @override
@@ -115,6 +118,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
 
   late final MediaDetailNotifier _detailNotifier;
   late final RequestNotifier _requestNotifier;
+  TVLibraryService? get _librarySeries => widget.librarySeries;
 
   /// Anchors the "Seasons" section so "Request More" can scroll the user to the
   /// per-season picker.
@@ -149,6 +153,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// answered just now; empty until the title is there to watch (available
   /// or partial) and a server has answered.
   List<WatchLink> _watchLinks = const [];
+  Map<WatchLink, int> _watchSourceIds = const {};
   int _watchGeneration = 0;
   RequestStatus? _watchedStatus;
 
@@ -190,10 +195,12 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       api: api,
       id: widget.id,
       mediaType: widget.mediaType,
+      libraryLoader: _librarySeries == null ? null : () async =>
+          (_librarySeries!.current ?? await _librarySeries!.load()).detail!,
     );
     final backendDio = ref.read(backendClientProvider);
     _requestNotifier = RequestNotifier(
-      service: RequestService(backendDio: backendDio),
+      service: _librarySeries ?? RequestService(backendDio: backendDio),
       tmdbId: widget.id,
       mediaType: widget.mediaType,
     )..instanceId = _selectedLibraryId;
@@ -241,10 +248,14 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// the notifier also fires for option loads and request writes, which
   /// change nothing about where the title can be watched.
   void _onRequestStateChanged() {
+    final library = _librarySeries?.current;
+    if (library?.detail != null && _requestNotifier.state.hasStatus) {
+      _detailNotifier.state = MediaDetailState(tvDetail: library!.detail);
+    }
     if (_requestNotifier.state.status != _watchedStatus) _resolveWatchLinks();
     if (widget.mediaType == MediaType.tv) {
       final state = _requestNotifier.state;
-      final key = '${state.match?.revision}:${state.match?.seriesId}:${state.hasStatus}';
+      final key = '${library?.revision ?? state.match?.revision}:${state.match?.seriesId}:${state.hasStatus}';
       if (key != _resolvedMatchKey) {
         _resolvedMatchKey = key;
         _resolveArrLink();
@@ -266,6 +277,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
         ? connection.radarrInstances
         : connection.sonarrInstances;
     return instances
+        .where((i) => _librarySeries == null || i.id == _librarySeries!.libraryId)
         .map((i) => LibraryChoice(id: i.id, name: i.name))
         .toList();
   }
@@ -318,7 +330,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       final event = next.valueOrNull;
       if (event == null) return;
       final tmdb = (event.data['tmdb_id'] as num?)?.toInt();
-      if (tmdb == widget.id &&
+      if ((tmdb == widget.id || (_librarySeries?.current?.matches.any((m) => m.tmdbId == tmdb) ?? false)) &&
           event.data['media_type'] == widget.mediaType.name) {
         _checkStatus();
       }
@@ -604,7 +616,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                               reportedPath:
                                                   _downloadMovieFile!.path,
                                             ),
-                                          if (_watchLinks.any((link) => link.state == WatchLinkState.found))
+                                          if (_librarySeries == null && _watchLinks.any((link) => link.state == WatchLinkState.found))
                                             AppleTVOpenButton(mediaType: widget.mediaType, tmdbId: widget.id),
                                           for (final link in _watchLinks)
                                             if (link.state ==
@@ -1010,7 +1022,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
 
   Future<void> _correctTVMatch() async {
     if (!_canCorrectTVMatch) return;
-    final uri = Uri(path: '/settings/tv-matches/${widget.id}', queryParameters: {
+    final uri = Uri(path: _librarySeries == null
+        ? '/settings/tv-matches/${widget.id}' : '/settings/tv-matches', queryParameters: {
       if (_effectiveLibraryId != null) 'instance_id': _effectiveLibraryId!,
     });
     await context.push(uri.toString());
@@ -1104,14 +1117,16 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
           instanceId: instanceId,
         );
         final serverMatch = _requestNotifier.state.match;
+        final library = _librarySeries?.current;
         final correctedServer = connection?.tvMatchCorrections == true;
         if (correctedServer && (!_requestNotifier.state.hasStatus ||
-            serverMatch?.isResolved != true || serverMatch!.seriesId <= 0)) {
+            (library == null && (serverMatch?.isResolved != true || serverMatch!.seriesId <= 0)))) {
           return;
         }
         final series = await service.getSeries();
         final exact = correctedServer ? series.where((s) =>
-            s.id == serverMatch!.seriesId && s.tvdbId == serverMatch.tvdbId).toList() : null;
+            s.id == (_librarySeries?.seriesId ?? serverMatch!.seriesId) &&
+            s.tvdbId == (library?.detail?.externalIds?.tvdbId ?? serverMatch!.tvdbId)).toList() : null;
         final match = correctedServer
             ? (exact!.length == 1 ? exact.single : null)
             : matchSonarrSeries(series,
@@ -1119,7 +1134,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                 tmdbId: widget.id, title: _detailNotifier.state.title,
                 year: tmdbPremiereYear(_detailNotifier.state.tvDetail?.firstAirDate));
         final sourceSeasons = <int, int>{
-          if (correctedServer) for (final e in serverMatch!.seasonMap.entries) e.value: e.key,
+          if (library != null)
+            for (final season in library.detail!.seasons) season.seasonNumber: season.seasonNumber
+          else if (correctedServer)
+            for (final e in serverMatch!.seasonMap.entries) e.value: e.key,
         };
         var episodes = const <SonarrEpisode>[];
         if (downloadsEnabled && match != null && match.id > 0) {
@@ -1202,17 +1220,35 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     }
     if (detail.movieDetail == null && detail.tvDetail == null) return;
     try {
-      final links = await ref.read(mediaAccessServiceProvider).watchLinks(
+      final library = _librarySeries?.current;
+      final links = <WatchLink>[];
+      final sourceIds = <WatchLink, int>{};
+      final sources = library?.matches;
+      for (final sourceId in sources?.map((m) => m.tmdbId) ?? [widget.id]) {
+        final source = sources?.where((m) => m.tmdbId == sourceId).firstOrNull;
+        final found = await ref.read(mediaAccessServiceProvider).watchLinks(
             mediaType: widget.mediaType,
-            tmdbId: widget.id,
+            tmdbId: sourceId,
             tvdbId: detail.tvDetail?.externalIds?.tvdbId,
-            year: widget.mediaType == MediaType.movie
+            year: library != null ? null : widget.mediaType == MediaType.movie
                 ? tmdbPremiereYear(detail.movieDetail?.releaseDate)
                 : tmdbPremiereYear(detail.tvDetail?.firstAirDate),
-            title: detail.title,
+            title: source?.title ?? detail.title,
           );
+        for (final link in found) {
+          // Media servers may also combine these source titles. One verified
+          // link to that same native series is enough; separate records stay
+          // separate and retain their own canonical action identity.
+          if (links.any((other) => other.instanceId == link.instanceId &&
+              other.url == link.url && other.state == link.state)) {
+            continue;
+          }
+          links.add(link);
+          sourceIds[link] = sourceId;
+        }
+      }
       if (!mounted || generation != _watchGeneration) return;
-      setState(() => _watchLinks = links);
+      setState(() { _watchLinks = links; _watchSourceIds = sourceIds; });
     } catch (_) {
       if (!mounted || generation != _watchGeneration) return;
       setState(() => _watchLinks = const []);
@@ -1243,7 +1279,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     final opened = await ref.read(mediaAppLauncherProvider).open(
           serviceType: link.serviceType,
           apps: link.videoApps,
-          tmdbId: !fallback && link.state == WatchLinkState.found ? widget.id : null,
+          tmdbId: !fallback && link.state == WatchLinkState.found
+              ? (_watchSourceIds[link] ?? widget.id) : null,
           webUrl: fallback ? link.fallbackUrl : link.url,
           mediaType: !fallback && link.state == WatchLinkState.found
               ? widget.mediaType
@@ -1305,7 +1342,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     for (final issue in _myReports) {
       if (issue.closedAt == null &&
           issue.mediaType == widget.mediaType.name &&
-          issue.tmdbId == widget.id && issue.instanceId == instanceId) {
+          (issue.tmdbId == widget.id || (_librarySeries?.current?.matches.any((m) => m.tmdbId == issue.tmdbId) ?? false)) &&
+          issue.instanceId == instanceId) {
         return issue.id;
       }
     }
@@ -1342,6 +1380,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// The same state rule covers one-tap requests, season-table requests and
   /// failures that block either. Admin corrections do not enable reporting.
   bool get _canReport => !_needsSetup && _reportInstanceId != null &&
+      (_librarySeries == null || _requestNotifier.state.hasStatus) &&
       (_reportingAllowed || _canCorrectTVMatch) &&
       _requestNotifier.state.canReportProblem;
 
@@ -1442,7 +1481,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                   child: Text("What's the problem with?",
                       style: TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
                 ),
-                ListTile(
+                if (_librarySeries == null) ListTile(
                   leading: const Icon(Icons.tv_outlined,
                       color: AppTheme.textSecondary),
                   title: const Text('The whole series',
@@ -1476,10 +1515,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                         Navigator.of(sheetContext).pop(
                           _ReportTVScopeChoice(ReportScope.series(
                             instanceId: instanceId,
-                            tmdbId: widget.id,
+                            tmdbId: _reportSourceId(s.seasonNumber),
                             tvdbId: tvdbId,
-                            seasonNumber: s.seasonNumber,
-                            title: title,
+                            seasonNumber: _reportSourceSeason(s.seasonNumber),
+                            title: _reportSourceTitle(s.seasonNumber, title),
                           )),
                         );
                         return;
@@ -1532,10 +1571,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                 onTap: () => Navigator.of(sheetContext).pop(
                   ReportScope.series(
                     instanceId: instanceId,
-                    tmdbId: widget.id,
+                    tmdbId: _reportSourceId(seasonNumber),
                     tvdbId: tvdbId,
-                    seasonNumber: seasonNumber,
-                    title: title,
+                    seasonNumber: _reportSourceSeason(seasonNumber),
+                    title: _reportSourceTitle(seasonNumber, title),
                   ),
                 ),
               ),
@@ -1553,11 +1592,11 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                             onPressed: () => Navigator.of(sheetContext).pop(
                               ReportScope.episode(
                                 instanceId: instanceId,
-                                tmdbId: widget.id,
+                                tmdbId: _reportSourceId(seasonNumber),
                                 tvdbId: tvdbId,
-                                seasonNumber: seasonNumber,
+                                seasonNumber: _reportSourceSeason(seasonNumber),
                                 episodeNumber: e,
-                                title: title,
+                                title: _reportSourceTitle(seasonNumber, title),
                               ),
                             ),
                           ),
@@ -1573,6 +1612,16 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       },
     );
   }
+
+  int _reportSourceId(int season) =>
+      _librarySeries?.current?.sourceForSeason(season)?.tmdbId ?? widget.id;
+
+  int _reportSourceSeason(int season) => _librarySeries?.current
+      ?.sourceForSeason(season)?.seasonMap.entries
+      .where((e) => e.value == season).firstOrNull?.key ?? season;
+
+  String _reportSourceTitle(int season, String title) =>
+      _librarySeries?.current?.sourceForSeason(season)?.title ?? title;
 
   /// Reports follow the request library, never a stale arr-link read from the
   /// previous selection. A link is only a fallback when no default is known.

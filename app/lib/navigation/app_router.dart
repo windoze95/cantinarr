@@ -70,6 +70,7 @@ import '../features/issues/ui/issues_list_screen.dart';
 import '../features/issues/ui/pending_agent_actions_screen.dart';
 import '../features/media_access/ui/media_access_guide.dart';
 import '../features/media_detail/ui/media_detail_screen.dart';
+import '../features/media_detail/ui/tv_library_detail_screen.dart';
 import '../features/notifications/ui/push_notifications_screen.dart';
 import '../features/notifications/ui/server_push_notifications_screen.dart';
 import '../features/radarr/ui/radarr_calendar_screen.dart';
@@ -697,6 +698,18 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               return AppAmbientBackground(
                 child: BrowseGridScreen(query: query),
               );
+            },
+          ),
+          GoRoute(
+            path: '/detail/tv-library/:seriesId',
+            builder: (_, state) {
+              final id = int.tryParse(state.pathParameters['seriesId'] ?? '');
+              final instance = state.uri.queryParameters['instance_id']?.trim();
+              if (id == null || id <= 0 || instance == null || instance.isEmpty) {
+                return const _InvalidRouteScreen(message: 'This TV library link is invalid.');
+              }
+              return AppAmbientBackground(child: TVLibraryDetailScreen(
+                  seriesId: id, instanceId: instance));
             },
           ),
           GoRoute(

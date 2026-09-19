@@ -62,6 +62,9 @@ func (s *Service) prepareTVTarget(r *resolvedRequest) (*TVRequestTarget, error) 
 		}
 	}
 	out := &TVRequestTarget{Match: *m, SourceSeasons: append([]int(nil), selected...), Pilot: pilot}
+	if r.tvLibraryScope != nil {
+		out.Pilot = r.tvLibraryScope.pilot
+	}
 	out.Match.TargetTitle = target.Title
 	for _, n := range selected {
 		dest := m.SeasonMap[n]
@@ -74,6 +77,12 @@ func (s *Service) prepareTVTarget(r *resolvedRequest) (*TVRequestTarget, error) 
 	existing, err := client.GetSeriesByTVDB(m.TVDBID)
 	if err != nil {
 		return nil, err
+	}
+	if proof := r.tvLibraryScope; proof != nil {
+		if existing == nil || existing.ID != proof.seriesID || m.Revision != proof.revision ||
+			encodeSeasonNumbers(normalizeSeasonNumbers(out.TargetSeasons)) != encodeSeasonNumbers(proof.targetSeasons) {
+			return nil, ErrTVMatchStale
+		}
 	}
 	r.newWork = existing == nil || !existing.Monitored
 	if existing != nil {

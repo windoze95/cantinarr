@@ -35,7 +35,11 @@ Confirming a correction creates a linked corrective request through the normal r
 
 ## Open a combined library series
 
-Sonarr can keep several separately listed TMDB titles under one series, such as **Monster (2022)**. Opening that series from **TV Shows > Recently Downloaded** or **Airing Next** displays **Choose a title** when its seasons map to several titles. Choose the story you want. A TV episode in **Releases** already identifies a season, so it opens that season's mapped title directly. Both keep the library the entry came from.
+Sonarr can keep several separately listed TMDB titles under one series, such as **Monster (2022)**. Opening that series from **TV Shows > Recently Downloaded**, **Airing Next**, or a TV episode in **Releases** opens the regular title page with its poster, overview, status, and all mapped seasons together. There is no title chooser. The page keeps the library the entry came from.
+
+Select seasons as you would for any other series. Cantinarr translates their numbers to the source titles internally and applies the same approval rules and request allowances. A request spanning several source titles can partly succeed. If that happens, the page refreshes accepted seasons and asks you to review the remaining ones before retrying. Problem reports start with a season so they reach the correct source title. Search results and story-specific notifications retain their separate catalog identities.
+
+The combined page is available to a kids account only when every source title is allowed. An unmapped season, paused correction, or metadata failure stops the page from showing an incomplete season list as if it were complete. Retry the page after correcting the match or restoring access.
 
 These links use the current mappings on each tap. If resolution fails, you stay on the current tab. Retry after checking library access and the mappings in **TV matches**. Paused, overlapping, or unmapped seasons must be resolved before Cantinarr can offer a complete title list. Rating limits still apply to each title.
 
