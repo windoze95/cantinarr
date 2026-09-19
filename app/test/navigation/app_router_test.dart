@@ -13,6 +13,8 @@ import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/auth/ui/auth_screen.dart';
 import 'package:cantinarr/features/auth/ui/set_password_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/dashboard_shell.dart';
+import 'package:cantinarr/features/dashboard/ui/dashboard_movies_tab.dart';
+import 'package:cantinarr/features/dashboard/ui/dashboard_tv_tab.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_album_detail_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/features/discover/ui/browse_grid_screen.dart';
@@ -481,6 +483,8 @@ void main() {
       router.push('/detail/tv/$id');
       await tester.pumpAndSettle();
       expect(router.routerDelegate.currentConfiguration.uri.path, '/dashboard/tv');
+      expect(find.byType(DashboardTvTab), findsOneWidget);
+      expect(find.byType(DashboardMoviesTab), findsNothing);
       expect(tester.takeException(), isNull);
       for (final index in [0, 1, 0, 1]) {
         tester.widget<DashboardShell>(find.byType(DashboardShell).last)
@@ -488,6 +492,8 @@ void main() {
         await tester.pumpAndSettle();
         final shell = tester.widget<DashboardShell>(find.byType(DashboardShell).last);
         expect(shell.currentIndex, index);
+        expect(find.byType(DashboardMoviesTab), index == 0 ? findsOneWidget : findsNothing);
+        expect(find.byType(DashboardTvTab), index == 1 ? findsOneWidget : findsNothing);
         expect(router.routerDelegate.currentConfiguration.uri.path,
             index == 0 ? '/dashboard/movies' : '/dashboard/tv');
         expect(tester.takeException(), isNull);
