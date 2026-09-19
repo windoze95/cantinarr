@@ -455,7 +455,15 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                   ),
                   topPadding: topPadding,
                   disableAnimations: MediaQuery.disableAnimationsOf(context),
-                  onBack: () => context.pop(),
+                  onBack: () {
+                    if (context.canPop()) {
+                      context.pop();
+                      return;
+                    }
+                    context.go(widget.mediaType == MediaType.tv
+                        ? '/dashboard/tv'
+                        : '/dashboard/movies');
+                  },
                 ),
               ),
 

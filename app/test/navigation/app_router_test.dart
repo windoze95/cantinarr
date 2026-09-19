@@ -37,6 +37,21 @@ void main() {
   // navigation tests local storage rather than waiting for a plugin timeout.
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
+  testWidgets('direct TV detail Back returns to TV Discover', (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+
+    router.go('/detail/tv/225634');
+    await tester.pumpAndSettle();
+
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/detail/tv/225634');
+    expect(router.canPop(), isFalse);
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/dashboard/tv');
+  });
+
   for (final cold in [true, false]) {
     for (final restoringAuth in [true, false]) {
       testWidgets('TV tap cold=$cold restoringAuth=$restoringAuth retains story and library', (tester) async {
@@ -741,6 +756,11 @@ class _JsonAdapter implements HttpClientAdapter {
   ) async {
     final Object body = switch (options.path) {
       '/api/trakt/anticipated' => [],
+      '/api/media/tv/225634' => {
+          'id': 225634,
+          'name': 'Nashville',
+          'seasons': <dynamic>[],
+        },
       _ => {
           'page': 1,
           'results': [],
