@@ -35,6 +35,7 @@ const (
 	PermissionArrSearch         Permission = "arr:search"
 	PermissionArrBrowse         Permission = "arr:browse"
 	PermissionDownloadsRead     Permission = "downloads:read"
+	PermissionDownloadsActivity Permission = "downloads:activity"
 	PermissionDownloadsManage   Permission = "downloads:manage"
 	PermissionMonitoringRead    Permission = "monitoring:read"
 	PermissionSystemRead        Permission = "system:read"
@@ -45,11 +46,12 @@ var rolePermissions = map[string]map[Permission]bool{
 		PermissionAdmin: true,
 	},
 	RoleUser: {
-		PermissionMediaDiscover: true,
-		PermissionMediaRequest:  true,
-		PermissionMediaDownload: true,
-		PermissionAIChat:        true,
-		PermissionMCPAccess:     true,
+		PermissionDownloadsActivity: true,
+		PermissionMediaDiscover:     true,
+		PermissionMediaRequest:      true,
+		PermissionMediaDownload:     true,
+		PermissionAIChat:            true,
+		PermissionMCPAccess:         true,
 		// Read-only Radarr/Sonarr browsing through the app's REST instance
 		// proxy: library, calendar, queue, history, and wanted lists. Enforced
 		// by RequireArrProxyAccess. Intentionally distinct from arr:read, which
@@ -110,6 +112,7 @@ func allPermissions() map[Permission]bool {
 		PermissionArrSearch:         true,
 		PermissionArrBrowse:         true,
 		PermissionDownloadsRead:     true,
+		PermissionDownloadsActivity: true,
 		PermissionDownloadsManage:   true,
 		PermissionMonitoringRead:    true,
 		PermissionSystemRead:        true,

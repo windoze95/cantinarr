@@ -13,6 +13,14 @@ Inspect the client state, progress, peers or provider connection, free space, an
 
 Cantinarr's observation windows let transient problems settle before automatic escalation. A failed upstream read is not treated as an empty queue or confirmed recovery.
 
+## Progress or the menu count is unavailable
+
+Open [Downloads](/use/downloads/) and check the incomplete-activity notice. `?` in the menu means Cantinarr cannot read an exact current count. It does not mean zero. Retry after the named library manager or download client is reachable again.
+
+Missing artwork uses a placeholder and does not hide a known title. Missing episode or track identity shows **Detailed contents could not be identified**. A season pack or album has shared job progress; Cantinarr does not divide it into invented episode or track percentages.
+
+If an administrator sees **Client controls unavailable**, compare the client's configured endpoint in the library manager with its Cantinarr connection. Matching names or categories cannot establish that they are the same client. DNS aliases and differing proxy paths may leave the relationship unverified; the existing Clients view still offers the directly connected client's controls.
+
 ## The transfer finished, but import is blocked
 
 Open the relevant arr queue and its Import Doctor explanation. Common causes include:

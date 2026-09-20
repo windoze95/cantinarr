@@ -74,6 +74,14 @@ func NewRouter(
 	if instanceHandler != nil {
 		instanceHandler.SetConfigChangedObserver(configChanged)
 	}
+	if wsHub != nil && downloadsHandler != nil {
+		wsHub.SetActivityInvalidator(downloadsHandler.InvalidateActivity)
+	}
+	if wsHub != nil && contentPolicyHandler != nil {
+		contentPolicyHandler.SetChangedObserver(func(userID int64) {
+			wsHub.BroadcastUser(userID, ws.Event{Type: "config_changed"})
+		})
+	}
 	if mediaAccessHandler != nil {
 		mediaAccessHandler.SetConfigChangedObserver(configChanged)
 	}
@@ -688,6 +696,10 @@ func NewRouter(
 			r.Use(authService.AuthMiddleware)
 
 			r.With(auth.RequirePermission(auth.PermissionDownloadsRead)).Get("/downloads/{instanceID}/queue", downloadsHandler.GetQueue)
+			r.With(auth.RequirePermission(auth.PermissionDownloadsActivity)).Get("/downloads/activity", downloadsHandler.GetActivity)
+			r.With(auth.RequirePermission(auth.PermissionDownloadsActivity)).Get("/downloads/summary", downloadsHandler.GetSummary)
+			r.With(auth.RequirePermission(auth.PermissionAdmin)).Get("/admin/downloads/settings", downloadsHandler.ActivitySettings(configChanged))
+			r.With(auth.RequirePermission(auth.PermissionAdmin)).Put("/admin/downloads/settings", downloadsHandler.ActivitySettings(configChanged))
 			r.With(auth.RequirePermission(auth.PermissionDownloadsManage)).Post("/downloads/{instanceID}/queue/{itemID}/pause", downloadsHandler.PauseItem)
 			r.With(auth.RequirePermission(auth.PermissionDownloadsManage)).Post("/downloads/{instanceID}/queue/{itemID}/resume", downloadsHandler.ResumeItem)
 			r.With(auth.RequirePermission(auth.PermissionDownloadsManage)).Delete("/downloads/{instanceID}/queue/{itemID}", downloadsHandler.DeleteItem)
@@ -869,6 +881,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			return
 		}
 		hiddenTabs := []string{}
+		downloadsUserScope := "all"
 		configured := map[string]bool{}
 		for _, inst := range allInstances {
 			configured[inst.ServiceType] = true
@@ -879,6 +892,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 				http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
 				return
 			}
+			downloadsUserScope = preferences.DownloadsUserScope
 			for _, mediaType := range []string{"movie", "tv", "book", "music"} {
 				if preferences.HiddenWhenUnconfigured[mediaType] && !configured[serversettings.DiscoverServices()[mediaType]] {
 					hiddenTabs = append(hiddenTabs, mediaType)
@@ -965,6 +979,8 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"request_quotas":           true,
 			"tv_match_corrections":     true,
 			"tv_library_navigation":    true,
+			"downloads_activity":       true,
+			"downloads_user_scope":     downloadsUserScope,
 			"apple_tv_remote":          len(appleTVCapability) > 0 && appleTVCapability[0](),
 			"media_account_management": true,
 			"hidden_discover_tabs":     hiddenTabs,

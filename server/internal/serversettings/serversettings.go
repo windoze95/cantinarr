@@ -79,6 +79,8 @@ func DiscoverySources() []string {
 // Settings is the server-wide admin preferences blob. It is stored as JSON and
 // unmarshalled over the zero value, so adding a field later is migration-free.
 type Settings struct {
+	// DownloadsUserScope limits requester activity; empty upgrades to all.
+	DownloadsUserScope string `json:"downloads_user_scope,omitempty"`
 	// ManagementURL is an optional link to the admin's own container-management
 	// portal (e.g. an Unraid or Portainer page). Empty means "not configured".
 	ManagementURL string `json:"management_url"`
@@ -164,6 +166,9 @@ func (s *Service) Get() Settings {
 // marker stays consistent. Hide-only updates leave the automatic defaults alone.
 func (s *Service) normalized(in Settings) Settings {
 	out := in
+	if out.DownloadsUserScope == "" {
+		out.DownloadsUserScope = "all"
+	}
 	out.ManagementURL = strings.TrimSpace(out.ManagementURL)
 	out.ExternalURL = normalizeExternalURL(out.ExternalURL)
 	if !discoveryDecided(out) {
@@ -208,6 +213,21 @@ func (s *Service) readRaw() (Settings, error) {
 func (s *Service) Read() (Settings, error) {
 	out, err := s.readRaw()
 	return s.normalized(out), err
+}
+
+// SetDownloadsUserScope changes only Downloads visibility in the shared blob.
+func (s *Service) SetDownloadsUserScope(scope string) (Settings, error) {
+	if scope != "all" && scope != "mine" {
+		return Settings{}, errors.New("user_scope must be all or mine")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next, err := s.readRaw()
+	if err != nil {
+		return Settings{}, err
+	}
+	next.DownloadsUserScope = scope
+	return s.save(next)
 }
 
 // DiscoveryChosen reports whether an admin has ever saved a discovery

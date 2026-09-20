@@ -30,6 +30,12 @@ func (b nzbgetBackend) Snapshot() (*QueueView, error) {
 		Items:    make([]QueueItem, 0, len(groups)),
 	}
 	for _, g := range groups {
+		var alias string
+		for _, parameter := range g.Parameters {
+			if parameter.Name == "drone" && parameter.Value != "" {
+				alias = parameter.Value
+			}
+		}
 		size := g.SizeBytes()
 		left := g.RemainingBytes()
 		progress := 0.0
@@ -42,6 +48,7 @@ func (b nzbgetBackend) Snapshot() (*QueueView, error) {
 		}
 		view.Items = append(view.Items, QueueItem{
 			ID:            strconv.Itoa(g.NZBID),
+			CorrelationID: alias,
 			Name:          g.NZBName,
 			SizeBytes:     size,
 			SizeLeftBytes: left,

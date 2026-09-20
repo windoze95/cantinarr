@@ -61,7 +61,7 @@ import '../features/discover/logic/browse_query.dart';
 import '../features/discover/ui/browse_grid_screen.dart';
 import '../features/downloads/ui/downloads_history_screen.dart';
 import '../features/downloads/ui/downloads_module_shell.dart';
-import '../features/downloads/ui/downloads_queue_screen.dart';
+import '../features/downloads/ui/downloads_queue_page.dart';
 import '../features/issues/ui/agent_run_screen.dart';
 import '../features/issues/ui/agent_approval_rules_screen.dart';
 import '../features/issues/ui/ai_remediation_settings_screen.dart';
@@ -225,6 +225,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       }
       final isAdmin = auth?.user?.isAdmin ?? false;
       if (isAuthenticated && !isAdmin && _isAdminOnlyRoute(state.uri.path)) {
+        return landing;
+      }
+      if (isAuthenticated && !isAdmin &&
+          state.uri.path.startsWith('/downloads') &&
+          auth?.connection?.downloadsActivity != true) {
         return landing;
       }
       // Requester book surfaces — the Books tab and the id-addressable book
@@ -577,7 +582,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 routes: [
                   GoRoute(
                     path: '/downloads/queue',
-                    builder: (_, __) => const DownloadsQueueScreen(),
+                    builder: (_, __) => const DownloadsQueuePage(),
                   ),
                 ],
               ),
@@ -1098,7 +1103,7 @@ bool _isAdminOnlyRoute(String path) {
     '/sonarr',
     '/chaptarr',
     '/lidarr',
-    '/downloads',
+    '/downloads/history',
     '/monitoring',
     '/tdarr',
     '/approvals',

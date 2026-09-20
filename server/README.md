@@ -722,6 +722,25 @@ The `coverage` endpoint takes up to 200 arr-reported paths under the same author
 
 Tickets are opaque, bounded, reusable for ten minutes so browser HEAD probes and resumed Range requests work, and contain neither JWTs nor server paths. Every GET/HEAD re-checks that the user still exists, uses the user's current role, re-checks effective-instance access for non-admins, re-fetches the live file record, and applies the current mapping. Responses are attachment-only `application/octet-stream` with no-store, no-referrer, nosniff, same-origin resource policy, and sandbox CSP headers; errors never expose arr hosts, filesystem paths, or OS details. Delivery covers the primary files indexed by Radarr, Sonarr, Chaptarr, and Lidarr, not arbitrary neighboring files, subtitles, extras, or directories. Multi-file audiobooks and albums remain individual file choices rather than being packaged into an archive.
 
+### Download activity
+
+```
+GET    /api/downloads/activity?scope=all|mine
+GET    /api/downloads/summary?scope=all|mine
+GET    /api/admin/downloads/settings
+PUT    /api/admin/downloads/settings
+```
+
+Activity and summary require `downloads:activity`, available to authenticated users and admins. Activity returns `groups`, unique `jobs`, effective `scope`, `user_scope`, `count`, `complete`, `stale`, `fetched_at`, and source availability. Summary returns the same count and freshness fields without groups/jobs. A null count means the exact total is unavailable. Each group has a stable ID, media type, library instance, title/year, creator/format/artwork when known, `job_ids`, confirmed children, `details_known`, and progress weighted by bytes across unique jobs. Child rows reference the shared job; they do not claim separate pack percentages.
+
+Jobs come from live Radarr, Sonarr, Chaptarr, and Lidarr queues plus the six normalized download clients. Provider snapshots coalesce concurrent reads and expire within 15 seconds; queue/configuration events and successful client actions invalidate them. Client endpoint identity and download IDs bind jobs, with NZBGet tracking aliases separate from numeric control IDs. No filename/category matching occurs. Arr-only jobs retain progress, while admin controls require an unambiguous configured client match. Admins also see unmatched client jobs. Queued, paused, stalled, and failed unfinished jobs count once; completed/seeding jobs, import processing, and requests without a job do not count.
+
+Per-request instance grants, kids policies, and saved request identities are applied after shared reads and rechecked before the response. My requests uses exact movie/book/album identities, instance targets, saved TV season/pilot mappings, and book-format subscriptions. Unidentifiable scope is incomplete, never confirmed empty. Requesters receive no raw filenames, paths, client configuration, other user identities, or control IDs. Missing artwork uses an app placeholder; unreadable identity/authorization fails closed.
+
+The settings routes require `admin:*` and read/write `{ "user_scope": "all" }` or `{ "user_scope": "mine" }`. This is `downloads_user_scope` in the existing server-settings JSON, defaulting to `all`, with no schema migration. Config advertises `downloads_activity: true` and `downloads_user_scope`. Restricting users to `mine` overrides their requested scope immediately. Admin totals remain server-wide. Raw client REST endpoints and `downloads_queue` WebSocket snapshots remain admin-only.
+
+The opt-in live check is `go test ./internal/downloads -run TestLiveDownloadsActivity -downloads-canary=/path/to/private-manifest.json -v`. The private manifest contains `disposable: true` and an `instances` array using the server instance fields (`service_type`, `url`, and credentials). Only loopback Radarr/NZBGet services are accepted. NZBGet must contain exactly one synthetic job named `Codex Downloads Fixture 632` with the `drone` parameter `codex-downloads-632`; the check resumes, pauses, then removes that job. Keep its NNTP providers disabled. It verifies real alias/control handling, unmatched visibility, and count transitions, while ordinary fixtures cover media matching. Never use a production service for this check.
+
 ### Downloads & monitoring (admin)
 ```
 GET    /api/downloads/{instanceID}/queue     # unified SABnzbd/qBittorrent/NZBGet/Transmission/Deluge/ruTorrent

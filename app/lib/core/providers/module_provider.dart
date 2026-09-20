@@ -99,7 +99,8 @@ class ModuleNotifier extends Notifier<ModuleState> {
         ));
       }
 
-      if (isAdmin && connection.downloadInstances.isNotEmpty) {
+      if (connection.downloadsActivity ||
+          (isAdmin && connection.downloadInstances.isNotEmpty)) {
         modules.add(const AppModule(
           type: ModuleType.downloads,
           label: 'Downloads',

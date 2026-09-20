@@ -6,6 +6,8 @@ import 'package:go_router/go_router.dart';
 
 import '../../discover/logic/discovery_access.dart';
 import '../../../core/providers/config_sync_provider.dart';
+import '../../downloads/logic/downloads_activity_provider.dart';
+import '../../downloads/ui/downloads_menu_badge.dart';
 import '../../../core/automation/web_semantics.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/models/app_module.dart';
@@ -547,6 +549,7 @@ class _AppShellState extends ConsumerState<AppShell>
     final hasAi =
         ref.watch(authProvider).valueOrNull?.connection?.services.ai ?? false;
     ref.watch(configSyncProvider);
+    ref.watch(downloadsSummaryProvider);
     final discoveryAccess = ref.watch(discoveryAccessProvider);
     // Admin approval queue depth — drives the hamburger dot (here) and the
     // drawer "Approvals" entry. Always 0 for non-admins.
@@ -1275,6 +1278,8 @@ class _AppShellState extends ConsumerState<AppShell>
       // Downloads offers the aggregate "All" view above its clients; the raw
       // stored id is passed through so the sentinel can be marked active.
       final isDownloads = module.type == ModuleType.downloads;
+      final hasDownloadBadge = isDownloads &&
+          ref.watch(authProvider).valueOrNull?.connection?.downloadsActivity == true;
       final activeInstanceId = isDownloads
           ? instanceState.activeDownloadInstanceId
           : activeInstance?.id;
@@ -1284,8 +1289,12 @@ class _AppShellState extends ConsumerState<AppShell>
         title: module.label,
         semanticsIdentifier: 'nav-module-${module.type.name}',
         selected: isActive,
-        trailing: selectorInstances.length > 1
-            ? _InstanceSelector(
+        trailingFlex: hasDownloadBadge && selectorInstances.length > 1 ? 3 : 2,
+        trailing: hasDownloadBadge || selectorInstances.length > 1
+            ? Row(mainAxisSize: MainAxisSize.min, children: [
+          if (hasDownloadBadge)
+            const DownloadsMenuBadge(),
+          if (selectorInstances.length > 1) Flexible(child: _InstanceSelector(
                 appName: module.label,
                 instances: selectorInstances,
                 activeInstanceId: activeInstanceId,
@@ -1305,8 +1314,8 @@ class _AppShellState extends ConsumerState<AppShell>
                         .setActiveModule(module.type);
                   }
                 },
-              )
-            : null,
+              )),
+        ]) : null,
         onTap: () {
           if (isOverlay) Navigator.pop(context);
           _navigateToModule(
@@ -1328,7 +1337,8 @@ class _AppShellState extends ConsumerState<AppShell>
       final pages = !isOverlay && isActive
           ? (module.type == ModuleType.dashboard
               ? discoveryAccess.pages
-              : modulePagesFor(module.type))
+              : module.type == ModuleType.downloads && !isAdmin
+                  ? const <ModulePage>[] : modulePagesFor(module.type))
           : const <ModulePage>[];
       if (pages.isEmpty) return item;
 
@@ -1661,6 +1671,7 @@ class _DrawerItem extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
   final Widget? trailing;
+  final int trailingFlex;
 
   /// When > 0, renders a trailing count pill (e.g. the pending-approvals count).
   final int badgeCount;
@@ -1672,6 +1683,7 @@ class _DrawerItem extends StatelessWidget {
     this.selected = false,
     required this.onTap,
     this.trailing,
+    this.trailingFlex = 2,
     this.badgeCount = 0,
   });
 
@@ -1759,7 +1771,7 @@ class _DrawerItem extends StatelessWidget {
                   if (trailingWidget != null) ...[
                     const SizedBox(width: 8),
                     Expanded(
-                      flex: 2,
+                      flex: trailingFlex,
                       child: Align(
                         alignment: Alignment.centerRight,
                         child: trailingWidget,

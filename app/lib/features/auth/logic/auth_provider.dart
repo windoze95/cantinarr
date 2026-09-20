@@ -231,6 +231,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         tvMatchCorrections: meta['tv_match_corrections'] as bool? ?? false,
         tvLibraryNavigation: meta['tv_library_navigation'] as bool? ?? false,
         requestQuotas: meta['request_quotas'] as bool? ?? false,
+        downloadsActivity: meta['downloads_activity'] as bool? ?? false,
+        downloadsUserScope: meta['downloads_user_scope'] as String? ?? 'all',
         hiddenDiscoverTabs:
             (meta['hidden_discover_tabs'] as List?)?.cast<String>(),
       );
@@ -313,7 +315,9 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
           appleTvRemote: config.appleTvRemote,
           tvMatchCorrections: config.tvMatchCorrections,
           tvLibraryNavigation: config.tvLibraryNavigation,
-        requestQuotas: config.requestQuotas,
+          requestQuotas: config.requestQuotas,
+          downloadsActivity: config.downloadsActivity,
+          downloadsUserScope: config.downloadsUserScope,
           hiddenDiscoverTabs: config.hiddenDiscoverTabs,
           configConfirmed: true,
         );
@@ -403,6 +407,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         tvMatchCorrections: config.tvMatchCorrections,
         tvLibraryNavigation: config.tvLibraryNavigation,
         requestQuotas: config.requestQuotas,
+        downloadsActivity: config.downloadsActivity,
+        downloadsUserScope: config.downloadsUserScope,
         hiddenDiscoverTabs: config.hiddenDiscoverTabs,
         configConfirmed: true,
       );
@@ -548,6 +554,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         tvMatchCorrections: config.tvMatchCorrections,
         tvLibraryNavigation: config.tvLibraryNavigation,
         requestQuotas: config.requestQuotas,
+        downloadsActivity: config.downloadsActivity,
+        downloadsUserScope: config.downloadsUserScope,
         hiddenDiscoverTabs: config.hiddenDiscoverTabs,
         configConfirmed: true,
       );
@@ -740,6 +748,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         tvMatchCorrections: config.tvMatchCorrections,
         tvLibraryNavigation: config.tvLibraryNavigation,
         requestQuotas: config.requestQuotas,
+        downloadsActivity: config.downloadsActivity,
+        downloadsUserScope: config.downloadsUserScope,
         hiddenDiscoverTabs: config.hiddenDiscoverTabs,
         configConfirmed: true,
       );
@@ -885,7 +895,9 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       appleTvRemote: config.appleTvRemote,
       tvMatchCorrections: config.tvMatchCorrections,
       tvLibraryNavigation: config.tvLibraryNavigation,
-        requestQuotas: config.requestQuotas,
+      requestQuotas: config.requestQuotas,
+      downloadsActivity: config.downloadsActivity,
+      downloadsUserScope: config.downloadsUserScope,
       hiddenDiscoverTabs: config.hiddenDiscoverTabs,
       configConfirmed: true,
     );
@@ -972,6 +984,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         tvMatchCorrections: config.tvMatchCorrections,
         tvLibraryNavigation: config.tvLibraryNavigation,
         requestQuotas: config.requestQuotas,
+        downloadsActivity: config.downloadsActivity,
+        downloadsUserScope: config.downloadsUserScope,
         hiddenDiscoverTabs: config.hiddenDiscoverTabs,
         clearHiddenDiscoverTabs: config.hiddenDiscoverTabs == null,
         configConfirmed: true,
@@ -1204,6 +1218,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         tvMatchCorrections: config.tvMatchCorrections,
         tvLibraryNavigation: config.tvLibraryNavigation,
         requestQuotas: config.requestQuotas,
+        downloadsActivity: config.downloadsActivity,
+        downloadsUserScope: config.downloadsUserScope,
         hiddenDiscoverTabs: config.hiddenDiscoverTabs,
         configConfirmed: true,
       );
@@ -1381,6 +1397,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         'tv_match_corrections': conn.tvMatchCorrections,
         'tv_library_navigation': conn.tvLibraryNavigation,
         'request_quotas': conn.requestQuotas,
+        'downloads_activity': conn.downloadsActivity,
+        'downloads_user_scope': conn.downloadsUserScope,
         if (conn.hiddenDiscoverTabs != null)
           'hidden_discover_tabs': conn.hiddenDiscoverTabs,
       }),

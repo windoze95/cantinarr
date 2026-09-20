@@ -508,7 +508,7 @@ func TestSnapshotNzbgetNormalization(t *testing.T) {
 		username: "nzbget",
 		password: "tegbzn6789",
 		groups: `[
-			{"NZBID":42,"NZBName":"Show.S01E01","FileSizeLo":1073741824,"FileSizeHi":0,"FileSizeMB":1024,"RemainingSizeLo":268435456,"RemainingSizeHi":0,"RemainingSizeMB":256,"Status":"DOWNLOADING","Category":"tv"},
+			{"NZBID":42,"NZBName":"Show.S01E01","FileSizeLo":1073741824,"FileSizeHi":0,"FileSizeMB":1024,"RemainingSizeLo":268435456,"RemainingSizeHi":0,"RemainingSizeMB":256,"Status":"DOWNLOADING","Category":"tv","Parameters":[{"Name":"drone","Value":"arr-tracking-alias"},{"Name":"unrelated","Value":"not-an-id"}]},
 			{"NZBID":43,"NZBName":"Big.Movie.2160p","FileSizeLo":705032704,"FileSizeHi":1,"FileSizeMB":4768,"RemainingSizeLo":705032704,"RemainingSizeHi":1,"RemainingSizeMB":4768,"Status":"QUEUED","Category":"movies"}
 		]`,
 		status: `{"DownloadRate":10485760,"DownloadPaused":false,"RemainingSizeLo":0,"RemainingSizeHi":0,"RemainingSizeMB":0}`,
@@ -534,7 +534,8 @@ func TestSnapshotNzbgetNormalization(t *testing.T) {
 	}
 	got := view.Items[0]
 	want := QueueItem{
-		ID:            "42", // NZBID is stringified for the unified ID field
+		ID:            "42",                 // NZBID is stringified for the unified ID field
+		CorrelationID: "arr-tracking-alias", // never substituted for the control ID
 		Name:          "Show.S01E01",
 		SizeBytes:     1073741824,
 		SizeLeftBytes: 268435456,

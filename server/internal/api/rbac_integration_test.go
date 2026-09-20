@@ -114,6 +114,8 @@ func TestRouterRBACMatrixWithAdminAndRequesterTokens(t *testing.T) {
 			want   int
 		}{
 			{http.MethodGet, "/api/ai/available", "", http.StatusOK},
+			{http.MethodGet, "/api/downloads/activity", "", http.StatusOK},
+			{http.MethodGet, "/api/downloads/summary", "", http.StatusOK},
 			{http.MethodGet, "/api/ai/settings", "", http.StatusOK},
 			{http.MethodGet, "/api/media-servers", "", http.StatusOK},
 			{http.MethodGet, "/api/media-servers/watch?media_type=movie&tmdb_id=1", "", http.StatusOK},
@@ -353,7 +355,7 @@ func privilegedRoutes(t *testing.T, router http.Handler) []rbacRoute {
 	var out []rbacRoute
 	err := chi.Walk(routes, func(method, pattern string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		privileged := strings.HasPrefix(pattern, "/api/admin/") ||
-			strings.HasPrefix(pattern, "/api/downloads/") ||
+			(strings.HasPrefix(pattern, "/api/downloads/") && pattern != "/api/downloads/activity" && pattern != "/api/downloads/summary") ||
 			strings.HasPrefix(pattern, "/api/tautulli/") ||
 			strings.HasPrefix(pattern, "/api/watch-history/") ||
 			strings.HasPrefix(pattern, "/api/tdarr/") ||
@@ -510,6 +512,8 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		}
 		return nil
 	}, discoverCache)
+
+	downloadsHandler.ConfigureActivity(database, contentPolicy, serversettings.NewService(database, nil), authService.AuthorizePermission)
 
 	cfg := &config.Config{
 		ArrCallbackURL:     "http://cantinarr.test",

@@ -19,6 +19,7 @@ import (
 type Handler struct {
 	store    *instance.Store
 	registry *instance.Registry
+	activity *ActivityService
 }
 
 // NewHandler creates a new downloads handler.
@@ -39,6 +40,8 @@ type QueueItem struct {
 	ETASeconds    int64   `json:"eta_seconds"`
 	Status        string  `json:"status"`
 	Category      string  `json:"category"`
+	// CorrelationID is a provider tracking alias, never control IDs or wire data.
+	CorrelationID string `json:"-"`
 }
 
 // QueueView is the normalized download queue for one instance. It is the
@@ -172,6 +175,9 @@ func (h *Handler) itemAction(w http.ResponseWriter, r *http.Request, action func
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	if h.activity != nil {
+		h.activity.Invalidate()
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -191,6 +197,9 @@ func (h *Handler) queueAction(w http.ResponseWriter, r *http.Request, action fun
 	if err := action(b); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
+	}
+	if h.activity != nil {
+		h.activity.Invalidate()
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

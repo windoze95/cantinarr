@@ -140,6 +140,10 @@ type Group struct {
 	RemainingSizeMB int64  `json:"RemainingSizeMB"`
 	Status          string `json:"Status"`
 	Category        string `json:"Category"`
+	Parameters      []struct {
+		Name  string `json:"Name"`
+		Value string `json:"Value"`
+	} `json:"Parameters"`
 }
 
 // SizeBytes returns the total size of the item in bytes, preferring the exact

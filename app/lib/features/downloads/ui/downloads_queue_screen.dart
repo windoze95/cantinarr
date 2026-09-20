@@ -10,6 +10,7 @@ import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/downloads_api_service.dart';
 import '../data/downloads_models.dart';
+import '../logic/downloads_activity_provider.dart';
 
 /// Shows the download client queue with global and per-item controls.
 ///
@@ -131,6 +132,7 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
     try {
       await action();
       if (!mounted) return;
+      ref.read(downloadsRefreshProvider.notifier).refresh();
       await _loadQueue(silent: true);
     } catch (e) {
       if (!mounted) return;
@@ -169,6 +171,7 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
           content: Text('Failed to ${resume ? 'resume' : 'pause'}: '
               '${failures.join(', ')}')));
     }
+    ref.read(downloadsRefreshProvider.notifier).refresh();
     await _loadQueue(silent: true);
   }
 
@@ -187,7 +190,7 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
       ServiceInstance source, DownloadQueueItem item) async {
     final deleteData = await showDialog<bool>(
       context: context,
-      builder: (_) => _RemoveDownloadDialog(
+      builder: (_) => RemoveDownloadDialog(
           name: item.name, serviceType: source.serviceType),
     );
     if (deleteData == null || !mounted) return;
@@ -197,6 +200,7 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('Removed from queue')));
+      ref.read(downloadsRefreshProvider.notifier).refresh();
       _loadQueue(silent: true);
     } catch (e) {
       if (!mounted) return;
@@ -437,17 +441,17 @@ class _SourceErrorBanner extends StatelessWidget {
 /// NZBGet has no way to remove downloaded files together with the queue item,
 /// so for NZBGet instances the checkbox is replaced by a factual hint and the
 /// dialog always resolves to `false`.
-class _RemoveDownloadDialog extends StatefulWidget {
+class RemoveDownloadDialog extends StatefulWidget {
   final String name;
   final String serviceType;
 
-  const _RemoveDownloadDialog({required this.name, required this.serviceType});
+  const RemoveDownloadDialog({super.key, required this.name, required this.serviceType});
 
   @override
-  State<_RemoveDownloadDialog> createState() => _RemoveDownloadDialogState();
+  State<RemoveDownloadDialog> createState() => RemoveDownloadDialogState();
 }
 
-class _RemoveDownloadDialogState extends State<_RemoveDownloadDialog> {
+class RemoveDownloadDialogState extends State<RemoveDownloadDialog> {
   bool _deleteData = false;
 
   bool get _supportsDeleteData => widget.serviceType != 'nzbget';
