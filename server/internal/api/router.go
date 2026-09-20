@@ -478,6 +478,8 @@ func NewRouter(
 			r.Get("/requests", requestHandler.List)
 			r.Get("/requests/options", requestHandler.Options)
 			r.Get("/requests/delivery-status", requestHandler.GetDelivery)
+			r.Get("/requests/tv-library", requestHandler.GetTVLibrary)
+			r.Post("/requests/tv-library", requestHandler.CreateTVLibraryRequest)
 			r.Post("/requests/{id}/delivery", requestHandler.UpdateDelivery)
 			r.Get("/requests/book-status", requestHandler.GetBookStatus)
 			r.Get("/requests/book-library", requestHandler.GetBookLibrary)
@@ -962,6 +964,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"admin_catalog_browsing":   true,
 			"request_quotas":           true,
 			"tv_match_corrections":     true,
+			"tv_library_navigation":    true,
 			"apple_tv_remote":          len(appleTVCapability) > 0 && appleTVCapability[0](),
 			"media_account_management": true,
 			"hidden_discover_tabs":     hiddenTabs,

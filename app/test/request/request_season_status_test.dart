@@ -80,6 +80,20 @@ void main() {
     RequestSeasonStatus season(int n, RequestStatus status) =>
         RequestSeasonStatus(seasonNumber: n, status: status);
 
+    for (final hasUsableSeason in [false, true]) {
+      testWidgets('blocked season copy with usable seasons $hasUsableSeason', (tester) async {
+        await pumpSheet(tester, [
+          const RequestSeasonStatus(seasonNumber: 1, requestBlockedReason: 'tv_match_paused'),
+          if (hasUsableSeason) const RequestSeasonStatus(seasonNumber: 2),
+        ]);
+        expect(find.textContaining('Season 1 needs attention'), findsOneWidget);
+        expect(find.textContaining(hasUsableSeason
+            ? 'You can request the other seasons below.'
+            : 'No seasons can currently be requested.'), findsOneWidget);
+        expect(find.textContaining('You can request the remaining'), findsNothing);
+      });
+    }
+
     testWidgets('collapses a contiguous run of ready seasons into a range',
         (tester) async {
       await pumpSheet(tester, [

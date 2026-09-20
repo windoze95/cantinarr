@@ -71,7 +71,17 @@ class RequestStatusSheet extends StatelessWidget {
     );
   }
 
-  String get _statusMessage => switch (status) {
+  String get _statusMessage {
+    final blocked = seasons.where((s) => s.hasRequestIssue).toList();
+    if (blocked.isNotEmpty) {
+      final scope = _seasonsPhrase(blocked.map((s) => s.seasonNumber).toList());
+      final next = seasons.any((s) => s.isRequestable)
+          ? 'You can request the other seasons below.'
+          : 'No seasons can currently be requested.';
+      return '$scope ${blocked.length == 1 ? 'needs' : 'need'} attention. '
+          'Check the season notes for details. $next';
+    }
+    return switch (status) {
         RequestStatus.unavailable =>
           'This title is not yet on the server. Tap Request to add it!',
         RequestStatus.pending =>
@@ -86,6 +96,7 @@ class RequestStatusSheet extends StatelessWidget {
           'This title is ready to watch! Open Plex or Infuse to start streaming.',
         RequestStatus.partial => _partialMessage,
       };
+  }
 
   /// For a partial title, name the gap using the per-season breakdown, e.g.
   /// "Seasons 1-3 ready; Season 4 downloading. You can request the rest."

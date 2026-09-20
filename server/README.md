@@ -397,6 +397,23 @@ GET    /api/requests                       # user: own request history (a kids a
                                            #   movie/show rows are left out)
 GET    /api/requests/options               # user: what this user may choose (seasons, quality);
                                            #   optional instance_id scopes quality profiles to that library
+GET    /api/requests/tv-library            # user: required instance_id and native series_id;
+                                           #   ordinary series return tmdb_id for the unchanged catalog page.
+                                           #   Corrected or zero-catalog-ID parents return detail, matches,
+                                           #   revision and live status for every native library season.
+                                           #   Unresolved rows carry request_blocked_reason/message;
+                                           #   status_known is separate from request eligibility. Valid
+                                           #   seasons remain usable. Kids accounts require identifiable,
+                                           #   permitted source titles; mappings and grants are live.
+                                           #   Advertised by /api/config tv_library_navigation:true.
+POST   /api/requests/tv-library            # user: instance_id, series_id, revision, optional seasons,
+                                           #   season_scope and quality_profile_id. Translates library
+                                           #   seasons through normal source request policy and dispatch.
+                                           #   Returns success and accepted_seasons; implicit all-season
+                                           #   requests report blocked rows in skipped_seasons. Explicit
+                                           #   selections containing a blocked season fail before writes;
+                                           #   first/latest/pilot never silently change target. Partial
+                                           #   acceptance includes error and requires a status refresh.
 GET    /api/requests/book-status           # user: per-format live state by foreign_id; optional instance_id, title, q (exact lookup context)
 GET    /api/requests/book-library          # user: title/format digest with typed identity_keys and complete author summaries
                                            #   (name/position) and author (name + the library's own

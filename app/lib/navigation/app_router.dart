@@ -70,6 +70,7 @@ import '../features/issues/ui/issues_list_screen.dart';
 import '../features/issues/ui/pending_agent_actions_screen.dart';
 import '../features/media_access/ui/media_access_guide.dart';
 import '../features/media_detail/ui/media_detail_screen.dart';
+import '../features/media_detail/ui/tv_library_detail_screen.dart';
 import '../features/notifications/ui/push_notifications_screen.dart';
 import '../features/notifications/ui/server_push_notifications_screen.dart';
 import '../features/radarr/ui/radarr_calendar_screen.dart';
@@ -700,6 +701,18 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             },
           ),
           GoRoute(
+            path: '/detail/tv-library/:seriesId',
+            builder: (_, state) {
+              final id = int.tryParse(state.pathParameters['seriesId'] ?? '');
+              final instance = state.uri.queryParameters['instance_id']?.trim();
+              if (id == null || id <= 0 || instance == null || instance.isEmpty) {
+                return const _InvalidRouteScreen(message: 'This TV library link is invalid.');
+              }
+              return AppAmbientBackground(child: TVLibraryDetailScreen(
+                  seriesId: id, instanceId: instance));
+            },
+          ),
+          GoRoute(
             path: '/detail/:type/:id',
             redirect: (_, state) => _mediaDetailRedirect(state),
             builder: (context, state) =>
@@ -1234,7 +1247,7 @@ bool _hasValidMediaDetailParameters(GoRouterState state) {
 /// Route-level guard for `/detail/:type/:id`. Books, authors, albums and
 /// artists use a string foreign id and a series uses its name, so the only
 /// malformed shape is a blank id — degrade to that media's own tab. Movie/TV
-/// keep the positive-TMDB-id validation and their movies-dashboard fallback.
+/// keep positive-TMDB-id validation and return to their own dashboard tab.
 String? _mediaDetailRedirect(GoRouterState state) {
   final type = state.pathParameters['type'];
   if (type == 'book' || type == 'author' || type == 'series') {
@@ -1245,7 +1258,9 @@ String? _mediaDetailRedirect(GoRouterState state) {
     final id = state.pathParameters['id']?.trim() ?? '';
     return id.isEmpty ? '/dashboard/music' : null;
   }
-  return _hasValidMediaDetailParameters(state) ? null : '/dashboard/movies';
+  return _hasValidMediaDetailParameters(state)
+      ? null
+      : type == 'tv' ? '/dashboard/tv' : '/dashboard/movies';
 }
 
 /// Defensive fallback for a malformed parameter if a future router version

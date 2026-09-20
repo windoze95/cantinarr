@@ -71,6 +71,7 @@ void main() {
           'hasFile': false,
         },
         {5: series},
+        instanceId: 'tv-other',
       );
 
       expect(event, isNotNull);
@@ -78,6 +79,9 @@ void main() {
       expect(event.subtitle, 'S02E07 • The Ep');
       expect(event.mediaType, ReleaseMediaType.tv);
       expect(event.tmdbId, 99);
+      expect(event.seriesId, 5);
+      expect(event.seasonNumber, 2);
+      expect(event.instanceId, 'tv-other');
       expect(event.posterUrl, 'http://x/s.jpg');
       expect(event.hasFile, isFalse);
     });

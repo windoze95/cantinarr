@@ -12,6 +12,7 @@ import '../../lidarr/data/lidarr_api_service.dart';
 import '../../radarr/data/radarr_api_service.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../data/release_event.dart';
+import 'tv_library_link.dart';
 
 /// Dashboard "Releases" tab — a unified view of what drops when, aggregating
 /// the default Radarr (movie) and Sonarr (episode) calendars, plus the
@@ -113,7 +114,8 @@ class _DashboardReleasesTabState extends ConsumerState<DashboardReleasesTab> {
         final seriesById = {for (final s in series) s.id: s};
         final raw = await service.getCalendar(start: start, end: end);
         for (final entry in raw) {
-          final event = releaseEventFromSonarr(entry, seriesById);
+          final event = releaseEventFromSonarr(entry, seriesById,
+              instanceId: sonarr.id);
           if (event != null) events.add(event);
         }
       } catch (_) {
@@ -409,13 +411,13 @@ class _ReleaseTile extends StatelessWidget {
               '${event.instanceId != null ? '&instance_id=${event.instanceId}' : ''}')
           : null;
     } else {
-      onTap = tmdbId != null
-          ? () => context.push('/detail/${isTv ? 'tv' : 'movie'}/$tmdbId')
+      onTap = !isTv && (tmdbId ?? 0) > 0
+          ? () => context.push('/detail/movie/$tmdbId')
           : null;
     }
 
-    return InkWell(
-      onTap: onTap,
+    Widget tile(VoidCallback? tap) => InkWell(
+      onTap: tap,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         child: Row(
@@ -472,6 +474,16 @@ class _ReleaseTile extends StatelessWidget {
         ),
       ),
     );
+    if (isTv && event.instanceId != null && event.seriesId != null) {
+      return TVLibraryLink(
+        instanceId: event.instanceId!,
+        seriesId: event.seriesId!,
+        seasonNumber: event.seasonNumber,
+        tmdbId: tmdbId,
+        builder: tile,
+      );
+    }
+    return tile(onTap);
   }
 
   Widget _poster(bool isTv, bool isMusic) {

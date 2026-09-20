@@ -222,6 +222,8 @@ class RequestNotifier extends ChangeNotifier {
     if (_disposed || libraryVersion != _libraryVersion) return status != null;
     _statusVersion++;
     if (status == null) {
+      if (_service.refreshStatusAfterFailure) await checkStatus();
+      if (_disposed || libraryVersion != _libraryVersion) return false;
       state = state.copyWith(
         isRequesting: false,
         isCheckingStatus: false,

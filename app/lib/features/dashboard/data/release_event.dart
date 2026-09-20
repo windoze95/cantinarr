@@ -26,10 +26,12 @@ class ReleaseEvent {
   final int? tmdbId;
 
   /// Album identity for the music detail screen: the MusicBrainz
-  /// release-group id plus the Lidarr instance it was read from. Null for
-  /// movie/tv events.
+  /// release-group id. Null for movie/tv events.
   final String? foreignId;
+  /// The library the event was read from (TV and music).
   final String? instanceId;
+  final int? seriesId;
+  final int? seasonNumber;
 
   /// Whether the file already exists in the library.
   final bool hasFile;
@@ -43,6 +45,8 @@ class ReleaseEvent {
     this.tmdbId,
     this.foreignId,
     this.instanceId,
+    this.seriesId,
+    this.seasonNumber,
     this.hasFile = false,
   });
 
@@ -99,8 +103,9 @@ ReleaseEvent? releaseEventFromRadarr(
 /// entry has no air date.
 ReleaseEvent? releaseEventFromSonarr(
   Map<String, dynamic> json,
-  Map<int, SonarrSeries> seriesById,
-) {
+  Map<int, SonarrSeries> seriesById, {
+  String? instanceId,
+}) {
   final air = DateTime.tryParse(json['airDateUtc'] as String? ?? '');
   if (air == null) return null;
 
@@ -127,6 +132,9 @@ ReleaseEvent? releaseEventFromSonarr(
     posterUrl: series?.posterUrl,
     mediaType: ReleaseMediaType.tv,
     tmdbId: series?.tmdbId,
+    instanceId: instanceId,
+    seriesId: seriesId,
+    seasonNumber: json['seasonNumber'] as int?,
     hasFile: json['hasFile'] as bool? ?? false,
   );
 }

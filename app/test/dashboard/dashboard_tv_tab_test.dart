@@ -22,6 +22,24 @@ import 'package:go_router/go_router.dart';
 /// see: that the tab asks Sonarr for import history at all, and that the row
 /// on screen is the one those builders produced.
 void main() {
+  testWidgets('zero-ID Monster library card opens its complete series page', (tester) async {
+    final adapter = _SonarrAdapter(
+      series: [_series(id: 42, title: 'Monster (2022)', files: 10, episodes: 30)..['tmdbId'] = 0],
+      history: [_import(seriesId: 42, date: '2026-09-19T01:00:00Z')],
+      calendar: const [],
+    );
+    final (:router, :opened) = await _pumpTvTabWithRouter(tester, adapter,
+        libraryNavigation: true);
+    await tester.ensureVisible(find.text('Monster (2022)'));
+    await tester.tap(find.text('Monster (2022)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Choose a title'), findsNothing);
+    expect(opened.last.toString(), '/detail/tv-library/42?instance_id=tv');
+    router.pop();
+    await tester.pumpAndSettle();
+    expect(find.text('Recently Downloaded'), findsOneWidget);
+  });
+
   testWidgets('Recently Downloaded is ordered by import date, not completeness',
       (tester) async {
     final adapter = _SonarrAdapter(
@@ -378,6 +396,7 @@ Future<({List<Uri> opened, GoRouter router})> _pumpTvTabWithRouter(
   WidgetTester tester,
   _SonarrAdapter adapter, {
   Size size = const Size(390, 844),
+  bool libraryNavigation = false,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -400,6 +419,14 @@ Future<({List<Uri> opened, GoRouter router})> _pumpTvTabWithRouter(
           return const Scaffold(body: Text('grid'));
         },
       ),
+      GoRoute(path: '/detail/tv/:id', builder: (_, state) {
+        opened.add(state.uri);
+        return const Scaffold(body: Text('detail'));
+      }),
+      GoRoute(path: '/detail/tv-library/:id', builder: (_, state) {
+        opened.add(state.uri);
+        return const Scaffold(body: Text('library detail'));
+      }),
     ],
   );
 
@@ -407,7 +434,8 @@ Future<({List<Uri> opened, GoRouter router})> _pumpTvTabWithRouter(
   dio.httpClientAdapter = adapter;
   final container = ProviderContainer(
     overrides: [
-      authProvider.overrideWith(() => _FakeAuthNotifier(_tvState)),
+      authProvider.overrideWith(() => _FakeAuthNotifier(_tvState.copyWith(
+        connection: _tvState.connection!.copyWith(tvLibraryNavigation: libraryNavigation)))),
       backendClientProvider.overrideWithValue(dio),
     ],
   );
