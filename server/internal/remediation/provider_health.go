@@ -168,7 +168,7 @@ func (s *Service) RecordAutoDispatchBreaker(tripped bool, streak, threshold int)
 	}
 
 	detail := fmt.Sprintf("After %d consecutive investigations ended without a resolution (threshold %d), Cantinarr switched automatic problem detection off so it would stop opening issues it cannot finish.", streak, threshold)
-	resolution := "Review the recent needs-admin issues for the underlying cause, then re-enable auto-dispatch under Settings > AI Remediation — re-enabling closes this notice."
+	resolution := "Review the recent needs-admin issues for the underlying cause, then re-enable auto-dispatch under Settings > AI Remediation. Re-enabling closes this notice; it cannot be closed by hand while automatic problem detection is off."
 	if errsql := err; errors.Is(errsql, sql.ErrNoRows) {
 		result, insertErr := tx.Exec(`
 			INSERT INTO issues
