@@ -17,6 +17,7 @@ import 'package:cantinarr/features/downloads/ui/downloads_module_shell.dart';
 import 'package:cantinarr/features/downloads/ui/downloads_queue_page.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -80,8 +81,17 @@ void main() {
       expect(find.textContaining('E02 · The next day'), findsOneWidget);
       expect(find.text('1 job · 50.0%'), findsOneWidget);
       expect(tester.takeException(), isNull);
-      await expectLater(find.byKey(const Key('content-golden')),
-          matchesGoldenFile('goldens/downloads_content_${width.toInt()}.png'));
+      // Capture at 2x so subpixel Ahem edges do not dominate the comparison
+      // between macOS and Linux. Keep the shared comparator's budget unchanged.
+      final boundary = tester.renderObject<RenderRepaintBoundary>(
+          find.byKey(const Key('content-golden')));
+      final golden = await boundary.toImage(pixelRatio: 2);
+      try {
+        await expectLater(golden,
+            matchesGoldenFile('goldens/downloads_content_${width.toInt()}.png'));
+      } finally {
+        golden.dispose();
+      }
       await tester.tap(find.byTooltip('Actions for Job 1'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Resume'));
