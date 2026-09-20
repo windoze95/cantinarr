@@ -37,6 +37,53 @@ void main() {
   // navigation tests local storage rather than waiting for a plugin timeout.
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
+  testWidgets('direct TV detail Back returns to TV Discover', (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+
+    router.go('/detail/tv/225634');
+    await tester.pumpAndSettle();
+
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/detail/tv/225634');
+    expect(router.canPop(), isFalse);
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/dashboard/tv');
+  });
+
+  testWidgets('direct book detail Back returns to Books Discover',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _booksState);
+
+    router.go('/detail/book/29749107?source=chaptarr&title=Ahsoka');
+    await tester.pumpAndSettle();
+
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/detail/book/29749107');
+    expect(router.canPop(), isFalse);
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/dashboard/books');
+  });
+
+  testWidgets('direct album detail Back returns to Music Discover',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _musicState);
+
+    router.go('/detail/album/mb-1234?title=Pinkerton');
+    await tester.pumpAndSettle();
+
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/detail/album/mb-1234');
+    expect(router.canPop(), isFalse);
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/dashboard/music');
+  });
+
   for (final cold in [true, false]) {
     for (final restoringAuth in [true, false]) {
       testWidgets('TV tap cold=$cold restoringAuth=$restoringAuth retains story and library', (tester) async {
@@ -741,6 +788,11 @@ class _JsonAdapter implements HttpClientAdapter {
   ) async {
     final Object body = switch (options.path) {
       '/api/trakt/anticipated' => [],
+      '/api/media/tv/225634' => {
+          'id': 225634,
+          'name': 'Nashville',
+          'seasons': <dynamic>[],
+        },
       _ => {
           'page': 1,
           'results': [],
