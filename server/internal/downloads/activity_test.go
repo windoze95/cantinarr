@@ -394,6 +394,35 @@ func TestActivityCompletedClientOverridesArrImportLag(t *testing.T) {
 	}
 }
 
+func TestActivityUnverifiedClientIdentityCannotProduceAnExactCount(t *testing.T) {
+	for _, scenario := range []string{"another address", "missing client job"} {
+		t.Run(scenario, func(t *testing.T) {
+			e := newActivityEnv(t)
+			arr := e.add(t, "radarr", "http://arr.invalid")
+			client := e.add(t, "sabnzbd", "http://client.invalid")
+			host := "client.invalid"
+			queue := &QueueView{Items: []QueueItem{}}
+			if scenario == "another address" {
+				host = "unverified-alias.invalid"
+				queue.Items = []QueueItem{{ID: "one", Status: "downloading", SizeBytes: 100, SizeLeftBytes: 50}}
+			}
+			cacheSource(e, client, sourceSnapshot{queue: queue})
+			cacheSource(e, arr, sourceSnapshot{definitions: []record{definition("sabnzbd", host)}, rows: []activityRow{movieRow(1, 100, "one", 100, 50)}})
+			for _, user := range []int64{1, 2} {
+				a, w := e.get(t, user, "/api/downloads/activity")
+				if a.Complete || a.Count != nil || len(a.Groups) == 0 || a.Jobs[0].Progress != 50 {
+					t.Fatalf("uncertain source agreement looked exact: %s", w.Body.String())
+				}
+				for _, job := range a.Jobs {
+					if job.ID == a.Groups[0].JobIDs[0] && job.Control != nil {
+						t.Fatal("unverified content gained client controls")
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestActivityInvalidatedReadCannotPopulateCache(t *testing.T) {
 	e := newActivityEnv(t)
 	entered, release := make(chan struct{}), make(chan struct{})

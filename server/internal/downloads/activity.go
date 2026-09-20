@@ -238,6 +238,9 @@ func (s *ActivityService) project(ctx context.Context, access activityAccess) (*
 	clientJobs := map[string]ActivityJob{}
 	finishedJobs := map[string]bool{}
 	correlations := map[string][]string{}
+	// An ID under another address is only a possible match. It cannot grant
+	// controls or justify counting two jobs when the client identity is unknown.
+	possibleCorrelations := map[string]bool{}
 	clientFailures := map[string]bool{}
 	clientEndpoints := map[string]int{}
 	used := map[string]bool{}
@@ -298,6 +301,7 @@ func (s *ActivityService) project(ctx context.Context, access activityAccess) (*
 				}
 				key := ep + "\x00" + correlationID(ep, alias)
 				correlations[key] = appendUnique(correlations[key], id)
+				possibleCorrelations[inst.ServiceType+"\x00"+correlationID(ep, alias)] = true
 			}
 			if finished {
 				finishedJobs[id] = true
@@ -324,6 +328,10 @@ func (s *ActivityService) project(ctx context.Context, access activityAccess) (*
 				id = opaqueID(inst.ID, q.str("downloadClient"), downloadID, fmt.Sprint(q.num("id")))
 			}
 			mapped := correlations[endpoint+"\x00"+correlationID(endpoint, downloadID)]
+			kind := strings.SplitN(endpoint, "|", 2)[0]
+			if len(mapped) == 0 && (clientEndpoints[endpoint] > 0 || possibleCorrelations[kind+"\x00"+correlationID(endpoint, downloadID)]) {
+				mappingComplete = false
+			}
 			if len(mapped) == 1 {
 				id = mapped[0]
 				// A client can have finished while the arr is still waiting to
