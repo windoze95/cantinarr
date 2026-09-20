@@ -2,6 +2,8 @@ package remediation
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -385,6 +387,80 @@ func TestBreakerTripOpensDurableIssueAndReenableResolves(t *testing.T) {
 	}
 	if !closed || kind == "" {
 		t.Fatalf("breaker issue after re-enable = closed %v kind %q, want auto-resolved", closed, kind)
+	}
+}
+
+// The breaker notice is the off state's only ambient indicator. On 2026-09-01
+// a production instance tripped its breaker; the notice was closed by hand in
+// a cleanup on 09-19, auto-dispatch stayed off, and every stuck download after
+// that was diagnosed and discarded with nothing on any screen saying why. A
+// human close is refused while remediation is on and auto-dispatch is off,
+// with the remedy as the error text; re-enabling remains what closes it, and
+// the master switch being off is the admin's own call.
+func TestBreakerNoticeRefusesManualCloseWhileAutoDispatchOff(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	if _, err := svc.SetSettings(Settings{Enabled: true, AutoDispatch: true, Mode: ModeSupervised}); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	svc.tripCircuitBreaker(5, 5)
+	var issueID int64
+	if err := svc.db.QueryRow(
+		"SELECT id FROM issues WHERE dedupe_key = ? AND closed_at IS NULL", autoDispatchBreakerDedupeKey,
+	).Scan(&issueID); err != nil {
+		t.Fatalf("breaker issue missing: %v", err)
+	}
+	ctx := context.Background()
+
+	for _, disposition := range []AdminIssueDisposition{AdminDispositionResolved, AdminDispositionWontFix} {
+		_, err := svc.ResolveIssueByAdmin(ctx, testAdminID, issueID, disposition, "")
+		if !errors.Is(err, ErrIssueCompletionConflict) {
+			t.Fatalf("%s while auto-dispatch off: err = %v, want completion conflict", disposition, err)
+		}
+		if !strings.Contains(err.Error(), "Settings > AI Remediation") {
+			t.Fatalf("refusal must name the remedy, got %q", err.Error())
+		}
+	}
+	if err := svc.DismissIssue(issueID); !errors.Is(err, ErrIssueCompletionConflict) {
+		t.Fatalf("dismiss while auto-dispatch off: err = %v, want completion conflict", err)
+	}
+	var stillOpen bool
+	if err := svc.db.QueryRow("SELECT closed_at IS NULL FROM issues WHERE id = ?", issueID).Scan(&stillOpen); err != nil || !stillOpen {
+		t.Fatalf("breaker notice closed by hand: open=%v err=%v", stillOpen, err)
+	}
+
+	// Turning the master switch off is the admin's own decision: the notice
+	// may then be closed like any other issue.
+	cur := svc.Settings()
+	cur.Enabled = false
+	if _, err := svc.SetSettings(cur); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if svc.breakerNoticeStillOff(ctx, issueID) {
+		t.Fatal("guard must not apply with remediation disabled")
+	}
+	cur.Enabled = true
+	if _, err := svc.SetSettings(cur); err != nil {
+		t.Fatalf("re-enable remediation: %v", err)
+	}
+
+	// Re-enabling auto-dispatch is what closes the notice.
+	cur.AutoDispatch = true
+	if _, err := svc.SetSettings(cur); err != nil {
+		t.Fatalf("re-enable auto-dispatch: %v", err)
+	}
+	var closed bool
+	var kind string
+	if err := svc.db.QueryRow(
+		"SELECT closed_at IS NOT NULL, resolution_kind FROM issues WHERE id = ?", issueID,
+	).Scan(&closed, &kind); err != nil {
+		t.Fatalf("read breaker issue: %v", err)
+	}
+	if !closed || kind != ResolutionRemediationProviderConfigured {
+		t.Fatalf("breaker notice after re-enable = closed %v kind %q", closed, kind)
+	}
+	// A closed notice is out of the guard's scope entirely.
+	if svc.breakerNoticeStillOff(ctx, issueID) {
+		t.Fatal("guard applied to a closed notice")
 	}
 }
 

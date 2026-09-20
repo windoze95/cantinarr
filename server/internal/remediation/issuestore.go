@@ -23,6 +23,20 @@ const (
 // to HTTP 409 and clients reconcile the authoritative issue.
 var ErrIssueCompletionConflict = errors.New("issue completion conflict")
 
+// breakerNoticeStillOffError refuses a human close of the circuit breaker's
+// notice while automatic problem detection is still off. It is an
+// ErrIssueCompletionConflict for the handler (HTTP 409) but reads as the remedy
+// in the admin's own screen, because the app shows this text verbatim.
+type breakerNoticeStillOffError struct{}
+
+func (breakerNoticeStillOffError) Error() string {
+	return "Automatic problem detection is still off. Turn auto-dispatch back on under Settings > AI Remediation; that closes this notice."
+}
+
+func (breakerNoticeStillOffError) Is(target error) bool { return target == ErrIssueCompletionConflict }
+
+var errBreakerNoticeStillOff error = breakerNoticeStillOffError{}
+
 // This file implements mcp.IssueStore on *Service so the agent-only MCP tools
 // (post_issue_message / conclude_issue) can write issue rows without internal/mcp
 // importing internal/remediation. The interface lives in internal/mcp; the
@@ -156,6 +170,21 @@ func (s *Service) ResolveIssueByAdmin(ctx context.Context, adminID, issueID int6
 	return s.GetIssue(issueID)
 }
 
+// breakerNoticeStillOff reports that issueID is the open circuit-breaker
+// notice while remediation is on and auto-dispatch is off: the exact state the
+// notice exists to make visible. Any read failure answers false so the ordinary
+// close path reports not-found or already-closed itself.
+func (s *Service) breakerNoticeStillOff(ctx context.Context, issueID int64) bool {
+	var dedupeKey sql.NullString
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT dedupe_key FROM issues WHERE id = ? AND closed_at IS NULL", issueID,
+	).Scan(&dedupeKey); err != nil || dedupeKey.String != autoDispatchBreakerDedupeKey {
+		return false
+	}
+	settings := s.Settings()
+	return settings.Enabled && !settings.AutoDispatch
+}
+
 func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, status, resolution, resolutionKind string, opts issueClosureOptions) (bool, error) {
 	resolution = secrets.RedactText(resolution)
 	if status != IssueResolved && status != IssueWontFix && status != IssueDismissed {
@@ -168,6 +197,18 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 	if status == IssueDismissed || resolutionKind == ResolutionAdminCompleted ||
 		resolutionKind == ResolutionReporterConfirmed || (status == IssueResolved && s.Settings().MarkResolvedAsRead) {
 		read = 1
+	}
+	// The breaker notice is the only thing in the product that says automatic
+	// problem detection switched itself off; the toggle it points at lives on
+	// a settings screen nobody opens once things work. A human close would
+	// leave detection off with no indicator at all, which is how a production
+	// instance ran blind for eighteen days (2026-09-01 to 09-19) after its
+	// notice was closed in a cleanup and every new stuck download was diagnosed
+	// and thrown away. Re-enabling auto-dispatch is what closes the notice
+	// (SetSettings), so the refusal names that. The master switch being off is
+	// the admin's own decision and is not second-guessed.
+	if (resolutionKind == ResolutionAdminCompleted || resolutionKind == ResolutionAdminDismissed) && s.breakerNoticeStillOff(ctx, issueID) {
+		return false, errBreakerNoticeStillOff
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
