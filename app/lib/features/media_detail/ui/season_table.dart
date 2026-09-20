@@ -113,12 +113,16 @@ class _SeasonTableState extends State<SeasonTable> {
 
   RequestSeasonStatus _statusFor(int seasonNumber) {
     final state = widget.notifier.state;
+    final season = _statusBySeason[seasonNumber];
+    // A title-wide pending badge must not erase an explicit mapping/status
+    // problem on one native library season.
+    if (season?.hasRequestIssue ?? false) return season!;
     // Pending approval covers the title; the API may omit its season rows.
     if (state.status == RequestStatus.pending) {
       return RequestSeasonStatus(
           seasonNumber: seasonNumber, status: RequestStatus.pending);
     }
-    return _statusBySeason[seasonNumber] ?? RequestSeasonStatus(
+    return season ?? RequestSeasonStatus(
       seasonNumber: seasonNumber,
       // A title without a breakdown must not turn accepted work into missing
       // seasons. With a breakdown, a newly announced season may still be new.
@@ -327,7 +331,12 @@ class _SeasonRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final checked = !status.isRequestable || selected;
+    final accepted = status.isKnown && switch (status.status) {
+      RequestStatus.available || RequestStatus.requested ||
+      RequestStatus.downloading || RequestStatus.pending => true,
+      _ => false,
+    };
+    final checked = accepted || selected;
     return InkWell(
       onTap: enabled ? () => onChanged(!selected) : null,
       child: Padding(
@@ -365,10 +374,17 @@ class _SeasonRow extends StatelessWidget {
                       style: const TextStyle(
                           color: AppTheme.textSecondary, fontSize: 12),
                     ),
+                  if (status.hasRequestIssue)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4, right: 8),
+                      child: Text(status.requestBlockedMessage ??
+                          'Could not verify this season. Retry before requesting.',
+                        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+                    ),
                 ],
               ),
             ),
-            _SeasonStatusBadge(status: status.status),
+            _SeasonStatusBadge(status: status.isKnown ? status.status : null),
             if (downloadInstanceId != null && downloadChoices.isNotEmpty) ...[
               const SizedBox(width: 4),
               MediaDownloadChoiceButton(
@@ -394,6 +410,7 @@ class _SeasonStatusBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (label, color) = switch (status) {
+      null => ('Unknown', AppTheme.textSecondary),
       RequestStatus.available => ('Available', AppTheme.available),
       RequestStatus.partial => ('Partial', AppTheme.requested),
       RequestStatus.downloading => ('Downloading', AppTheme.downloading),

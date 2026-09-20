@@ -20,18 +20,19 @@ import (
 )
 
 type correctionLab struct {
-	mu            sync.Mutex
-	parent        map[string]any
-	episodes      []map[string]any
-	commands      []map[string]any
-	adds          []map[string]any
-	delayRefresh  bool
-	metadataDown  bool
-	episodesDown  bool
-	extraSource   bool
-	missingTarget bool
-	mutations     int
-	lookupTVDB    int
+	mu             sync.Mutex
+	parent         map[string]any
+	episodes       []map[string]any
+	commands       []map[string]any
+	adds           []map[string]any
+	delayRefresh   bool
+	metadataDown   bool
+	metadataDownID int
+	episodesDown   bool
+	extraSource    bool
+	missingTarget  bool
+	mutations      int
+	lookupTVDB     int
 }
 
 func (l *correctionLab) seasonMetadata() []map[string]any {
@@ -83,12 +84,12 @@ func newCorrectionLab(t *testing.T) (*Service, int64, int64, *correctionLab) {
 		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/tv/"):
-			if l.metadataDown {
+			parts := strings.Split(r.URL.Path, "/")
+			id, _ := strconv.Atoi(parts[2])
+			if l.metadataDown || l.metadataDownID == id {
 				w.WriteHeader(503)
 				return
 			}
-			parts := strings.Split(r.URL.Path, "/")
-			id, _ := strconv.Atoi(parts[2])
 			if strings.HasSuffix(r.URL.Path, "/external_ids") {
 				write(map[string]any{"tvdb_id": 999999})
 				return

@@ -83,6 +83,28 @@ func (s *Service) prepareTVTarget(r *resolvedRequest) (*TVRequestTarget, error) 
 			encodeSeasonNumbers(normalizeSeasonNumbers(out.TargetSeasons)) != encodeSeasonNumbers(proof.targetSeasons) {
 			return nil, ErrTVMatchStale
 		}
+		// An edit to ANOTHER source can introduce an overlap without changing
+		// this source's revision. Recheck ownership during request preparation.
+		_, candidates, err := s.importTVMatches(existing)
+		if err != nil {
+			return nil, err
+		}
+		for _, target := range out.TargetSeasons {
+			owners := 0
+			for _, candidate := range candidates {
+				for _, n := range candidate.SeasonMap {
+					if n == target {
+						if candidate.TmdbID != m.TmdbID {
+							return nil, ErrTVMatchStale
+						}
+						owners++
+					}
+				}
+			}
+			if owners != 1 {
+				return nil, ErrTVMatchStale
+			}
+		}
 	}
 	r.newWork = existing == nil || !existing.Monitored
 	if existing != nil {

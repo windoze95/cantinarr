@@ -249,7 +249,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// change nothing about where the title can be watched.
   void _onRequestStateChanged() {
     final library = _librarySeries?.current;
-    if (library?.detail != null && _requestNotifier.state.hasStatus) {
+    if (library?.detail != null && !_requestNotifier.state.isCheckingStatus) {
       _detailNotifier.state = MediaDetailState(tvDetail: library!.detail);
     }
     if (_requestNotifier.state.status != _watchedStatus) _resolveWatchLinks();
@@ -259,6 +259,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       if (key != _resolvedMatchKey) {
         _resolvedMatchKey = key;
         _resolveArrLink();
+        if (library != null) _resolveWatchLinks();
       }
     }
   }
@@ -266,6 +267,12 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// Whether the user may pick specific seasons. Defaults to true (the
   /// server's out-of-the-box global setting) until the options load.
   bool get _canChooseSeasons => !_needsSetup && (_requestOptions?.canChooseSeason ?? true);
+
+  bool get _librarySeasonsNeedAttention => _librarySeries != null &&
+      _requestNotifier.state.seasons.any((s) => s.hasRequestIssue);
+
+  bool get _canRequestLibrarySeasons => _librarySeries == null ||
+      _requestNotifier.state.seasons.any((s) => s.isRequestable);
 
   /// The libraries this user may aim requests at for this media type, from
   /// the per-user filtered connection (granted set for requesters, every
@@ -514,10 +521,18 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                         isRequesting:
                                             _requestNotifier.state.isRequesting,
                                         error: _requestNotifier.state.error,
-                                        onRequest: widget.mediaType == MediaType.tv && !_requestNotifier.state.hasStatus
+                                        onRequest: widget.mediaType == MediaType.tv &&
+                                            (!_requestNotifier.state.hasStatus || !_canRequestLibrarySeasons)
                                             ? null : () => _onRequest(),
                                       ),
-                                      if (widget.mediaType == MediaType.tv && !_requestNotifier.state.hasStatus)
+                                      if (_librarySeasonsNeedAttention)
+                                        Padding(padding: const EdgeInsets.only(top: 8),
+                                          child: Text(_canRequestLibrarySeasons
+                                            ? 'Some seasons need attention. You can request the other seasons below.'
+                                            : 'Season requests are unavailable. See the notes beside each season.',
+                                            textAlign: TextAlign.center)),
+                                      if (widget.mediaType == MediaType.tv &&
+                                          (!_requestNotifier.state.hasStatus || _librarySeasonsNeedAttention))
                                         TextButton.icon(onPressed: _requestNotifier.state.isCheckingStatus
                                             ? null : _requestNotifier.checkStatus,
                                           icon: const Icon(Icons.refresh),
@@ -932,7 +947,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// the one-tap experience.
   Future<void> _onRequest() async {
     if (_needsSetup) return;
-    if (widget.mediaType == MediaType.tv && !_requestNotifier.state.hasStatus) return;
+    if (widget.mediaType == MediaType.tv &&
+        (!_requestNotifier.state.hasStatus || !_canRequestLibrarySeasons)) {
+      return;
+    }
     final s = _detailNotifier.state;
 
     final options = await _requestNotifier.fetchOptions();
@@ -946,7 +964,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     // choose seasons fall through to the coarse flow instead (the server
     // applies their default season scope to the missing seasons).
     if (widget.mediaType == MediaType.tv &&
-        _requestNotifier.state.status == RequestStatus.partial &&
+        (_requestNotifier.state.status == RequestStatus.partial || _librarySeries != null) &&
         s.seasons.isNotEmpty &&
         (options?.canChooseSeason ?? true)) {
       _scrollToSeasons();
@@ -1380,7 +1398,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// The same state rule covers one-tap requests, season-table requests and
   /// failures that block either. Admin corrections do not enable reporting.
   bool get _canReport => !_needsSetup && _reportInstanceId != null &&
-      (_librarySeries == null || _requestNotifier.state.hasStatus) &&
+      (_librarySeries == null || (_requestNotifier.state.hasStatus &&
+          (_librarySeries!.current?.matches.isNotEmpty ?? false))) &&
       (_reportingAllowed || _canCorrectTVMatch) &&
       _requestNotifier.state.canReportProblem;
 
@@ -1431,7 +1450,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       MediaDetailState state, String title, int? tvdbId, String instanceId,
       {required bool canCorrect, required bool allowReporting, int? reportId}) {
     // Real seasons only (drop a season 0 / specials placeholder when empty).
-    final seasons = state.seasons.where((s) => s.seasonNumber > 0).toList();
+    final seasons = state.seasons.where((s) => s.seasonNumber > 0 &&
+        (_librarySeries == null ||
+          _librarySeries!.current?.sourceForSeason(s.seasonNumber) != null)).toList();
     return showAppSheet<_TVProblemChoice>(
       context,
       builder: (sheetContext) {

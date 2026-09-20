@@ -734,6 +734,11 @@ type SeasonStatus struct {
 	EpisodeCount     int     `json:"episode_count"`
 	Status           string  `json:"status"`
 	Progress         float64 `json:"progress"`
+	// Native library pages can know availability without a usable catalog
+	// match. Keep that separate from permission to submit a season request.
+	StatusKnown           *bool  `json:"status_known,omitempty"`
+	RequestBlockedReason  string `json:"request_blocked_reason,omitempty"`
+	RequestBlockedMessage string `json:"request_blocked_message,omitempty"`
 }
 
 type RequestLog struct {

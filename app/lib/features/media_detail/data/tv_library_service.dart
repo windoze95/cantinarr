@@ -5,7 +5,7 @@ import '../../request/data/request_service.dart';
 import '../../request/data/tv_match_service.dart';
 import '../../request/data/request_quota.dart';
 
-/// One native series, including all of its verified catalog season mappings.
+/// One native series, with every season and any verified catalog mappings.
 /// A positive catalogId means an ordinary show: use its unchanged title page.
 class TVLibraryDetail {
   final int catalogId;
@@ -53,9 +53,19 @@ class TVLibraryService extends RequestService {
     }
     final result = TVLibraryDetail.fromJson(data);
     if (result.catalogId <= 0 && (result.detail == null ||
-        result.matches.isEmpty || result.revision.isEmpty ||
+        result.revision.isEmpty ||
         result.matches.any((m) => m.tmdbId <= 0 || m.seriesId != seriesId || !m.isResolved))) {
       throw const FormatException('Could not verify this library series.');
+    }
+    if (result.catalogId <= 0) {
+      final seasons = result.detail!.seasons.where((s) => s.seasonNumber > 0)
+          .map((s) => s.seasonNumber).toSet();
+      final statuses = result.status.seasons.map((s) => s.seasonNumber).toSet();
+      if (seasons.length != statuses.length || !seasons.containsAll(statuses) ||
+          result.status.seasons.any((s) => !s.hasRequestIssue &&
+              result.matches.where((m) => m.seasonMap.containsValue(s.seasonNumber)).length != 1)) {
+        throw const FormatException('Could not verify this series\' season status.');
+      }
     }
     return current = result;
   }

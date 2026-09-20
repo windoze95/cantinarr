@@ -95,8 +95,8 @@ func TestTVLibraryDetailOrdinaryMissingAndUnmappedIdentity(t *testing.T) {
 		t.Fatalf("ordinary page changed: %+v", out)
 	}
 	lab.parent["tmdbId"] = 0
-	if out, err := s.TVLibraryDetail(uid, instance, 42); err == nil || out != nil {
-		t.Fatalf("guessed zero ID: %+v %v", out, err)
+	if out, err := s.TVLibraryDetail(uid, instance, 42); err != nil || out.TmdbID != 0 || len(out.Status.Seasons) != 4 || len(out.Matches) != 0 {
+		t.Fatalf("native identity should remain browsable without guessing a catalog ID: %+v %v", out, err)
 	}
 	lab.parent = nil
 	if _, err := s.TVLibraryDetail(uid, instance, 42); !errors.Is(err, ErrTitleNotAvailable) {
@@ -104,28 +104,96 @@ func TestTVLibraryDetailOrdinaryMissingAndUnmappedIdentity(t *testing.T) {
 	}
 }
 
-func TestTVLibraryDetailNeverReturnsIncompleteOrGuessedSeasons(t *testing.T) {
+func TestTVLibraryDetailKeepsEverySeasonWhenOneMatchFails(t *testing.T) {
 	for _, tc := range []struct {
 		name, sql string
-		down      bool
+		downID    int
 	}{
 		{name: "paused", sql: `INSERT INTO tv_match_overrides(tmdb_id,mode,tvdb_id,season_map,revision) VALUES(225634,'paused',389492,'{"1":2}',1)`},
 		{name: "overlap", sql: `INSERT INTO tv_match_overrides(tmdb_id,mode,tvdb_id,season_map,revision) VALUES(555,'custom',389492,'{"1":2}',1)`},
 		{name: "moved", sql: `INSERT INTO tv_match_overrides(tmdb_id,mode,tvdb_id,season_map,revision) VALUES(225634,'custom',12345,'{"1":1}',1)`},
-		{name: "metadata unavailable", down: true},
+		{name: "metadata unavailable", downID: 225634},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, uid, _, lab := newCorrectionLab(t)
 			libraryParent(lab)
-			lab.metadataDown = tc.down
+			lab.metadataDownID = tc.downID
 			if tc.sql != "" {
 				if _, err := s.db.Exec(tc.sql); err != nil {
 					t.Fatal(err)
 				}
 			}
-			_, instance, _ := s.resolveSonarr(uid, "")
-			if out, err := s.TVLibraryDetail(uid, instance, 42); err == nil || out != nil {
-				t.Fatalf("unsafe parent: %+v %v", out, err)
+			out := libraryDetail(t, s, uid)
+			if len(out.Status.Seasons) != 4 || len(out.Matches) != 3 || !*out.Status.StatusKnown {
+				t.Fatalf("one failed mapping hid the series: %+v", out)
+			}
+			for _, season := range out.Status.Seasons {
+				if (season.RequestBlockedReason != "") != (season.SeasonNumber == 2) {
+					t.Fatalf("wrong season blocked: %+v", season)
+				}
+			}
+			// A mixed valid/invalid explicit selection is refused BEFORE any write.
+			if _, err := s.RequestTVLibrary(uid, TVLibraryRequest{InstanceID: out.InstanceID, SeriesID: 42, Revision: out.Revision, Seasons: []int{1, 2}}); err == nil || lab.mutations != 0 {
+				t.Fatalf("unverified selection was submitted: %v, mutations %d", err, lab.mutations)
+			}
+			result, err := s.RequestTVLibrary(uid, TVLibraryRequest{InstanceID: out.InstanceID, SeriesID: 42, Revision: out.Revision, Seasons: []int{3}})
+			if err != nil || !result.Success || !reflect.DeepEqual(result.AcceptedSeasons, []int{3}) {
+				t.Fatalf("unrelated season was blocked: %+v %v", result, err)
+			}
+			assertOnlySeasons(t, lab, 3)
+		})
+	}
+}
+
+func TestTVLibraryDetailUnmappedFutureSeasonAndAllPausedRemainVisible(t *testing.T) {
+	for _, allPaused := range []bool{false, true} {
+		t.Run(fmt.Sprint(allPaused), func(t *testing.T) {
+			s, uid, _, lab := newCorrectionLab(t)
+			libraryParent(lab)
+			lab.parent["seasons"] = append(lab.seasonMetadata(), map[string]any{"seasonNumber": 5})
+			if allPaused {
+				for _, id := range []int{113988, 225634, 286801, 299939} {
+					if _, err := s.db.Exec(`INSERT INTO tv_match_overrides(tmdb_id,mode,revision) VALUES(?,'paused',1)`, id); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			out := libraryDetail(t, s, uid)
+			if len(out.Status.Seasons) != 5 || out.Status.Seasons[4].RequestBlockedReason != "tv_seasons_unmapped" {
+				t.Fatalf("new season disappeared: %+v", out)
+			}
+			if allPaused && len(out.Matches) != 0 {
+				t.Fatalf("paused mapping remained actionable: %+v", out.Matches)
+			}
+			if lab.mutations != 0 {
+				t.Fatal("browsing mutated the library")
+			}
+		})
+	}
+}
+
+func TestTVLibraryRequestsAllSkipsBlockedButFirstNeverChangesTarget(t *testing.T) {
+	for _, scope := range []string{SeasonScopeAll, SeasonScopeFirst, SeasonScopePilot} {
+		t.Run(scope, func(t *testing.T) {
+			s, uid, _, lab := newCorrectionLab(t)
+			libraryParent(lab)
+			if _, err := s.db.Exec(`INSERT INTO tv_match_overrides(tmdb_id,mode,revision) VALUES(113988,'paused',1)`); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SetGlobalSettings(GlobalSettings{RequireApproval: true, DefaultSeasonScope: scope}); err != nil {
+				t.Fatal(err)
+			}
+			out := libraryDetail(t, s, uid)
+			result, err := s.RequestTVLibrary(uid, TVLibraryRequest{InstanceID: out.InstanceID, SeriesID: 42, Revision: out.Revision})
+			if scope == SeasonScopeAll {
+				if err != nil || !result.Success || !reflect.DeepEqual(result.AcceptedSeasons, []int{2, 3, 4}) || !reflect.DeepEqual(result.SkippedSeasons, []int{1}) {
+					t.Fatalf("all: %+v %v", result, err)
+				}
+			} else if err == nil || result != nil {
+				t.Fatalf("first silently changed season: %+v %v", result, err)
+			}
+			if lab.mutations != 0 {
+				t.Fatal("approval was bypassed")
 			}
 		})
 	}
@@ -250,7 +318,7 @@ func TestTVLibraryStatusOutageDoesNotEnableRequests(t *testing.T) {
 }
 
 func TestTVLibraryPreparedRequestRechecksSourceRevisionAndNativeRecord(t *testing.T) {
-	for _, change := range []string{"revision", "record", "seasons"} {
+	for _, change := range []string{"revision", "record", "seasons", "another source overlaps"} {
 		t.Run(change, func(t *testing.T) {
 			s, uid, _, lab := newCorrectionLab(t)
 			libraryParent(lab)
@@ -264,6 +332,10 @@ func TestTVLibraryPreparedRequestRechecksSourceRevisionAndNativeRecord(t *testin
 				proof.seriesID = 99
 			case "seasons":
 				proof.targetSeasons = []int{3}
+			case "another source overlaps":
+				if _, err := s.db.Exec(`INSERT INTO tv_match_overrides(tmdb_id,mode,tvdb_id,season_map,revision) VALUES(555,'custom',389492,'{"1":2}',1)`); err != nil {
+					t.Fatal(err)
+				}
 			}
 			_, err := s.CreateMediaRequest(uid, &CreateRequest{MediaType: "tv", TmdbID: match.TmdbID, InstanceID: out.InstanceID, Seasons: []int{1}, tvLibraryScope: proof})
 			if !errors.Is(err, ErrTVMatchStale) || lab.mutations != 0 {
@@ -274,8 +346,9 @@ func TestTVLibraryPreparedRequestRechecksSourceRevisionAndNativeRecord(t *testin
 }
 
 type libraryRatings struct {
-	down   bool
-	onRead func()
+	down       bool
+	allAllowed bool
+	onRead     func()
 }
 
 func (f *libraryRatings) DoGetRaw(path string, _ url.Values) ([]byte, error) {
@@ -286,7 +359,7 @@ func (f *libraryRatings) DoGetRaw(path string, _ url.Values) ([]byte, error) {
 		return nil, errors.New("unavailable")
 	}
 	rating := "TV-MA"
-	if path == "/tv/225634/content_ratings" || path == "/tv/456/content_ratings" {
+	if f.allAllowed || path == "/tv/225634/content_ratings" || path == "/tv/456/content_ratings" {
 		rating = "TV-PG"
 	}
 	return []byte(fmt.Sprintf(`{"results":[{"iso_3166_1":"US","rating":%q}]}`, rating)), nil
@@ -313,6 +386,91 @@ func TestTVLibraryDetailAppliesKidsPolicyToEntireParent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTVLibraryIncompleteMatchesNeverBypassKidsPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		allAllowed, unmapped bool
+		want                 error
+	}{
+		{name: "paused blocked story", want: ErrTitleNotAvailable},
+		{name: "paused allowed story", allAllowed: true},
+		{name: "unmapped story", allAllowed: true, unmapped: true, want: ErrContentPolicyUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, uid, _, lab := newCorrectionLab(t)
+			libraryParent(lab)
+			if _, err := s.db.Exec(`INSERT INTO tv_match_overrides(tmdb_id,mode,revision) VALUES(113988,'paused',1)`); err != nil {
+				t.Fatal(err)
+			}
+			if tc.unmapped {
+				lab.parent["seasons"] = append(lab.seasonMetadata(), map[string]any{"seasonNumber": 5})
+			}
+			policy := contentpolicy.New(s.db, func() contentpolicy.RawGetter { return &libraryRatings{allAllowed: tc.allAllowed} }, nil)
+			s.SetContentPolicy(policy)
+			if err := policy.Store.Set(uid, contentpolicy.Policy{MaxMovieRating: "PG", MaxTVRating: "TV-PG", RatingRegion: "US", BlockUnrated: true}); err != nil {
+				t.Fatal(err)
+			}
+			_, instance, _ := s.resolveSonarr(uid, "")
+			out, err := s.TVLibraryDetail(uid, instance, 42)
+			if !errors.Is(err, tc.want) || (tc.want != nil && out != nil) {
+				t.Fatalf("policy: %+v %v", out, err)
+			}
+			if tc.want == nil && (out == nil || len(out.Status.Seasons) != 4 || out.Status.Seasons[0].RequestBlockedReason != "tv_match_paused") {
+				t.Fatalf("allowed parent: %+v", out)
+			}
+		})
+	}
+}
+
+func TestTVLibraryUnmappedAvailabilityIsLiveAndRepairsRefresh(t *testing.T) {
+	s, uid, _, lab := newCorrectionLab(t)
+	libraryParent(lab)
+	if _, err := s.db.Exec(`INSERT INTO tv_match_overrides(tmdb_id,mode,revision) VALUES(225634,'paused',1)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, ep := range lab.episodes {
+		if ep["seasonNumber"] == 2 {
+			ep["hasFile"] = true
+		}
+	}
+	out := libraryDetail(t, s, uid)
+	row := out.Status.Seasons[1]
+	if row.Status != StatusAvailable || row.EpisodeFileCount != 2 || row.RequestBlockedReason != "tv_match_paused" {
+		t.Fatalf("native availability lost: %+v", row)
+	}
+	oldRevision := out.Revision
+	if _, err := s.db.Exec(`UPDATE tv_match_overrides SET mode='default',revision=revision+1 WHERE tmdb_id=225634`); err != nil {
+		t.Fatal(err)
+	}
+	out = libraryDetail(t, s, uid)
+	if out.Revision == oldRevision || out.Status.Seasons[1].RequestBlockedReason != "" || len(out.Matches) != 4 {
+		t.Fatalf("repair not reflected: %+v", out)
+	}
+	if lab.mutations != 0 {
+		t.Fatal("a read changed Sonarr")
+	}
+}
+
+func TestTVLibraryCustomPartialMappingDoesNotNeedBundledCorrections(t *testing.T) {
+	s, uid, _, lab := newCorrectionLab(t)
+	libraryParent(lab)
+	lab.lookupTVDB = 987654
+	lab.parent["tvdbId"], lab.parent["title"] = 987654, "Unrelated series"
+	lab.parent["seasons"] = lab.seasonMetadata()[:3]
+	if _, err := s.db.Exec(`INSERT INTO tv_match_overrides(tmdb_id,mode,tvdb_id,season_map,revision) VALUES(555,'custom',987654,'{"1":2}',1)`); err != nil {
+		t.Fatal(err)
+	}
+	out := libraryDetail(t, s, uid)
+	if len(out.Status.Seasons) != 2 || out.Status.Seasons[0].RequestBlockedReason != "tv_seasons_unmapped" || out.Status.Seasons[1].RequestBlockedReason != "" {
+		t.Fatalf("partial custom series: %+v", out)
+	}
+	result, err := s.RequestTVLibrary(uid, TVLibraryRequest{InstanceID: out.InstanceID, SeriesID: 42, Revision: out.Revision, Seasons: []int{2}})
+	if err != nil || !result.Success {
+		t.Fatalf("valid custom season: %+v %v", result, err)
+	}
+	assertOnlySeasons(t, lab, 2)
 }
 
 func TestTVLibraryDetailKeepsExplicitLibraryAndRechecksGrant(t *testing.T) {

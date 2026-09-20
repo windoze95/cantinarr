@@ -92,6 +92,78 @@ void main() {
         .any((r) => r.queryParameters.containsKey('season_number')), isFalse);
   });
 
+  testWidgets('one blocked mapping keeps the page and other season requests working', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() { tester.view.resetPhysicalSize(); tester.view.resetDevicePixelRatio(); });
+    final adapter = _Adapter(blocked: {2});
+    await _pump(tester, adapter);
+    await tester.tap(find.text('Monster card'));
+    await tester.pumpAndSettle();
+    expect(find.byType(MediaDetailScreen), findsOneWidget);
+    final table = tester.widget<SeasonTable>(find.byType(SeasonTable));
+    expect(table.seasons.map((s) => s.seasonNumber), [1, 2, 3, 4]);
+    expect(table.notifier.state.seasons[1].isRequestable, isFalse);
+    expect(table.notifier.state.seasons[0].isRequestable, isTrue);
+    final boxes = tester.widgetList<Checkbox>(find.byType(Checkbox)).toList();
+    expect(boxes[1].value, isFalse);
+    expect(boxes[1].onChanged, isNull);
+    expect(find.text('This season needs a TV match before it can be requested.'), findsOneWidget);
+    await tester.ensureVisible(find.text('All'));
+    await tester.tap(find.text('All'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Request 3 seasons'));
+    await tester.tap(find.text('Request 3 seasons'));
+    await tester.pumpAndSettle();
+    expect(adapter.requests.singleWhere((r) => r.method == 'POST').data['seasons'], [1, 3, 4]);
+    expect(table.notifier.state.seasons[1].isRequestable, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('all mappings unavailable still shows the title and can recover on retry', (tester) async {
+    final adapter = _Adapter(blocked: {1, 2, 3, 4});
+    final router = await _pump(tester, adapter);
+    await tester.tap(find.text('Monster card'));
+    await tester.pumpAndSettle();
+    expect(find.text('An anthology with four stories.'), findsOneWidget);
+    expect(tester.widget<SeasonTable>(find.byType(SeasonTable)).seasons.length, 4);
+    expect(tester.widgetList<Checkbox>(find.byType(Checkbox))
+        .every((c) => c.onChanged == null && c.value == false), isTrue);
+    expect(find.text('All'), findsNothing);
+    expect(tester.widget<ElevatedButton>(find.widgetWithText(ElevatedButton, 'Request')).onPressed, isNull);
+    expect(find.text('Season requests are unavailable. See the notes beside each season.'), findsOneWidget);
+    adapter.blocked.clear();
+    await tester.ensureVisible(find.text('Retry TV match'));
+    await tester.tap(find.text('Retry TV match'));
+    await tester.pumpAndSettle();
+    expect(tester.widgetList<Checkbox>(find.byType(Checkbox))
+        .every((c) => c.onChanged != null), isTrue);
+    expect(find.text('Retry TV match'), findsNothing);
+    router.pop();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Movies'));
+    await tester.pumpAndSettle();
+    expect(find.text('Movies screen'), findsOneWidget);
+    router.go('/dashboard/tv');
+    await tester.pumpAndSettle();
+    expect(find.text('Monster card'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('problem reports exclude seasons without a verified source identity', (tester) async {
+    final adapter = _Adapter(blocked: {2})..requested.add(1);
+    await _pump(tester, adapter, reporting: true);
+    await tester.tap(find.text('Monster card'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Report a problem'));
+    await tester.tap(find.text('Report a problem'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ListTile, 'Season 1'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, 'Season 2'), findsNothing);
+    expect(find.widgetWithText(ListTile, 'Season 3'), findsOneWidget);
+    expect(adapter.requests.any((r) => r.path.contains('/tv/0')), isFalse);
+  });
+
   testWidgets('season request keeps native season, revision and exact library', (tester) async {
     final adapter = _Adapter();
     await _pump(tester, adapter);
@@ -192,10 +264,10 @@ void main() {
 }
 
 Future<GoRouter> _pump(WidgetTester tester, _Adapter adapter,
-    {int tmdbId = 0, int? season, bool supported = true}) async {
+    {int tmdbId = 0, int? season, bool supported = true, bool reporting = false}) async {
   final dio = Dio(BaseOptions(baseUrl: 'http://fixture'))..httpClientAdapter = adapter;
   final container = ProviderContainer(overrides: [
-    authProvider.overrideWith(() => _Auth(supported)),
+    authProvider.overrideWith(() => _Auth(supported, reporting)),
     backendClientProvider.overrideWithValue(dio),
     realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
   ]);
@@ -221,12 +293,14 @@ Future<GoRouter> _pump(WidgetTester tester, _Adapter adapter,
 }
 
 class _Auth extends AuthNotifier {
-  _Auth(this.supported);
+  _Auth(this.supported, this.reporting);
   final bool supported;
+  final bool reporting;
   @override
   Future<AuthState> build() async => AuthState(
     connection: BackendConnection(serverUrl: 'http://fixture', accessToken: 'test',
       refreshToken: 'test', tvLibraryNavigation: supported, tvMatchCorrections: true,
+      allowReporting: reporting,
       configConfirmed: true, instances: const [
         ServiceInstance(id: 'tv-main', serviceType: 'sonarr', name: 'Default TV', isDefault: true),
         ServiceInstance(id: 'tv-other', serviceType: 'sonarr', name: 'Other TV'),
@@ -236,7 +310,9 @@ class _Auth extends AuthNotifier {
 }
 
 class _Adapter implements HttpClientAdapter {
-  _Adapter({this.status = 200, this.gate, this.catalogId = 0, this.partialWrite = false});
+  _Adapter({this.status = 200, this.gate, this.catalogId = 0, this.partialWrite = false,
+    Set<int> blocked = const {}}) : blocked = {...blocked};
+  final Set<int> blocked;
   int status;
   final int catalogId;
   final bool partialWrite;
@@ -267,8 +343,10 @@ class _Adapter implements HttpClientAdapter {
             'seasons': [for (var n = 1; n <= 4; n++) {'id': n, 'season_number': n, 'episode_count': 2}]},
           'status': {'status': requested.isEmpty ? 'unavailable' : 'partial', 'status_known': true,
             'seasons': [for (var n = 1; n <= 4; n++) {'season_number': n,
+              if (blocked.contains(n)) 'request_blocked_reason': 'tv_seasons_unmapped',
+              if (blocked.contains(n)) 'request_blocked_message': 'This season needs a TV match before it can be requested.',
               'episode_count': 2, 'status': requested.contains(n) ? 'requested' : 'unavailable'}]},
-          'matches': [for (var n = 1; n <= 4; n++) {'tmdb_id': n*100, 'series_id': 42,
+          'matches': [for (var n = 1; n <= 4; n++) if (!blocked.contains(n)) {'tmdb_id': n*100, 'series_id': 42,
             'tvdb_id': 389492, 'state': 'resolved', 'revision': 'source$n', 'season_map': {'1': n}}],
         };
       }

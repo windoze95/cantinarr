@@ -35,13 +35,17 @@ Confirming a correction creates a linked corrective request through the normal r
 
 ## Open a combined library series
 
-Sonarr can keep several separately listed TMDB titles under one series, such as **Monster (2022)**. Opening that series from **TV Shows > Recently Downloaded**, **Airing Next**, or a TV episode in **Releases** opens the regular title page with its poster, overview, status, and all mapped seasons together. There is no title chooser. The page keeps the library the entry came from.
+Sonarr can keep several separately listed TMDB titles under one series, such as **Monster (2022)**. Opening that series from **TV Shows > Recently Downloaded**, **Airing Next**, or a TV episode in **Releases** opens the regular title page with its poster, overview, status, and every library season together. There is no title chooser. The page keeps the library the entry came from.
 
 Select seasons as you would for any other series. Cantinarr translates their numbers to the source titles internally and applies the same approval rules and request allowances. A request spanning several source titles can partly succeed. If that happens, the page refreshes accepted seasons and asks you to review the remaining ones before retrying. Problem reports start with a season so they reach the correct source title. Search results and story-specific notifications retain their separate catalog identities.
 
-The combined page is available to a kids account only when every source title is allowed. An unmapped season, paused correction, or metadata failure stops the page from showing an incomplete season list as if it were complete. Retry the page after correcting the match or restoring access.
+Missing, paused, conflicting, or temporarily unreadable matches do not prevent the series from opening. Each affected season stays visible with an explanation and cannot be requested until its match can be verified. Other seasons remain usable. This also covers newly announced seasons and series with no working matches. Availability still comes from the live library; an unreadable status says **Unknown**, not **Not added**. Use **Retry TV match** after correcting a match or restoring access.
 
-These links use the current mappings on each tap. If resolution fails, you stay on the current tab. Retry after checking library access and the mappings in **TV matches**. Paused, overlapping, or unmapped seasons must be resolved before Cantinarr can offer a complete title list. Rating limits still apply to each title.
+The season picker's **All**, **First**, and **Latest** controls select only requestable seasons. For accounts without season choice, an **All seasons** policy skips blocked seasons; **First season**, **Latest season**, and **Pilot only** never silently substitute a different season when their intended target is blocked. Problem reports require a verified source match too.
+
+Kids-account limits remain separate from request matching. Every season must have an identifiable source that the account may see before the combined parent's artwork and overview are shown. An unknown source or unreadable rating keeps the combined page unavailable; pausing a match does not bypass a rating limit.
+
+These links read current library data and mappings on opening and refresh. A removed library, revoked grant, or unreadable series shows an unavailable or retry page with working back navigation. It never switches the TV tab to Movies.
 
 This navigation requires a server that supports TV library resolution. With an older server, cards without a usable catalog ID cannot be opened.
 

@@ -50,103 +50,21 @@ func (s *Service) TVLibraryDetail(userID int64, instanceID string, seriesID int)
 
 	s.tvMatchMu.Lock()
 	defer s.tvMatchMu.Unlock()
-	corrected, _, err := s.importTVMatches(series)
+	corrected, candidates, err := s.importTVMatches(series)
 	if err != nil {
 		return nil, tvMatchFailure("tv_metadata_unavailable")
 	}
 	out := &TVLibraryDetail{InstanceID: resolvedID, SeriesID: seriesID}
 	isAdmin := s.userIsAdmin(userID)
-	if !corrected {
-		if series.TmdbID <= 0 {
-			return nil, tvMatchFailure("tv_match_ambiguous")
-		}
+	if !corrected && series.TmdbID > 0 {
 		if err = s.checkContentPolicy(userID, isAdmin, "tv", series.TmdbID); err != nil {
 			return nil, err
 		}
 		out.TmdbID = series.TmdbID
 	} else {
-		var evidence []sonarr.ImportedEpisode
-		for _, season := range series.Seasons {
-			if season.SeasonNumber > 0 {
-				evidence = append(evidence, sonarr.ImportedEpisode{SeasonNumber: season.SeasonNumber})
-			}
+		if err := s.populateTVLibraryDetail(userID, isAdmin, client, series, candidates, out); err != nil {
+			return nil, err
 		}
-		titles, err := s.resolveTVImports(client, series, evidence)
-		if err != nil {
-			return nil, libraryReadError(err)
-		}
-		if len(titles) == 0 {
-			return nil, tvMatchFailure("tv_seasons_unmapped")
-		}
-		known := true
-		out.Status = &StatusResponse{StatusKnown: &known}
-		seasons := []map[string]any{}
-		for _, title := range titles {
-			// A parent's overview/artwork can name any of its stories. Do not
-			// expose that parent to a child allowed only a subset of its seasons.
-			if err = s.checkContentPolicy(userID, isAdmin, "tv", title.TmdbID); err != nil {
-				return nil, err
-			}
-			status, err := s.userTVStatus(userID, title.TmdbID, resolvedID)
-			if err != nil {
-				return nil, libraryReadError(err)
-			}
-			m := status.Match
-			if m == nil || m.State != "resolved" || m.TVDBID != series.TvdbID || m.SeriesID != seriesID {
-				return nil, tvMatchFailure("tv_match_ambiguous")
-			}
-			source, err := s.tvSource(title.TmdbID)
-			if err != nil {
-				return nil, err
-			}
-			out.Matches = append(out.Matches, *m)
-			for _, season := range source.Seasons {
-				target := m.SeasonMap[season.SeasonNumber]
-				if target <= 0 {
-					continue
-				}
-				seasons = append(seasons, map[string]any{
-					"id": target, "season_number": target, "name": source.Name,
-					"episode_count": season.EpisodeCount,
-				})
-			}
-			for _, season := range status.Seasons {
-				season.SeasonNumber = m.SeasonMap[season.SeasonNumber]
-				if season.SeasonNumber > 0 {
-					out.Status.Seasons = append(out.Status.Seasons, season)
-				}
-			}
-			if status.StatusKnown == nil || !*status.StatusKnown {
-				known = false
-				out.Status.StatusUnknownReason = status.StatusUnknownReason
-			}
-			out.Status.Delivery = append(out.Status.Delivery, status.Delivery...)
-		}
-		sort.Slice(seasons, func(i, j int) bool { return seasons[i]["season_number"].(int) < seasons[j]["season_number"].(int) })
-		sort.Slice(out.Status.Seasons, func(i, j int) bool { return out.Status.Seasons[i].SeasonNumber < out.Status.Seasons[j].SeasonNumber })
-		out.Status.Status = librarySeasonStatus(out.Status.Seasons)
-		out.Detail = map[string]any{
-			"id": 0, "name": series.Title, "overview": series.Overview,
-			"seasons": seasons, "number_of_seasons": len(seasons),
-			"external_ids": map[string]any{"tvdb_id": series.TvdbID, "imdb_id": series.ImdbID},
-		}
-		if first, err := time.Parse(time.RFC3339, series.FirstAired); err == nil {
-			out.Detail["first_air_date"] = first.Format("2006-01-02")
-		}
-		for _, image := range series.Images {
-			u, err := url.Parse(image.RemoteURL)
-			if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil {
-				continue
-			}
-			switch image.CoverType {
-			case "poster":
-				out.Detail["poster_path"] = image.RemoteURL
-			case "fanart":
-				out.Detail["backdrop_path"] = image.RemoteURL
-			}
-		}
-		proof, _ := json.Marshal([]any{resolvedID, seriesID, series.TvdbID, out.Matches})
-		out.Revision = fmt.Sprintf("%x", sha256.Sum256(proof))
 	}
 	// Revoke during any provider read means no metadata leaves this method.
 	if _, _, err = s.resolveSonarr(userID, resolvedID); err != nil {
@@ -155,15 +73,208 @@ func (s *Service) TVLibraryDetail(userID int64, instanceID string, seriesID int)
 	return out, nil
 }
 
-func libraryReadError(err error) error {
-	var matchError *tvMatchError
-	if errors.As(err, &matchError) {
-		return matchError
+// Browsing starts with the native series, not with the subset of seasons that
+// currently have a working request match. No unresolved season is hidden or
+// assigned a guessed catalog identity. Caller holds tvMatchMu.
+func (s *Service) populateTVLibraryDetail(userID int64, isAdmin bool, client *sonarr.Client, series *sonarr.Series, candidates []TVMatch, out *TVLibraryDetail) error {
+	owners := map[int][]TVMatch{}
+	for _, match := range candidates {
+		for _, target := range match.SeasonMap {
+			owners[target] = append(owners[target], match)
+		}
 	}
-	if errors.Is(err, ErrArrInstanceForbidden) || errors.Is(err, ErrArrInstanceInvalid) || errors.Is(err, ErrTVMatchStale) {
+	var numbers []int
+	for _, season := range series.Seasons {
+		if season.SeasonNumber > 0 {
+			numbers = append(numbers, season.SeasonNumber)
+		}
+	}
+	numbers = normalizeSeasonNumbers(numbers)
+	policy, err := s.contentPolicyFor(userID, isAdmin)
+	if err != nil {
 		return err
 	}
-	return tvMatchFailure("tv_metadata_unavailable")
+	if policy != nil {
+		// Native parent artwork/overview can identify any of its stories. A
+		// paused request match is still rateable; an unknown/ambiguous owner is
+		// not. Neither a broken match nor a failed rating read bypasses limits.
+		if len(numbers) == 0 {
+			return ErrContentPolicyUnavailable
+		}
+		checked := map[int]bool{}
+		for _, n := range numbers {
+			if len(owners[n]) != 1 {
+				return ErrContentPolicyUnavailable
+			}
+			id := owners[n][0].TmdbID
+			if !checked[id] {
+				if err := s.checkContentPolicy(userID, isAdmin, "tv", id); err != nil {
+					return err
+				}
+				checked[id] = true
+			}
+		}
+	}
+	episodes, episodeErr := client.GetAllEpisodes(series.ID)
+	_, completion := sonarr.SeriesCompletion(episodes, time.Now())
+	monitored := map[int]bool{}
+	for _, ep := range episodes {
+		monitored[ep.SeasonNumber] = monitored[ep.SeasonNumber] || ep.Monitored
+	}
+	known := episodeErr == nil && len(numbers) > 0
+	out.Status = &StatusResponse{StatusKnown: &known}
+	if !known {
+		out.Status.StatusUnknownReason = "library_unavailable"
+	}
+	rows := map[int]SeasonStatus{}
+	metadata := map[int]map[string]any{}
+	for _, native := range series.Seasons {
+		n := native.SeasonNumber
+		if n <= 0 {
+			continue
+		}
+		c := completion[n]
+		if episodeErr != nil && native.Statistics != nil {
+			c = sonarr.Completion{Files: native.Statistics.EpisodeFileCount, Aired: native.Statistics.TotalEpisodeCount}
+		}
+		status, progress := statusFromCompletion(c, series.Monitored && (native.Monitored || monitored[n]))
+		row := SeasonStatus{SeasonNumber: n, Status: status, Progress: progress, EpisodeFileCount: c.Files, EpisodeCount: c.Aired, StatusKnown: &known}
+		blockLibrarySeason(&row, "tv_seasons_unmapped")
+		rows[n] = row
+		metadata[n] = map[string]any{"id": n, "season_number": n, "name": fmt.Sprintf("Season %d", n)}
+		if native.Statistics != nil && native.Statistics.TotalEpisodeCount > 0 {
+			metadata[n]["episode_count"] = native.Statistics.TotalEpisodeCount
+		}
+	}
+	sources := map[int]tvLibrarySource{}
+	verified := map[int]*TVMatch{}
+	for _, n := range numbers {
+		row := rows[n]
+		if len(owners[n]) > 1 {
+			blockLibrarySeason(&row, "tv_match_ambiguous")
+		} else if len(owners[n]) == 1 {
+			owner := owners[n][0]
+			read, exists := sources[owner.TmdbID]
+			if !exists {
+				read = s.readTVLibrarySource(userID, out.InstanceID, series, owner)
+				if read.reason == "" {
+					out.Status.Delivery = append(out.Status.Delivery, read.status.Delivery...)
+				}
+				sources[owner.TmdbID] = read
+			}
+			if read.reason != "" {
+				blockLibrarySeason(&row, read.reason)
+			} else {
+				m := read.status.Match
+				for source, target := range m.SeasonMap {
+					if target != n {
+						continue
+					}
+					metadata[n]["name"], metadata[n]["episode_count"] = m.Title, read.counts[source]
+					if verified[m.TmdbID] == nil {
+						copy := *m
+						copy.SeasonMap = map[int]int{}
+						verified[m.TmdbID] = &copy
+					}
+					verified[m.TmdbID].SeasonMap[source] = n
+					for _, status := range read.status.Seasons {
+						if status.SeasonNumber == source {
+							row = status
+							row.SeasonNumber, row.StatusKnown = n, read.status.StatusKnown
+						}
+					}
+					if row.StatusKnown == nil || !*row.StatusKnown {
+						blockLibrarySeason(&row, "library_unavailable")
+					}
+				}
+			}
+		}
+		out.Status.Seasons = append(out.Status.Seasons, row)
+	}
+	for _, match := range verified {
+		out.Matches = append(out.Matches, *match)
+	}
+	sort.Slice(out.Matches, func(i, j int) bool { return out.Matches[i].TmdbID < out.Matches[j].TmdbID })
+	seasons := []map[string]any{}
+	for _, n := range numbers {
+		seasons = append(seasons, metadata[n])
+	}
+	out.Status.Status = librarySeasonStatus(out.Status.Seasons)
+	out.Detail = map[string]any{"id": 0, "name": series.Title, "overview": series.Overview,
+		"seasons": seasons, "number_of_seasons": len(seasons),
+		"external_ids": map[string]any{"tvdb_id": series.TvdbID, "imdb_id": series.ImdbID}}
+	if first, err := time.Parse(time.RFC3339, series.FirstAired); err == nil {
+		out.Detail["first_air_date"] = first.Format("2006-01-02")
+	}
+	for _, image := range series.Images {
+		u, err := url.Parse(image.RemoteURL)
+		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil {
+			continue
+		}
+		switch image.CoverType {
+		case "poster":
+			out.Detail["poster_path"] = image.RemoteURL
+		case "fanart":
+			out.Detail["backdrop_path"] = image.RemoteURL
+		}
+	}
+	// Include unresolved configuration and native seasons too: repairing a
+	// match or adding a season invalidates a previously displayed selection.
+	proof, _ := json.Marshal([]any{out.InstanceID, series.ID, series.TvdbID, numbers, candidates, out.Matches})
+	out.Revision = fmt.Sprintf("%x", sha256.Sum256(proof))
+	return nil
+}
+
+type tvLibrarySource struct {
+	status *StatusResponse
+	reason string
+	counts map[int]int
+}
+
+func (s *Service) readTVLibrarySource(userID int64, instanceID string, series *sonarr.Series, owner TVMatch) tvLibrarySource {
+	status, err := s.userTVStatus(userID, owner.TmdbID, instanceID)
+	if err != nil {
+		return tvLibrarySource{reason: "library_unavailable"}
+	}
+	m := status.Match
+	if m == nil || m.State != "resolved" {
+		reason := status.StatusUnknownReason
+		if reason == "" {
+			reason = "tv_match_ambiguous"
+		}
+		return tvLibrarySource{reason: reason}
+	}
+	if m.TVDBID != series.TvdbID || m.SeriesID != series.ID || m.Revision != owner.Revision {
+		return tvLibrarySource{reason: "tv_match_ambiguous"}
+	}
+	source, err := s.tvSource(owner.TmdbID)
+	if err != nil {
+		return tvLibrarySource{reason: "tv_metadata_unavailable"}
+	}
+	if validateTVSeasons(m.SeasonMap, sourceSeasonNumbers(source), series.Seasons) != nil {
+		return tvLibrarySource{reason: "tv_seasons_unmapped"}
+	}
+	read := tvLibrarySource{status: status, counts: map[int]int{}}
+	for _, season := range source.Seasons {
+		read.counts[season.SeasonNumber] = season.EpisodeCount
+	}
+	return read
+}
+
+func blockLibrarySeason(row *SeasonStatus, reason string) {
+	row.RequestBlockedReason = reason
+	switch reason {
+	case "tv_match_paused":
+		row.RequestBlockedMessage = "Matching is paused for this season. An admin can review its TV match."
+	case "tv_match_ambiguous":
+		row.RequestBlockedMessage = "This season has conflicting TV matches. An admin can review them."
+	case "tv_seasons_unmapped":
+		row.RequestBlockedMessage = "This season needs a TV match before it can be requested."
+	case "tv_metadata_unavailable":
+		row.RequestBlockedMessage = "Could not verify this season's catalog details. Retry to check again."
+	default:
+		row.RequestBlockedMessage = "Could not verify this season's request status. Retry to check again."
+	}
 }
 
 func librarySeasonStatus(seasons []SeasonStatus) string {
@@ -206,6 +317,7 @@ type TVLibraryRequest struct {
 type TVLibraryRequestResult struct {
 	Success         bool   `json:"success"`
 	AcceptedSeasons []int  `json:"accepted_seasons"`
+	SkippedSeasons  []int  `json:"skipped_seasons,omitempty"`
 	Error           string `json:"error,omitempty"`
 }
 
@@ -225,8 +337,14 @@ func (s *Service) RequestTVLibrary(userID int64, req TVLibraryRequest) (*TVLibra
 		return nil, err
 	}
 	var all []int
+	blocked := map[int]string{}
 	for _, season := range detail.Status.Seasons {
 		all = append(all, season.SeasonNumber)
+		if season.RequestBlockedReason != "" {
+			blocked[season.SeasonNumber] = season.RequestBlockedReason
+		} else if season.StatusKnown != nil && !*season.StatusKnown {
+			blocked[season.SeasonNumber] = "tv_metadata_unavailable"
+		}
 	}
 	all = normalizeSeasonNumbers(all)
 	if len(all) == 0 {
@@ -237,7 +355,8 @@ func (s *Service) RequestTVLibrary(userID int64, req TVLibraryRequest) (*TVLibra
 		scope = req.SeasonScope
 	}
 	pilot := scope == SeasonScopePilot
-	if eff.AllowSeasonChoice && len(req.Seasons) > 0 {
+	explicit := eff.AllowSeasonChoice && len(req.Seasons) > 0
+	if explicit {
 		for _, n := range req.Seasons {
 			if n <= 0 {
 				return nil, tvMatchFailure("tv_seasons_unmapped")
@@ -252,13 +371,26 @@ func (s *Service) RequestTVLibrary(userID int64, req TVLibraryRequest) (*TVLibra
 			selected = all[len(all)-1:]
 		}
 	}
+	result := &TVLibraryRequestResult{AcceptedSeasons: []int{}}
+	var safe []int
 	for _, n := range selected {
 		i := sort.SearchInts(all, n)
 		if i >= len(all) || all[i] != n {
 			return nil, tvMatchFailure("tv_seasons_unmapped")
 		}
+		if reason := blocked[n]; reason != "" {
+			if !explicit && scope == SeasonScopeAll {
+				result.SkippedSeasons = append(result.SkippedSeasons, n)
+				continue
+			}
+			return nil, tvMatchFailure(reason)
+		}
+		safe = append(safe, n)
 	}
-	result := &TVLibraryRequestResult{AcceptedSeasons: []int{}}
+	if len(safe) == 0 {
+		return nil, tvMatchFailure("tv_seasons_unmapped")
+	}
+	selected = safe
 	// Matches are sorted by source ID, not parent season. Sort groups by their
 	// first target so any partial success is predictable to the user.
 	sort.Slice(detail.Matches, func(i, j int) bool { return firstTarget(detail.Matches[i]) < firstTarget(detail.Matches[j]) })

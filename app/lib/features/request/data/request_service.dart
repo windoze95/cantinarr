@@ -544,6 +544,9 @@ class RequestSeasonStatus {
   final int episodeCount;
   final RequestStatus status;
   final double progress;
+  final bool isKnown;
+  final String? requestBlockedReason;
+  final String? requestBlockedMessage;
 
   const RequestSeasonStatus({
     required this.seasonNumber,
@@ -551,6 +554,9 @@ class RequestSeasonStatus {
     this.episodeCount = 0,
     this.status = RequestStatus.unavailable,
     this.progress = 0,
+    this.isKnown = true,
+    this.requestBlockedReason,
+    this.requestBlockedMessage,
   });
 
   factory RequestSeasonStatus.fromJson(Map<String, dynamic> json) {
@@ -564,6 +570,9 @@ class RequestSeasonStatus {
         orElse: () => RequestStatus.unavailable,
       ),
       progress: (json['progress'] as num?)?.toDouble() ?? 0,
+      isKnown: json['status_known'] != false,
+      requestBlockedReason: json['request_blocked_reason'] as String?,
+      requestBlockedMessage: json['request_blocked_message'] as String?,
     );
   }
 
@@ -571,7 +580,9 @@ class RequestSeasonStatus {
   bool get isAvailable => status == RequestStatus.available;
 
   /// A missing or incomplete season can be requested; accepted work cannot.
-  bool get isRequestable => switch (status) {
+  bool get hasRequestIssue => !isKnown || (requestBlockedReason?.isNotEmpty ?? false);
+
+  bool get isRequestable => !hasRequestIssue && switch (status) {
         RequestStatus.unavailable ||
         RequestStatus.partial ||
         RequestStatus.denied => true,

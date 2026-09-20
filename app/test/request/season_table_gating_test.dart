@@ -65,6 +65,41 @@ void main() {
     expect(find.byType(ElevatedButton), findsNothing);
   });
 
+  testWidgets('unverified seasons are unknown, unchecked and never selected', (tester) async {
+    final n = notifier(state: RequestState(hasStatus: true, seasons: [
+      RequestSeasonStatus.fromJson({'season_number': 1, 'status_known': false}),
+      const RequestSeasonStatus(seasonNumber: 2),
+    ]));
+    await tester.pumpWidget(host(SeasonTable(seasons: seasons, notifier: n)));
+    expect(find.text('Unknown'), findsOneWidget);
+    expect(find.text('Not added'), findsOneWidget);
+    var boxes = tester.widgetList<Checkbox>(find.byType(Checkbox)).toList();
+    expect(boxes.first.value, isFalse);
+    expect(boxes.first.onChanged, isNull);
+    await tester.tap(find.text('All'));
+    await tester.pump();
+    boxes = tester.widgetList<Checkbox>(find.byType(Checkbox)).toList();
+    expect(boxes.map((b) => b.value), [false, true]);
+  });
+
+  testWidgets('a newly blocked match clears selection before an old submit can run', (tester) async {
+    final adapter = _Adapter();
+    final n = notifier(adapter: adapter);
+    await tester.pumpWidget(host(SeasonTable(seasons: seasons, notifier: n)));
+    await tester.tap(find.text('All'));
+    await tester.pump();
+    final submit = tester.widget<ElevatedButton>(find.byType(ElevatedButton)).onPressed!;
+    n.state = const RequestState(hasStatus: true, seasons: [
+      RequestSeasonStatus(seasonNumber: 1, requestBlockedReason: 'tv_match_paused'),
+      RequestSeasonStatus(seasonNumber: 2, requestBlockedReason: 'tv_seasons_unmapped'),
+    ]);
+    submit();
+    await tester.pumpAndSettle();
+    expect(adapter.posts, isEmpty);
+    expect(tester.widgetList<Checkbox>(find.byType(Checkbox))
+        .every((b) => b.value == false && b.onChanged == null), isTrue);
+  });
+
   testWidgets('the only unreleased, requested season cannot be selected',
       (tester) async {
     final adapter = _Adapter();
