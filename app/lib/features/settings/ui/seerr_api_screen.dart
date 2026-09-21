@@ -139,10 +139,13 @@ class _SeerrApiScreenState extends ConsumerState<SeerrApiScreen> {
                 ? serverUrl
                 : 'The address this app is connected with is not known yet.'),
             if (serverUrl.isNotEmpty)
-              TextButton.icon(
-                  onPressed: () => _copy('Address', serverUrl),
-                  icon: const Icon(Icons.copy),
-                  label: const Text('Copy address')),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                    onPressed: () => _copy('Address', serverUrl),
+                    icon: const Icon(Icons.copy),
+                    label: const Text('Copy address')),
+              ),
             const SizedBox(height: 4),
             Text(
                 'This is the address your app uses. An app on another machine or in another container may need a different one, such as the server\'s LAN address or its container name.',
@@ -158,10 +161,7 @@ class _SeerrApiScreenState extends ConsumerState<SeerrApiScreen> {
             if (key != null && !key.configured)
               const Text('No key has been issued. Issue one to let apps connect.'),
             if (key != null && key.configured) ...[
-              SelectableText(
-                _reveal ? key.apiKey : '•' * 24,
-                style: const TextStyle(fontFamily: 'monospace'),
-              ),
+              SelectableText(_reveal ? key.apiKey : '•' * 24),
               const SizedBox(height: 4),
               Text(
                   'Issued by ${key.issuedBy.isEmpty ? 'an administrator' : key.issuedBy}'
