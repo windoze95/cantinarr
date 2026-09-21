@@ -12,11 +12,16 @@ import (
 // Handler serves the admin routes: a user's policy and the certification
 // schemes the editor offers. Authorization (users:manage) is the router's.
 type Handler struct {
-	svc *Service
+	svc     *Service
+	changed func(userID int64)
 }
 
 // NewHandler wraps the service.
 func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
+
+// SetChangedObserver installs the startup callback for a persisted policy
+// change, so connected clients immediately discard previously visible content.
+func (h *Handler) SetChangedObserver(changed func(userID int64)) { h.changed = changed }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -87,6 +92,9 @@ func (h *Handler) PutUserPolicy(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if h.changed != nil {
+		h.changed(userID)
+	}
 	stored, err := h.svc.Store.Get(userID)
 	if err != nil || stored == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load content policy"})
@@ -106,6 +114,9 @@ func (h *Handler) DeleteUserPolicy(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.Store.Clear(userID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to clear content policy"})
 		return
+	}
+	if h.changed != nil {
+		h.changed(userID)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
 }

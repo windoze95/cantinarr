@@ -5,6 +5,8 @@ import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/instance_dropdown.dart';
 import '../../../core/widgets/module_scaffold.dart';
+import '../../auth/logic/auth_provider.dart';
+import '../logic/downloads_activity_provider.dart';
 
 /// Downloads module shell: Queue | History.
 /// Pages render as a bottom nav on mobile and sidebar items on desktop.
@@ -24,9 +26,13 @@ class DownloadsModuleShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final instanceState = ref.watch(instanceProvider);
+    final auth = ref.watch(authProvider).valueOrNull;
+    final admin = auth?.user?.isAdmin == true;
+    final content = auth?.connection?.downloadsActivity == true &&
+        (ref.watch(downloadsPreferencesProvider).valueOrNull?.content ?? false);
 
     return ModuleScaffold(
-      appBar: instanceState.downloadInstances.length > 1
+      appBar: admin && (currentIndex == 1 || !content) && instanceState.downloadInstances.length > 1
           ? AppBar(
               title: InstanceDropdown(
                 instances: instanceState.downloadInstances,
@@ -40,7 +46,7 @@ class DownloadsModuleShell extends ConsumerWidget {
               elevation: 0,
             )
           : null,
-      pages: modulePagesFor(ModuleType.downloads),
+      pages: admin ? modulePagesFor(ModuleType.downloads) : const [],
       currentIndex: currentIndex,
       onTabChanged: onTabChanged,
       child: child,

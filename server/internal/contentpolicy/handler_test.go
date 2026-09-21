@@ -108,6 +108,30 @@ func TestHandlerCertifications(t *testing.T) {
 	}
 }
 
+func TestHandlerNotifiesOnlyPersistedPolicyChanges(t *testing.T) {
+	env := newTestEnv(t)
+	kid := env.user(t, "kid", "user")
+	h := NewHandler(env.svc)
+	var notified []int64
+	h.SetChangedObserver(func(id int64) { notified = append(notified, id) })
+	r := chi.NewRouter()
+	r.Put("/{userID}", h.PutUserPolicy)
+	r.Delete("/{userID}", h.DeleteUserPolicy)
+	path := "/" + itoa64(kid)
+	if rec := do(t, r, "PUT", path, `{"max_movie_rating":"G","max_tv_rating":"TV-Y","rating_region":"US"}`); rec.Code != 200 {
+		t.Fatalf("save: %s", rec.Body.String())
+	}
+	if rec := do(t, r, "PUT", path, `invalid`); rec.Code != 400 {
+		t.Fatalf("invalid save: %d", rec.Code)
+	}
+	if rec := do(t, r, "DELETE", path, ""); rec.Code != 200 {
+		t.Fatalf("clear: %d", rec.Code)
+	}
+	if len(notified) != 2 || notified[0] != kid || notified[1] != kid {
+		t.Fatalf("notified: %v", notified)
+	}
+}
+
 func itoa64(i int64) string {
 	return strings.TrimSpace(strings.Repeat(" ", 0) + itoaInt(int(i)))
 }

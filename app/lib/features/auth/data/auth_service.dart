@@ -596,6 +596,8 @@ class ServerConfig {
   final bool tvMatchCorrections;
   final bool tvLibraryNavigation;
   final bool requestQuotas;
+  final bool downloadsActivity;
+  final String downloadsUserScope;
 
   /// Null means the server predates Discover visibility preferences.
   final List<String>? hiddenDiscoverTabs;
@@ -615,6 +617,8 @@ class ServerConfig {
     this.tvMatchCorrections = false,
     this.tvLibraryNavigation = false,
     this.requestQuotas = false,
+    this.downloadsActivity = false,
+    this.downloadsUserScope = 'all',
     this.hiddenDiscoverTabs,
   });
 
@@ -641,6 +645,8 @@ class ServerConfig {
       tvMatchCorrections: json['tv_match_corrections'] as bool? ?? false,
       tvLibraryNavigation: json['tv_library_navigation'] as bool? ?? false,
       requestQuotas: json['request_quotas'] as bool? ?? false,
+      downloadsActivity: json['downloads_activity'] as bool? ?? false,
+      downloadsUserScope: json['downloads_user_scope'] as String? ?? 'all',
       hiddenDiscoverTabs:
           (json['hidden_discover_tabs'] as List?)?.cast<String>(),
     );

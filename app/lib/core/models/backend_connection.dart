@@ -85,6 +85,8 @@ class BackendConnection {
   final bool tvMatchCorrections;
   final bool tvLibraryNavigation;
   final bool requestQuotas;
+  final bool downloadsActivity;
+  final String downloadsUserScope;
 
   /// Null means the server predates Discover visibility preferences.
   final List<String>? hiddenDiscoverTabs;
@@ -111,6 +113,8 @@ class BackendConnection {
     this.tvMatchCorrections = false,
     this.tvLibraryNavigation = false,
     this.requestQuotas = false,
+    this.downloadsActivity = false,
+    this.downloadsUserScope = 'all',
     this.hiddenDiscoverTabs,
     this.configConfirmed = false,
   });
@@ -133,6 +137,8 @@ class BackendConnection {
     bool? tvMatchCorrections,
     bool? tvLibraryNavigation,
     bool? requestQuotas,
+    bool? downloadsActivity,
+    String? downloadsUserScope,
     List<String>? hiddenDiscoverTabs,
     bool clearHiddenDiscoverTabs = false,
     bool? configConfirmed,
@@ -149,6 +155,8 @@ class BackendConnection {
         tvMatchCorrections: tvMatchCorrections ?? this.tvMatchCorrections,
         tvLibraryNavigation: tvLibraryNavigation ?? this.tvLibraryNavigation,
         requestQuotas: requestQuotas ?? this.requestQuotas,
+        downloadsActivity: downloadsActivity ?? this.downloadsActivity,
+        downloadsUserScope: downloadsUserScope ?? this.downloadsUserScope,
         mediaAccountManagement:
             mediaAccountManagement ?? this.mediaAccountManagement,
         hiddenDiscoverTabs: clearHiddenDiscoverTabs

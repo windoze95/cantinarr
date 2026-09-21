@@ -38,6 +38,10 @@ Use the [run template](../run-template.md) to record executions of these cases.
 
 ## Download clients and unified downloads
 
+- [ ] `DL-CONTENT-001` · P1 · LIVE/UI: With disposable movie, season-pack, album, ebook, and audiobook downloads, compare Content titles, children, artwork, progress, and the job count with live provider UIs. Include an arr-only client, a client the library manager reaches through another hostname or URL base than Cantinarr does, NZBGet's tracking alias, repeated IDs on different clients, and two library instances. Confirm only verified pack contents appear. Pause/resume/remove a disposable whole job, then observe count changes through transfer, processing, completion, provider outage, and recovery. Record provider versions and any unverified cases separately.
+- [ ] `DL-CONTENT-002` · P1 · LIVE/UI: On phone and desktop, leave Downloads for another module and verify its badge updates; background/resume the app during a transfer. Compare requester All/My scope, change server visibility, revoke a library grant, and restrict a kids account while Content is open. Confirm old metadata/counts disappear and admin history, selectors, and controls never appear for requesters.
+
+
 Run client-specific cases once for **each** of SABnzbd, qBittorrent, NZBGet, Transmission, Deluge, and ruTorrent; do not accept one client as proof for the other adapters.
 
 - [ ] `DOWN-003` · P0 · LIVE — Pause and resume one active item per client; verify exact external item state and UI convergence.

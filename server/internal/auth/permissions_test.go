@@ -44,6 +44,7 @@ func TestRolePermissionMatrixIsExact(t *testing.T) {
 		PermissionArrSearch,
 		PermissionArrBrowse,
 		PermissionDownloadsRead,
+		PermissionDownloadsActivity,
 		PermissionDownloadsManage,
 		PermissionMonitoringRead,
 		PermissionSystemRead,
@@ -53,12 +54,13 @@ func TestRolePermissionMatrixIsExact(t *testing.T) {
 		t.Fatalf("registered permission count = %d, want explicit matrix count %d", len(registered), len(permissions))
 	}
 	userAllowed := map[Permission]bool{
-		PermissionMediaDiscover: true,
-		PermissionMediaRequest:  true,
-		PermissionMediaDownload: true,
-		PermissionAIChat:        true,
-		PermissionMCPAccess:     true,
-		PermissionArrBrowse:     true,
+		PermissionDownloadsActivity: true,
+		PermissionMediaDiscover:     true,
+		PermissionMediaRequest:      true,
+		PermissionMediaDownload:     true,
+		PermissionAIChat:            true,
+		PermissionMCPAccess:         true,
+		PermissionArrBrowse:         true,
 	}
 	for _, permission := range permissions {
 		if !registered[permission] {

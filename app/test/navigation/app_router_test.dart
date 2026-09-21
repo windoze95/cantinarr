@@ -237,6 +237,8 @@ void main() {
     final (:router, container: _) = await _pumpRouter(tester, _authedState);
 
     for (final path in [
+      '/downloads/queue', // servers without the capability keep old navigation
+      '/downloads/history',
       '/monitoring/activity',
       '/tdarr/activity',
       '/tdarr/libraries',
@@ -268,6 +270,22 @@ void main() {
         reason: '$path must remain admin-only',
       );
     }
+  });
+
+  testWidgets('supported requesters can open Content but cannot open History', (tester) async {
+    final (:router, :container) = await _pumpRouter(tester, _authedState.copyWith(
+        connection: _authedState.connection!.copyWith(downloadsActivity: true)));
+    router.go('/downloads/queue');
+    await tester.pumpAndSettle();
+    expect(router.routeInformationProvider.value.uri.path, '/downloads/queue');
+    expect(find.text('All downloads'), findsOneWidget);
+    expect(find.text('Clients'), findsNothing);
+    expect(find.text('History'), findsNothing);
+    router.go('/downloads/history');
+    await tester.pumpAndSettle();
+    expect(router.routeInformationProvider.value.uri.path, '/dashboard/movies');
+    await tester.pumpWidget(const SizedBox());
+    container.dispose();
   });
 
   testWidgets('old Tautulli tab paths redirect to the Monitoring module',
@@ -816,6 +834,10 @@ class _JsonAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     final Object body = switch (options.path) {
+      '/api/downloads/activity' || '/api/downloads/summary' => {
+          'count': 0, 'complete': true, 'scope': 'all', 'user_scope': 'all',
+          'groups': [], 'jobs': [],
+        },
       '/api/trakt/anticipated' => [],
       '/api/media/tv/225634' => {
           'id': 225634,

@@ -7,6 +7,8 @@ sidebar:
 
 Download-client connections let administrators inspect transfer activity, history, speeds, and supported actions in Cantinarr. The library manager still owns its connection to the client and the import of completed media.
 
+Users can follow authorized downloads in the [Content view](/use/downloads/). A direct client connection is needed for administrator controls and unmatched jobs; library-tracked progress remains available without one.
+
 ## Connection details
 
 | Service | Address to enter | Credential and common gotcha |

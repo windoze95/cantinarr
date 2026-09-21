@@ -133,12 +133,16 @@ type Client struct {
 
 // Hub manages WebSocket clients and broadcasts events.
 type Hub struct {
-	upgrader   websocket.Upgrader
-	clients    map[*Client]bool
-	broadcast  chan outboundMessage
-	register   chan *Client
-	unregister chan *Client
-	mu         sync.RWMutex
+	// Invalidates shared source snapshots before a ping. The hub may already
+	// be polling when the router installs this callback.
+	activityMu          sync.RWMutex
+	activityInvalidator func()
+	upgrader            websocket.Upgrader
+	clients             map[*Client]bool
+	broadcast           chan outboundMessage
+	register            chan *Client
+	unregister          chan *Client
+	mu                  sync.RWMutex
 
 	authService *auth.Service
 	registry    *instance.Registry
@@ -327,6 +331,12 @@ func (h *Hub) Broadcast(event Event) {
 	h.enqueue(event, false, 0)
 }
 
+func (h *Hub) SetActivityInvalidator(invalidate func()) {
+	h.activityMu.Lock()
+	h.activityInvalidator = invalidate
+	h.activityMu.Unlock()
+}
+
 // BroadcastAdmin sends an event only to clients authenticated as admins.
 // Used for payloads whose REST equivalents sit behind the admin middleware
 // (e.g. download-client queue contents).
@@ -355,6 +365,15 @@ func (h *Hub) NotifyAdmins(eventType string, data map[string]interface{}) {
 }
 
 func (h *Hub) enqueue(event Event, adminOnly bool, userID int64) {
+	h.activityMu.RLock()
+	invalidate := h.activityInvalidator
+	h.activityMu.RUnlock()
+	if invalidate != nil {
+		switch event.Type {
+		case "downloads_queue", "arr_queue_changed", "config_changed", "request_status_changed", "request_updated", "request_decision":
+			invalidate()
+		}
+	}
 	data, err := json.Marshal(event)
 	if err != nil {
 		log.Printf("websocket: marshal event: %v", err)

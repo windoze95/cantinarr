@@ -527,7 +527,7 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			}
 			assertExactMapKeys(t, payload,
 				"server_name", "version", "min_app_version", "services", "instances", "issues_enabled", "allow_reporting",
-				"plex_access_requestable", "media_account_management", "admin_catalog_browsing", "hidden_discover_tabs", "apple_tv_remote", "tv_match_corrections", "tv_library_navigation", "request_quotas",
+				"plex_access_requestable", "media_account_management", "admin_catalog_browsing", "hidden_discover_tabs", "apple_tv_remote", "tv_match_corrections", "tv_library_navigation", "request_quotas", "downloads_activity", "downloads_user_scope",
 			)
 
 			if string(payload["apple_tv_remote"]) != "false" {
