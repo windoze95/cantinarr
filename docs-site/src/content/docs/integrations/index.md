@@ -41,6 +41,7 @@ The client still needs to be configured in the library manager that sends downlo
 - [Discovery providers](/integrations/discovery-providers/) for catalogs and recommendations.
 - [AI providers](/admin/ai/) for the assistant and remediation.
 - [MCP clients](/integrations/mcp/) for external tools.
+- [Apps built for Seerr](/integrations/seerr-api/) such as Maintainerr, Dashbrr, and Homepage, which read requests through the Seerr API.
 - [Outbound proxy](/integrations/outbound-proxy/) for server internet traffic.
 
 ## Check both directions

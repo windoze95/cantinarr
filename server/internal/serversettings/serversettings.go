@@ -119,14 +119,15 @@ type Settings struct {
 	SetupSkippedItems []string `json:"setup_skipped_items,omitempty"`
 }
 
-// Service reads and writes the server settings blob, plus the one setting
-// that carries a secret (the outbound proxy, outbound_proxy.go).
+// Service reads and writes the server settings blob, plus the settings that
+// carry a secret and so live in rows of their own: the outbound proxy
+// (outbound_proxy.go) and the Seerr-compatible API key (seerr_api_key.go).
 type Service struct {
 	db *sql.DB
 	// All writers of the shared JSON blob serialize their read/modify/write.
 	mu sync.Mutex
-	// cipher encrypts the outbound proxy row at rest. Nil (tests) stores it
-	// in plaintext; the server binary always supplies one.
+	// cipher encrypts the secret-bearing rows at rest. Nil (tests) stores
+	// them in plaintext; the server binary always supplies one.
 	cipher *secrets.Cipher
 	// traktConfigured reports whether Trakt can answer right now. It is a
 	// callback rather than a stored flag because credentials change under us,
@@ -137,9 +138,10 @@ type Service struct {
 // Option customizes a Service at construction.
 type Option func(*Service)
 
-// WithCipher supplies the cipher that encrypts the outbound proxy row. The
-// server binary always passes it; a Service built without one stores that
-// row in plaintext, which only tests do.
+// WithCipher supplies the cipher that encrypts the secret-bearing rows (the
+// outbound proxy, the Seerr-compatible API key). The server binary always
+// passes it; a Service built without one stores those rows in plaintext,
+// which only tests do.
 func WithCipher(cipher *secrets.Cipher) Option {
 	return func(s *Service) { s.cipher = cipher }
 }

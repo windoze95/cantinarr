@@ -549,6 +549,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		serversettings.NewService(database, func() bool { return registry.Trakt() != nil }),
 		contentpolicy.NewHandler(contentPolicy),
 		discordNotifications,
+		nil,
 	)
 	return &rbacRouterHarness{
 		router:            router,
