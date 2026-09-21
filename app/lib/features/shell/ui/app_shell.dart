@@ -1254,7 +1254,7 @@ class _AppShellState extends ConsumerState<AppShell>
         attentionEntries.fold<int>(0, (sum, entry) => sum + entry.count);
 
     // AI Assistant is a tool, not a library, so it sits with the footer actions
-    // instead of under the "Libraries" header. It's always last in
+    // instead of among the library modules. It's always last in
     // moduleState.modules, so pulling it out leaves the remaining indices (used
     // by the active-highlight fallback below) unchanged.
     AppModule? assistantModule;
@@ -1423,11 +1423,11 @@ class _AppShellState extends ConsumerState<AppShell>
           ),
           const Divider(color: AppTheme.border),
 
-          // Module navigation. Discover (the browse/home surface) leads on its
-          // own; the "Libraries" header groups the managed arr modules beneath
-          // it. On desktop the active module also expands into its pages — those
-          // replace the module shell's bottom nav there. The mobile drawer stays
-          // modules-only because the bottom nav covers page switching.
+          // Module navigation. Discover (the browse/home surface) leads, the
+          // managed arr modules follow as one plain list. On desktop the active
+          // module also expands into its pages — those replace the module
+          // shell's bottom nav there. The mobile drawer stays modules-only
+          // because the bottom nav covers page switching.
           //
           // The admin queues ride at the top of this same list rather than as
           // fixed rows above it: six of them left the modules a ~40px slot on a
@@ -1500,13 +1500,7 @@ class _AppShellState extends ConsumerState<AppShell>
                   ),
                   const Divider(color: AppTheme.border),
                 ],
-                if (libraryModules.isNotEmpty)
-                  buildModuleTile(libraryModules.first),
-                if (libraryModules.length > 1) ...[
-                  const _DrawerSectionHeader('Libraries'),
-                  for (int i = 1; i < libraryModules.length; i++)
-                    buildModuleTile(libraryModules[i]),
-                ],
+                for (final module in libraryModules) buildModuleTile(module),
               ],
             ),
           ),
@@ -1815,30 +1809,6 @@ class _AttentionEntry {
   /// How many items are waiting in this queue; 0 renders no badge.
   final int count;
   final String route;
-}
-
-/// A small caps label that segments the drawer into scannable groups
-/// (e.g. "Libraries"). Purely visual — not tappable.
-class _DrawerSectionHeader extends StatelessWidget {
-  final String label;
-
-  const _DrawerSectionHeader(this.label);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 18, 10, 7),
-      child: Text(
-        label.toUpperCase(),
-        style: const TextStyle(
-          color: AppTheme.textMuted,
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 1.25,
-        ),
-      ),
-    );
-  }
 }
 
 /// A page entry nested under the active module in the desktop sidebar —
