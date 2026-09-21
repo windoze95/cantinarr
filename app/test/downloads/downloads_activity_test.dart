@@ -22,7 +22,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-DownloadsActivity sample({int? count = 2, bool complete = true}) => DownloadsActivity.fromJson({
+Map<String, dynamic> sampleJson({int? count = 2, bool complete = true}) => {
   'count': count, 'complete': complete, 'scope': 'all', 'user_scope': 'all',
   'jobs': [
     {'id': 'pack', 'status': 'paused', 'size_bytes': 1000, 'size_left_bytes': 500,
@@ -42,7 +42,10 @@ DownloadsActivity sample({int? count = 2, bool complete = true}) => DownloadsAct
       'year': 2026, 'instance_name': 'Movies', 'job_ids': ['movie-job'],
       'progress': 75, 'details_known': true, 'children': []},
   ],
-});
+};
+
+DownloadsActivity sample({int? count = 2, bool complete = true}) =>
+    DownloadsActivity.fromJson(sampleJson(count: count, complete: complete));
 
 AuthState session({bool admin = false, bool supported = true, String scope = 'all',
     int user = 2, String server = 'http://server.test'}) => AuthState(
@@ -103,7 +106,7 @@ void main() {
   testWidgets('requester sees Content and filter without admin surfaces', (tester) async {
     final container = ProviderContainer(overrides: [
       authProvider.overrideWith(() => TestAuth(session())),
-      downloadsActivityProvider.overrideWith((_) async => sample()),
+      downloadsActivityProvider.overrideWith((_) => AsyncData(sample())),
       downloadsSummaryProvider.overrideWith((_) => AsyncData(sample())),
     ]);
     addTearDown(container.dispose);
@@ -127,10 +130,37 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('requester scope control stays fixed while its summary refreshes',
+      (tester) async {
+    final restricted = DownloadsActivity.fromJson({
+      ...sampleJson(), 'user_scope': 'mine', 'scope': 'mine',
+    });
+    final summaryState = StateProvider<AsyncValue<DownloadsActivity?>>(
+        (_) => AsyncData(restricted));
+    final c = ProviderContainer(overrides: [
+      authProvider.overrideWith(() => TestAuth(session())),
+      downloadsActivityProvider.overrideWith((_) => AsyncData(sample())),
+      downloadsSummaryProvider.overrideWith((ref) => ref.watch(summaryState)),
+    ]);
+    await tester.pumpWidget(UncontrolledProviderScope(container: c,
+        child: const MaterialApp(home: Scaffold(body: DownloadsQueuePage()))));
+    await tester.pumpAndSettle();
+    expect(find.text('All downloads'), findsNothing);
+    expect(find.text('My requests'), findsOneWidget);
+
+    c.read(summaryState.notifier).state = const AsyncLoading<DownloadsActivity?>()
+        .copyWithPrevious(c.read(summaryState), isRefresh: false);
+    await tester.pump();
+    expect(find.text('All downloads'), findsNothing);
+    expect(find.text('My requests'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+  });
+
   testWidgets('admin starts in Clients and can remember Content with visibility menu', (tester) async {
     final c = ProviderContainer(overrides: [
       authProvider.overrideWith(() => TestAuth(session(admin: true))),
-      downloadsActivityProvider.overrideWith((_) async => sample()),
+      downloadsActivityProvider.overrideWith((_) => AsyncData(sample())),
       downloadsSummaryProvider.overrideWith((_) => AsyncData(sample())),
     ]);
     await tester.pumpWidget(UncontrolledProviderScope(container: c,
@@ -251,6 +281,63 @@ void main() {
     await events.close();
   });
 
+  testWidgets('Content stays rendered while a routine activity refresh is pending',
+      (tester) async {
+    final pending = <({RequestOptions request, RequestInterceptorHandler handler})>[];
+    final dio = Dio(BaseOptions(baseUrl: 'http://server.test'));
+    dio.interceptors.add(InterceptorsWrapper(onRequest: (request, handler) {
+      pending.add((request: request, handler: handler));
+    }));
+    final events = StreamController<WsEvent>.broadcast();
+    final c = ProviderContainer(overrides: [
+      authProvider.overrideWith(() => TestAuth(session())),
+      backendClientProvider.overrideWithValue(dio),
+      realtimeEventsProvider.overrideWithValue(events.stream),
+    ]);
+    await tester.pumpWidget(UncontrolledProviderScope(container: c,
+        child: const MaterialApp(home: Scaffold(body: DownloadsContentScreen()))));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(pending, hasLength(1));
+
+    pending[0].handler.resolve(Response(
+        requestOptions: pending[0].request, data: sampleJson()));
+    await tester.pumpAndSettle();
+    expect(find.text('A show with a season pack'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    c.read(downloadsRefreshProvider.notifier).refresh();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+    expect(pending, hasLength(2));
+    expect(find.text('A show with a season pack'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    pending[1].handler.reject(DioException(
+        requestOptions: pending[1].request, type: DioExceptionType.connectionError));
+    await tester.pumpAndSettle();
+    expect(find.text('A show with a season pack'), findsOneWidget);
+    expect(find.text('Could not refresh downloads. Showing the previous update.'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    events.add(const WsEvent(type: 'config_changed', data: {}));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+    await tester.pump(const Duration(milliseconds: 10));
+    expect(find.text('A show with a season pack'), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(pending, hasLength(3));
+
+    pending[2].handler.resolve(Response(
+        requestOptions: pending[2].request, data: sampleJson()));
+    await tester.pumpAndSettle();
+    expect(find.text('A show with a season pack'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+    await events.close();
+  });
+
   testWidgets('incomplete empty activity never claims no active downloads', (tester) async {
     final value = DownloadsActivity.fromJson({'complete': false, 'count': null, 'groups': []});
     await tester.pumpWidget(MaterialApp(home: Scaffold(body: DownloadsActivityView(
@@ -341,7 +428,7 @@ void main() {
   testWidgets('hidden Content does not fetch full activity', (tester) async {
     var reads = 0;
     await tester.pumpWidget(ProviderScope(overrides: [
-      downloadsActivityProvider.overrideWith((_) async { reads++; return sample(); }),
+      downloadsActivityProvider.overrideWith((_) { reads++; return AsyncData(sample()); }),
     ], child: const MaterialApp(home: TickerMode(enabled: false,
         child: DownloadsContentScreen()))));
     await tester.pumpAndSettle();

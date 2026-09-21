@@ -136,13 +136,19 @@ class _DownloadsLifecycle extends WidgetsBindingObserver {
       changed(state == AppLifecycleState.resumed);
 }
 
-typedef _DownloadsSummaryContext = ({String accessKey, String scope, int clearEpoch});
+typedef _DownloadsRequestContext = ({String accessKey, String scope, int clearEpoch});
 
-// Keeping the request in a family lets Riverpod retain a confirmed count while
-// the same account and scope poll again. Authorization and config changes move
-// to a new family member, which has no previous value to expose.
+final _downloadsRequestContextProvider = Provider.autoDispose<_DownloadsRequestContext>((ref) => (
+  accessKey: ref.watch(downloadsAccessKeyProvider),
+  scope: ref.watch(downloadsScopeProvider),
+  clearEpoch: ref.watch(downloadsRefreshProvider.select((state) => state.clearEpoch)),
+));
+
+// Keeping requests in a family lets Riverpod retain confirmed data while the
+// same account and scope poll again. Authorization and config changes move to
+// a new family member, which has no previous value to expose.
 final _downloadsSummaryRequestProvider = FutureProvider.autoDispose.family<
-    DownloadsActivity?, _DownloadsSummaryContext>((ref, context) async {
+    DownloadsActivity?, _DownloadsRequestContext>((ref, context) async {
   final auth = ref.watch(authProvider).valueOrNull;
   if (auth?.connection?.downloadsActivity != true) return null;
   ref.watch(downloadsRefreshProvider.select((state) => state.revision));
@@ -156,25 +162,30 @@ final _downloadsSummaryRequestProvider = FutureProvider.autoDispose.family<
 });
 
 final downloadsSummaryProvider = Provider.autoDispose<AsyncValue<DownloadsActivity?>>((ref) {
-  final refresh = ref.watch(downloadsRefreshProvider);
-  final context = (
-    accessKey: ref.watch(downloadsAccessKeyProvider),
-    scope: ref.watch(downloadsScopeProvider),
-    clearEpoch: refresh.clearEpoch,
-  );
-  return ref.watch(_downloadsSummaryRequestProvider(context));
+  return ref.watch(_downloadsSummaryRequestProvider(
+      ref.watch(_downloadsRequestContextProvider)));
 });
 
-final downloadsActivityProvider = FutureProvider.autoDispose<DownloadsActivity>((ref) async {
+final _downloadsActivityRequestProvider = FutureProvider.autoDispose.family<
+    DownloadsActivity, _DownloadsRequestContext>((ref, context) async {
   final auth = ref.watch(authProvider).valueOrNull;
-  ref.watch(downloadsRefreshProvider);
-  final scope = ref.watch(downloadsScopeProvider);
+  ref.watch(downloadsRefreshProvider.select((state) => state.revision));
   if (auth?.connection?.downloadsActivity != true) throw StateError('Downloads unavailable');
   final dio = ref.watch(backendClientProvider);
   final cancel = CancelToken();
   ref.onDispose(cancel.cancel);
   await ref.watch(downloadsPreferencesProvider.future);
   final response = await dio.get('/api/downloads/activity',
-      queryParameters: {'scope': scope}, cancelToken: cancel);
+      queryParameters: {'scope': context.scope}, cancelToken: cancel);
   return DownloadsActivity.fromJson(response.data as Map<String, dynamic>);
+});
+
+final downloadsActivityProvider = Provider.autoDispose<AsyncValue<DownloadsActivity>>((ref) {
+  return ref.watch(_downloadsActivityRequestProvider(
+      ref.watch(_downloadsRequestContextProvider)));
+});
+
+final downloadsActivityFutureProvider = Provider.autoDispose<Future<DownloadsActivity>>((ref) {
+  return ref.watch(_downloadsActivityRequestProvider(
+      ref.watch(_downloadsRequestContextProvider)).future);
 });

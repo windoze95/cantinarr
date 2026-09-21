@@ -21,20 +21,21 @@ class DownloadsContentScreen extends ConsumerWidget {
     final activity = ref.watch(downloadsActivityProvider);
     final admin = ref.watch(authProvider).valueOrNull?.user?.isAdmin == true;
     void refresh() => ref.read(downloadsRefreshProvider.notifier).refresh();
-    // Clearing previous data on reload prevents old titles surviving a grant
-    // or kids-policy change while the replacement request is in flight.
-    if (activity.isLoading) return const Center(child: CircularProgressIndicator());
-    if (activity.hasError) {
+    final value = activity.valueOrNull;
+    if (value == null && activity.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (value == null && activity.hasError) {
       return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
         const Text('Download activity is unavailable.'),
         const SizedBox(height: 8),
         FilledButton.tonal(onPressed: refresh, child: const Text('Retry')),
       ]));
     }
-    final value = activity.requireValue;
     return RefreshIndicator(
-      onRefresh: () async { refresh(); await ref.read(downloadsActivityProvider.future); },
-      child: DownloadsActivityView(activity: value, admin: admin,
+      onRefresh: () async { refresh(); await ref.read(downloadsActivityFutureProvider); },
+      child: DownloadsActivityView(activity: value!, admin: admin,
+        refreshFailed: activity.hasError,
         onRefresh: refresh,
         onAction: (job, action, title) async {
           if (!admin || job.control == null) return;
@@ -73,16 +74,29 @@ class DownloadsContentScreen extends ConsumerWidget {
 class DownloadsActivityView extends StatelessWidget {
   final DownloadsActivity activity;
   final bool admin;
+  final bool refreshFailed;
   final VoidCallback onRefresh;
   final void Function(DownloadActivityJob job, String action, String title) onAction;
   const DownloadsActivityView({super.key, required this.activity, required this.admin,
-    required this.onRefresh, required this.onAction});
+    this.refreshFailed = false, required this.onRefresh, required this.onAction});
 
   @override
   Widget build(BuildContext context) => ListView(
     physics: const AlwaysScrollableScrollPhysics(),
     padding: const EdgeInsets.all(12),
     children: [
+      if (refreshFailed) Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(color: AppTheme.surface, borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppTheme.requested)),
+        child: Row(children: [
+          const Icon(Icons.cloud_off, color: AppTheme.requested, size: 20),
+          const SizedBox(width: 10),
+          const Expanded(child: Text('Could not refresh downloads. Showing the previous update.')),
+          IconButton(tooltip: 'Refresh downloads', onPressed: onRefresh, icon: const Icon(Icons.refresh)),
+        ]),
+      ),
       if (!activity.complete || activity.stale) Container(
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(12),

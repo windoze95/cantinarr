@@ -23,7 +23,7 @@ class DownloadsQueuePage extends ConsumerWidget {
     final scope = ref.watch(downloadsScopeProvider);
     final summary = ref.watch(downloadsSummaryProvider);
     final restricted = auth?.connection?.downloadsUserScope == 'mine' ||
-        (!summary.isLoading && summary.valueOrNull?.userScope == 'mine');
+        summary.valueOrNull?.userScope == 'mine';
     if (preferences.isLoading || selection == null) {
       return const Center(child: CircularProgressIndicator());
     }
