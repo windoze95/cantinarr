@@ -104,7 +104,7 @@ void main() {
     final container = ProviderContainer(overrides: [
       authProvider.overrideWith(() => TestAuth(session())),
       downloadsActivityProvider.overrideWith((_) async => sample()),
-      downloadsSummaryProvider.overrideWith((_) async => sample()),
+      downloadsSummaryProvider.overrideWith((_) => AsyncData(sample())),
     ]);
     addTearDown(container.dispose);
     await tester.pumpWidget(UncontrolledProviderScope(container: container,
@@ -131,7 +131,7 @@ void main() {
     final c = ProviderContainer(overrides: [
       authProvider.overrideWith(() => TestAuth(session(admin: true))),
       downloadsActivityProvider.overrideWith((_) async => sample()),
-      downloadsSummaryProvider.overrideWith((_) async => sample()),
+      downloadsSummaryProvider.overrideWith((_) => AsyncData(sample())),
     ]);
     await tester.pumpWidget(UncontrolledProviderScope(container: c,
         child: const MaterialApp(home: Scaffold(body: DownloadsQueuePage()))));
@@ -183,13 +183,72 @@ void main() {
   testWidgets('badge hides confirmed zero and marks incomplete count unavailable', (tester) async {
     for (final count in [0, 2, null]) {
       await tester.pumpWidget(ProviderScope(key: ValueKey(count), overrides: [
-        downloadsSummaryProvider.overrideWith((_) async => sample(count: count, complete: count != null)),
+        downloadsSummaryProvider.overrideWith((_) =>
+            AsyncData(sample(count: count, complete: count != null))),
       ], child: const MaterialApp(home: Scaffold(body: DownloadsMenuBadge()))));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('downloads-menu-count')), count == 0 ? findsNothing : findsOneWidget);
       if (count == null) expect(find.byTooltip('Download count unavailable'), findsOneWidget);
     }
     await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('badge keeps its count during polling and clears it for config changes',
+      (tester) async {
+    final pending = <({RequestOptions request, RequestInterceptorHandler handler})>[];
+    final dio = Dio(BaseOptions(baseUrl: 'http://server.test'));
+    dio.interceptors.add(InterceptorsWrapper(onRequest: (request, handler) {
+      pending.add((request: request, handler: handler));
+    }));
+    final events = StreamController<WsEvent>.broadcast();
+    final c = ProviderContainer(overrides: [
+      authProvider.overrideWith(() => TestAuth(session())),
+      backendClientProvider.overrideWithValue(dio),
+      realtimeEventsProvider.overrideWithValue(events.stream),
+    ]);
+    await tester.pumpWidget(UncontrolledProviderScope(container: c,
+        child: const MaterialApp(home: DownloadsMenuBadge())));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('downloads-menu-count')), findsNothing);
+    expect(pending, hasLength(1));
+
+    pending[0].handler.resolve(Response(requestOptions: pending[0].request, data: {
+      'count': 4, 'complete': true, 'scope': 'all', 'user_scope': 'all',
+    }));
+    await tester.pumpAndSettle();
+    expect(find.text('4'), findsOneWidget);
+
+    final refresh = c.read(downloadsRefreshProvider);
+    c.read(downloadsRefreshProvider.notifier).refresh();
+    expect(c.read(downloadsRefreshProvider).revision, refresh.revision + 1);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+    expect(c.read(downloadsSummaryProvider).isLoading, isTrue);
+    expect(pending, hasLength(2));
+    expect(find.text('4'), findsOneWidget);
+    expect(find.byTooltip('Download count unavailable'), findsNothing);
+
+    pending[1].handler.resolve(Response(requestOptions: pending[1].request, data: {
+      'count': 5, 'complete': true, 'scope': 'all', 'user_scope': 'all',
+    }));
+    await tester.pumpAndSettle();
+    expect(find.text('5'), findsOneWidget);
+
+    events.add(const WsEvent(type: 'config_changed', data: {}));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+    await tester.pump(const Duration(milliseconds: 10));
+    expect(pending, hasLength(3));
+    expect(find.byKey(const Key('downloads-menu-count')), findsNothing);
+
+    pending[2].handler.resolve(Response(requestOptions: pending[2].request, data: {
+      'count': 6, 'complete': true, 'scope': 'all', 'user_scope': 'all',
+    }));
+    await tester.pumpAndSettle();
+    expect(find.text('6'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+    await events.close();
   });
 
   testWidgets('incomplete empty activity never claims no active downloads', (tester) async {
@@ -230,10 +289,11 @@ void main() {
     await tester.pump();
     await tester.pumpAndSettle();
     expect(paths.length, initial + 2);
-    final revision = c.read(downloadsRefreshProvider);
+    final refresh = c.read(downloadsRefreshProvider);
     events.add(const WsEvent(type: 'config_changed', data: {}));
     await tester.pump();
-    expect(c.read(downloadsRefreshProvider), revision + 1);
+    expect(c.read(downloadsRefreshProvider).revision, refresh.revision + 1);
+    expect(c.read(downloadsRefreshProvider).clearEpoch, refresh.clearEpoch + 1);
     await tester.pump(const Duration(milliseconds: 10));
     await tester.pumpAndSettle();
     expect(paths.length, initial + 3);
@@ -260,7 +320,7 @@ void main() {
     final old = pending.last;
     (c.read(authProvider.notifier) as TestAuth).replace(session(user: 3, scope: 'mine'));
     await tester.pumpAndSettle();
-    expect(find.byTooltip('Download count unavailable'), findsOneWidget);
+    expect(find.byKey(const Key('downloads-menu-count')), findsNothing);
     expect(old.request.cancelToken!.isCancelled, isTrue);
     final latest = pending.last;
     expect(latest.request.queryParameters['scope'], 'mine');

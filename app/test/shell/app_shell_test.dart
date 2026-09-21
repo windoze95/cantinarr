@@ -901,9 +901,9 @@ void main() {
         ))),
         backendClientProvider.overrideWithValue(_fakeDio()),
         realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
-        downloadsSummaryProvider.overrideWith((_) async => DownloadsActivity.fromJson({
+        downloadsSummaryProvider.overrideWith((_) => AsyncData(DownloadsActivity.fromJson({
           'count': 123, 'complete': true, 'scope': 'all', 'user_scope': 'all',
-        })),
+        }))),
       ]);
       addTearDown(container.dispose);
       final router = GoRouter(initialLocation: '/dashboard/movies', routes: [

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/widgets.dart';
@@ -54,14 +55,42 @@ final downloadsScopeProvider = Provider<String>((ref) {
   return ref.watch(downloadsPreferencesProvider).valueOrNull?.scope ?? 'all';
 });
 
+// A summary may keep its last value during ordinary polling, but never across
+// a change that can alter which jobs this account is allowed to count.
+final downloadsAccessKeyProvider = Provider<String>((ref) {
+  final auth = ref.watch(authProvider).valueOrNull;
+  final permissions = [...?auth?.user?.permissions]..sort();
+  final instances = [
+    ...?auth?.connection?.instances
+        .map((instance) => '${instance.serviceType}:${instance.id}'),
+  ]..sort();
+  return jsonEncode({
+    'account': ref.watch(downloadsAccountProvider),
+    'scope': ref.watch(downloadsScopeProvider),
+    'role': auth?.user?.role,
+    'permissions': permissions,
+    'child': auth?.user?.child,
+    'content_limits': auth?.user?.contentLimits?.toJson(),
+    'activity': auth?.connection?.downloadsActivity,
+    'user_scope': auth?.connection?.downloadsUserScope,
+    'instances': instances,
+  });
+});
+
 // One clock serves the menu badge and the visible Content view. It lives with
 // the foreground shell, including while another module is selected.
-class DownloadsRefreshNotifier extends AutoDisposeNotifier<int> {
+class DownloadsRefreshState {
+  final int revision;
+  final int clearEpoch;
+  const DownloadsRefreshState({this.revision = 0, this.clearEpoch = 0});
+}
+
+class DownloadsRefreshNotifier extends AutoDisposeNotifier<DownloadsRefreshState> {
   @override
-  int build() {
+  DownloadsRefreshState build() {
     final supported = ref.watch(authProvider.select(
         (s) => s.valueOrNull?.connection?.downloadsActivity == true));
-    if (!supported) return 0;
+    if (!supported) return const DownloadsRefreshState();
     var foreground = WidgetsBinding.instance.lifecycleState == null ||
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     Timer? debounce;
@@ -77,7 +106,7 @@ class DownloadsRefreshNotifier extends AutoDisposeNotifier<int> {
       if (!foreground) return;
       if (event.type == 'config_changed') {
         // Clear user results immediately, before the config refresh completes.
-        refresh();
+        refresh(clearCached: true);
       } else if (const {'downloads_queue', 'arr_queue_changed',
           'request_status_changed', 'request_updated', 'request_decision'}.contains(event.type)) {
         debounce?.cancel();
@@ -88,14 +117,16 @@ class DownloadsRefreshNotifier extends AutoDisposeNotifier<int> {
       timer.cancel(); debounce?.cancel(); events.cancel();
       WidgetsBinding.instance.removeObserver(lifecycle);
     });
-    return 0;
+    return const DownloadsRefreshState();
   }
 
-  void refresh() => state++;
+  void refresh({bool clearCached = false}) => state = DownloadsRefreshState(
+      revision: state.revision + 1,
+      clearEpoch: state.clearEpoch + (clearCached ? 1 : 0));
 }
 
-final downloadsRefreshProvider = NotifierProvider.autoDispose<DownloadsRefreshNotifier, int>(
-    DownloadsRefreshNotifier.new);
+final downloadsRefreshProvider = NotifierProvider.autoDispose<DownloadsRefreshNotifier,
+    DownloadsRefreshState>(DownloadsRefreshNotifier.new);
 
 class _DownloadsLifecycle extends WidgetsBindingObserver {
   final void Function(bool) changed;
@@ -105,21 +136,33 @@ class _DownloadsLifecycle extends WidgetsBindingObserver {
       changed(state == AppLifecycleState.resumed);
 }
 
-// Watching auth (not just the URL) drops results on grant/policy/config changes.
-// Riverpod discards superseded futures. Consumers hide previous data during a
-// reload or failure instead of resurfacing a no-longer-authorized title/count.
-final downloadsSummaryProvider = FutureProvider.autoDispose<DownloadsActivity?>((ref) async {
+typedef _DownloadsSummaryContext = ({String accessKey, String scope, int clearEpoch});
+
+// Keeping the request in a family lets Riverpod retain a confirmed count while
+// the same account and scope poll again. Authorization and config changes move
+// to a new family member, which has no previous value to expose.
+final _downloadsSummaryRequestProvider = FutureProvider.autoDispose.family<
+    DownloadsActivity?, _DownloadsSummaryContext>((ref, context) async {
   final auth = ref.watch(authProvider).valueOrNull;
   if (auth?.connection?.downloadsActivity != true) return null;
-  ref.watch(downloadsRefreshProvider);
-  final scope = ref.watch(downloadsScopeProvider);
+  ref.watch(downloadsRefreshProvider.select((state) => state.revision));
   final dio = ref.watch(backendClientProvider);
   final cancel = CancelToken();
   ref.onDispose(cancel.cancel);
   await ref.watch(downloadsPreferencesProvider.future);
   final response = await dio.get('/api/downloads/summary',
-      queryParameters: {'scope': scope}, cancelToken: cancel);
+      queryParameters: {'scope': context.scope}, cancelToken: cancel);
   return DownloadsActivity.fromJson(response.data as Map<String, dynamic>);
+});
+
+final downloadsSummaryProvider = Provider.autoDispose<AsyncValue<DownloadsActivity?>>((ref) {
+  final refresh = ref.watch(downloadsRefreshProvider);
+  final context = (
+    accessKey: ref.watch(downloadsAccessKeyProvider),
+    scope: ref.watch(downloadsScopeProvider),
+    clearEpoch: refresh.clearEpoch,
+  );
+  return ref.watch(_downloadsSummaryRequestProvider(context));
 });
 
 final downloadsActivityProvider = FutureProvider.autoDispose<DownloadsActivity>((ref) async {

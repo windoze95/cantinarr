@@ -8,7 +8,14 @@ class DownloadsMenuBadge extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final summary = ref.watch(downloadsSummaryProvider);
-    final value = summary.isLoading || summary.hasError ? null : summary.valueOrNull;
+    // A dependency reload carries the prior value, so a normal poll does not
+    // make the badge flash unavailable. A first load or authorization reset
+    // has no prior value and stays hidden until the server answers.
+    if (summary.isLoading && !summary.hasValue && !summary.hasError) {
+      return const SizedBox.shrink();
+    }
+    final value = summary.hasError ? null : summary.valueOrNull;
+    if (!summary.hasError && value == null) return const SizedBox.shrink();
     final count = value?.complete == true && value?.stale == false ? value?.count : null;
     if (count == 0) return const SizedBox.shrink();
     return Tooltip(
