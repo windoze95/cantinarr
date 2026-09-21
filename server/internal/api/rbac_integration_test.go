@@ -40,6 +40,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/remediation"
 	requestsvc "github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
+	"github.com/windoze95/cantinarr-server/internal/seerrcompat"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
 	"github.com/windoze95/cantinarr-server/internal/tdarr"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
@@ -95,11 +96,22 @@ func TestRouterRBACMatrixWithAdminAndRequesterTokens(t *testing.T) {
 		{http.MethodGet, "/api/admin/plex-auth"},
 		{http.MethodGet, "/api/admin/plex-auth/candidates"},
 		{http.MethodGet, "/api/admin/users/1/plex"},
+		{http.MethodGet, "/api/admin/seerr-api"},
 	}
 	for _, route := range adminRoutes {
 		recorder := serveRBACRequest(harness.router, route.method, route.path, harness.adminToken)
 		if recorder.Code == http.StatusUnauthorized || recorder.Code == http.StatusForbidden {
 			t.Errorf("admin %s %s was rejected with %d: %s", route.method, route.path, recorder.Code, recorder.Body.String())
+		}
+	}
+
+	// The Seerr-compatible surface takes only its own issued key: a session
+	// token of either role is not a credential there, and without a key issued
+	// nothing is.
+	for _, token := range []string{harness.adminToken, harness.requesterToken, ""} {
+		recorder := serveRBACRequest(harness.router, http.MethodGet, "/api/v1/status", token)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Errorf("GET /api/v1/status with a session token status = %d, want 401; body=%s", recorder.Code, recorder.Body.String())
 		}
 	}
 
@@ -549,7 +561,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		serversettings.NewService(database, func() bool { return registry.Trakt() != nil }),
 		contentpolicy.NewHandler(contentPolicy),
 		discordNotifications,
-		nil,
+		seerrcompat.NewHandler(database, requestService, serversettings.NewService(database, func() bool { return false }), registry.TMDB),
 	)
 	return &rbacRouterHarness{
 		router:            router,
