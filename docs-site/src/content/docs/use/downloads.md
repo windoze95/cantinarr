@@ -11,7 +11,7 @@ Open **Downloads** in the menu to follow active transfers. The Content view uses
 
 1. Open **Downloads**. Administrators select **Content** on the **Queue** tab.
 2. Choose **All downloads** to see downloads in your accessible libraries, or **My requests** to follow jobs linked to your saved requests. Your choice is remembered for this account and server on this device.
-3. Expand a title to see its jobs. Shows expand into seasons and confirmed episodes. Albums show confirmed tracks when the provider identifies them. Books show their author and ebook or audiobook format when known.
+3. Each title shows its download status, percentage, and size. Expand a title for its contents: shows expand into seasons and confirmed episodes. Albums show confirmed tracks when the provider identifies them. Books show their author and ebook or audiobook format when known.
 
 If the administrator restricts visibility to own requests, the screen shows **My requests** and hides the filter. Users do not receive the Clients view, History, client selector, or management actions.
 
@@ -21,7 +21,7 @@ Library instances remain separate, even when they contain the same title. Multip
 
 The badge counts unfinished download jobs. Queued, paused, stalled, and failed unfinished transfers count. Opening a group does not change it. Completed or seeding jobs, import-only processing, and requests that have not started a download do not count.
 
-For users, the badge follows the current All/My filter and access rules. Administrators always receive the server-wide count, including unmatched jobs. The badge disappears at confirmed zero. A `?` means the exact count is unavailable; check the notice in Content and retry. Foreground updates use events and a 15-second polling fallback, including while another module is open.
+For users, the badge follows the current All/My filter and access rules. Administrators always receive the server-wide count, including unmatched jobs. The badge disappears at zero, and also while Cantinarr cannot read every library manager or download client; the notice in Content names what could not be read. Foreground updates use events and a 15-second polling fallback, including while another module is open.
 
 ## Administrator views and controls
 
@@ -29,7 +29,7 @@ On **Queue**, switch between **Content** and **Clients**. The initial selection 
 
 Expand a Content title and open a job's action menu to pause, resume, or remove it. Removal applies to the entire download, including a whole season pack or album, and asks for confirmation. The existing option to delete downloaded data depends on the client; NZBGet removes the queue item and leaves files on disk.
 
-Controls appear only when Cantinarr can verify the exact client and job. Progress reported by a library manager still appears when that client is not connected directly in Cantinarr. **Unmatched downloads** contains directly connected client jobs that could not be assigned to content. Only administrators can see their raw names.
+Controls appear when the download is found in a download client connected to Cantinarr; the library manager may reach that client through a different hostname or URL base. Progress reported by a library manager still appears when its client is not connected in Cantinarr. **Unmatched downloads** contains directly connected client jobs that could not be assigned to content. Only administrators can see their raw names.
 
 ## Set user visibility
 

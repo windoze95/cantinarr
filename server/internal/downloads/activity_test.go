@@ -123,7 +123,7 @@ func TestActivityCorrelatesAllClientsWithoutConfusingControlIDs(t *testing.T) {
 			if w.Code != 200 || a.Count == nil || *a.Count != 1 || len(a.Groups) != 1 {
 				t.Fatalf("%s", w.Body.String())
 			}
-			if a.Jobs[0].Control == nil || a.Jobs[0].Control.ItemID != control || a.Jobs[0].Progress != 50 {
+			if a.Jobs[0].Control == nil || a.Jobs[0].Control.ItemID != control || a.Jobs[0].Progress != 50 || a.Jobs[0].Name != "PRIVATE.release.filename" {
 				t.Fatalf("job = %+v", a.Jobs[0])
 			}
 			a, w = e.get(t, 2, "/api/downloads/activity")
@@ -159,20 +159,25 @@ func TestActivityCountsUniqueJobsAcrossLibrariesAndClients(t *testing.T) {
 	}
 }
 
-func TestActivityUnconfiguredClientKeepsArrProgressAndUncertainMappingDisablesCount(t *testing.T) {
+func TestActivityUnconfiguredClientKeepsArrProgress(t *testing.T) {
 	e := newActivityEnv(t)
 	arr := e.add(t, "radarr", "http://arr.invalid")
-	ss := sourceSnapshot{definitions: []record{definition("sabnzbd", "not-configured.invalid")}, rows: []activityRow{movieRow(1, 100, "job", 100, 25)}}
-	cacheSource(e, arr, ss)
-	a, w := e.get(t, 2, "/api/downloads/activity")
-	if a.Count == nil || *a.Count != 1 || a.Jobs[0].Progress != 75 || a.Jobs[0].Control != nil {
-		t.Fatalf("%s", w.Body.String())
-	}
-	ss.definitions = nil
-	cacheSource(e, arr, ss)
-	a, w = e.get(t, 1, "/api/downloads/summary")
-	if a.Count != nil || a.Complete || len(a.Groups) != 0 || len(a.Jobs) != 0 {
-		t.Fatalf("%s", w.Body.String())
+	// No connected client can hold this job, whether the arr's definition names a
+	// client Cantinarr does not know, one it cannot connect to, or none at all.
+	for name, definitions := range map[string][]record{
+		"unconfigured": {definition("sabnzbd", "not-configured.invalid")},
+		"unsupported":  {definition("DownloadStation", "nas.invalid")},
+		"unreadable":   nil,
+	} {
+		cacheSource(e, arr, sourceSnapshot{definitions: definitions, rows: []activityRow{movieRow(1, 100, "job", 100, 25)}})
+		a, w := e.get(t, 2, "/api/downloads/activity")
+		if !a.Complete || a.Count == nil || *a.Count != 1 || a.Jobs[0].Progress != 75 || a.Jobs[0].Control != nil || a.Jobs[0].Name != "" {
+			t.Fatalf("%s: %s", name, w.Body.String())
+		}
+		a, w = e.get(t, 1, "/api/downloads/activity")
+		if !a.Complete || a.Count == nil || *a.Count != 1 || a.Jobs[0].Control != nil || a.Jobs[0].Name != "PRIVATE.release.filename" {
+			t.Fatalf("%s admin: %s", name, w.Body.String())
+		}
 	}
 }
 
@@ -331,8 +336,12 @@ func TestActivityKidsFilteringAndUnknownIdentity(t *testing.T) {
 	rows[0].identityKnown = false
 	cacheSource(e, inst, sourceSnapshot{rows: rows[:1], definitions: []record{definition("sabnzbd", "client.invalid")}})
 	a, w = e.get(t, 2, "/api/downloads/activity")
-	if a.Count != nil || a.Complete || len(a.Groups) > 0 {
-		t.Fatalf("%s", w.Body.String())
+	if !a.Complete || a.Count == nil || *a.Count != 0 || len(a.Groups) > 0 || strings.Contains(w.Body.String(), "PRIVATE") {
+		t.Fatalf("unidentified row reached a requester: %s", w.Body.String())
+	}
+	a, w = e.get(t, 1, "/api/downloads/activity")
+	if !a.Complete || a.Count == nil || *a.Count != 1 || len(a.Groups) != 1 || a.Groups[0].Title != "Unidentified content" || a.Jobs[0].Name != "PRIVATE.release.filename" {
+		t.Fatalf("admin lost the unidentified row: %s", w.Body.String())
 	}
 }
 
@@ -394,32 +403,85 @@ func TestActivityCompletedClientOverridesArrImportLag(t *testing.T) {
 	}
 }
 
-func TestActivityUnverifiedClientIdentityCannotProduceAnExactCount(t *testing.T) {
-	for _, scenario := range []string{"another address", "missing client job"} {
+// The arr and Cantinarr reach one client through different names all the
+// time (Docker DNS, a VPN namespace's localhost, SABnzbd's URL base). The
+// download ID is what identifies the job; the address never has to agree.
+func TestActivityClientAddressVariantsStillCorrelate(t *testing.T) {
+	for scenario, host := range map[string]string{"url base": "client.invalid", "another hostname": "sab-alias.invalid", "unreadable definitions": ""} {
 		t.Run(scenario, func(t *testing.T) {
 			e := newActivityEnv(t)
 			arr := e.add(t, "radarr", "http://arr.invalid")
-			client := e.add(t, "sabnzbd", "http://client.invalid")
-			host := "client.invalid"
-			queue := &QueueView{Items: []QueueItem{}}
-			if scenario == "another address" {
-				host = "unverified-alias.invalid"
-				queue.Items = []QueueItem{{ID: "one", Status: "downloading", SizeBytes: 100, SizeLeftBytes: 50}}
+			client := e.add(t, "sabnzbd", "http://client.invalid/sabnzbd")
+			cacheSource(e, client, sourceSnapshot{queue: &QueueView{Items: []QueueItem{{ID: "one", Name: "PRIVATE.release.filename", Status: "downloading", SizeBytes: 100, SizeLeftBytes: 20}}}})
+			var definitions []record
+			if host != "" {
+				definitions = []record{definition("sabnzbd", host)}
 			}
-			cacheSource(e, client, sourceSnapshot{queue: queue})
-			cacheSource(e, arr, sourceSnapshot{definitions: []record{definition("sabnzbd", host)}, rows: []activityRow{movieRow(1, 100, "one", 100, 50)}})
-			for _, user := range []int64{1, 2} {
-				a, w := e.get(t, user, "/api/downloads/activity")
-				if a.Complete || a.Count != nil || len(a.Groups) == 0 || a.Jobs[0].Progress != 50 {
-					t.Fatalf("uncertain source agreement looked exact: %s", w.Body.String())
-				}
-				for _, job := range a.Jobs {
-					if job.ID == a.Groups[0].JobIDs[0] && job.Control != nil {
-						t.Fatal("unverified content gained client controls")
-					}
+			cacheSource(e, arr, sourceSnapshot{definitions: definitions, rows: []activityRow{movieRow(1, 100, "one", 100, 50)}})
+			a, w := e.get(t, 1, "/api/downloads/activity")
+			if !a.Complete || a.Count == nil || *a.Count != 1 || len(a.Groups) != 1 || a.Groups[0].Title != "Movie 1" {
+				t.Fatalf("one download became two: %s", w.Body.String())
+			}
+			if job := a.Jobs[0]; job.Progress != 80 || job.Control == nil || job.Control.ItemID != "one" || job.Name != "PRIVATE.release.filename" {
+				t.Fatalf("admin lost the client's live job: %+v", job)
+			}
+			a, w = e.get(t, 2, "/api/downloads/activity")
+			if !a.Complete || a.Count == nil || *a.Count != 1 || a.Jobs[0].Progress != 80 || a.Jobs[0].Control != nil {
+				t.Fatalf("requester lost live progress: %s", w.Body.String())
+			}
+			for _, secret := range []string{"PRIVATE", "client.invalid", "sabnzbd"} {
+				if strings.Contains(w.Body.String(), secret) {
+					t.Fatalf("requester leaked %q", secret)
 				}
 			}
 		})
+	}
+}
+
+func TestActivityMissingClientJobStaysAnArrJob(t *testing.T) {
+	e := newActivityEnv(t)
+	arr := e.add(t, "radarr", "http://arr.invalid")
+	client := e.add(t, "sabnzbd", "http://client.invalid")
+	cacheSource(e, client, sourceSnapshot{queue: &QueueView{Items: []QueueItem{}}})
+	cacheSource(e, arr, sourceSnapshot{definitions: []record{definition("sabnzbd", "client.invalid")}, rows: []activityRow{movieRow(1, 100, "one", 100, 50)}})
+	for _, user := range []int64{1, 2} {
+		a, w := e.get(t, user, "/api/downloads/activity")
+		if !a.Complete || a.Count == nil || *a.Count != 1 || len(a.Groups) != 1 || a.Jobs[0].Progress != 50 || a.Jobs[0].Control != nil {
+			t.Fatalf("arr-tracked job without a client copy: %s", w.Body.String())
+		}
+	}
+}
+
+// A repeated ID only names one job within a client kind; NZBGet's numeric
+// "42" is unrelated to any other client's "42".
+func TestActivityRepeatedIDAcrossKindsNeverCorrelates(t *testing.T) {
+	e := newActivityEnv(t)
+	arr := e.add(t, "radarr", "http://arr.invalid")
+	client := e.add(t, "nzbget", "http://client.invalid")
+	cacheSource(e, client, sourceSnapshot{queue: &QueueView{Items: []QueueItem{{ID: "42", Status: "downloading", SizeBytes: 100, SizeLeftBytes: 50}}}})
+	cacheSource(e, arr, sourceSnapshot{definitions: []record{definition("sabnzbd", "client.invalid")}, rows: []activityRow{movieRow(1, 100, "42", 100, 50)}})
+	a, w := e.get(t, 1, "/api/downloads/activity")
+	if !a.Complete || a.Count == nil || *a.Count != 2 || len(a.Groups) != 2 || a.Groups[1].MediaType != "unmatched" {
+		t.Fatalf("%s", w.Body.String())
+	}
+	if a.Groups[0].JobIDs[0] == a.Groups[1].JobIDs[0] {
+		t.Fatal("different kinds shared a job")
+	}
+}
+
+func TestActivityClientConnectedTwiceCountsOnce(t *testing.T) {
+	e := newActivityEnv(t)
+	c1 := e.add(t, "sabnzbd", "http://client.invalid:8080/sabnzbd")
+	c2 := e.add(t, "sabnzbd", "http://client.invalid:8080/sabnzbd/")
+	for _, c := range []instance.Instance{c1, c2} {
+		cacheSource(e, c, sourceSnapshot{queue: &QueueView{Items: []QueueItem{{ID: "one", Status: "downloading", SizeBytes: 100, SizeLeftBytes: 50}}}})
+	}
+	a, w := e.get(t, 1, "/api/downloads/activity")
+	if !a.Complete || a.Count == nil || *a.Count != 1 || len(a.Jobs) != 1 || a.Jobs[0].Control == nil {
+		t.Fatalf("%s", w.Body.String())
+	}
+	if id := a.Jobs[0].Control.InstanceID; id != c1.ID && id != c2.ID {
+		t.Fatalf("control routed to %q", id)
 	}
 }
 

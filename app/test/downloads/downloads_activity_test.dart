@@ -26,8 +26,8 @@ Map<String, dynamic> sampleJson({int? count = 2, bool complete = true}) => {
   'count': count, 'complete': complete, 'scope': 'all', 'user_scope': 'all',
   'jobs': [
     {'id': 'pack', 'status': 'paused', 'size_bytes': 1000, 'size_left_bytes': 500,
-      'progress': 50, 'control': {'instance_id': 'nzb', 'item_id': '42',
-        'service_type': 'nzbget', 'client_name': 'NZBGet'}},
+      'progress': 50, 'name': 'Show.S01.1080p.Pack', 'control': {'instance_id': 'nzb',
+        'item_id': '42', 'service_type': 'nzbget', 'client_name': 'NZBGet'}},
     {'id': 'movie-job', 'status': 'downloading', 'size_bytes': 1000,
       'size_left_bytes': 250, 'progress': 75},
   ],
@@ -80,9 +80,12 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Season 1'));
       await tester.pumpAndSettle();
-      expect(find.textContaining('E01 · A beginning'), findsOneWidget);
-      expect(find.textContaining('E02 · The next day'), findsOneWidget);
-      expect(find.text('1 job · 50.0%'), findsOneWidget);
+      expect(find.text('E01 · A beginning'), findsOneWidget);
+      expect(find.text('E02 · The next day'), findsOneWidget);
+      expect(find.text('Paused · 50.0% · 500 B of 1000 B'), findsOneWidget);
+      expect(find.text('Downloading · 75.0% · 750 B of 1000 B'), findsOneWidget);
+      expect(find.text('Show.S01.1080p.Pack'), findsOneWidget);
+      expect(find.textContaining('Job '), findsNothing);
       expect(tester.takeException(), isNull);
       // Capture at 2x so subpixel Ahem edges do not dominate the comparison
       // between macOS and Linux. Keep the shared comparator's budget unchanged.
@@ -95,7 +98,7 @@ void main() {
       } finally {
         golden.dispose();
       }
-      await tester.tap(find.byTooltip('Actions for Job 1'));
+      await tester.tap(find.byTooltip('Actions for Show.S01.1080p.Pack'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Resume'));
       await tester.pumpAndSettle();
@@ -122,6 +125,11 @@ void main() {
     await tester.tap(find.text('A show with a season pack'));
     await tester.pumpAndSettle();
     expect(find.byType(PopupMenuButton<String>), findsNothing);
+    // A requester's single download is summarised on the title row; the job
+    // row (and its name) is an admin surface.
+    expect(find.text('Paused · 50.0% · 500 B of 1000 B'), findsOneWidget);
+    expect(find.text('Show.S01.1080p.Pack'), findsNothing);
+    expect(find.text('Client controls unavailable'), findsNothing);
     expect(container.read(moduleProvider).modules.map((m) => m.type), contains(ModuleType.downloads));
     (container.read(authProvider.notifier) as TestAuth).replace(session(scope: 'mine'));
     await tester.pumpAndSettle();
@@ -210,15 +218,15 @@ void main() {
     expect(c.read(moduleProvider).modules.map((m) => m.type), isNot(contains(ModuleType.downloads)));
   });
 
-  testWidgets('badge hides confirmed zero and marks incomplete count unavailable', (tester) async {
+  testWidgets('badge shows only an exact non-zero count', (tester) async {
     for (final count in [0, 2, null]) {
       await tester.pumpWidget(ProviderScope(key: ValueKey(count), overrides: [
         downloadsSummaryProvider.overrideWith((_) =>
             AsyncData(sample(count: count, complete: count != null))),
       ], child: const MaterialApp(home: Scaffold(body: DownloadsMenuBadge()))));
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('downloads-menu-count')), count == 0 ? findsNothing : findsOneWidget);
-      if (count == null) expect(find.byTooltip('Download count unavailable'), findsOneWidget);
+      expect(find.byKey(const Key('downloads-menu-count')), count == 2 ? findsOneWidget : findsNothing);
+      expect(find.text('?'), findsNothing);
     }
     await tester.pumpWidget(const SizedBox());
   });
@@ -256,7 +264,7 @@ void main() {
     expect(c.read(downloadsSummaryProvider).isLoading, isTrue);
     expect(pending, hasLength(2));
     expect(find.text('4'), findsOneWidget);
-    expect(find.byTooltip('Download count unavailable'), findsNothing);
+    expect(find.text('?'), findsNothing);
 
     pending[1].handler.resolve(Response(requestOptions: pending[1].request, data: {
       'count': 5, 'complete': true, 'scope': 'all', 'user_scope': 'all',

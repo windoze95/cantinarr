@@ -235,8 +235,9 @@ func opaqueID(parts ...string) string {
 	return hex.EncodeToString(h[:16])
 }
 
-// endpointKey is deliberately exact: DNS aliases, names and categories do
-// not prove that two clients address the same download service.
+// endpointKey stays exact on purpose. It only has to recognise one client
+// connected twice and to pick between connected clients reporting the same
+// download ID, so aliases and proxy paths never need resolving here.
 func endpointKey(kind, raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") {
@@ -265,9 +266,16 @@ func endpointKey(kind, raw string) string {
 	return kind + "|" + u.Scheme + "|" + net.JoinHostPort(strings.ToLower(u.Hostname()), port) + "|" + path
 }
 
+// definitionKind maps an arr's download-client implementation onto the
+// Cantinarr client type; an implementation Cantinarr cannot connect to has no
+// kind, so its jobs are arr-only by construction.
+func definitionKind(d record) string {
+	return map[string]string{"sabnzbd": "sabnzbd", "qbittorrent": "qbittorrent", "nzbget": "nzbget", "transmission": "transmission", "deluge": "deluge", "rtorrent": "rutorrent"}[strings.ToLower(d.str("implementation"))]
+}
+
 func definitionEndpoint(d record) string {
 	implementation := strings.ToLower(d.str("implementation"))
-	kind := map[string]string{"sabnzbd": "sabnzbd", "qbittorrent": "qbittorrent", "nzbget": "nzbget", "transmission": "transmission", "deluge": "deluge", "rtorrent": "rutorrent"}[implementation]
+	kind := definitionKind(d)
 	if kind == "" {
 		return ""
 	}
@@ -305,7 +313,10 @@ func definitionEndpoint(d record) string {
 	return endpointKey(kind, scheme+"://"+host+base)
 }
 
-func boundEndpoint(q record, defs []record) string {
+// boundClient resolves the arr's own definition for a queue row's client. The
+// kind scopes download-ID matching; the endpoint only breaks a tie between
+// connected clients of that kind that report the same ID.
+func boundClient(q record, defs []record) (kind, endpoint string, resolved bool) {
 	var found []record
 	for _, d := range defs {
 		if (q.num("downloadClientId") > 0 && d.num("id") == q.num("downloadClientId")) ||
@@ -314,9 +325,9 @@ func boundEndpoint(q record, defs []record) string {
 		}
 	}
 	if len(found) != 1 {
-		return ""
+		return "", "", false
 	}
-	return definitionEndpoint(found[0])
+	return definitionKind(found[0]), definitionEndpoint(found[0]), true
 }
 
 func artwork(p record, inst instance.Instance) string {

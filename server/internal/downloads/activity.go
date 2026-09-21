@@ -237,19 +237,18 @@ func (s *ActivityService) project(ctx context.Context, access activityAccess) (*
 	jobs := map[string]ActivityJob{}
 	clientJobs := map[string]ActivityJob{}
 	finishedJobs := map[string]bool{}
-	correlations := map[string][]string{}
-	// An ID under another address is only a possible match. It cannot grant
-	// controls or justify counting two jobs when the client identity is unknown.
-	possibleCorrelations := map[string]bool{}
-	clientFailures := map[string]bool{}
-	clientEndpoints := map[string]int{}
+	// A client names its own jobs (nzo_id, torrent hash, NZBGet tracking alias)
+	// and the arr stores that same name in its queue row, so the ID is the join
+	// key, scoped by client kind so NZBGet's "42" never meets another "42".
+	// Addresses are only a tie-breaker: the arr and Cantinarr routinely reach
+	// one client through different names (Docker DNS, a VPN namespace's
+	// localhost, a URL base), and demanding that they agree lists every job
+	// twice while the count goes unavailable.
+	kindJobs := map[string]map[string][]string{}
+	jobEndpoint := map[string]string{}
+	readEndpoints := map[string]bool{}
 	used := map[string]bool{}
 	groups := map[string]*ContentGroup{}
-	for _, inst := range sources {
-		if IsDownloadClientType(inst.ServiceType) {
-			clientEndpoints[endpointKey(inst.ServiceType, inst.URL)]++
-		}
-	}
 	for i, inst := range sources {
 		ss := snapshots[i]
 		isClient := IsDownloadClientType(inst.ServiceType)
@@ -265,44 +264,40 @@ func (s *ActivityService) project(ctx context.Context, access activityAccess) (*
 				out.FetchedAt = ss.at
 			}
 		}
-		if !isClient {
+		if !isClient || ss.err != nil || ss.queue == nil || time.Since(ss.at) > activityTTL {
 			continue
 		}
 		ep := endpointKey(inst.ServiceType, inst.URL)
-		if ss.err != nil || ss.queue == nil || time.Since(ss.at) > activityTTL {
-			clientFailures[ep] = true
-			continue
+		if ep != "" {
+			// The same client connected twice reports every job twice.
+			if readEndpoints[ep] {
+				continue
+			}
+			readEndpoints[ep] = true
+		}
+		if kindJobs[inst.ServiceType] == nil {
+			kindJobs[inst.ServiceType] = map[string][]string{}
 		}
 		for _, item := range ss.queue.Items {
 			finished := !unfinished(item.Status, item.SizeBytes, item.SizeLeftBytes)
-			if item.ID == "" || ep == "" {
+			if item.ID == "" {
 				if access.admin && !finished {
 					out.Complete = false
 				}
 				continue
 			}
-			id := opaqueID(ep, correlationID(ep, item.ID))
-			if clientEndpoints[ep] > 1 {
-				id = opaqueID(inst.ID, correlationID(ep, item.ID))
-				clientFailures[ep] = true
-				if access.admin && !finished {
-					out.Complete = false
-				}
-			}
+			id := opaqueID(inst.ID, item.ID)
 			job := newActivityJob(id, item.Status, item.SizeBytes, item.SizeLeftBytes, ss.queue.Paused)
 			job.SpeedBPS = item.SpeedBPS
 			job.Name = item.Name
-			if clientEndpoints[ep] == 1 {
-				job.Control = &JobControl{inst.ID, item.ID, inst.ServiceType, inst.Name}
-			}
+			job.Control = &JobControl{inst.ID, item.ID, inst.ServiceType, inst.Name}
 			for _, alias := range []string{item.ID, item.CorrelationID} {
-				if alias == "" {
-					continue
+				if alias != "" {
+					key := normalizeDownloadID(inst.ServiceType, alias)
+					kindJobs[inst.ServiceType][key] = appendUnique(kindJobs[inst.ServiceType][key], id)
 				}
-				key := ep + "\x00" + correlationID(ep, alias)
-				correlations[key] = appendUnique(correlations[key], id)
-				possibleCorrelations[inst.ServiceType+"\x00"+correlationID(ep, alias)] = true
 			}
+			jobEndpoint[id] = ep
 			if finished {
 				finishedJobs[id] = true
 			} else {
@@ -320,35 +315,63 @@ func (s *ActivityService) project(ctx context.Context, access activityAccess) (*
 		}
 		for _, row := range ss.rows {
 			q := row.queue
-			endpoint := boundEndpoint(q, ss.definitions)
+			kind, endpoint, resolved := boundClient(q, ss.definitions)
 			downloadID := q.str("downloadId")
-			id := opaqueID(endpoint, correlationID(endpoint, downloadID))
-			mappingComplete := endpoint != "" && downloadID != "" && !clientFailures[endpoint]
-			if endpoint == "" || downloadID == "" {
-				id = opaqueID(inst.ID, q.str("downloadClient"), downloadID, fmt.Sprint(q.num("id")))
+			var mapped []string
+			if downloadID != "" {
+				if resolved {
+					mapped = kindJobs[kind][normalizeDownloadID(kind, downloadID)]
+				} else {
+					// An unreadable definition hides the kind, not the job: an ID
+					// held by exactly one connected client still names it.
+					for k, table := range kindJobs {
+						mapped = append(mapped, table[normalizeDownloadID(k, downloadID)]...)
+					}
+				}
+				if len(mapped) > 1 && endpoint != "" {
+					var exact []string
+					for _, id := range mapped {
+						if jobEndpoint[id] == endpoint {
+							exact = append(exact, id)
+						}
+					}
+					if len(exact) == 1 {
+						mapped = exact
+					}
+				}
 			}
-			mapped := correlations[endpoint+"\x00"+correlationID(endpoint, downloadID)]
-			kind := strings.SplitN(endpoint, "|", 2)[0]
-			if len(mapped) == 0 && (clientEndpoints[endpoint] > 0 || possibleCorrelations[kind+"\x00"+correlationID(endpoint, downloadID)]) {
-				mappingComplete = false
-			}
-			if len(mapped) == 1 {
+			var id string
+			switch {
+			case len(mapped) == 1:
 				id = mapped[0]
 				// A client can have finished while the arr is still waiting to
 				// import. Its verified finished state overrides arr queue lag.
 				if finishedJobs[id] {
 					continue
 				}
+			case downloadID != "":
+				// Sibling rows of one pack, and libraries sharing one grab, share
+				// this job even when no connected client reports it.
+				id = opaqueID("arr", endpoint, normalizeDownloadID(kind, downloadID))
+			default:
+				id = opaqueID("arr", inst.ID, fmt.Sprint(q.num("id")))
 			}
-			mappingComplete = mappingComplete && len(mapped) <= 1
+			if len(mapped) > 1 && access.admin {
+				// Several connected clients hold this ID and the arr's address
+				// picks none of them, so the job is listed here and under
+				// Unmatched downloads: the admin's total cannot be exact.
+				out.Complete = false
+			}
+			arrJob := newActivityJob(id, q.str("status"), int64(q.num("size")), int64(q.num("sizeleft")), false)
+			if access.admin {
+				arrJob.Name = q.str("title")
+			}
 			if !row.identityKnown {
-				if !access.admin || !mappingComplete {
-					out.Complete = false
-				}
-				// Even an unrestricted requester needs a verified content identity.
-				// The admin still sees the client job in Unmatched downloads.
+				// A row without a readable title cannot be shown to a requester
+				// or checked against a content policy. The admin still sees it,
+				// or its client job under Unmatched downloads.
 				if access.admin && len(mapped) != 1 {
-					jobs[id] = newActivityJob(id, q.str("status"), int64(q.num("size")), int64(q.num("sizeleft")), false)
+					jobs[id] = arrJob
 					gid := opaqueID(inst.ID, "unidentified")
 					g := groups[gid]
 					if g == nil {
@@ -376,16 +399,13 @@ func (s *ActivityService) project(ctx context.Context, access activityAccess) (*
 					continue
 				}
 			}
-			if !mappingComplete {
-				out.Complete = false
-			}
-			job := newActivityJob(id, q.str("status"), int64(q.num("size")), int64(q.num("sizeleft")), false)
+			job := arrJob
 			if len(mapped) == 1 {
 				job = clientJobs[id]
 				used[id] = true
 			}
-			job.Name = ""
 			if !access.admin {
+				job.Name = ""
 				job.Control = nil
 			}
 			jobs[id] = job
@@ -494,11 +514,12 @@ func (s *ActivityService) project(ctx context.Context, access activityAccess) (*
 	return out, nil
 }
 
-func correlationID(endpoint, id string) string {
-	for _, kind := range []string{"qbittorrent|", "transmission|", "deluge|", "rutorrent|"} {
-		if strings.HasPrefix(endpoint, kind) {
-			return strings.ToUpper(id)
-		}
+// Torrent clients report info hashes in whichever case they like while the
+// arrs store them upper-case; usenet IDs are opaque and case-sensitive.
+func normalizeDownloadID(kind, id string) string {
+	switch kind {
+	case "qbittorrent", "transmission", "deluge", "rutorrent":
+		return strings.ToUpper(id)
 	}
 	return id
 }

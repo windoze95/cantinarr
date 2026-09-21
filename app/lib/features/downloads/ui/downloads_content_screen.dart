@@ -141,6 +141,15 @@ class _ContentRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final jobs = [for (final id in group.jobIds) if (activity.jobs[id] != null) activity.jobs[id]!];
     final knownProgress = jobs.isNotEmpty && jobs.every((j) => j.sizeBytes > 0);
+    // One download is the common case, so its status and bytes belong on the
+    // title row itself. Numbered downloads only exist to tell packs apart.
+    final multi = jobs.length > 1;
+    String jobLabel(String id) => 'Download ${group.jobIds.indexOf(id) + 1}';
+    final progress = knownProgress ? '${group.progress.toStringAsFixed(1)}%' : 'Progress unavailable';
+    final summary = multi ? '${jobs.length} downloads · $progress'
+        : jobs.isEmpty ? progress
+        : '${statusLabel(jobs.single)} · $progress${knownProgress
+            ? ' · ${formatBytes(jobs.single.sizeBytes - jobs.single.sizeLeftBytes)} of ${formatBytes(jobs.single.sizeBytes)}' : ''}';
     final title = '${group.title}${group.mediaType == 'movie' && group.year > 0 ? ' (${group.year})' : ''}';
     final subtitle = [group.creator, if (group.format.isNotEmpty) group.format == 'audiobook' ? 'Audiobook' : 'Ebook',
       group.instanceName].where((v) => v.isNotEmpty).join(' · ');
@@ -151,8 +160,8 @@ class _ContentRow extends StatelessWidget {
       }, color: AppTheme.textSecondary));
     Widget childRow(DownloadContentChild child) => Padding(
       padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 16),
-      child: Align(alignment: Alignment.centerLeft, child: Text('${child.label}\n'
-          '${child.jobIds.map((id) => 'Job ${group.jobIds.indexOf(id) + 1}').join(', ')}',
+      child: Align(alignment: Alignment.centerLeft, child: Text(multi
+          ? '${child.label}\n${child.jobIds.map(jobLabel).join(', ')}' : child.label,
           style: const TextStyle(fontSize: 13))),
     );
     final seasons = group.children.map((c) => c.season).whereType<int>().toSet().toList()..sort();
@@ -176,12 +185,10 @@ class _ContentRow extends StatelessWidget {
           LinearProgressIndicator(value: knownProgress ? (group.progress / 100).clamp(0, 1) : null,
               minHeight: 4, backgroundColor: AppTheme.surfaceVariant, color: AppTheme.downloading),
           const SizedBox(height: 5),
-          Text('${jobs.length} ${jobs.length == 1 ? 'job' : 'jobs'} · '
-              '${knownProgress ? '${group.progress.toStringAsFixed(1)}%' : 'Progress unavailable'}',
-              style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          Text(summary, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
         ]),
         children: [
-          if (!group.detailsKnown && group.mediaType != 'unmatched') const Padding(
+          if (!group.detailsKnown && group.mediaType != 'unmatched' && group.mediaType != 'unknown') const Padding(
             padding: EdgeInsets.all(12), child: Text('Detailed contents could not be identified.',
                 style: TextStyle(color: AppTheme.textSecondary))),
           for (final season in seasons) ExpansionTile(
@@ -190,32 +197,44 @@ class _ContentRow extends StatelessWidget {
             children: [for (final child in group.children.where((c) => c.season == season)) childRow(child)],
           ),
           for (final child in group.children.where((c) => c.season == null)) childRow(child),
-          for (var i = 0; i < jobs.length; i++) _JobRow(job: jobs[i],
-            label: jobs[i].name.isNotEmpty ? jobs[i].name : 'Job ${i + 1}',
-            admin: admin, onAction: (action) => onAction(jobs[i], action, title)),
+          // A requester's single download is already summarised on the title
+          // row; admins keep the row for the client name and its actions.
+          if (admin || multi) for (final job in jobs) _JobRow(job: job,
+            label: job.name.isNotEmpty ? job.name : multi ? jobLabel(job.id) : null,
+            name: job.name.isNotEmpty ? job.name : multi ? jobLabel(job.id) : title,
+            admin: admin, onAction: (action) => onAction(job, action, title)),
         ],
       ),
     );
   }
 }
 
+String statusLabel(DownloadActivityJob job) => job.status.isEmpty ? 'Downloading'
+    : '${job.status[0].toUpperCase()}${job.status.substring(1)}';
+
 class _JobRow extends StatelessWidget {
   final DownloadActivityJob job;
-  final String label;
+  /// The job's own name when the server sent one, a "Download N" tag when the
+  /// group has several, otherwise nothing: the status line leads.
+  final String? label;
+  /// What the actions menu calls this job.
+  final String name;
   final bool admin;
   final ValueChanged<String> onAction;
-  const _JobRow({required this.job, required this.label, required this.admin, required this.onAction});
+  const _JobRow({required this.job, required this.label, required this.name, required this.admin,
+      required this.onAction});
 
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.fromLTRB(16, 8, 8, 12),
     child: Row(children: [
       Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label, maxLines: 2, overflow: TextOverflow.ellipsis,
+        if (label != null) Text(label!, maxLines: 2, overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13)),
-        Text('${job.status[0].toUpperCase()}${job.status.substring(1)}'
-            '${admin && job.control != null ? ' · ${job.control!.clientName}' : ''}',
-            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+        Text('${statusLabel(job)}${admin && job.control != null ? ' · ${job.control!.clientName}' : ''}',
+            style: label == null
+                ? const TextStyle(fontWeight: FontWeight.w500, fontSize: 13)
+                : const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
         const SizedBox(height: 7),
         LinearProgressIndicator(value: job.sizeBytes > 0 ? (job.progress / 100).clamp(0, 1) : null,
             minHeight: 4, backgroundColor: AppTheme.surfaceVariant, color: AppTheme.downloading),
@@ -228,7 +247,7 @@ class _JobRow extends StatelessWidget {
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
       ])),
       if (admin && job.control != null) PopupMenuButton<String>(
-        tooltip: 'Actions for $label',
+        tooltip: 'Actions for $name',
         onSelected: onAction,
         itemBuilder: (_) => [
           PopupMenuItem(value: job.status == 'paused' ? 'resume' : 'pause',

@@ -33,7 +33,8 @@ type ActivityJob struct {
 	Progress      float64     `json:"progress"`
 	SpeedBPS      int64       `json:"speed_bps"`
 	Control       *JobControl `json:"control,omitempty"`
-	// Name is only populated for an admin's unmatched client jobs.
+	// Name is the client's or arr's own name for the job. Requesters never
+	// receive it.
 	Name string `json:"name,omitempty"`
 }
 

@@ -15,11 +15,13 @@ class DownloadsMenuBadge extends ConsumerWidget {
       return const SizedBox.shrink();
     }
     final value = summary.hasError ? null : summary.valueOrNull;
-    if (!summary.hasError && value == null) return const SizedBox.shrink();
+    // The badge is a number or nothing. When the server cannot produce an
+    // exact count (a source could not be read), the Content view says so;
+    // a placeholder here would only read as a help button.
     final count = value?.complete == true && value?.stale == false ? value?.count : null;
-    if (count == 0) return const SizedBox.shrink();
+    if (count == null || count == 0) return const SizedBox.shrink();
     return Tooltip(
-      message: count == null ? 'Download count unavailable' : '$count active download jobs',
+      message: '$count active downloads',
       child: Container(
         key: const Key('downloads-menu-count'),
         margin: const EdgeInsets.only(right: 3),
@@ -27,8 +29,7 @@ class DownloadsMenuBadge extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
         decoration: BoxDecoration(color: AppTheme.accent.withValues(alpha: 0.16),
             borderRadius: BorderRadius.circular(12)),
-        child: FittedBox(fit: BoxFit.scaleDown, child: Text(
-            count == null ? '?' : count > 99 ? '99+' : '$count',
+        child: FittedBox(fit: BoxFit.scaleDown, child: Text(count > 99 ? '99+' : '$count',
             style: const TextStyle(color: AppTheme.accent, fontSize: 12, fontWeight: FontWeight.w600))),
       ),
     );
