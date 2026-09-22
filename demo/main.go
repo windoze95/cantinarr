@@ -41,6 +41,12 @@ var demoServerURL = fmt.Sprintf("http://localhost:%d", demoPort)
 //go:embed assets/landing.html
 var demoLandingTemplate string
 
+//go:embed assets/logo.png
+var demoLogo []byte
+
+//go:embed assets/favicon.png
+var demoFavicon []byte
+
 // demoLandingRendered is the landing page with DEMO_SERVER_URL substituted.
 var demoLandingRendered string
 
@@ -95,6 +101,17 @@ func buildRouter() chi.Router {
 		ExposedHeaders: []string{"Link"},
 		MaxAge:         300,
 	}))
+
+	r.Get("/static/logo.png", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(demoLogo)
+	})
+	r.Get("/static/favicon.png", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(demoFavicon)
+	})
 
 	r.Route("/api", func(r chi.Router) {
 		r.Use(middleware.SetHeader("Content-Type", "application/json"))

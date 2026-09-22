@@ -1,0 +1,46 @@
+name: Demo CI
+
+on:
+  pull_request:
+    branches: [demo]
+    paths:
+      - "demo/**"
+      - ".github/workflows/demo-ci.yml"
+  push:
+    branches: [demo]
+    paths:
+      - "demo/**"
+      - ".github/workflows/demo-ci.yml"
+
+concurrency:
+  group: demo-ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  demo:
+    name: Demo
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: demo
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: demo/go.mod
+          cache-dependency-path: demo/go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Build
+        run: CGO_ENABLED=0 go build -o cantinarr-demo .
