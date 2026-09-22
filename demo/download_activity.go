@@ -34,6 +34,28 @@ func registerDownloadActivity(r chi.Router) {
 	r.With(requireAdmin).Put("/admin/downloads/settings", dlActivitySettingsHandler)
 }
 
+// registerDownloadActivityArtwork exposes the two generated covers used by
+// content activity. They are public because Flutter's Image.network does not
+// attach the session token that the instance proxies require.
+func registerDownloadActivityArtwork(r chi.Router) {
+	r.Get("/static/downloads/{name}.png", func(w http.ResponseWriter, r *http.Request) {
+		var data []byte
+		switch chi.URLParam(r, "name") {
+		case "moby-dick":
+			data = chapCoverPNG(4)
+		case "livery-stable-blues":
+			data = lidCoverPNG(6)
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Header().Set("Content-Type", "image/png")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+	})
+}
+
 type dlActivityJob struct {
 	ID            string         `json:"id"`
 	Status        string         `json:"status"`
@@ -138,15 +160,38 @@ func dlActivityMeta(name string) *dlActivityGroup {
 		for _, id := range requesters {
 			by[id] = true
 		}
-		return &dlActivityGroup{ID: id, MediaType: mediaType, Title: title, Year: year,
+		g := &dlActivityGroup{ID: id, MediaType: mediaType, Title: title, Year: year,
 			InstanceID: instanceID, InstanceName: instanceName, DetailsKnown: true,
 			JobIDs: []string{}, Children: []dlActivityChild{}, requestedBy: by, tmdbID: tmdbID}
+		var posterPath string
+		switch mediaType {
+		case mediaTypeMovie:
+			if movie, ok := findMovie(tmdbID); ok {
+				posterPath = movie.PosterPath
+			}
+		case mediaTypeTV:
+			if show, ok := findShow(tmdbID); ok {
+				posterPath = show.PosterPath
+			}
+		}
+		if posterPath != "" {
+			g.Artwork = "https://image.tmdb.org/t/p/w500" + posterPath
+		}
+		return g
 	}
 	switch {
 	case strings.Contains(lower, "metropolis"):
 		return group("movie:19", mediaTypeMovie, "Metropolis", 1927, 19, instRadarr, "Radarr", 2)
 	case strings.Contains(lower, "the.general"):
 		return group("movie:961", mediaTypeMovie, "The General", 1926, 961, instRadarr, "Radarr", 1, 4)
+	case strings.Contains(lower, "his.girl.friday"):
+		return group("movie:3085", mediaTypeMovie, "His Girl Friday", 1940, 3085, instRadarr, "Radarr")
+	case strings.Contains(lower, "the.39.steps"):
+		return group("movie:260", mediaTypeMovie, "The 39 Steps", 1935, 260, instRadarr, "Radarr")
+	case strings.Contains(lower, "charade"):
+		return group("movie:4808", mediaTypeMovie, "Charade", 1963, 4808, instRadarr, "Radarr", 4)
+	case strings.Contains(lower, "carnival.of.souls"):
+		return group("movie:16093", mediaTypeMovie, "Carnival of Souls", 1962, 16093, instRadarr, "Radarr")
 	case strings.Contains(lower, "caligari"):
 		return group("movie:234", mediaTypeMovie, "The Cabinet of Dr. Caligari", 1920, 234, instRadarr, "Radarr", 2)
 	case strings.Contains(lower, "nosferatu"):
@@ -159,10 +204,12 @@ func dlActivityMeta(name string) *dlActivityGroup {
 	case strings.Contains(lower, "moby.dick"):
 		g := group("book:153747:audiobook", mediaTypeBook, "Moby-Dick", 1851, 0, instChaptarr, "Chaptarr")
 		g.Creator, g.Format = "Herman Melville", bookFormatAudiobook
+		g.Artwork = strings.TrimRight(demoServerURL, "/") + "/static/downloads/moby-dick.png"
 		return g
 	case strings.Contains(lower, "original.dixieland"):
 		g := group("music:odjb-1917", mediaTypeMusic, "Livery Stable Blues: The 1917 Sessions", 1917, 0, instLidarr, "Lidarr", 2)
 		g.Creator = "Original Dixieland Jass Band"
+		g.Artwork = strings.TrimRight(demoServerURL, "/") + "/static/downloads/livery-stable-blues.png"
 		g.Children = []dlActivityChild{{ID: "odjb-track-1", Title: "Livery Stable Blues", Disc: 1, Track: "1", JobIDs: []string{}}}
 		return g
 	}

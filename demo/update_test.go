@@ -72,6 +72,54 @@ func TestCurrentAppDemoSurfaces(t *testing.T) {
 		t.Fatalf("download activity is empty: %s", res.Body.String())
 	}
 
+	res = demoTestRequest(t, router, http.MethodGet, "/api/downloads/activity?scope=all", admin, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("admin download activity status = %d: %s", res.Code, res.Body.String())
+	}
+	var allActivity struct {
+		Groups []struct {
+			MediaType string   `json:"media_type"`
+			Title     string   `json:"title"`
+			Artwork   string   `json:"artwork"`
+			JobIDs    []string `json:"job_ids"`
+		} `json:"groups"`
+	}
+	_ = json.Unmarshal(res.Body.Bytes(), &allActivity)
+	for _, group := range allActivity.Groups {
+		if group.Artwork == "" {
+			t.Errorf("download group %q has no artwork", group.Title)
+		}
+		if group.MediaType == mediaTypeMovie && len(group.JobIDs) != 1 {
+			t.Errorf("movie download group %q has %d jobs, want 1", group.Title, len(group.JobIDs))
+		}
+	}
+	qbitMovies := map[string]string{}
+	for _, item := range dlTorrents {
+		if meta := dlActivityMeta(item.Name); meta != nil && meta.MediaType == mediaTypeMovie {
+			qbitMovies[meta.ID] = item.Name
+		}
+	}
+	sabItems := append([]*dlItem{}, dlItems...)
+	for i := range dlRespawnPool {
+		sabItems = append(sabItems, &dlRespawnPool[i])
+	}
+	for _, item := range sabItems {
+		if meta := dlActivityMeta(item.Name); meta != nil && meta.MediaType == mediaTypeMovie {
+			if torrent, exists := qbitMovies[meta.ID]; exists {
+				t.Errorf("movie %q can overlap across SABnzbd %q and qBittorrent %q", meta.Title, item.Name, torrent)
+			}
+		}
+	}
+	for _, path := range []string{
+		"/static/downloads/moby-dick.png",
+		"/static/downloads/livery-stable-blues.png",
+	} {
+		cover := demoTestRequest(t, router, http.MethodGet, path, "", nil)
+		if cover.Code != http.StatusOK || cover.Header().Get("Content-Type") != "image/png" || cover.Body.Len() == 0 {
+			t.Errorf("download artwork %s: status=%d type=%q bytes=%d", path, cover.Code, cover.Header().Get("Content-Type"), cover.Body.Len())
+		}
+	}
+
 	res = demoTestRequest(t, router, http.MethodGet, "/api/tdarr/"+instTdarr+"/activity", admin, nil)
 	if res.Code != http.StatusOK || !bytes.Contains(res.Body.Bytes(), []byte(`"nodes"`)) {
 		t.Fatalf("Tdarr activity status = %d: %s", res.Code, res.Body.String())

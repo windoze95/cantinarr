@@ -172,15 +172,15 @@ func dlSeed() {
 	// ones for the history (uploading, stalledUP, pausedUP, missingFiles).
 	ago := func(d time.Duration) time.Time { return now.Add(-d) }
 	dlTorrents = []*dlTorrent{
-		{Hash: "3f9a1c7e5b2d8046a9c3e1f7b5d2a8c4e6f0b1d3", Name: "The.General.1926.Remastered.1080p.BluRay.x265-DEMO",
+		{Hash: "3f9a1c7e5b2d8046a9c3e1f7b5d2a8c4e6f0b1d3", Name: "His.Girl.Friday.1940.Remastered.1080p.BluRay.x265-DEMO",
 			Size: 4_200_000_000, Progress: 0.375, DLSpeed: 3_100_000, State: "downloading", Category: "movies"},
 		{Hash: "7b2e4d6f8a0c1e3b5d7f9a1c2e4b6d8f0a2c4e61", Name: "Sherlock.Holmes.Adventures.S04E09.1080p.WEB.H264-DEMO",
 			Size: 1_400_000_000, Progress: 0.82, DLSpeed: 2_400_000, State: "downloading", Category: "tv"},
-		{Hash: "c4d8e2f6a0b4c8d2e6f0a4b8c2d6e0f4a8b2c6d0", Name: "Metropolis.1927.The.Complete.Metropolis.2160p.BluRay-DEMO",
+		{Hash: "c4d8e2f6a0b4c8d2e6f0a4b8c2d6e0f4a8b2c6d0", Name: "The.39.Steps.1935.Restored.2160p.BluRay-DEMO",
 			Size: 38_000_000_000, Progress: 0.04, State: "stalledDL", Category: "movies"},
-		{Hash: "e1f3a5b7c9d1e3f5a7b9c1d3e5f7a9b1c3d5e7f9", Name: "The.Cabinet.of.Dr.Caligari.1920.1080p.BluRay.x264-DEMO",
+		{Hash: "e1f3a5b7c9d1e3f5a7b9c1d3e5f7a9b1c3d5e7f9", Name: "Carnival.of.Souls.1962.1080p.BluRay.x264-DEMO",
 			Size: 3_600_000_000, Progress: 0, State: "queuedDL", Category: "movies"},
-		{Hash: "a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0", Name: "Nosferatu.1922.1080p.BluRay.x264-DEMO",
+		{Hash: "a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0", Name: "Charade.1963.1080p.BluRay.x264-DEMO",
 			Size: 5_100_000_000, Progress: 0.612, State: "pausedDL", Category: "movies", resumeState: "downloading"},
 
 		{Hash: "0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e", Name: "A.Trip.to.the.Moon.1902.Restored.1080p-DEMO",

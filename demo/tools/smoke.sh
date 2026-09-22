@@ -80,6 +80,8 @@ chk_key() {
 
 R="$BASE"
 # ── infrastructure / auth ────────────────────────────────
+chk GET /static/downloads/moby-dick.png none 200 ''
+chk GET /static/downloads/livery-stable-blues.png none 200 ''
 chk GET /api/health none 200 '.status=="ok"'
 chk GET /api/auth/status none 200 '.needs_setup==false'
 chk GET /api/auth/me admin 200 '.username=="admin" and .child==false and (.content_limits==null)'
@@ -300,7 +302,7 @@ chk GET /api/downloads/qbittorrent-4b5c6d7e/queue admin 200 '(.items|length)==5 
 chk GET /api/downloads/qbittorrent-4b5c6d7e/history admin 200 '(.items|length)==5 and ([.items[]|select(.error!=null and .error!="")]|length)==1'
 chk GET /api/downloads/sabnzbd-3f4a5b6c/queue user 403 ''
 # ── content-first download activity ─────────────────────
-chk GET "/api/downloads/activity?scope=all" admin 200 '.scope=="all" and .user_scope=="all" and .count==(.groups|length) and .count>0 and (.jobs|length)>0 and (all(.jobs[]; (.name|length)>0 and (.control.instance_id|length)>0))'
+chk GET "/api/downloads/activity?scope=all" admin 200 '.scope=="all" and .user_scope=="all" and .count==(.groups|length) and .count>0 and (.jobs|length)>0 and (all(.jobs[]; (.name|length)>0 and (.control.instance_id|length)>0)) and (all(.groups[]; (.artwork|length)>0)) and (all(.groups[]|select(.media_type=="movie"); (.job_ids|length)==1))'
 chk GET "/api/downloads/activity?scope=mine" user 200 '.scope=="mine" and .count==(.groups|length) and .count>0 and (.jobs|length)>0 and (all(.jobs[]; (has("name")|not) and (has("control")|not)))'
 chk GET "/api/downloads/summary?scope=mine" user 200 '.scope=="mine" and (.count|type=="number") and (has("groups")|not) and (has("jobs")|not)'
 chk GET "/api/downloads/activity?scope=invalid" user 400 '.error|test("scope must be all or mine")'

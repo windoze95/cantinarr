@@ -112,6 +112,7 @@ func buildRouter() chi.Router {
 		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write(demoFavicon)
 	})
+	registerDownloadActivityArtwork(r)
 
 	r.Route("/api", func(r chi.Router) {
 		r.Use(middleware.SetHeader("Content-Type", "application/json"))
