@@ -343,7 +343,7 @@ class _RequesterAlbumDetailScreenState
     });
     if (!access.canBrowse('lidarr', _instanceId)) {
       return Scaffold(
-          appBar: AppBar(title: const Text('Album details')),
+          appBar: _appBar(context),
           body: Center(
               child: Text(access.needsUpdate(_instanceId)
                   ? adminCatalogUpdateMessage
@@ -365,12 +365,23 @@ class _RequesterAlbumDetailScreenState
         ? const AsyncData(<OwnedAlbum>[])
         : ref.watch(ownedAlbumsForInstanceProvider(_instanceId));
     return Scaffold(
-      appBar: AppBar(title: const Text('Album details')),
+      appBar: _appBar(context),
       // Metadata renders immediately; ownership and request truth resolve in
       // their own rows instead of blanking the whole page behind one digest.
       body: _resolved(digest.valueOrNull ?? const []),
     );
   }
+
+  AppBar _appBar(BuildContext context) => AppBar(
+        leading: BackButton(onPressed: () {
+          if (context.canPop()) {
+            context.pop();
+            return;
+          }
+          context.go('/dashboard/music');
+        }),
+        title: const Text('Album details'),
+      );
 
   Widget _resolved(List<OwnedAlbum> titles) {
     OwnedAlbum? owned;

@@ -61,7 +61,7 @@ import '../features/discover/logic/browse_query.dart';
 import '../features/discover/ui/browse_grid_screen.dart';
 import '../features/downloads/ui/downloads_history_screen.dart';
 import '../features/downloads/ui/downloads_module_shell.dart';
-import '../features/downloads/ui/downloads_queue_screen.dart';
+import '../features/downloads/ui/downloads_queue_page.dart';
 import '../features/issues/ui/agent_run_screen.dart';
 import '../features/issues/ui/agent_approval_rules_screen.dart';
 import '../features/issues/ui/ai_remediation_settings_screen.dart';
@@ -70,6 +70,7 @@ import '../features/issues/ui/issues_list_screen.dart';
 import '../features/issues/ui/pending_agent_actions_screen.dart';
 import '../features/media_access/ui/media_access_guide.dart';
 import '../features/media_detail/ui/media_detail_screen.dart';
+import '../features/media_detail/ui/tv_library_detail_screen.dart';
 import '../features/notifications/ui/push_notifications_screen.dart';
 import '../features/notifications/ui/server_push_notifications_screen.dart';
 import '../features/radarr/ui/radarr_calendar_screen.dart';
@@ -83,6 +84,7 @@ import '../features/settings/ui/credentials_screen.dart';
 import '../features/settings/ui/devices_screen.dart';
 import '../features/settings/ui/discovery_settings_screen.dart';
 import '../features/settings/ui/discord_notifications_screen.dart';
+import '../features/settings/ui/seerr_api_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
 import '../features/settings/ui/pending_requests_screen.dart';
 import '../features/settings/ui/request_settings_screen.dart';
@@ -104,6 +106,8 @@ import '../features/monitoring/ui/monitoring_activity_screen.dart';
 import '../features/monitoring/ui/monitoring_history_screen.dart';
 import '../features/monitoring/ui/monitoring_module_shell.dart';
 import '../features/monitoring/ui/monitoring_stats_screen.dart';
+import '../features/tdarr/ui/tdarr_module_shell.dart';
+import '../features/tdarr/ui/tdarr_screen.dart';
 import '../core/widgets/app_ambient_background.dart';
 import '../core/widgets/unsaved_changes_guard.dart';
 
@@ -222,6 +226,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       }
       final isAdmin = auth?.user?.isAdmin ?? false;
       if (isAuthenticated && !isAdmin && _isAdminOnlyRoute(state.uri.path)) {
+        return landing;
+      }
+      if (isAuthenticated && !isAdmin &&
+          state.uri.path.startsWith('/downloads') &&
+          auth?.connection?.downloadsActivity != true) {
         return landing;
       }
       // Requester book surfaces — the Books tab and the id-addressable book
@@ -574,7 +583,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 routes: [
                   GoRoute(
                     path: '/downloads/queue',
-                    builder: (_, __) => const DownloadsQueueScreen(),
+                    builder: (_, __) => const DownloadsQueuePage(),
                   ),
                 ],
               ),
@@ -625,6 +634,22 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                   ),
                 ],
               ),
+            ],
+          ),
+          StatefulShellRoute.indexedStack(
+            pageBuilder: (context, state, navigationShell) => _fadeSurfacePage(
+              key: state.pageKey,
+              child: TdarrModuleShell(
+                currentIndex: navigationShell.currentIndex,
+                onTabChanged: (index) => navigationShell.goBranch(index),
+                child: navigationShell,
+              ),
+            ),
+            branches: [
+              StatefulShellBranch(routes: [GoRoute(path: '/tdarr/activity',
+                  builder: (_, __) => const TdarrScreen(activity: true))]),
+              StatefulShellBranch(routes: [GoRoute(path: '/tdarr/libraries',
+                  builder: (_, __) => const TdarrScreen(activity: false))]),
             ],
           ),
           // Authenticated secondary routes stay inside the same shell. On
@@ -679,6 +704,18 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               return AppAmbientBackground(
                 child: BrowseGridScreen(query: query),
               );
+            },
+          ),
+          GoRoute(
+            path: '/detail/tv-library/:seriesId',
+            builder: (_, state) {
+              final id = int.tryParse(state.pathParameters['seriesId'] ?? '');
+              final instance = state.uri.queryParameters['instance_id']?.trim();
+              if (id == null || id <= 0 || instance == null || instance.isEmpty) {
+                return const _InvalidRouteScreen(message: 'This TV library link is invalid.');
+              }
+              return AppAmbientBackground(child: TVLibraryDetailScreen(
+                  seriesId: id, instanceId: instance));
             },
           ),
           GoRoute(
@@ -895,6 +932,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 const AppAmbientBackground(child: DiscordNotificationsScreen()),
           ),
           GoRoute(
+            path: '/settings/seerr-api',
+            builder: (_, __) =>
+                const AppAmbientBackground(child: SeerrApiScreen()),
+          ),
+          GoRoute(
             path: '/settings/discovery',
             onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
@@ -1067,8 +1109,9 @@ bool _isAdminOnlyRoute(String path) {
     '/sonarr',
     '/chaptarr',
     '/lidarr',
-    '/downloads',
+    '/downloads/history',
     '/monitoring',
+    '/tdarr',
     '/approvals',
     '/agent-actions',
     '/agent-runs',
@@ -1085,6 +1128,7 @@ bool _isAdminOnlyRoute(String path) {
     '/settings/request-settings',
     '/settings/tv-matches',
     '/settings/discord-notifications',
+    '/settings/seerr-api',
     '/settings/push-notifications/server',
     '/settings/devices',
     '/settings/apple-tvs',
@@ -1215,7 +1259,7 @@ bool _hasValidMediaDetailParameters(GoRouterState state) {
 /// Route-level guard for `/detail/:type/:id`. Books, authors, albums and
 /// artists use a string foreign id and a series uses its name, so the only
 /// malformed shape is a blank id — degrade to that media's own tab. Movie/TV
-/// keep the positive-TMDB-id validation and their movies-dashboard fallback.
+/// keep positive-TMDB-id validation and return to their own dashboard tab.
 String? _mediaDetailRedirect(GoRouterState state) {
   final type = state.pathParameters['type'];
   if (type == 'book' || type == 'author' || type == 'series') {
@@ -1226,7 +1270,9 @@ String? _mediaDetailRedirect(GoRouterState state) {
     final id = state.pathParameters['id']?.trim() ?? '';
     return id.isEmpty ? '/dashboard/music' : null;
   }
-  return _hasValidMediaDetailParameters(state) ? null : '/dashboard/movies';
+  return _hasValidMediaDetailParameters(state)
+      ? null
+      : type == 'tv' ? '/dashboard/tv' : '/dashboard/movies';
 }
 
 /// Defensive fallback for a malformed parameter if a future router version

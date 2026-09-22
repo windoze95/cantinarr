@@ -14,6 +14,8 @@ import 'package:cantinarr/features/ai_assistant/data/codex_oauth_service.dart';
 import 'package:cantinarr/features/ai_assistant/logic/ai_chat_provider.dart';
 import 'package:cantinarr/features/ai_assistant/ui/ai_chat_screen.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:cantinarr/features/downloads/data/downloads_activity.dart';
+import 'package:cantinarr/features/downloads/logic/downloads_activity_provider.dart';
 import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
 import 'package:cantinarr/features/shell/ui/app_shell.dart';
 import 'package:dio/dio.dart';
@@ -803,6 +805,133 @@ void main() {
     );
     expect(find.text('Radarr library'), findsOneWidget);
   });
+
+  for (final width in [390.0, 1400.0]) {
+    testWidgets('Transcoding groups and switches Tdarr instances at $width px',
+        (tester) async {
+      tester.view.physicalSize = Size(width, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      final container = ProviderContainer(
+        overrides: [
+          authProvider.overrideWith(
+            () => _FakeAuthNotifier(const AuthState(
+              connection: BackendConnection(
+                serverUrl: 'http://localhost',
+                accessToken: 'access',
+                refreshToken: 'refresh',
+                instances: [
+                  ServiceInstance(id: 'tdarr-main', serviceType: 'tdarr',
+                    name: 'Main Tdarr', isDefault: true),
+                  ServiceInstance(id: 'tdarr-secondary', serviceType: 'tdarr',
+                    name: 'Secondary Tdarr'),
+                ],
+              ),
+              user: UserProfile(id: 1, username: 'admin', role: 'admin'),
+            )),
+          ),
+          backendClientProvider.overrideWithValue(_fakeDio()),
+          realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      final router = GoRouter(
+        initialLocation: '/dashboard/movies',
+        routes: [
+          ShellRoute(
+            builder: (context, state, child) =>
+                AppShell(currentPath: state.uri.path, child: child),
+            routes: [
+              GoRoute(path: '/dashboard/movies',
+                builder: (_, __) => const Scaffold(body: Text('Dashboard home'))),
+              GoRoute(path: '/tdarr/activity',
+                builder: (_, __) => const Scaffold(body: Text('Worker activity'))),
+            ],
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
+
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp.router(routerConfig: router),
+      ));
+      await tester.pumpAndSettle();
+      if (width < 900) {
+        await tester.tap(find.byIcon(Icons.menu));
+        await tester.pumpAndSettle();
+      }
+
+      expect(find.text('Transcoding'), findsOneWidget);
+      expect(find.text('Tdarr'), findsNothing);
+      expect(find.text('Main Tdarr'), findsOneWidget);
+      expect(find.text('Secondary Tdarr'), findsNothing);
+      await tester.tap(find.byTooltip('Choose Transcoding instance'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Secondary Tdarr'));
+      await tester.pumpAndSettle();
+
+      expect(container.read(instanceProvider).activeTdarrInstanceId,
+        'tdarr-secondary');
+      expect(router.routeInformationProvider.value.uri.path, '/tdarr/activity');
+      expect(find.text('Worker activity'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final width in [390.0, 1400.0]) {
+    testWidgets('Downloads count and client selector remain usable at $width px', (tester) async {
+      tester.view.physicalSize = Size(width, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final container = ProviderContainer(overrides: [
+        authProvider.overrideWith(() => _FakeAuthNotifier(const AuthState(
+          connection: BackendConnection(serverUrl: 'http://localhost',
+            accessToken: 'access', refreshToken: 'refresh', downloadsActivity: true,
+            instances: [
+              ServiceInstance(id: 'sab', serviceType: 'sabnzbd', name: 'Primary download client', isDefault: true),
+              ServiceInstance(id: 'nzb', serviceType: 'nzbget', name: 'Second client'),
+            ]),
+          user: UserProfile(id: 1, username: 'admin', role: 'admin'),
+        ))),
+        backendClientProvider.overrideWithValue(_fakeDio()),
+        realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
+        downloadsSummaryProvider.overrideWith((_) => AsyncData(DownloadsActivity.fromJson({
+          'count': 123, 'complete': true, 'scope': 'all', 'user_scope': 'all',
+        }))),
+      ]);
+      addTearDown(container.dispose);
+      final router = GoRouter(initialLocation: '/dashboard/movies', routes: [
+        ShellRoute(builder: (context, state, child) => AppShell(currentPath: state.uri.path, child: child), routes: [
+          GoRoute(path: '/dashboard/movies', builder: (_, __) => const Scaffold(body: Text('Dashboard home'))),
+          GoRoute(path: '/downloads/queue', builder: (_, __) => const Scaffold(body: Text('Downloads queue'))),
+        ]),
+      ]);
+      addTearDown(router.dispose);
+      await tester.pumpWidget(UncontrolledProviderScope(container: container,
+          child: MaterialApp.router(routerConfig: router)));
+      await tester.pumpAndSettle();
+      if (width < 900) {
+        await tester.tap(find.byIcon(Icons.menu));
+        await tester.pumpAndSettle();
+      }
+      expect(find.text('99+'), findsOneWidget);
+      expect(find.byTooltip('Choose Downloads instance'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.byTooltip('Choose Downloads instance'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Second client'));
+      await tester.pumpAndSettle();
+      expect(container.read(instanceProvider).activeDownloadInstanceId, 'nzb');
+      expect(router.routeInformationProvider.value.uri.path, '/downloads/queue');
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   // A long instance name once squeezed the module label until "Chaptarr"
   // wrapped mid-word to "Chapta / rr" in the desktop sidebar. The chip is the

@@ -62,6 +62,9 @@ func (s *Service) prepareTVTarget(r *resolvedRequest) (*TVRequestTarget, error) 
 		}
 	}
 	out := &TVRequestTarget{Match: *m, SourceSeasons: append([]int(nil), selected...), Pilot: pilot}
+	if r.tvLibraryScope != nil {
+		out.Pilot = r.tvLibraryScope.pilot
+	}
 	out.Match.TargetTitle = target.Title
 	for _, n := range selected {
 		dest := m.SeasonMap[n]
@@ -74,6 +77,34 @@ func (s *Service) prepareTVTarget(r *resolvedRequest) (*TVRequestTarget, error) 
 	existing, err := client.GetSeriesByTVDB(m.TVDBID)
 	if err != nil {
 		return nil, err
+	}
+	if proof := r.tvLibraryScope; proof != nil {
+		if existing == nil || existing.ID != proof.seriesID || m.Revision != proof.revision ||
+			encodeSeasonNumbers(normalizeSeasonNumbers(out.TargetSeasons)) != encodeSeasonNumbers(proof.targetSeasons) {
+			return nil, ErrTVMatchStale
+		}
+		// An edit to ANOTHER source can introduce an overlap without changing
+		// this source's revision. Recheck ownership during request preparation.
+		_, candidates, err := s.importTVMatches(existing)
+		if err != nil {
+			return nil, err
+		}
+		for _, target := range out.TargetSeasons {
+			owners := 0
+			for _, candidate := range candidates {
+				for _, n := range candidate.SeasonMap {
+					if n == target {
+						if candidate.TmdbID != m.TmdbID {
+							return nil, ErrTVMatchStale
+						}
+						owners++
+					}
+				}
+			}
+			if owners != 1 {
+				return nil, ErrTVMatchStale
+			}
+		}
 	}
 	r.newWork = existing == nil || !existing.Monitored
 	if existing != nil {

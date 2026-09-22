@@ -1,0 +1,14 @@
+---
+import { getCollection } from 'astro:content';
+const entries = await getCollection('docs');
+const groups = [
+  ['start', 'Start here'], ['install', 'Install and maintain'],
+  ['use', 'Use Cantinarr'], ['admin', 'Manage your server'],
+  ['integrations', 'Connect your services'], ['troubleshooting', 'Fix a problem'],
+  ['reference', 'Reference'], ['contributing', 'Contribute'],
+];
+---
+{groups.map(([prefix, title]) => <section>
+  <h2 id={prefix}>{title}</h2>
+  <ul>{entries.filter((entry) => entry.id.startsWith(prefix + '/') && entry.id !== 'reference/coverage').sort((a,b) => a.data.title.localeCompare(b.data.title)).map((entry) => <li><a href={'/' + entry.id.replace(/(^|\/)index$/, '') + '/'}>{entry.data.title}</a></li>)}</ul>
+</section>)}

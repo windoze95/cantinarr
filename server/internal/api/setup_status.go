@@ -41,6 +41,7 @@ type setupFacts struct {
 	HasDownloadClient bool
 	MediaDownloads    bool
 	HasWatchHistory   bool
+	HasTdarr          bool
 	HasMediaServer    bool
 	TMDB              bool
 	Trakt             bool
@@ -152,6 +153,12 @@ func buildSetupItems(f setupFacts) []setupItem {
 			Configured:  f.HasWatchHistory,
 		},
 		{
+			Key:         "tdarr",
+			Title:       "Tdarr progress",
+			Description: "See active processing jobs and library statistics in the Tdarr module.",
+			Configured:  f.HasTdarr,
+		},
+		{
 			Key:         "books",
 			Title:       "Books (Chaptarr)",
 			Description: "Let users request ebooks and audiobooks; access is granted per user.",
@@ -203,6 +210,8 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 					facts.HasLidarr = true
 				case "tautulli", "tracearr":
 					facts.HasWatchHistory = true
+				case "tdarr":
+					facts.HasTdarr = true
 				default:
 					if downloads.IsDownloadClientType(inst.ServiceType) {
 						facts.HasDownloadClient = true

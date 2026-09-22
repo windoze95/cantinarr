@@ -125,6 +125,11 @@ enum AdminIssueDisposition {
 
   const AdminIssueDisposition(this.value);
   final String value;
+
+  String get defaultNote => switch (this) {
+        resolved => 'Marked resolved.',
+        wontFix => 'Closed without a fix.',
+      };
 }
 
 /// One reported (or auto-detected) problem. Media-scoped like a media request
@@ -161,6 +166,7 @@ class Issue {
   /// executing), and it deliberately stays false on list reads — only the
   /// single-issue fetch that renders the control computes it.
   final bool canConfirmFixed;
+  final bool canReopen;
   final bool isPrevention;
 
   const Issue({
@@ -185,6 +191,7 @@ class Issue {
     required this.updatedAt,
     required this.closedAt,
     required this.canConfirmFixed,
+    this.canReopen = false,
     this.isPrevention = false,
   });
 
@@ -250,9 +257,9 @@ class Issue {
         closedAt:
             DateTime.tryParse(json['closed_at'] as String? ?? '')?.toLocal(),
         // Absent on an older server and on every list read — default false so a
-        // missing field never offers an irreversible close the server would
-        // refuse.
+        // missing field never offers a close the server would refuse.
         canConfirmFixed: json['can_confirm_fixed'] as bool? ?? false,
+        canReopen: json['can_reopen'] as bool? ?? false,
         isPrevention: json['is_prevention'] as bool? ?? false,
       );
 }

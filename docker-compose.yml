@@ -20,8 +20,9 @@ services:
       # persists its own key in the DB (./config volume) — zero manual setup.
       # Set CANTINARR_PUSH_API_KEY (in a gitignored .env) only to override; set
       # CANTINARR_PUSH_ENROLL_TOKEN only if the gateway uses gated enrollment.
-      # Blank the URL to disable push entirely.
-      - CANTINARR_PUSH_GATEWAY_URL=https://push.cantinarr.com
+      # Override this in .env for another gateway; an explicitly blank value
+      # disables push. The server itself has no default gateway.
+      - CANTINARR_PUSH_GATEWAY_URL=${CANTINARR_PUSH_GATEWAY_URL-https://push.cantinarr.com}
       - CANTINARR_PUSH_API_KEY=${CANTINARR_PUSH_API_KEY:-}
       - CANTINARR_PUSH_ENROLL_TOKEN=${CANTINARR_PUSH_ENROLL_TOKEN:-}
       # Comma-separated absolute container paths forming the outer media

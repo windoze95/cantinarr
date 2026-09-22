@@ -19,6 +19,7 @@ import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/data/sonarr_models.dart';
 import '../../sonarr/logic/tv_discover_provider.dart';
 import '../logic/library_rows.dart';
+import 'tv_library_link.dart';
 
 /// How far back the "Recently Downloaded" row looks. Sonarr writes one import
 /// record per episode, so a season pack spends a dozen of these on one series —
@@ -38,6 +39,8 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
     with WidgetsBindingObserver {
   List<SonarrSeries> _recentlyDownloaded = [];
   List<SonarrSeries> _airingNext = [];
+  String _recentInstanceId = '';
+  String _airingInstanceId = '';
   bool _isLoadingLibrary = false;
 
   /// The full Sonarr library, retained so Discover browse-row posters can be
@@ -112,6 +115,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
 
       setState(() {
         _recentlyDownloaded = recentlyDownloadedSeries(series, imports.records);
+        _recentInstanceId = defaultSonarr.id;
       });
     } catch (_) {
       // History fetch failed. A series record carries no import date, so there
@@ -129,6 +133,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
 
       setState(() {
         _airingNext = airingNextSeries(series, calendarEntries);
+        _airingInstanceId = defaultSonarr.id;
       });
     } catch (_) {
       // Calendar fetch failed; leave _airingNext as it is.
@@ -252,6 +257,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
             _buildRow(
               title: 'Recently Downloaded',
               items: _recentlyDownloaded,
+              instanceId: _recentInstanceId,
               statusLabel: 'Downloaded',
               statusColor: AppTheme.available,
             ),
@@ -259,6 +265,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
             _buildRow(
               title: 'Airing Next',
               items: _airingNext,
+              instanceId: _airingInstanceId,
               statusLabel: 'Airing',
               statusColor: AppTheme.downloading,
             ),
@@ -278,6 +285,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
   Widget _buildRow({
     required String title,
     required List<SonarrSeries> items,
+    required String instanceId,
     required String statusLabel,
     required Color statusColor,
   }) {
@@ -301,17 +309,20 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
             items: items,
             isLoading: _isLoadingLibrary,
             height: cardWidth * 1.5 + MediaCard.rowExtraHeight(context, withSubtitle: true),
-            itemBuilder: (series) => MediaCard(
-              id: series.id,
-              title: series.title,
-              posterPath: series.posterUrl,
-              statusLabel: statusLabel,
-              statusColor: statusColor,
-              subtitle: _availabilityLine(series),
-              width: cardWidth,
-              onTap: series.tmdbId != null
-                  ? () => context.push('/detail/tv/${series.tmdbId}')
-                  : null,
+            itemBuilder: (series) => TVLibraryLink(
+              instanceId: instanceId,
+              seriesId: series.id,
+              tmdbId: series.tmdbId,
+              builder: (onTap) => MediaCard(
+                id: series.id,
+                title: series.title,
+                posterPath: series.posterUrl,
+                statusLabel: statusLabel,
+                statusColor: statusColor,
+                subtitle: _availabilityLine(series),
+                width: cardWidth,
+                onTap: onTap,
+              ),
             ),
           ),
         ],

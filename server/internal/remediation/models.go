@@ -196,6 +196,9 @@ type Issue struct {
 	// thread screen uses; a list read leaves it false rather than paying a
 	// per-row query for a control no list renders.
 	CanConfirmFixed bool `json:"can_confirm_fixed"`
+	// Only an admin's thread read advertises reopening. Older servers omit
+	// this capability, so newer clients keep the button hidden there.
+	CanReopen bool `json:"can_reopen"`
 
 	// IsPrevention marks a recurrence notice — advice about a setting, not an
 	// incident. Computed at read from the dedupe namespace so clients render
@@ -508,9 +511,9 @@ type ActionDenyRequest struct {
 	Note string `json:"note"`
 }
 
-// AdminIssueResolutionRequest is POST /api/admin/issues/{id}/resolve. Note is
-// required human evidence/judgment; it is stored in the terminal issue and its
-// append-only thread audit.
+// AdminIssueResolutionRequest is POST /api/admin/issues/{id}/resolve. A supplied
+// note is stored in the terminal issue and its append-only thread audit; an
+// omitted or blank note receives disposition-specific canonical audit text.
 type AdminIssueResolutionRequest struct {
 	Disposition AdminIssueDisposition `json:"disposition"`
 	Note        string                `json:"note"`

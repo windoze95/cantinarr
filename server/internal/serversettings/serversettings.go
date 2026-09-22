@@ -79,6 +79,8 @@ func DiscoverySources() []string {
 // Settings is the server-wide admin preferences blob. It is stored as JSON and
 // unmarshalled over the zero value, so adding a field later is migration-free.
 type Settings struct {
+	// DownloadsUserScope limits requester activity; empty upgrades to all.
+	DownloadsUserScope string `json:"downloads_user_scope,omitempty"`
 	// ManagementURL is an optional link to the admin's own container-management
 	// portal (e.g. an Unraid or Portainer page). Empty means "not configured".
 	ManagementURL string `json:"management_url"`
@@ -117,14 +119,15 @@ type Settings struct {
 	SetupSkippedItems []string `json:"setup_skipped_items,omitempty"`
 }
 
-// Service reads and writes the server settings blob, plus the one setting
-// that carries a secret (the outbound proxy, outbound_proxy.go).
+// Service reads and writes the server settings blob, plus the settings that
+// carry a secret and so live in rows of their own: the outbound proxy
+// (outbound_proxy.go) and the Seerr-compatible API key (seerr_api_key.go).
 type Service struct {
 	db *sql.DB
 	// All writers of the shared JSON blob serialize their read/modify/write.
 	mu sync.Mutex
-	// cipher encrypts the outbound proxy row at rest. Nil (tests) stores it
-	// in plaintext; the server binary always supplies one.
+	// cipher encrypts the secret-bearing rows at rest. Nil (tests) stores
+	// them in plaintext; the server binary always supplies one.
 	cipher *secrets.Cipher
 	// traktConfigured reports whether Trakt can answer right now. It is a
 	// callback rather than a stored flag because credentials change under us,
@@ -135,9 +138,10 @@ type Service struct {
 // Option customizes a Service at construction.
 type Option func(*Service)
 
-// WithCipher supplies the cipher that encrypts the outbound proxy row. The
-// server binary always passes it; a Service built without one stores that
-// row in plaintext, which only tests do.
+// WithCipher supplies the cipher that encrypts the secret-bearing rows (the
+// outbound proxy, the Seerr-compatible API key). The server binary always
+// passes it; a Service built without one stores those rows in plaintext,
+// which only tests do.
 func WithCipher(cipher *secrets.Cipher) Option {
 	return func(s *Service) { s.cipher = cipher }
 }
@@ -164,6 +168,9 @@ func (s *Service) Get() Settings {
 // marker stays consistent. Hide-only updates leave the automatic defaults alone.
 func (s *Service) normalized(in Settings) Settings {
 	out := in
+	if out.DownloadsUserScope == "" {
+		out.DownloadsUserScope = "all"
+	}
 	out.ManagementURL = strings.TrimSpace(out.ManagementURL)
 	out.ExternalURL = normalizeExternalURL(out.ExternalURL)
 	if !discoveryDecided(out) {
@@ -208,6 +215,21 @@ func (s *Service) readRaw() (Settings, error) {
 func (s *Service) Read() (Settings, error) {
 	out, err := s.readRaw()
 	return s.normalized(out), err
+}
+
+// SetDownloadsUserScope changes only Downloads visibility in the shared blob.
+func (s *Service) SetDownloadsUserScope(scope string) (Settings, error) {
+	if scope != "all" && scope != "mine" {
+		return Settings{}, errors.New("user_scope must be all or mine")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next, err := s.readRaw()
+	if err != nil {
+		return Settings{}, err
+	}
+	next.DownloadsUserScope = scope
+	return s.save(next)
 }
 
 // DiscoveryChosen reports whether an admin has ever saved a discovery

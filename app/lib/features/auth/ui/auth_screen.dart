@@ -4,17 +4,28 @@ import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
+import '../data/connection_input.dart';
 import '../data/passkey_service.dart';
 import '../data/server_status.dart';
 import '../logic/auth_provider.dart';
 import '../logic/saved_servers_provider.dart';
 import 'saved_server_picker.dart';
+import 'server_setup_help.dart';
 
 /// Overridable so native widget tests can exercise hosted-web selection too.
 final authPageOriginProvider = Provider<String?>((ref) {
   if (!kIsWeb) return null;
   final origin = Uri.base.origin;
   return origin.isEmpty || origin == 'null' ? null : origin;
+});
+
+/// Resolve device support once for the connection and sign-in views. The server
+/// must independently advertise support for this same platform.
+final authPasskeyPlatformProvider =
+    FutureProvider.autoDispose<String?>((ref) async {
+  return await PasskeyService.isAvailableAsync()
+      ? PasskeyService.platformKind()
+      : null;
 });
 
 /// Unified auth screen: checks server status, shows setup wizard or login.
@@ -27,12 +38,12 @@ class AuthScreen extends ConsumerStatefulWidget {
 
 class _AuthScreenState extends ConsumerState<AuthScreen> {
   final _serverUrlController = TextEditingController();
-  final _linkController = TextEditingController();
 
   _AuthView _view = _AuthView.serverUrl;
   ServerStatus? _serverStatus;
   bool _isCheckingServer = false;
-  bool _isLoadingHistory = true;
+  bool _backgroundCheck = false;
+  bool _showSavedServers = false;
   int _selectionEpoch = 0;
   String? _serverError;
 
@@ -56,7 +67,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       servers = const [];
     }
     if (!mounted || epoch != _selectionEpoch) return;
-    setState(() => _isLoadingHistory = false);
     final auth = ref.read(authProvider).valueOrNull;
     if (auth?.isAuthenticated == true || auth?.isLoading == true) return;
     final url = servers.isNotEmpty
@@ -64,25 +74,60 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         : ref.read(authPageOriginProvider);
     if (url != null) {
       _serverUrlController.text = url;
-      await _checkServer();
+      // Hosted web can go directly to its server's login/setup. Native apps
+      // stay on the shared entry field; this read only enables a passkey shortcut.
+      await _checkServer(advance: ref.read(authPageOriginProvider) != null);
     }
   }
 
   @override
   void dispose() {
     _serverUrlController.dispose();
-    _linkController.dispose();
     super.dispose();
   }
 
-  Future<void> _checkServer() async {
+  Future<void> _submitConnection() async {
+    final auth = ref.read(authProvider);
+    if (auth.isLoading ||
+        auth.valueOrNull?.isLoading == true ||
+        auth.valueOrNull?.isAuthenticated == true ||
+        (_isCheckingServer && !_backgroundCheck)) {
+      return;
+    }
+    ConnectionInput input;
+    try {
+      input = ConnectionInput.parse(_serverUrlController.text);
+    } on FormatException catch (e) {
+      setState(() {
+        _cancelPendingSelection();
+        _backgroundCheck = false;
+        _serverError = e.message;
+      });
+      return;
+    }
+    ref.read(authProvider.notifier).clearError();
+    if (!input.isLink) {
+      await _checkServer();
+      return;
+    }
+    setState(() {
+      _cancelPendingSelection();
+      _backgroundCheck = false;
+      _serverStatus = null;
+      _serverError = null;
+    });
+    await ref.read(authProvider.notifier).connectWithLink(input.value);
+  }
+
+  Future<void> _checkServer({bool advance = true}) async {
     final serverUrl = _serverUrlController.text.trim();
     if (serverUrl.isEmpty) return;
     final epoch = ++_selectionEpoch;
 
     setState(() {
-      _isLoadingHistory = false;
       _isCheckingServer = true;
+      _backgroundCheck = !advance;
+      _serverStatus = null;
       _serverError = null;
     });
 
@@ -97,7 +142,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       setState(() {
         _serverStatus = result.status;
         _isCheckingServer = false;
-        _view = result.status.needsSetup ? _AuthView.setup : _AuthView.login;
+        if (advance) {
+          _view = result.status.needsSetup ? _AuthView.setup : _AuthView.login;
+        }
       });
     } catch (e) {
       if (!_canFinishCheck(epoch)) return;
@@ -113,15 +160,17 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   void _cancelPendingSelection() {
     _selectionEpoch++;
-    _isLoadingHistory = false;
     _isCheckingServer = false;
   }
 
   void _addressChanged(String _) {
     setState(() {
       _cancelPendingSelection();
+      _backgroundCheck = false;
+      _serverStatus = null;
       _serverError = null;
     });
+    ref.read(authProvider.notifier).clearError();
   }
 
   void _selectSavedServer(SavedServer server) {
@@ -168,23 +217,17 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   String _parseConnectionError(Object e) {
     final msg = e.toString();
     if (msg.contains('Connection refused') || msg.contains('SocketException')) {
-      return 'Could not connect to server';
+      return 'Could not reach your Cantinarr server. Check its address and connection.';
     }
-    if (msg.contains('404')) return 'Server not found at this URL';
-    return 'Could not connect to server. Check the URL.';
-  }
-
-  void _showConnectLink() {
-    setState(() {
-      _cancelPendingSelection();
-      _view = _AuthView.connectLink;
-    });
+    if (msg.contains('404')) return 'Cantinarr was not found at this address.';
+    return 'Could not reach your Cantinarr server. Check its address and connection.';
   }
 
   void _backToServerUrl() {
     setState(() {
       _cancelPendingSelection();
       _view = _AuthView.serverUrl;
+      _backgroundCheck = false;
       _serverStatus = null;
       _serverError = null;
     });
@@ -204,18 +247,27 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     final auth = authState.valueOrNull;
     final showPasskeyOffer =
         auth?.pendingPasskeyOffer == true && auth?.isAuthenticated == true;
+    final passkeyPlatform = ref.watch(authPasskeyPlatformProvider).valueOrNull;
+    final passkeyAvailable = passkeyPlatform != null &&
+        _serverStatus?.needsSetup == false &&
+        _serverStatus?.ssoOnly == false &&
+        _serverStatus!.supportsPasskeyPlatform(passkeyPlatform);
+    final connectionEntry = _view == _AuthView.serverUrl && !showPasskeyOffer;
 
-    return Scaffold(
+    final screen = Scaffold(
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 32),
+            padding: EdgeInsets.symmetric(
+                horizontal: 22, vertical: connectionEntry ? 20 : 32),
             // Login card: full-width buttons would otherwise stretch the
             // column across a desktop window.
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 460),
               child: AppPanel(
-                padding: const EdgeInsets.fromLTRB(28, 30, 28, 28),
+                padding: connectionEntry
+                    ? const EdgeInsets.all(22)
+                    : const EdgeInsets.fromLTRB(28, 30, 28, 28),
                 radius: AppTheme.radiusXLarge,
                 accentColor: AppTheme.signal,
                 child: Column(
@@ -223,8 +275,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   children: [
                     // Logo
                     Container(
-                      width: 78,
-                      height: 78,
+                      width: connectionEntry ? 60 : 78,
+                      height: connectionEntry ? 60 : 78,
                       padding: const EdgeInsets.all(3),
                       decoration: BoxDecoration(
                         gradient: const LinearGradient(
@@ -248,31 +300,29 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 18),
-                    const Text(
-                      'CANTINARR',
-                      style: TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontSize: 27,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 2.2,
+                    SizedBox(height: connectionEntry ? 12 : 18),
+                    const FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        'CANTINARR',
+                        style: TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 27,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 2.2,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      showPasskeyOffer
-                          ? 'Secure your account'
-                          : _view == _AuthView.serverUrl &&
-                                  savedServers.valueOrNull?.isNotEmpty == true
-                              ? 'Choose a server'
-                              : _subtitle,
+                      showPasskeyOffer ? 'Secure your account' : _subtitle,
                       style: const TextStyle(
                         color: AppTheme.textSecondary,
                         fontSize: 15,
                       ),
                       textAlign: TextAlign.center,
                     ),
-                    const SizedBox(height: 34),
+                    SizedBox(height: connectionEntry ? 20 : 34),
 
                     // Post-setup passkey offer takes priority
                     if (showPasskeyOffer)
@@ -280,18 +330,41 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                     else
                       // View-specific content
                       switch (_view) {
-                        _AuthView.serverUrl => _ServerUrlView(
+                        _AuthView.serverUrl => _ConnectionView(
                             controller: _serverUrlController,
-                            isLoading: _isCheckingServer || _isLoadingHistory,
-                            error: _serverError,
+                            isAuthenticating:
+                                authState.isLoading || auth?.isLoading == true,
+                            isLoading:
+                                (_isCheckingServer && !_backgroundCheck) ||
+                                    authState.isLoading || auth?.isLoading == true,
+                            error: _serverError ?? auth?.error,
                             servers: savedServers.valueOrNull ?? const [],
                             historyUnavailable: savedServers.hasError,
+                            showSavedServers: _showSavedServers,
+                            onToggleSavedServers: () => setState(() =>
+                                _showSavedServers = !_showSavedServers),
+                            isCheckingSavedServer:
+                                _isCheckingServer && _backgroundCheck,
+                            retrySavedServer:
+                                _backgroundCheck && _serverError != null
+                                    ? () => _checkServer(advance: false)
+                                    : null,
+                            passkeyServer: passkeyAvailable
+                                ? SavedServer(
+                                    url: _serverUrlController.text,
+                                    name: savedServers.valueOrNull
+                                        ?.where((s) =>
+                                            s.url == _serverUrlController.text)
+                                        .firstOrNull
+                                        ?.name)
+                                : null,
+                            onPasskey: () => ref
+                                .read(authProvider.notifier)
+                                .loginWithPasskey(_serverUrlController.text),
                             onAddressChanged: _addressChanged,
                             onSelectServer: _selectSavedServer,
                             onForgetServer: _forgetServer,
-                            onChangeServer: _backToServerUrl,
-                            onCheck: _checkServer,
-                            onConnectLink: _showConnectLink,
+                            onConnect: _submitConnection,
                           ),
                         _AuthView.setup => _SetupView(
                             serverUrl: _serverUrlController.text.trim(),
@@ -308,11 +381,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                                 ?.name,
                             serverStatus: _serverStatus,
                             onBack: _backToServerUrl,
-                            onConnectLink: _showConnectLink,
-                          ),
-                        _AuthView.connectLink => _ConnectLinkView(
-                            controller: _linkController,
-                            onBack: _backToServerUrl,
                           ),
                       },
                   ],
@@ -323,17 +391,23 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         ),
       ),
     );
+    return PopScope(
+      canPop: _view == _AuthView.serverUrl || showPasskeyOffer,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && auth?.isLoading != true) _backToServerUrl();
+      },
+      child: screen,
+    );
   }
 
   String get _subtitle => switch (_view) {
-        _AuthView.serverUrl => 'Enter your server address to get started',
+        _AuthView.serverUrl => 'Connect to Cantinarr',
         _AuthView.setup => 'Create your admin account',
         _AuthView.login => 'Sign in to your server',
-        _AuthView.connectLink => 'Paste your connection link',
       };
 }
 
-enum _AuthView { serverUrl, setup, login, connectLink }
+enum _AuthView { serverUrl, setup, login }
 
 // ─── Passkey Offer View (post-setup) ─────────────────────
 
@@ -485,66 +559,81 @@ class _PasskeyOfferViewState extends ConsumerState<_PasskeyOfferView> {
   }
 }
 
-// ─── Server URL View ─────────────────────────────────────
+// ─── Connection Entry ────────────────────────────────────
 
-class _ServerUrlView extends StatelessWidget {
+class _ConnectionView extends StatelessWidget {
   final TextEditingController controller;
   final bool isLoading;
+  final bool isAuthenticating;
   final String? error;
   final List<SavedServer> servers;
   final bool historyUnavailable;
+  final bool showSavedServers;
+  final VoidCallback onToggleSavedServers;
+  final bool isCheckingSavedServer;
+  final VoidCallback? retrySavedServer;
+  final SavedServer? passkeyServer;
+  final VoidCallback onPasskey;
   final ValueChanged<String> onAddressChanged;
   final ValueChanged<SavedServer> onSelectServer;
   final ValueChanged<SavedServer> onForgetServer;
-  final VoidCallback onChangeServer;
-  final VoidCallback onCheck;
-  final VoidCallback onConnectLink;
+  final VoidCallback onConnect;
 
-  const _ServerUrlView({
+  const _ConnectionView({
     required this.controller,
     required this.isLoading,
+    required this.isAuthenticating,
     this.error,
     required this.servers,
     required this.historyUnavailable,
+    required this.showSavedServers,
+    required this.onToggleSavedServers,
+    required this.isCheckingSavedServer,
+    required this.retrySavedServer,
+    required this.passkeyServer,
+    required this.onPasskey,
     required this.onAddressChanged,
     required this.onSelectServer,
     required this.onForgetServer,
-    required this.onChangeServer,
-    required this.onCheck,
-    required this.onConnectLink,
+    required this.onConnect,
   });
 
   @override
   Widget build(BuildContext context) {
     return Column(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (servers.isNotEmpty)
-          SavedServerPicker(
-            servers: servers,
-            selectedUrl: controller.text,
-            onSelect: onSelectServer,
-            onForget: onForgetServer,
-          ),
-        if (historyUnavailable) ...[
-          const Text(
-            'Saved servers are unavailable. Enter an address to continue.',
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 16),
-        ],
+        Text(
+          'This app connects to a Cantinarr server running on a computer or NAS. '
+          'That server connects to your services, including Radarr, Sonarr, and Plex.',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 12),
+        Text(
+          'Ask your server admin for a connection link, or enter your '
+          'Cantinarr server address below.',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 20),
         TextField(
+          key: const ValueKey('connection-entry'),
           controller: controller,
+          enabled: !isAuthenticating,
           decoration: const InputDecoration(
-            labelText: 'Server URL',
-            hintText: 'cantinarr.example.com',
-            prefixIcon: Icon(Icons.dns_outlined),
+            labelText: 'Link or Cantinarr address',
+            floatingLabelBehavior: FloatingLabelBehavior.always,
+            hintText: 'http://192.168.1.10:8585',
+            prefixIcon: Icon(Icons.link),
           ),
           keyboardType: TextInputType.url,
           textInputAction: TextInputAction.done,
           autocorrect: false,
+          enableSuggestions: false,
           onChanged: onAddressChanged,
-          onSubmitted: (_) => onCheck(),
+          onSubmitted: (_) {
+            if (!isLoading) onConnect();
+          },
         ),
         if (error != null) ...[
           const SizedBox(height: 12),
@@ -554,12 +643,11 @@ class _ServerUrlView extends StatelessWidget {
             textAlign: TextAlign.center,
           ),
         ],
-        const SizedBox(height: 24),
-        SizedBox(
-          width: double.infinity,
-          height: 50,
+        const SizedBox(height: 16),
+        ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 50),
           child: ElevatedButton(
-            onPressed: isLoading ? null : onCheck,
+            onPressed: isLoading ? null : onConnect,
             child: isLoading
                 ? const SizedBox(
                     width: 22,
@@ -569,22 +657,60 @@ class _ServerUrlView extends StatelessWidget {
                       color: AppTheme.background,
                     ),
                   )
-                : Text(error == null ? 'Continue' : 'Retry'),
+                : const Text('Connect'),
           ),
         ),
-        if (error != null)
+        if (isCheckingSavedServer) ...[
+          const SizedBox(height: 12),
+          const Text('Checking saved server...', textAlign: TextAlign.center),
+        ],
+        if (retrySavedServer != null)
           TextButton(
-            onPressed: onChangeServer,
-            child: const Text('Change server'),
+            onPressed: isLoading ? null : retrySavedServer,
+            child: const Text('Retry saved server'),
           ),
+        if (passkeyServer case final server?) ...[
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: isLoading ? null : onPasskey,
+            icon: const Icon(Icons.fingerprint),
+            label: const Text('Sign in with passkey',
+                textAlign: TextAlign.center),
+          ),
+          const SizedBox(height: 6),
+          Text('For ${server.label}', textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall),
+          if (server.name != null)
+            Text(server.url, textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodySmall),
+        ],
+        if (servers.isNotEmpty) ...[
+          TextButton.icon(
+            onPressed: isAuthenticating ? null : onToggleSavedServers,
+            icon: Icon(
+                showSavedServers ? Icons.expand_less : Icons.expand_more),
+            label: Text(
+                showSavedServers ? 'Hide saved servers' : 'Saved servers'),
+          ),
+          if (showSavedServers)
+            SavedServerPicker(
+              servers: servers,
+              selectedUrl: controller.text,
+              onSelect: (server) {
+                if (!isAuthenticating) onSelectServer(server);
+              },
+              onForget: (server) {
+                if (!isAuthenticating) onForgetServer(server);
+              },
+            ),
+        ],
+        if (historyUnavailable) ...[
+          const SizedBox(height: 12),
+          const Text('Saved servers are unavailable. Paste a connection link '
+              'or enter an address to continue.', textAlign: TextAlign.center),
+        ],
         const SizedBox(height: 24),
-        TextButton(
-          onPressed: onConnectLink,
-          child: const Text(
-            'Have a connection link?',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-          ),
-        ),
+        const ServerSetupHelp(),
       ],
     );
   }
@@ -776,7 +902,6 @@ class _LoginView extends ConsumerStatefulWidget {
   final String? serverName;
   final ServerStatus? serverStatus;
   final VoidCallback onBack;
-  final VoidCallback onConnectLink;
 
   const _LoginView({
     super.key,
@@ -784,7 +909,6 @@ class _LoginView extends ConsumerStatefulWidget {
     this.serverName,
     this.serverStatus,
     required this.onBack,
-    required this.onConnectLink,
   });
 
   @override
@@ -795,24 +919,10 @@ class _LoginViewState extends ConsumerState<_LoginView> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
-  bool _platformPasskeyAvailable = false;
-
-  bool get _showPasskey =>
-      (widget.serverStatus
-              ?.supportsPasskeyPlatform(PasskeyService.platformKind()) ??
-          false) &&
-      _platformPasskeyAvailable;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadPasskeyAvailability();
-  }
-
-  Future<void> _loadPasskeyAvailability() async {
-    final available = await PasskeyService.isAvailableAsync();
-    if (!mounted) return;
-    setState(() => _platformPasskeyAvailable = available);
+  bool get _showPasskey {
+    final platform = ref.watch(authPasskeyPlatformProvider).valueOrNull;
+    return platform != null &&
+        widget.serverStatus?.supportsPasskeyPlatform(platform) == true;
   }
 
   @override
@@ -995,96 +1105,13 @@ class _LoginViewState extends ConsumerState<_LoginView> {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             TextButton(
-              onPressed: widget.onConnectLink,
+              onPressed: isLoading ? null : widget.onBack,
               child: const Text(
-                'Have a connection link?',
+                'Use a connection link',
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
               ),
             ),
           ],
-        ),
-      ],
-    );
-  }
-}
-
-// ─── Connect Link View ───────────────────────────────────
-
-class _ConnectLinkView extends ConsumerWidget {
-  final TextEditingController controller;
-  final VoidCallback onBack;
-
-  const _ConnectLinkView({
-    required this.controller,
-    required this.onBack,
-  });
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final authState = ref.watch(authProvider);
-    final isLoading = authState.valueOrNull?.isLoading ?? false;
-    final error = authState.valueOrNull?.error;
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            labelText: 'Connection Link',
-            hintText: 'cantinarr://connect?...',
-            prefixIcon: Icon(Icons.link),
-          ),
-          keyboardType: TextInputType.url,
-          textInputAction: TextInputAction.done,
-          autocorrect: false,
-          onSubmitted: (_) {
-            final link = controller.text.trim();
-            if (link.isNotEmpty) {
-              ref.read(authProvider.notifier).connectWithLink(link);
-            }
-          },
-        ),
-        if (error != null) ...[
-          const SizedBox(height: 12),
-          Text(
-            error,
-            style: const TextStyle(color: AppTheme.error, fontSize: 13),
-            textAlign: TextAlign.center,
-          ),
-        ],
-        const SizedBox(height: 24),
-        SizedBox(
-          width: double.infinity,
-          height: 50,
-          child: ElevatedButton(
-            onPressed: isLoading
-                ? null
-                : () {
-                    final link = controller.text.trim();
-                    if (link.isNotEmpty) {
-                      ref.read(authProvider.notifier).connectWithLink(link);
-                    }
-                  },
-            child: isLoading
-                ? const SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: AppTheme.background,
-                    ),
-                  )
-                : const Text('Connect'),
-          ),
-        ),
-        const SizedBox(height: 16),
-        TextButton(
-          onPressed: onBack,
-          child: const Text(
-            'Back',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-          ),
         ),
       ],
     );

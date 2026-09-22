@@ -41,6 +41,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       case 'sonarr':
       case 'download_client':
       case 'tautulli':
+      case 'tdarr':
       case 'books':
       case 'music':
       case 'media_servers':
@@ -80,6 +81,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return Icons.download_for_offline_outlined;
       case 'tautulli':
         return Icons.monitor_heart_outlined;
+      case 'tdarr':
+        return Icons.sync;
       case 'push':
         return Icons.notifications_outlined;
       case 'media_servers':
@@ -108,6 +111,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return {'service_type': 'radarr'};
       case 'sonarr':
         return {'service_type': 'sonarr'};
+      case 'tdarr':
+        return {'service_type': 'tdarr'};
       case 'tautulli':
         return {'service_type_prompt': 'Select a monitoring service'};
       case 'books':

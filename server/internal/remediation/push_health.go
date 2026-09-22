@@ -29,9 +29,13 @@ func (s *Service) RecordPushDeliveryHealth(healthy bool, detail string) error {
 	defer tx.Rollback()
 
 	var issueID int64
+	var manualReview bool
 	err = tx.QueryRow(`
-		SELECT id FROM issues
-		WHERE dedupe_key = ? AND closed_at IS NULL`, pushDeliveryHealthDedupeKey).Scan(&issueID)
+		SELECT id, reopened_at IS NOT NULL FROM issues
+		WHERE dedupe_key = ? AND closed_at IS NULL`, pushDeliveryHealthDedupeKey).Scan(&issueID, &manualReview)
+	if err == nil && manualReview {
+		return nil
+	}
 	if healthy {
 		// The common case by far: nothing is open, so a successful send costs
 		// one indexed lookup and returns.

@@ -22,11 +22,19 @@ class AppConfig {
   static String tmdbLogo(String? path, {int width = 92}) =>
       path != null ? '$tmdbImageBase/w$width$path' : '';
   static String tmdbPoster(String? path, {int width = 500}) =>
-      path != null ? '$tmdbImageBase/w$width$path' : '';
+      _imagePath(path, 'w$width');
   static String tmdbBackdrop(String? path, {int width = 780}) =>
-      path != null ? '$tmdbImageBase/w$width$path' : '';
+      _imagePath(path, 'w$width');
 
   /// Full-resolution backdrop — only worth the bytes on very wide displays.
   static String tmdbBackdropOriginal(String? path) =>
-      path != null ? '$tmdbImageBase/original$path' : '';
+      _imagePath(path, 'original');
+
+  // A library parent can have public CDN artwork without a TMDB record.
+  static String _imagePath(String? path, String size) {
+    if (path == null || path.isEmpty) return '';
+    final uri = Uri.tryParse(path);
+    if (uri != null && (uri.scheme == 'https' || uri.scheme == 'http')) return path;
+    return '$tmdbImageBase/$size$path';
+  }
 }

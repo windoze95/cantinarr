@@ -19,8 +19,8 @@ import (
 
 func TestBuildSetupItemsNothingConfigured(t *testing.T) {
 	items := buildSetupItems(setupFacts{})
-	if len(items) != 14 {
-		t.Fatalf("items = %d, want 14", len(items))
+	if len(items) != 15 {
+		t.Fatalf("items = %d, want 15", len(items))
 	}
 	for _, item := range items {
 		if item.Configured {
@@ -42,6 +42,7 @@ func TestBuildSetupItemsMapsFacts(t *testing.T) {
 	items := buildSetupItems(setupFacts{
 		HasRadarr:         true,
 		HasDownloadClient: true,
+		HasTdarr:          true,
 		MediaDownloads:    true,
 		TMDB:              true,
 	})
@@ -58,6 +59,7 @@ func TestBuildSetupItemsMapsFacts(t *testing.T) {
 		"download_client": true,
 		"media_downloads": true,
 		"tautulli":        false,
+		"tdarr":           true,
 		"trakt":           false,
 		"discovery_prefs": false,
 		"books":           false,
@@ -242,7 +244,7 @@ func TestSetupSkipsPersistForEveryItem(t *testing.T) {
 		return response.Items
 	}
 	items := get()
-	if len(items) != 14 {
+	if len(items) != 15 {
 		t.Fatalf("read %d items", len(items))
 	}
 	for _, item := range items {

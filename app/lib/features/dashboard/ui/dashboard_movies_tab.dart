@@ -285,7 +285,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
                 statusLabel: badge.label,
                 statusColor: badge.color,
                 width: cardWidth,
-                onTap: movie.tmdbId != null
+                onTap: (movie.tmdbId ?? 0) > 0
                     ? () => context.push('/detail/movie/${movie.tmdbId}')
                     : null,
               );

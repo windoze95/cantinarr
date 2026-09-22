@@ -6,6 +6,8 @@ import 'package:go_router/go_router.dart';
 
 import '../../discover/logic/discovery_access.dart';
 import '../../../core/providers/config_sync_provider.dart';
+import '../../downloads/logic/downloads_activity_provider.dart';
+import '../../downloads/ui/downloads_menu_badge.dart';
 import '../../../core/automation/web_semantics.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/models/app_module.dart';
@@ -406,6 +408,7 @@ class _AppShellState extends ConsumerState<AppShell>
     if (path.startsWith('/lidarr')) return ModuleType.lidarr;
     if (path.startsWith('/downloads')) return ModuleType.downloads;
     if (path.startsWith('/monitoring')) return ModuleType.monitoring;
+    if (path.startsWith('/tdarr')) return ModuleType.tdarr;
     return null;
   }
 
@@ -546,6 +549,7 @@ class _AppShellState extends ConsumerState<AppShell>
     final hasAi =
         ref.watch(authProvider).valueOrNull?.connection?.services.ai ?? false;
     ref.watch(configSyncProvider);
+    ref.watch(downloadsSummaryProvider);
     final discoveryAccess = ref.watch(discoveryAccessProvider);
     // Admin approval queue depth — drives the hamburger dot (here) and the
     // drawer "Approvals" entry. Always 0 for non-admins.
@@ -1250,7 +1254,7 @@ class _AppShellState extends ConsumerState<AppShell>
         attentionEntries.fold<int>(0, (sum, entry) => sum + entry.count);
 
     // AI Assistant is a tool, not a library, so it sits with the footer actions
-    // instead of under the "Libraries" header. It's always last in
+    // instead of among the library modules. It's always last in
     // moduleState.modules, so pulling it out leaves the remaining indices (used
     // by the active-highlight fallback below) unchanged.
     AppModule? assistantModule;
@@ -1274,6 +1278,8 @@ class _AppShellState extends ConsumerState<AppShell>
       // Downloads offers the aggregate "All" view above its clients; the raw
       // stored id is passed through so the sentinel can be marked active.
       final isDownloads = module.type == ModuleType.downloads;
+      final hasDownloadBadge = isDownloads &&
+          ref.watch(authProvider).valueOrNull?.connection?.downloadsActivity == true;
       final activeInstanceId = isDownloads
           ? instanceState.activeDownloadInstanceId
           : activeInstance?.id;
@@ -1283,8 +1289,12 @@ class _AppShellState extends ConsumerState<AppShell>
         title: module.label,
         semanticsIdentifier: 'nav-module-${module.type.name}',
         selected: isActive,
-        trailing: selectorInstances.length > 1
-            ? _InstanceSelector(
+        trailingFlex: hasDownloadBadge && selectorInstances.length > 1 ? 3 : 2,
+        trailing: hasDownloadBadge || selectorInstances.length > 1
+            ? Row(mainAxisSize: MainAxisSize.min, children: [
+          if (hasDownloadBadge)
+            const DownloadsMenuBadge(),
+          if (selectorInstances.length > 1) Flexible(child: _InstanceSelector(
                 appName: module.label,
                 instances: selectorInstances,
                 activeInstanceId: activeInstanceId,
@@ -1304,8 +1314,8 @@ class _AppShellState extends ConsumerState<AppShell>
                         .setActiveModule(module.type);
                   }
                 },
-              )
-            : null,
+              )),
+        ]) : null,
         onTap: () {
           if (isOverlay) Navigator.pop(context);
           _navigateToModule(
@@ -1327,7 +1337,8 @@ class _AppShellState extends ConsumerState<AppShell>
       final pages = !isOverlay && isActive
           ? (module.type == ModuleType.dashboard
               ? discoveryAccess.pages
-              : modulePagesFor(module.type))
+              : module.type == ModuleType.downloads && !isAdmin
+                  ? const <ModulePage>[] : modulePagesFor(module.type))
           : const <ModulePage>[];
       if (pages.isEmpty) return item;
 
@@ -1412,11 +1423,11 @@ class _AppShellState extends ConsumerState<AppShell>
           ),
           const Divider(color: AppTheme.border),
 
-          // Module navigation. Discover (the browse/home surface) leads on its
-          // own; the "Libraries" header groups the managed arr modules beneath
-          // it. On desktop the active module also expands into its pages — those
-          // replace the module shell's bottom nav there. The mobile drawer stays
-          // modules-only because the bottom nav covers page switching.
+          // Module navigation. Discover (the browse/home surface) leads, the
+          // managed arr modules follow as one plain list. On desktop the active
+          // module also expands into its pages — those replace the module
+          // shell's bottom nav there. The mobile drawer stays modules-only
+          // because the bottom nav covers page switching.
           //
           // The admin queues ride at the top of this same list rather than as
           // fixed rows above it: six of them left the modules a ~40px slot on a
@@ -1489,13 +1500,7 @@ class _AppShellState extends ConsumerState<AppShell>
                   ),
                   const Divider(color: AppTheme.border),
                 ],
-                if (libraryModules.isNotEmpty)
-                  buildModuleTile(libraryModules.first),
-                if (libraryModules.length > 1) ...[
-                  const _DrawerSectionHeader('Libraries'),
-                  for (int i = 1; i < libraryModules.length; i++)
-                    buildModuleTile(libraryModules[i]),
-                ],
+                for (final module in libraryModules) buildModuleTile(module),
               ],
             ),
           ),
@@ -1550,6 +1555,8 @@ class _AppShellState extends ConsumerState<AppShell>
         return state.downloadInstances;
       case ModuleType.monitoring:
         return state.watchHistoryInstances;
+      case ModuleType.tdarr:
+        return state.tdarrInstances;
       case ModuleType.chaptarr:
         return state.chaptarrInstances;
       case ModuleType.lidarr:
@@ -1572,6 +1579,8 @@ class _AppShellState extends ConsumerState<AppShell>
         return state.activeDownloadInstance;
       case ModuleType.monitoring:
         return state.activeWatchHistoryInstance;
+      case ModuleType.tdarr:
+        return state.activeTdarrInstance;
       case ModuleType.chaptarr:
         return state.activeChaptarrInstance;
       case ModuleType.lidarr:
@@ -1616,6 +1625,8 @@ class _AppShellState extends ConsumerState<AppShell>
           instances.setActiveDownloadInstance(instanceId);
         case ModuleType.monitoring:
           instances.setActiveWatchHistoryInstance(instanceId);
+        case ModuleType.tdarr:
+          instances.setActiveTdarrInstance(instanceId);
         case ModuleType.chaptarr:
           instances.setActiveChaptarrInstance(instanceId);
         case ModuleType.lidarr:
@@ -1639,6 +1650,8 @@ class _AppShellState extends ConsumerState<AppShell>
         context.go('/downloads/queue');
       case ModuleType.monitoring:
         context.go('/monitoring/activity');
+      case ModuleType.tdarr:
+        context.go('/tdarr/activity');
       case ModuleType.assistant:
         context.push('/assistant');
     }
@@ -1652,6 +1665,7 @@ class _DrawerItem extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
   final Widget? trailing;
+  final int trailingFlex;
 
   /// When > 0, renders a trailing count pill (e.g. the pending-approvals count).
   final int badgeCount;
@@ -1663,6 +1677,7 @@ class _DrawerItem extends StatelessWidget {
     this.selected = false,
     required this.onTap,
     this.trailing,
+    this.trailingFlex = 2,
     this.badgeCount = 0,
   });
 
@@ -1750,7 +1765,7 @@ class _DrawerItem extends StatelessWidget {
                   if (trailingWidget != null) ...[
                     const SizedBox(width: 8),
                     Expanded(
-                      flex: 2,
+                      flex: trailingFlex,
                       child: Align(
                         alignment: Alignment.centerRight,
                         child: trailingWidget,
@@ -1794,30 +1809,6 @@ class _AttentionEntry {
   /// How many items are waiting in this queue; 0 renders no badge.
   final int count;
   final String route;
-}
-
-/// A small caps label that segments the drawer into scannable groups
-/// (e.g. "Libraries"). Purely visual — not tappable.
-class _DrawerSectionHeader extends StatelessWidget {
-  final String label;
-
-  const _DrawerSectionHeader(this.label);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 18, 10, 7),
-      child: Text(
-        label.toUpperCase(),
-        style: const TextStyle(
-          color: AppTheme.textMuted,
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 1.25,
-        ),
-      ),
-    );
-  }
 }
 
 /// A page entry nested under the active module in the desktop sidebar —

@@ -27,9 +27,13 @@ func (s *Service) RecordSharedAIHealth(provider, model string, healthy bool) err
 	defer tx.Rollback()
 
 	var issueID int64
+	var manualReview bool
 	err = tx.QueryRow(`
-		SELECT id FROM issues
-		WHERE dedupe_key = ? AND closed_at IS NULL`, sharedAIHealthDedupeKey).Scan(&issueID)
+		SELECT id, reopened_at IS NOT NULL FROM issues
+		WHERE dedupe_key = ? AND closed_at IS NULL`, sharedAIHealthDedupeKey).Scan(&issueID, &manualReview)
+	if err == nil && manualReview {
+		return nil
+	}
 	if healthy {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil

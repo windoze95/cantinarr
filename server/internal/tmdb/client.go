@@ -88,6 +88,9 @@ type TVSeason struct {
 	SeasonNumber int    `json:"season_number"`
 	Name         string `json:"name"`
 	EpisodeCount int    `json:"episode_count"`
+	// AirDate is the season's first air date as TMDB states it (YYYY-MM-DD),
+	// "" when unknown.
+	AirDate string `json:"air_date,omitempty"`
 }
 
 // GenreIDs lists the detail's genre ids.

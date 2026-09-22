@@ -83,7 +83,10 @@ class BackendConnection {
   /// Server supports paired Apple TV handoffs.
   final bool appleTvRemote;
   final bool tvMatchCorrections;
+  final bool tvLibraryNavigation;
   final bool requestQuotas;
+  final bool downloadsActivity;
+  final String downloadsUserScope;
 
   /// Null means the server predates Discover visibility preferences.
   final List<String>? hiddenDiscoverTabs;
@@ -108,7 +111,10 @@ class BackendConnection {
     this.mediaAccountManagement = false,
     this.appleTvRemote = false,
     this.tvMatchCorrections = false,
+    this.tvLibraryNavigation = false,
     this.requestQuotas = false,
+    this.downloadsActivity = false,
+    this.downloadsUserScope = 'all',
     this.hiddenDiscoverTabs,
     this.configConfirmed = false,
   });
@@ -129,7 +135,10 @@ class BackendConnection {
     bool? mediaAccountManagement,
     bool? appleTvRemote,
     bool? tvMatchCorrections,
+    bool? tvLibraryNavigation,
     bool? requestQuotas,
+    bool? downloadsActivity,
+    String? downloadsUserScope,
     List<String>? hiddenDiscoverTabs,
     bool clearHiddenDiscoverTabs = false,
     bool? configConfirmed,
@@ -144,7 +153,10 @@ class BackendConnection {
         adminCatalogBrowsing: adminCatalogBrowsing ?? this.adminCatalogBrowsing,
         appleTvRemote: appleTvRemote ?? this.appleTvRemote,
         tvMatchCorrections: tvMatchCorrections ?? this.tvMatchCorrections,
+        tvLibraryNavigation: tvLibraryNavigation ?? this.tvLibraryNavigation,
         requestQuotas: requestQuotas ?? this.requestQuotas,
+        downloadsActivity: downloadsActivity ?? this.downloadsActivity,
+        downloadsUserScope: downloadsUserScope ?? this.downloadsUserScope,
         mediaAccountManagement:
             mediaAccountManagement ?? this.mediaAccountManagement,
         hiddenDiscoverTabs: clearHiddenDiscoverTabs
@@ -192,6 +204,9 @@ class BackendConnection {
       ...instances.where((i) => torrent.contains(i.serviceType)),
     ];
   }
+
+  List<ServiceInstance> get tdarrInstances =>
+      instances.where((i) => i.serviceType == 'tdarr').toList();
 
   /// Get all watch-history (Tautulli, Tracearr) instances, in server order.
   List<ServiceInstance> get watchHistoryInstances => instances

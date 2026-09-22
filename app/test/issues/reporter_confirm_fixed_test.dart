@@ -221,7 +221,7 @@ void main() {
         findsNothing);
   });
 
-  testWidgets('confirming warns it is final and can be backed out of',
+  testWidgets('confirming explains closed replies and can be backed out of',
       (tester) async {
     final service = _FakeIssuesService(
       thread: _openThread(canConfirmFixed: true),
@@ -236,11 +236,10 @@ void main() {
       find.descendant(of: dialog, matching: find.text('Close this as fixed?')),
       findsOneWidget,
     );
-    // There is no reopen anywhere in this product, so the dialog must say the
-    // thread ends and point at the only way back in.
-    expect(find.textContaining('can’t be reopened'), findsOneWidget);
+    // Closing stops replies; further review belongs to an administrator.
+    expect(find.textContaining('while it is closed'), findsOneWidget);
     expect(find.textContaining('won’t be able to reply'), findsOneWidget);
-    expect(find.textContaining('report the problem again'), findsOneWidget);
+    expect(find.textContaining('ask an administrator'), findsOneWidget);
 
     await tester.tap(find.widgetWithText(TextButton, 'Not yet'));
     await tester.pumpAndSettle();

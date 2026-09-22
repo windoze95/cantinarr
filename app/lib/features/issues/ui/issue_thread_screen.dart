@@ -53,6 +53,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
   bool _dismissing = false;
   bool _completing = false;
   bool _confirming = false;
+  bool _reopening = false;
   int _loadEpoch = 0;
 
   /// A short REST re-poll while the issue is still being worked, so steps that
@@ -200,9 +201,8 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
     }
   }
 
-  /// The reporter's own "yes, that's sorted". Irreversible: there is no reopen
-  /// anywhere in this product, and the server refuses a reply on a closed
-  /// issue — so the dialog says so before anything is sent.
+  /// The reporter's own "yes, that's sorted". Replies stop while closed;
+  /// administrators can reopen the conversation for another review.
   Future<void> _confirmFixed() async {
     final issue = _thread?.issue;
     if (issue == null || !issue.canConfirmFixed || _confirming) return;
@@ -215,9 +215,9 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
           style: TextStyle(color: AppTheme.textPrimary),
         ),
         content: const Text(
-          'This ends the conversation for good — it can’t be reopened, and you '
-          'won’t be able to reply here afterwards. If it turns out to still be '
-          'wrong, report the problem again and we’ll take another look.',
+          'This closes the conversation. You won’t be able to reply while it '
+          'is closed. If the problem continues, ask an administrator to take '
+          'another look.',
           style: TextStyle(color: AppTheme.textSecondary, height: 1.35),
         ),
         actions: [
@@ -367,6 +367,40 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
       }
     } finally {
       if (mounted) setState(() => _completing = false);
+    }
+  }
+
+  Future<void> _reopenIssue() async {
+    final issue = _thread?.issue;
+    if (issue == null || !issue.canReopen || _reopening) return;
+    setState(() => _reopening = true);
+    try {
+      await ref.read(issuesServiceProvider).reopenIssue(widget.issueId);
+      await _load();
+      if (!mounted) return;
+      ref.read(issueQueueCountsProvider.notifier).refresh();
+      ref.read(pendingAgentActionsProvider.notifier).refresh();
+      _showSnack('Issue reopened for review.');
+    } catch (e) {
+      await _load();
+      if (!mounted) return;
+      final data = e is DioException ? e.response?.data : null;
+      final existingId = data is Map && data['existing_issue_id'] is num
+          ? (data['existing_issue_id'] as num).toInt()
+          : 0;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_friendlyError(e)),
+          action: existingId > 0
+              ? SnackBarAction(
+                  label: 'Open issue',
+                  onPressed: () => context.push('/issues/$existingId'),
+                )
+              : null,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _reopening = false);
     }
   }
 
@@ -534,6 +568,21 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
             }),
           ),
         ),
+        if (isAdmin && issue.canReopen && issue.status.isTerminal)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: OutlinedButton.icon(
+              onPressed: _reopening || _error != null ? null : _reopenIssue,
+              icon: _reopening
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh),
+              label: const Text('Reopen issue'),
+            ),
+          ),
         if (!issue.status.isTracking)
           _ReplyBar(
             controller: _replyController,
@@ -756,8 +805,8 @@ class _AdminCompletionPanel extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             needsReview
-                ? 'Verify the current arr state, then record the honest outcome and what you checked.'
-                : 'Record a final human judgment and required note. This is separate from dismissing the report.',
+                ? 'Verify the current arr state, then record the honest outcome. You can add a note about what you checked.'
+                : 'Record a final human judgment, with an optional note for context. This is separate from dismissing the report.',
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 12,
@@ -827,7 +876,6 @@ class _AdminResolutionDialogState extends State<_AdminResolutionDialog> {
   @override
   Widget build(BuildContext context) {
     final resolved = widget.disposition == AdminIssueDisposition.resolved;
-    final noteReady = _controller.text.trim().isNotEmpty;
     return AlertDialog(
       backgroundColor: AppTheme.surface,
       title: Text(
@@ -876,14 +924,13 @@ class _AdminResolutionDialogState extends State<_AdminResolutionDialog> {
             const SizedBox(height: 14),
             TextField(
               controller: _controller,
-              autofocus: true,
+              autofocus: false,
               minLines: 2,
               maxLines: 5,
               maxLength: maxNoteLength,
-              onChanged: (_) => setState(() {}),
               style: const TextStyle(color: AppTheme.textPrimary),
               decoration: const InputDecoration(
-                labelText: 'Completion note (required)',
+                labelText: 'Completion note (optional)',
                 hintText: 'What did you verify, or why is no fix appropriate?',
                 border: OutlineInputBorder(),
               ),
@@ -897,9 +944,7 @@ class _AdminResolutionDialogState extends State<_AdminResolutionDialog> {
           child: const Text('Cancel'),
         ),
         ElevatedButton(
-          onPressed: noteReady
-              ? () => Navigator.of(context).pop(_controller.text.trim())
-              : null,
+          onPressed: () => Navigator.of(context).pop(_controller.text.trim()),
           style: ElevatedButton.styleFrom(
             backgroundColor: resolved ? AppTheme.available : AppTheme.error,
             foregroundColor: AppTheme.background,

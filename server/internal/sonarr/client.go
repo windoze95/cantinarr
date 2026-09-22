@@ -66,11 +66,15 @@ func (g mutationGuard) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 type Series struct {
-	ID     int    `json:"id"`
-	Title  string `json:"title"`
-	TvdbID int    `json:"tvdbId"`
-	TmdbID int    `json:"tmdbId"`
-	Year   int    `json:"year"`
+	ID         int           `json:"id"`
+	Title      string        `json:"title"`
+	TvdbID     int           `json:"tvdbId"`
+	TmdbID     int           `json:"tmdbId"`
+	Year       int           `json:"year"`
+	Overview   string        `json:"overview,omitempty"`
+	FirstAired string        `json:"firstAired,omitempty"`
+	ImdbID     string        `json:"imdbId,omitempty"`
+	Images     []SeriesImage `json:"images,omitempty"`
 	// Sonarr clears addOptions only after its initial refresh and post-add
 	// monitoring have finished. Episode-only corrections wait for that fence.
 	AddOptions json.RawMessage `json:"addOptions"`
@@ -83,6 +87,11 @@ type Series struct {
 	// Seasons carries Sonarr's per-season monitoring + statistics, used to
 	// drive per-season availability in the request UI.
 	Seasons []SeasonResource `json:"seasons,omitempty"`
+}
+
+type SeriesImage struct {
+	CoverType string `json:"coverType"`
+	RemoteURL string `json:"remoteUrl"`
 }
 
 // SeriesStatistics is the series-wide episode rollup Sonarr returns on a

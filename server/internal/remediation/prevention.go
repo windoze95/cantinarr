@@ -443,11 +443,15 @@ func (s *Service) sweepPreventionLiveChanges(now time.Time) {
 			continue // unreadable now, or unchanged.
 		}
 		resolution := "The settings this notice pointed at have changed since it was raised. If the problem re-forms from newer incidents, a fresh notice will say so."
-		if _, err := s.db.Exec(
+		res, err := s.db.Exec(
 			`UPDATE issues SET status = ?, read = 0, resolution = ?, resolution_kind = ?,
-			 updated_at = ?, closed_at = ? WHERE id = ? AND closed_at IS NULL`,
+			 updated_at = ?, closed_at = ? WHERE id = ? AND closed_at IS NULL AND reopened_at IS NULL`,
 			IssueResolved, resolution, ResolutionPreventionSettingChanged, now, now, n.id,
-		); err != nil {
+		)
+		if err != nil {
+			continue
+		}
+		if changed, _ := res.RowsAffected(); changed == 0 {
 			continue
 		}
 		_, _ = s.db.Exec(

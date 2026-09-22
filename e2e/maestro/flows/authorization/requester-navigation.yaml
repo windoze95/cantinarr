@@ -36,11 +36,18 @@ tags:
     text: "Navigate to Sonarr"
 - assertNotVisible:
     text: "Navigate to Chaptarr"
-- assertNotVisible:
-    text: "Navigate to Downloads"
+- assertVisible: "Navigate to Downloads"
 - assertNotVisible:
     text: "Navigate to Tautulli"
 - assertNotVisible: "Navigate to AI Assistant"
 - assertNotVisible: "Navigate to Approvals"
 - assertNotVisible: "Navigate to Agent fixes"
 - assertNotVisible: "Navigate to Profile approvals"
+
+- tapOn: "Navigate to Downloads"
+- assertVisible: "All downloads"
+- assertVisible: "My requests"
+- assertNotVisible: "Clients"
+- assertNotVisible: "History"
+- assertNotVisible: "Pause all"
+- assertNotVisible: "Downloads settings"

@@ -1,0 +1,9 @@
+---
+import Default from '@astrojs/starlight/components/Footer.astro';
+import source from '../generated.json';
+---
+<Default><slot /></Default>
+<div class="docs-footer" data-pagefind-ignore>
+  <p>These docs follow Cantinarr's <a href={`https://github.com/windoze95/cantinarr/tree/${source.revision}`}>main branch</a>. A stable installation may have fewer features. <a href="/install/updates/">Check your version</a>.</p>
+  <div><a href="https://cantinarr.com">Cantinarr.com</a><a href="/troubleshooting/get-help/">Get help</a><a href="/reference/generated/privacy/">Privacy</a><a href="/reference/coverage/">Documentation map</a></div>
+</div>

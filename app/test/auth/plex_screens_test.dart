@@ -124,7 +124,8 @@ void main() {
       await tester.pumpAndSettle();
       await tester.enterText(
           find.byType(TextField).first, 'https://media.example');
-      await tester.tap(find.text('Continue'));
+      await tester.ensureVisible(find.text('Connect'));
+      await tester.tap(find.text('Connect'));
       await tester.pumpAndSettle();
       expect(
           find.text(only

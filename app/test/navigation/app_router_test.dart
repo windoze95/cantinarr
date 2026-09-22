@@ -13,6 +13,8 @@ import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/auth/ui/auth_screen.dart';
 import 'package:cantinarr/features/auth/ui/set_password_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/dashboard_shell.dart';
+import 'package:cantinarr/features/dashboard/ui/dashboard_movies_tab.dart';
+import 'package:cantinarr/features/dashboard/ui/dashboard_tv_tab.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_album_detail_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/features/discover/ui/browse_grid_screen.dart';
@@ -30,8 +32,60 @@ import 'package:flutter/services.dart' show MethodChannel, StandardMethodCodec, 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  // Connection entry stays usable while saved-server history loads. Give
+  // navigation tests local storage rather than waiting for a plugin timeout.
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  testWidgets('direct TV detail Back returns to TV Discover', (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+
+    router.go('/detail/tv/225634');
+    await tester.pumpAndSettle();
+
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/detail/tv/225634');
+    expect(router.canPop(), isFalse);
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/dashboard/tv');
+  });
+
+  testWidgets('direct book detail Back returns to Books Discover',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _booksState);
+
+    router.go('/detail/book/29749107?source=chaptarr&title=Ahsoka');
+    await tester.pumpAndSettle();
+
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/detail/book/29749107');
+    expect(router.canPop(), isFalse);
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/dashboard/books');
+  });
+
+  testWidgets('direct album detail Back returns to Music Discover',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _musicState);
+
+    router.go('/detail/album/mb-1234?title=Pinkerton');
+    await tester.pumpAndSettle();
+
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/detail/album/mb-1234');
+    expect(router.canPop(), isFalse);
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/dashboard/music');
+  });
+
   for (final cold in [true, false]) {
     for (final restoringAuth in [true, false]) {
       testWidgets('TV tap cold=$cold restoringAuth=$restoringAuth retains story and library', (tester) async {
@@ -183,7 +237,11 @@ void main() {
     final (:router, container: _) = await _pumpRouter(tester, _authedState);
 
     for (final path in [
+      '/downloads/queue', // servers without the capability keep old navigation
+      '/downloads/history',
       '/monitoring/activity',
+      '/tdarr/activity',
+      '/tdarr/libraries',
       // The old module path stays admin-only through its redirect.
       '/tautulli/activity',
       '/approvals',
@@ -197,6 +255,7 @@ void main() {
       '/settings/users',
       '/settings/request-settings',
       '/settings/discord-notifications',
+      '/settings/seerr-api',
       '/settings/push-notifications/server',
       '/settings/agent-approval-rules',
       '/settings/devices',
@@ -212,6 +271,22 @@ void main() {
         reason: '$path must remain admin-only',
       );
     }
+  });
+
+  testWidgets('supported requesters can open Content but cannot open History', (tester) async {
+    final (:router, :container) = await _pumpRouter(tester, _authedState.copyWith(
+        connection: _authedState.connection!.copyWith(downloadsActivity: true)));
+    router.go('/downloads/queue');
+    await tester.pumpAndSettle();
+    expect(router.routeInformationProvider.value.uri.path, '/downloads/queue');
+    expect(find.text('All downloads'), findsOneWidget);
+    expect(find.text('Clients'), findsNothing);
+    expect(find.text('History'), findsNothing);
+    router.go('/downloads/history');
+    await tester.pumpAndSettle();
+    expect(router.routeInformationProvider.value.uri.path, '/dashboard/movies');
+    await tester.pumpWidget(const SizedBox());
+    container.dispose();
   });
 
   testWidgets('old Tautulli tab paths redirect to the Monitoring module',
@@ -463,6 +538,33 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(router.routeInformationProvider.value.uri.path, '/dashboard/books');
+  });
+
+  testWidgets('invalid TV links stay on TV and both dashboard tabs remain usable',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _adminState);
+    for (final id in ['0', '-1', 'not-a-number']) {
+      router.go('/dashboard/tv');
+      await tester.pumpAndSettle();
+      router.push('/detail/tv/$id');
+      await tester.pumpAndSettle();
+      expect(router.routerDelegate.currentConfiguration.uri.path, '/dashboard/tv');
+      expect(find.byType(DashboardTvTab), findsOneWidget);
+      expect(find.byType(DashboardMoviesTab), findsNothing);
+      expect(tester.takeException(), isNull);
+      for (final index in [0, 1, 0, 1]) {
+        tester.widget<DashboardShell>(find.byType(DashboardShell).last)
+            .onTabChanged(index);
+        await tester.pumpAndSettle();
+        final shell = tester.widget<DashboardShell>(find.byType(DashboardShell).last);
+        expect(shell.currentIndex, index);
+        expect(find.byType(DashboardMoviesTab), index == 0 ? findsOneWidget : findsNothing);
+        expect(find.byType(DashboardTvTab), index == 1 ? findsOneWidget : findsNothing);
+        expect(router.routerDelegate.currentConfiguration.uri.path,
+            index == 0 ? '/dashboard/movies' : '/dashboard/tv');
+        expect(tester.takeException(), isNull);
+      }
+    }
   });
 
   testWidgets('malformed parameter routes redirect without throwing',
@@ -733,7 +835,16 @@ class _JsonAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     final Object body = switch (options.path) {
+      '/api/downloads/activity' || '/api/downloads/summary' => {
+          'count': 0, 'complete': true, 'scope': 'all', 'user_scope': 'all',
+          'groups': [], 'jobs': [],
+        },
       '/api/trakt/anticipated' => [],
+      '/api/media/tv/225634' => {
+          'id': 225634,
+          'name': 'Nashville',
+          'seasons': <dynamic>[],
+        },
       _ => {
           'page': 1,
           'results': [],

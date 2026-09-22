@@ -34,11 +34,20 @@ class _FakeAuthNotifier extends AuthNotifier {
   Future<AuthState> build() async => _adminState;
 }
 
+class _ReporterAuthNotifier extends AuthNotifier {
+  @override
+  Future<AuthState> build() async => AuthState(
+        connection: _adminState.connection,
+        user: const UserProfile(id: 2, username: 'reporter', role: 'user'),
+      );
+}
+
 Map<String, dynamic> _issueJson({
   String status = 'awaiting_approval',
   String resolution = '',
   String resolutionKind = '',
   String? closedAt,
+  bool canReopen = false,
 }) =>
     {
       'id': 5,
@@ -60,6 +69,7 @@ Map<String, dynamic> _issueJson({
       'created_at': '2026-07-10T10:00:00Z',
       'updated_at': '2026-07-10T10:05:00Z',
       'closed_at': closedAt,
+      'can_reopen': canReopen,
     };
 
 AgentAction _proposedAction() => AgentAction.fromJson({
@@ -136,6 +146,9 @@ class _FakeIssuesService extends IssuesService {
   bool failActions = false;
   bool failRun = false;
   Object? resolveError;
+  Object? reopenError;
+  IssueThread? threadOnReopenError;
+  int reopenCalls = 0;
   IssueThread? threadOnResolveError;
   int threadLoads = 0;
   int runLoads = 0;
@@ -184,10 +197,23 @@ class _FakeIssuesService extends IssuesService {
   }
 
   @override
+  Future<Issue> reopenIssue(int id) async {
+    reopenCalls++;
+    final error = reopenError;
+    if (error != null) {
+      if (threadOnReopenError != null) thread = threadOnReopenError!;
+      throw error;
+    }
+    final issue = Issue.fromJson(_issueJson(status: 'needs_admin'));
+    thread = IssueThread(issue: issue, messages: thread.messages);
+    return issue;
+  }
+
+  @override
   Future<Issue> resolveIssue(
     int id, {
     required AdminIssueDisposition disposition,
-    required String note,
+    String note = '',
   }) async {
     resolveCalls++;
     lastDisposition = disposition;
@@ -199,9 +225,11 @@ class _FakeIssuesService extends IssuesService {
     }
     final status =
         disposition == AdminIssueDisposition.resolved ? 'resolved' : 'wont_fix';
+    final storedNote =
+        note.trim().isEmpty ? disposition.defaultNote : note.trim();
     final issue = Issue.fromJson(_issueJson(
       status: status,
-      resolution: note,
+      resolution: storedNote,
       resolutionKind: 'admin_completed',
       closedAt: '2026-07-10T11:00:00Z',
     ));
@@ -214,10 +242,13 @@ Future<ProviderContainer> _pumpScreen(
   WidgetTester tester, {
   required _FakeIssuesService service,
   required Widget screen,
+  bool isAdmin = true,
 }) async {
   final container = ProviderContainer(
     overrides: [
-      authProvider.overrideWith(_FakeAuthNotifier.new),
+      authProvider.overrideWith(
+        isAdmin ? _FakeAuthNotifier.new : _ReporterAuthNotifier.new,
+      ),
       issuesServiceProvider.overrideWithValue(service),
       realtimeEventsProvider.overrideWithValue(
         const Stream<WsEvent>.empty(),
@@ -257,6 +288,118 @@ void _usePhoneSize(WidgetTester tester) {
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
+  testWidgets('admin reopens with one tap and can continue the existing thread',
+      (tester) async {
+    final service = _FakeIssuesService(
+      thread: IssueThread.fromJson({
+        'issue': _issueJson(
+          status: 'dismissed',
+          closedAt: '2026-07-10T11:00:00Z',
+          canReopen: true,
+        ),
+        'thread': [
+          {'id': 1, 'author_kind': 'admin', 'body': 'Original conversation'},
+        ],
+      }),
+    );
+    await _pumpScreen(tester, service: service,
+        screen: const IssueThreadScreen(issueId: 5));
+    expect(find.text('This issue is closed.'), findsOneWidget);
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Reopen issue'));
+    await tester.pumpAndSettle();
+    expect(service.reopenCalls, 1);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.text('Reopen issue'), findsNothing);
+    expect(find.text('Original conversation'), findsOneWidget);
+    expect(find.text('This issue is closed.'), findsNothing);
+    await tester.enterText(find.byType(TextField), 'Still needs review.');
+    expect(find.text('Still needs review.'), findsOneWidget);
+    await tester.drag(find.byType(ListView), const Offset(0, 600));
+    await tester.pumpAndSettle();
+    expect(find.text('Status: Needs a closer look'), findsOneWidget);
+    expect(find.text('Issue reopened for review.'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('reopen requires both admin role and server capability',
+      (tester) async {
+    for (final isAdmin in [true, false]) {
+      final service = _FakeIssuesService(
+        thread: IssueThread.fromJson({
+          'issue': _issueJson(
+            status: 'resolved',
+            closedAt: '2026-07-10T11:00:00Z',
+            canReopen: !isAdmin,
+          ),
+          'thread': const [],
+        }),
+      );
+      await _pumpScreen(tester, service: service, isAdmin: isAdmin,
+          screen: const IssueThreadScreen(issueId: 5));
+      expect(find.text('Reopen issue'), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  testWidgets('duplicate reopen offers the existing issue without changing this one',
+      (tester) async {
+    final request = RequestOptions(path: '/api/admin/issues/5/reopen');
+    final service = _FakeIssuesService(
+      thread: IssueThread.fromJson({
+        'issue': _issueJson(status: 'resolved',
+            closedAt: '2026-07-10T11:00:00Z', canReopen: true),
+        'thread': const [],
+      }),
+    )..reopenError = DioException(
+        requestOptions: request,
+        response: Response(requestOptions: request, statusCode: 409, data: {
+          'error': 'Issue #9 is already open for this problem. Continue there.',
+          'existing_issue_id': 9,
+        }),
+      );
+    await _pumpScreen(tester, service: service,
+        screen: const IssueThreadScreen(issueId: 5));
+    final before = service.threadLoads;
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Reopen issue'));
+    await tester.pumpAndSettle();
+    expect(service.threadLoads, greaterThan(before));
+    expect(find.text('This issue is closed.'), findsOneWidget);
+    expect(find.textContaining('Issue #9 is already open'), findsOneWidget);
+    expect(find.text('Open issue'), findsOneWidget);
+    expect(find.text('Issue reopened for review.'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('reopen conflict reloads an issue another admin already reopened',
+      (tester) async {
+    final request = RequestOptions(path: '/api/admin/issues/5/reopen');
+    final service = _FakeIssuesService(
+      thread: IssueThread.fromJson({
+        'issue': _issueJson(status: 'resolved',
+            closedAt: '2026-07-10T11:00:00Z', canReopen: true),
+        'thread': const [],
+      }),
+    )
+      ..threadOnReopenError = IssueThread.fromJson({
+        'issue': _issueJson(status: 'needs_admin'), 'thread': const [],
+      })
+      ..reopenError = DioException(
+        requestOptions: request,
+        response: Response(requestOptions: request, statusCode: 409,
+            data: {'error': 'This issue is already open or has changed.'}),
+      );
+    await _pumpScreen(tester, service: service,
+        screen: const IssueThreadScreen(issueId: 5));
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Reopen issue'));
+    await tester.pumpAndSettle();
+    expect(find.text('Reopen issue'), findsNothing);
+    expect(find.text('This issue is closed.'), findsNothing);
+    await tester.drag(find.byType(ListView), const Offset(0, 600));
+    await tester.pumpAndSettle();
+    expect(find.text('Status: Needs a closer look'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('needs_admin shows its instruction and activity failure',
       (tester) async {
     const instruction =
@@ -294,7 +437,7 @@ void main() {
         findsOneWidget);
   });
 
-  testWidgets('admin completion requires a note and records resolved outcome',
+  testWidgets('admin completion allows a blank optional note',
       (tester) async {
     final service = _FakeIssuesService(
       thread: IssueThread.fromJson({
@@ -320,28 +463,24 @@ void main() {
             of: dialog, matching: find.text('Mark this issue resolved?')),
         findsOneWidget);
     expect(find.textContaining('must be verified manually'), findsOneWidget);
+    final noteField = tester.widget<TextField>(
+      find.descendant(of: dialog, matching: find.byType(TextField)),
+    );
+    expect(noteField.autofocus, isFalse);
+    expect(find.text('Completion note (optional)'), findsOneWidget);
     final confirm = find.descendant(
       of: dialog,
       matching: find.widgetWithText(ElevatedButton, 'Mark resolved'),
     );
-    expect(tester.widget<ElevatedButton>(confirm).onPressed, isNull);
-
-    const note =
-        'Checked Sonarr: the replacement episode is imported and plays correctly.';
-    await tester.enterText(
-      find.descendant(of: dialog, matching: find.byType(TextField)),
-      note,
-    );
-    await tester.pump();
     expect(tester.widget<ElevatedButton>(confirm).onPressed, isNotNull);
     await tester.tap(confirm);
     await tester.pumpAndSettle();
 
     expect(service.resolveCalls, 1);
     expect(service.lastDisposition, AdminIssueDisposition.resolved);
-    expect(service.lastResolutionNote, note);
+    expect(service.lastResolutionNote, '');
     expect(find.textContaining('Completed after review'), findsOneWidget);
-    expect(find.text(note), findsOneWidget);
+    expect(find.text('Marked resolved.'), findsOneWidget);
     expect(find.text('Complete after admin review'), findsNothing);
     expect(find.text('Issue marked resolved.'), findsOneWidget);
   });
@@ -398,6 +537,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(service.resolveCalls, 1);
+    expect(service.lastResolutionNote,
+        'Reviewed manually; no safe fix remains.');
     expect(find.textContaining('Media became available'), findsOneWidget);
     expect(
       find.text(

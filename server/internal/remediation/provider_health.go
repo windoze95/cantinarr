@@ -32,10 +32,14 @@ func (s *Service) RecordRemediationProviderHealth(available bool) error {
 
 	var issueID int64
 	var recentlyRefreshed bool
+	var manualReview bool
 	err = tx.QueryRow(`
-		SELECT id, COALESCE(datetime(updated_at) >= datetime('now', '-1 hour'), 0)
+		SELECT id, COALESCE(datetime(updated_at) >= datetime('now', '-1 hour'), 0), reopened_at IS NOT NULL
 		FROM issues
-		WHERE dedupe_key = ? AND closed_at IS NULL`, remediationProviderDedupeKey).Scan(&issueID, &recentlyRefreshed)
+		WHERE dedupe_key = ? AND closed_at IS NULL`, remediationProviderDedupeKey).Scan(&issueID, &recentlyRefreshed, &manualReview)
+	if err == nil && manualReview {
+		return nil
+	}
 	if available {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
@@ -129,9 +133,13 @@ func (s *Service) RecordAutoDispatchBreaker(tripped bool, streak, threshold int)
 	defer tx.Rollback()
 
 	var issueID int64
+	var manualReview bool
 	err = tx.QueryRow(`
-		SELECT id FROM issues
-		WHERE dedupe_key = ? AND closed_at IS NULL`, autoDispatchBreakerDedupeKey).Scan(&issueID)
+		SELECT id, reopened_at IS NOT NULL FROM issues
+		WHERE dedupe_key = ? AND closed_at IS NULL`, autoDispatchBreakerDedupeKey).Scan(&issueID, &manualReview)
+	if err == nil && manualReview {
+		return nil
+	}
 	if !tripped {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
@@ -160,7 +168,7 @@ func (s *Service) RecordAutoDispatchBreaker(tripped bool, streak, threshold int)
 	}
 
 	detail := fmt.Sprintf("After %d consecutive investigations ended without a resolution (threshold %d), Cantinarr switched automatic problem detection off so it would stop opening issues it cannot finish.", streak, threshold)
-	resolution := "Review the recent needs-admin issues for the underlying cause, then re-enable auto-dispatch under Settings > AI Remediation — re-enabling closes this notice."
+	resolution := "Review the recent needs-admin issues for the underlying cause, then re-enable auto-dispatch under Settings > AI Remediation. Re-enabling closes this notice; it cannot be closed by hand while automatic problem detection is off."
 	if errsql := err; errors.Is(errsql, sql.ErrNoRows) {
 		result, insertErr := tx.Exec(`
 			INSERT INTO issues

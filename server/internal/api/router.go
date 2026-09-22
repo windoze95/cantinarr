@@ -28,7 +28,9 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/push"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
 	"github.com/windoze95/cantinarr-server/internal/request"
+	"github.com/windoze95/cantinarr-server/internal/seerrcompat"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
+	"github.com/windoze95/cantinarr-server/internal/tdarr"
 	"github.com/windoze95/cantinarr-server/internal/update"
 	"github.com/windoze95/cantinarr-server/internal/version"
 	"github.com/windoze95/cantinarr-server/internal/watchhistory"
@@ -53,6 +55,7 @@ func NewRouter(
 	downloadsHandler *downloads.Handler,
 	mediaFilesHandler *mediafiles.Handler,
 	watchHistoryHandler *watchhistory.Handler,
+	tdarrHandler *tdarr.Handler,
 	creds *credentials.Registry,
 	credHandler *credentials.Handler,
 	toolServer *mcp.ToolServer,
@@ -63,6 +66,7 @@ func NewRouter(
 	serverSettings *serversettings.Service,
 	contentPolicyHandler *contentpolicy.Handler,
 	discordNotifications *discordnotify.Service,
+	seerrHandler *seerrcompat.Handler,
 ) http.Handler {
 	configChanged := func() {
 		if wsHub != nil {
@@ -71,6 +75,14 @@ func NewRouter(
 	}
 	if instanceHandler != nil {
 		instanceHandler.SetConfigChangedObserver(configChanged)
+	}
+	if wsHub != nil && downloadsHandler != nil {
+		wsHub.SetActivityInvalidator(downloadsHandler.InvalidateActivity)
+	}
+	if wsHub != nil && contentPolicyHandler != nil {
+		contentPolicyHandler.SetChangedObserver(func(userID int64) {
+			wsHub.BroadcastUser(userID, ws.Event{Type: "config_changed"})
+		})
 	}
 	if mediaAccessHandler != nil {
 		mediaAccessHandler.SetConfigChangedObserver(configChanged)
@@ -117,6 +129,14 @@ func NewRouter(
 	r.With(oauthLimiter.Middleware).Post("/api/auth/plex/mcp/begin", oauthHandler.BeginPlex)
 	r.Get("/passkeys/setup", oauthHandler.PasskeySetup)
 	r.Get("/passkeys/create", oauthHandler.PasskeyCreate)
+
+	// The Seerr-compatible surface. Its own mount because it speaks Seerr's
+	// contract (X-Api-Key, Seerr's shapes and error bodies) rather than the
+	// session API's, and /api/v1 is a prefix nothing else uses. Mounted ahead
+	// of /api so chi routes the deeper prefix here.
+	if seerrHandler != nil {
+		r.Mount("/api/v1", seerrHandler.Routes())
+	}
 
 	r.Route("/api", func(r chi.Router) {
 		// CORS: same-origin only. No CORS middleware is mounted on purpose —
@@ -275,6 +295,14 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/outbound-proxy", updateOutboundProxyHandler(serverSettings))
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Post("/outbound-proxy/test", testOutboundProxyHandler(serverSettings, creds))
 
+			// The Seerr-compatible API key: read, issue (replacing the old
+			// one at once), revoke. The key acts as the issuing admin.
+			if seerrHandler != nil {
+				r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/seerr-api", seerrHandler.AdminKey)
+				r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Post("/seerr-api", seerrHandler.AdminKey)
+				r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Delete("/seerr-api", seerrHandler.AdminKey)
+			}
+
 			// Media-server accounts (Jellyfin, Emby, Plex): the linked-account
 			// rows the Users screen tags, the server's own account list for the
 			// link picker, link/unlink, and the import that turns picked
@@ -371,6 +399,7 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/issues", remediationHandler.ListAdmin)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/issues/{id}/dismiss", remediationHandler.Dismiss)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/issues/{id}/resolve", remediationHandler.ResolveIssue)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/issues/{id}/reopen", remediationHandler.ReopenIssue)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/issues/{id}/activity", remediationHandler.GetIssueActivity)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/agent-digest", remediationHandler.Digest)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/agent-approval-rules/candidates", remediationHandler.ListRuleCandidates)
@@ -475,6 +504,8 @@ func NewRouter(
 			r.Get("/requests", requestHandler.List)
 			r.Get("/requests/options", requestHandler.Options)
 			r.Get("/requests/delivery-status", requestHandler.GetDelivery)
+			r.Get("/requests/tv-library", requestHandler.GetTVLibrary)
+			r.Post("/requests/tv-library", requestHandler.CreateTVLibraryRequest)
 			r.Post("/requests/{id}/delivery", requestHandler.UpdateDelivery)
 			r.Get("/requests/book-status", requestHandler.GetBookStatus)
 			r.Get("/requests/book-library", requestHandler.GetBookLibrary)
@@ -683,12 +714,24 @@ func NewRouter(
 			r.Use(authService.AuthMiddleware)
 
 			r.With(auth.RequirePermission(auth.PermissionDownloadsRead)).Get("/downloads/{instanceID}/queue", downloadsHandler.GetQueue)
+			r.With(auth.RequirePermission(auth.PermissionDownloadsActivity)).Get("/downloads/activity", downloadsHandler.GetActivity)
+			r.With(auth.RequirePermission(auth.PermissionDownloadsActivity)).Get("/downloads/summary", downloadsHandler.GetSummary)
+			r.With(auth.RequirePermission(auth.PermissionAdmin)).Get("/admin/downloads/settings", downloadsHandler.ActivitySettings(configChanged))
+			r.With(auth.RequirePermission(auth.PermissionAdmin)).Put("/admin/downloads/settings", downloadsHandler.ActivitySettings(configChanged))
 			r.With(auth.RequirePermission(auth.PermissionDownloadsManage)).Post("/downloads/{instanceID}/queue/{itemID}/pause", downloadsHandler.PauseItem)
 			r.With(auth.RequirePermission(auth.PermissionDownloadsManage)).Post("/downloads/{instanceID}/queue/{itemID}/resume", downloadsHandler.ResumeItem)
 			r.With(auth.RequirePermission(auth.PermissionDownloadsManage)).Delete("/downloads/{instanceID}/queue/{itemID}", downloadsHandler.DeleteItem)
 			r.With(auth.RequirePermission(auth.PermissionDownloadsManage)).Post("/downloads/{instanceID}/pause", downloadsHandler.PauseAll)
 			r.With(auth.RequirePermission(auth.PermissionDownloadsManage)).Post("/downloads/{instanceID}/resume", downloadsHandler.ResumeAll)
 			r.With(auth.RequirePermission(auth.PermissionDownloadsRead)).Get("/downloads/{instanceID}/history", downloadsHandler.GetHistory)
+		})
+
+		r.Group(func(r chi.Router) {
+			r.Use(authService.AuthMiddleware)
+			r.Use(auth.RequirePermission(auth.PermissionMonitoringRead))
+			for _, view := range []string{"activity", "libraries", "stats"} {
+				r.Get("/tdarr/{instanceID}/"+view, tdarrHandler.Serve)
+			}
 		})
 
 		// Watch-history (Tautulli, Tracearr) routes (admin only). The
@@ -856,6 +899,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			return
 		}
 		hiddenTabs := []string{}
+		downloadsUserScope := "all"
 		configured := map[string]bool{}
 		for _, inst := range allInstances {
 			configured[inst.ServiceType] = true
@@ -866,6 +910,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 				http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
 				return
 			}
+			downloadsUserScope = preferences.DownloadsUserScope
 			for _, mediaType := range []string{"movie", "tv", "book", "music"} {
 				if preferences.HiddenWhenUnconfigured[mediaType] && !configured[serversettings.DiscoverServices()[mediaType]] {
 					hiddenTabs = append(hiddenTabs, mediaType)
@@ -951,6 +996,9 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"admin_catalog_browsing":   true,
 			"request_quotas":           true,
 			"tv_match_corrections":     true,
+			"tv_library_navigation":    true,
+			"downloads_activity":       true,
+			"downloads_user_scope":     downloadsUserScope,
 			"apple_tv_remote":          len(appleTVCapability) > 0 && appleTVCapability[0](),
 			"media_account_management": true,
 			"hidden_discover_tabs":     hiddenTabs,

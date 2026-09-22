@@ -32,6 +32,15 @@ func (s *Service) CanReporterConfirmFix(issue *Issue) (bool, error) {
 	if issue == nil || issue.Source != SourceUser || issue.ClosedAt != nil {
 		return false, nil
 	}
+	// Reopening requests a fresh administrator review. Historical execution
+	// evidence cannot offer another reporter confirmation of the old fix.
+	var reopened bool
+	if err := s.db.QueryRow("SELECT reopened_at IS NOT NULL FROM issues WHERE id = ?", issue.ID).Scan(&reopened); err != nil {
+		return false, fmt.Errorf("check reopened issue: %w", err)
+	}
+	if reopened {
+		return false, nil
+	}
 	applied, err := s.issueHasExecutedFix(issue.ID)
 	if err != nil || !applied {
 		return false, err

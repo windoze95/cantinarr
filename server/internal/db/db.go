@@ -613,6 +613,7 @@ CREATE TABLE IF NOT EXISTS issues (
     active_run_id INTEGER,                      -- CAS claim: at most one running run per issue
     resolution TEXT,                           -- short closing note on a terminal state
     resolution_kind TEXT NOT NULL DEFAULT '',  -- why work ended; exposed for audit provenance
+    reopened_at DATETIME,                       -- manual review owns a reopened issue
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     closed_at DATETIME
@@ -1133,6 +1134,9 @@ func Open(dbPath string) (*sql.DB, error) {
 		},
 		{alter: "ALTER TABLE issues ADD COLUMN arr_queue_id INTEGER"},
 		{alter: "ALTER TABLE issues ADD COLUMN resolution_kind TEXT NOT NULL DEFAULT ''"},
+		// A reopened issue belongs to manual review. Background recovery must
+		// not close it again from evidence gathered before the admin reopened it.
+		{alter: "ALTER TABLE issues ADD COLUMN reopened_at DATETIME"},
 		{alter: "ALTER TABLE agent_actions ADD COLUMN approved_params TEXT"},
 		// The arr download id an executed action actually acted on, proven from a
 		// live queue read at dispatch. It is the only identity that can tell

@@ -169,19 +169,30 @@ class IssuesService {
     await _dio.post('/api/admin/issues/$id/dismiss');
   }
 
+  /// Restore a closed thread for administrator review, with no typed details.
+  Future<Issue> reopenIssue(int id) async {
+    final resp = await _dio.post<Map<String, dynamic>>(
+      '/api/admin/issues/$id/reopen',
+    );
+    return Issue.fromJson(resp.data!);
+  }
+
   /// Complete an issue after human review. The server atomically closes the
-  /// aggregate and records the required note/admin provenance. Dismissal is a
-  /// separate endpoint and is intentionally not representable here.
+  /// aggregate and records the optional note/admin provenance. A canonical
+  /// fallback keeps blank-note completion compatible with older servers that
+  /// still require non-empty text. Dismissal is a separate endpoint and is
+  /// intentionally not representable here.
   Future<Issue> resolveIssue(
     int id, {
     required AdminIssueDisposition disposition,
-    required String note,
+    String note = '',
   }) async {
+    final trimmedNote = note.trim();
     final resp = await _dio.post(
       '/api/admin/issues/$id/resolve',
       data: {
         'disposition': disposition.value,
-        'note': note.trim(),
+        'note': trimmedNote.isEmpty ? disposition.defaultNote : trimmedNote,
       },
     );
     return Issue.fromJson(resp.data as Map<String, dynamic>);

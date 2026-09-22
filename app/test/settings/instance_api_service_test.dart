@@ -113,6 +113,21 @@ InstanceApiService _service(_RecordingAdapter adapter) {
 }
 
 void main() {
+  test('Tdarr test and save use the same explicit key-removal flag', () async {
+    final adapter = _RecordingAdapter();
+    final service = _service(adapter);
+    for (final clear in [false, true]) {
+      await service.testConnection(id: 'tdarr', serviceType: 'tdarr',
+          url: 'http://tdarr:8266', clearApiKey: clear);
+      await service.updateInstance(id: 'tdarr', name: 'Tdarr',
+          url: 'http://tdarr:8266', clearApiKey: clear);
+      for (final request in adapter.requests.skip(adapter.requests.length - 2)) {
+        expect(request.body['api_key'], '');
+        expect(request.body['clear_api_key'], clear ? true : null);
+      }
+    }
+  });
+
   test('MediaPathMapping uses the instance API JSON shape', () {
     const mapping = MediaPathMapping(
       arrPath: '/ebooks',

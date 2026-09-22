@@ -99,7 +99,8 @@ class ModuleNotifier extends Notifier<ModuleState> {
         ));
       }
 
-      if (isAdmin && connection.downloadInstances.isNotEmpty) {
+      if (connection.downloadsActivity ||
+          (isAdmin && connection.downloadInstances.isNotEmpty)) {
         modules.add(const AppModule(
           type: ModuleType.downloads,
           label: 'Downloads',
@@ -114,6 +115,14 @@ class ModuleNotifier extends Notifier<ModuleState> {
           type: ModuleType.monitoring,
           label: 'Monitoring',
           icon: Icons.monitor_heart,
+        ));
+      }
+
+      // One Transcoding row groups Tdarr instances, separate from playback
+      // monitoring. Keep the service identity and routes provider-specific.
+      if (isAdmin && connection.tdarrInstances.isNotEmpty) {
+        modules.add(const AppModule(
+          type: ModuleType.tdarr, label: 'Transcoding', icon: Icons.sync,
         ));
       }
 

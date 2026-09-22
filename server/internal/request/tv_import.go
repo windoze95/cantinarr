@@ -51,6 +51,11 @@ func (s *Service) ResolveTVImports(client *sonarr.Client, series *sonarr.Series,
 	// newly introduced overlapping custom scope halfway through this resolution.
 	s.tvMatchMu.Lock()
 	defer s.tvMatchMu.Unlock()
+	return s.resolveTVImports(client, series, episodes)
+}
+
+// Caller holds tvMatchMu while composing a read from several source titles.
+func (s *Service) resolveTVImports(client *sonarr.Client, series *sonarr.Series, episodes []sonarr.ImportedEpisode) ([]sonarr.ImportedTitle, error) {
 	corrected, candidates, err := s.importTVMatches(series)
 	if err != nil {
 		return nil, err

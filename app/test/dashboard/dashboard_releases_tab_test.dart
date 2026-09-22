@@ -6,12 +6,33 @@ import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/dashboard/ui/dashboard_releases_tab.dart';
+import 'package:cantinarr/features/dashboard/ui/tv_library_link.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('TV calendar keeps the Sonarr series, season and originating library', (tester) async {
+    final adapter = _CalendarAdapter(tv: true);
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))..httpClientAdapter = adapter;
+    await tester.pumpWidget(ProviderScope(overrides: [
+      authProvider.overrideWith(() => _FakeAuthNotifier(_noInstancesState.copyWith(
+        connection: _noInstancesState.connection!.copyWith(
+          tvLibraryNavigation: true,
+          instances: const [ServiceInstance(id: 'tv-other', serviceType: 'sonarr', name: 'TV', isDefault: true)],
+        ),
+      ))),
+      backendClientProvider.overrideWithValue(dio),
+    ], child: const MaterialApp(home: Scaffold(body: DashboardReleasesTab()))));
+    await tester.pumpAndSettle();
+    final link = tester.widget<TVLibraryLink>(find.byType(TVLibraryLink));
+    expect(link.instanceId, 'tv-other');
+    expect(link.seriesId, 42);
+    expect(link.seasonNumber, 2);
+    expect(link.tmdbId, 0);
+  });
+
   testWidgets('prompts to connect a service when no instances are configured',
       (tester) async {
     tester.view.physicalSize = const Size(390, 844);
@@ -73,6 +94,8 @@ void main() {
 
 /// Serves one album on the Lidarr calendar; anything else gets `{}`.
 class _CalendarAdapter implements HttpClientAdapter {
+  _CalendarAdapter({this.tv = false});
+  final bool tv;
   final calendarPaths = <String>[];
 
   @override
@@ -82,7 +105,12 @@ class _CalendarAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     Object body = const <String, dynamic>{};
-    if (options.path.endsWith('/calendar')) {
+    if (tv && options.path.endsWith('/series')) {
+      body = [{'id': 42, 'title': 'Monster (2022)', 'tmdbId': 0}];
+    } else if (tv && options.path.endsWith('/calendar')) {
+      body = [{'seriesId': 42, 'seasonNumber': 2, 'episodeNumber': 1,
+        'airDateUtc': DateTime.now().add(const Duration(days: 1)).toIso8601String()}];
+    } else if (options.path.endsWith('/calendar')) {
       calendarPaths.add(options.path);
       body = [
         {

@@ -40,7 +40,9 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/remediation"
 	requestsvc "github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
+	"github.com/windoze95/cantinarr-server/internal/seerrcompat"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
+	"github.com/windoze95/cantinarr-server/internal/tdarr"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 	"github.com/windoze95/cantinarr-server/internal/update"
 	"github.com/windoze95/cantinarr-server/internal/watchhistory"
@@ -89,15 +91,27 @@ func TestRouterRBACMatrixWithAdminAndRequesterTokens(t *testing.T) {
 		{http.MethodGet, "/api/downloads/missing/queue"},
 		{http.MethodGet, "/api/tautulli/missing/activity"},
 		{http.MethodGet, "/api/watch-history/missing/activity"},
+		{http.MethodGet, "/api/tdarr/missing/activity"},
 		{http.MethodGet, "/api/admin/media-servers/accounts"},
 		{http.MethodGet, "/api/admin/plex-auth"},
 		{http.MethodGet, "/api/admin/plex-auth/candidates"},
 		{http.MethodGet, "/api/admin/users/1/plex"},
+		{http.MethodGet, "/api/admin/seerr-api"},
 	}
 	for _, route := range adminRoutes {
 		recorder := serveRBACRequest(harness.router, route.method, route.path, harness.adminToken)
 		if recorder.Code == http.StatusUnauthorized || recorder.Code == http.StatusForbidden {
 			t.Errorf("admin %s %s was rejected with %d: %s", route.method, route.path, recorder.Code, recorder.Body.String())
+		}
+	}
+
+	// The Seerr-compatible surface takes only its own issued key: a session
+	// token of either role is not a credential there, and without a key issued
+	// nothing is.
+	for _, token := range []string{harness.adminToken, harness.requesterToken, ""} {
+		recorder := serveRBACRequest(harness.router, http.MethodGet, "/api/v1/status", token)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Errorf("GET /api/v1/status with a session token status = %d, want 401; body=%s", recorder.Code, recorder.Body.String())
 		}
 	}
 
@@ -112,6 +126,8 @@ func TestRouterRBACMatrixWithAdminAndRequesterTokens(t *testing.T) {
 			want   int
 		}{
 			{http.MethodGet, "/api/ai/available", "", http.StatusOK},
+			{http.MethodGet, "/api/downloads/activity", "", http.StatusOK},
+			{http.MethodGet, "/api/downloads/summary", "", http.StatusOK},
 			{http.MethodGet, "/api/ai/settings", "", http.StatusOK},
 			{http.MethodGet, "/api/media-servers", "", http.StatusOK},
 			{http.MethodGet, "/api/media-servers/watch?media_type=movie&tmdb_id=1", "", http.StatusOK},
@@ -120,6 +136,25 @@ func TestRouterRBACMatrixWithAdminAndRequesterTokens(t *testing.T) {
 			recorder := serveRBACRequestWithBody(harness.router, route.method, route.path, token, route.body)
 			if recorder.Code != route.want {
 				t.Errorf("%s %s status = %d, want %d; body=%s", route.method, route.path, recorder.Code, route.want, recorder.Body.String())
+			}
+		}
+	}
+}
+
+func TestTVLibraryNavigationRouteRequiresAuthentication(t *testing.T) {
+	harness := newRBACRouterHarness(t, false)
+	for _, tc := range []struct {
+		token  string
+		status int
+	}{
+		{"", http.StatusUnauthorized},
+		{harness.requesterToken, http.StatusBadRequest},
+		{harness.adminToken, http.StatusBadRequest},
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			response := serveRBACRequest(harness.router, method, "/api/requests/tv-library", tc.token)
+			if response.Code != tc.status {
+				t.Fatalf("%s status %d, want %d: %s", method, response.Code, tc.status, response.Body.String())
 			}
 		}
 	}
@@ -332,9 +367,10 @@ func privilegedRoutes(t *testing.T, router http.Handler) []rbacRoute {
 	var out []rbacRoute
 	err := chi.Walk(routes, func(method, pattern string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		privileged := strings.HasPrefix(pattern, "/api/admin/") ||
-			strings.HasPrefix(pattern, "/api/downloads/") ||
+			(strings.HasPrefix(pattern, "/api/downloads/") && pattern != "/api/downloads/activity" && pattern != "/api/downloads/summary") ||
 			strings.HasPrefix(pattern, "/api/tautulli/") ||
 			strings.HasPrefix(pattern, "/api/watch-history/") ||
+			strings.HasPrefix(pattern, "/api/tdarr/") ||
 			(strings.HasPrefix(pattern, "/api/instances") && !strings.HasSuffix(pattern, "/*"))
 		if privileged {
 			out = append(out, rbacRoute{method: method, pattern: pattern})
@@ -489,6 +525,8 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		return nil
 	}, discoverCache)
 
+	downloadsHandler.ConfigureActivity(database, contentPolicy, serversettings.NewService(database, nil), authService.AuthorizePermission)
+
 	cfg := &config.Config{
 		ArrCallbackURL:     "http://cantinarr.test",
 		OAuthIssuer:        "https://cantinarr.test",
@@ -512,6 +550,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		downloadsHandler,
 		mediaFilesHandler,
 		watchHistoryHandler,
+		tdarr.NewHandler(store, instanceRegistry),
 		registry,
 		credentialHandler,
 		toolServer,
@@ -522,6 +561,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		serversettings.NewService(database, func() bool { return registry.Trakt() != nil }),
 		contentpolicy.NewHandler(contentPolicy),
 		discordNotifications,
+		seerrcompat.NewHandler(database, requestService, serversettings.NewService(database, func() bool { return false }), registry.TMDB),
 	)
 	return &rbacRouterHarness{
 		router:            router,

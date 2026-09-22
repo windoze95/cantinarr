@@ -9,6 +9,7 @@ enum ModuleType {
   lidarr,
   downloads,
   monitoring,
+  tdarr,
   assistant
 }
 
@@ -250,6 +251,13 @@ List<ModulePage> modulePagesFor(ModuleType type,
           activeIcon: Icons.insights,
           route: '/monitoring/stats',
         ),
+      ];
+    case ModuleType.tdarr:
+      return const [
+        ModulePage(label: 'Activity', icon: Icons.sync_outlined,
+            activeIcon: Icons.sync, route: '/tdarr/activity'),
+        ModulePage(label: 'Libraries', icon: Icons.video_library_outlined,
+            activeIcon: Icons.video_library, route: '/tdarr/libraries'),
       ];
     case ModuleType.assistant:
       return const [];

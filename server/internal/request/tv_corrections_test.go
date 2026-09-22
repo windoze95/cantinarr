@@ -20,17 +20,19 @@ import (
 )
 
 type correctionLab struct {
-	mu            sync.Mutex
-	parent        map[string]any
-	episodes      []map[string]any
-	commands      []map[string]any
-	adds          []map[string]any
-	delayRefresh  bool
-	metadataDown  bool
-	episodesDown  bool
-	extraSource   bool
-	missingTarget bool
-	mutations     int
+	mu             sync.Mutex
+	parent         map[string]any
+	episodes       []map[string]any
+	commands       []map[string]any
+	adds           []map[string]any
+	delayRefresh   bool
+	metadataDown   bool
+	metadataDownID int
+	episodesDown   bool
+	extraSource    bool
+	missingTarget  bool
+	mutations      int
+	lookupTVDB     int
 }
 
 func (l *correctionLab) seasonMetadata() []map[string]any {
@@ -82,12 +84,12 @@ func newCorrectionLab(t *testing.T) (*Service, int64, int64, *correctionLab) {
 		}
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/tv/"):
-			if l.metadataDown {
+			parts := strings.Split(r.URL.Path, "/")
+			id, _ := strconv.Atoi(parts[2])
+			if l.metadataDown || l.metadataDownID == id {
 				w.WriteHeader(503)
 				return
 			}
-			parts := strings.Split(r.URL.Path, "/")
-			id, _ := strconv.Atoi(parts[2])
 			if strings.HasSuffix(r.URL.Path, "/external_ids") {
 				write(map[string]any{"tvdb_id": 999999})
 				return
@@ -98,7 +100,11 @@ func newCorrectionLab(t *testing.T) (*Service, int64, int64, *correctionLab) {
 			}
 			write(map[string]any{"id": id, "name": fmt.Sprintf("Selected TMDB %d", id), "first_air_date": "2026-01-01", "seasons": seasons})
 		case r.Method == "GET" && r.URL.Path == "/api/v3/series/lookup":
-			write([]map[string]any{{"tvdbId": 389492, "title": "Monster (2022)", "year": 2022, "seasons": l.seasonMetadata()}})
+			tvdbID := l.lookupTVDB
+			if tvdbID == 0 {
+				tvdbID = 389492
+			}
+			write([]map[string]any{{"tvdbId": tvdbID, "title": "Monster (2022)", "year": 2022, "seasons": l.seasonMetadata()}})
 		case r.Method == "GET" && r.URL.Path == "/api/v3/series":
 			if l.parent == nil {
 				write([]any{})

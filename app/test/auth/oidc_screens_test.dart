@@ -92,7 +92,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.enterText(
         find.byType(TextField).first, 'https://media.example.com');
-    await tester.tap(find.text('Continue'));
+    await tester.ensureVisible(find.text('Connect'));
+    await tester.tap(find.text('Connect'));
     await tester.pumpAndSettle();
     expect(find.text('Continue with Family'), findsOneWidget);
     expect(find.textContaining('Administrators can use local sign-in'),
@@ -110,7 +111,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.enterText(
         find.byType(TextField).first, 'https://media.example.com');
-    await tester.tap(find.text('Continue'));
+    await tester.ensureVisible(find.text('Connect'));
+    await tester.tap(find.text('Connect'));
     await tester.pumpAndSettle();
     expect(find.text('Continue with Family'), findsNothing);
     expect(find.widgetWithText(TextField, 'Password'), findsOneWidget);

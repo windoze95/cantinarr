@@ -347,6 +347,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
               ),
               _SettingsTile(
+                icon: Icons.hub_outlined,
+                title: 'Seerr-compatible API',
+                subtitle: 'Let Maintainerr and other apps read requests',
+                onTap: () => context.push('/settings/seerr-api'),
+              ),
+              _SettingsTile(
                 icon: Icons.devices,
                 title: 'Connected Devices',
                 subtitle: 'Manage all connected devices',
@@ -1091,6 +1097,8 @@ IconData _serviceIcon(String serviceType) {
     case 'tautulli':
     case 'tracearr':
       return Icons.monitor_heart_outlined;
+    case 'tdarr':
+      return Icons.sync;
     case 'audiobookshelf':
       return Icons.headphones_outlined;
     case 'jellyfin':
@@ -1127,6 +1135,8 @@ String _serviceLabel(String serviceType) {
       return 'Tautulli';
     case 'tracearr':
       return 'Tracearr';
+    case 'tdarr':
+      return 'Tdarr';
     case 'audiobookshelf':
       return 'Audiobookshelf';
     case 'jellyfin':
