@@ -1,49 +1,303 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Cantinarr Demo Server</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0C0805">
+<meta name="description" content="Connect Cantinarr to a safe demo server and explore media requests, download progress, and server management.">
+<title>Try Cantinarr · Demo server</title>
 <style>
-  *{margin:0;padding:0;box-sizing:border-box}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#1a1a2e;color:#e0e0e0;min-height:100vh;display:flex;align-items:center;justify-content:center}
-  .container{max-width:640px;padding:2rem;text-align:center}
-  h1{color:#ffd700;font-size:2.5rem;margin-bottom:.5rem}
-  .subtitle{color:#888;margin-bottom:2rem}
-  .card{background:#16213e;border-radius:12px;padding:1.5rem;margin:1rem 0;text-align:left}
-  .card h3{color:#ffd700;margin-bottom:.5rem}
-  code{background:#0f3460;padding:.2rem .5rem;border-radius:4px;font-size:.9rem;color:#e94560}
-  .credentials{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
-  .cred{background:#0f3460;border-radius:8px;padding:1rem;text-align:center}
-  .cred .label{color:#888;font-size:.8rem;text-transform:uppercase}
-  .cred .value{color:#ffd700;font-size:1.2rem;margin-top:.25rem}
-  .connect-link{text-decoration:none}
-  .connect-link code{text-decoration:underline;text-underline-offset:.15em}
-  .connect-link:hover code,.connect-link:focus-visible code{background:#16407a}
-  .footer{margin-top:2rem;color:#555;font-size:.85rem}
+  :root {
+    --bg: #0C0805;
+    --bg-2: #15100C;
+    --surface: #201710;
+    --surface-2: #2A1E14;
+    --border: #4A3526;
+    --ink: #F6F0E8;
+    --muted: #B7A99D;
+    --quiet: #A09286;
+    --gold: #F2AC2D;
+    --gold-bright: #F4C66A;
+    --signal: #F47A2E;
+    --on-gold: #201505;
+    --available: #72CC91;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { background: var(--bg); color-scheme: dark; }
+
+  body {
+    min-height: 100vh;
+    overflow-x: hidden;
+    background:
+      radial-gradient(circle at 24% -10%, rgba(242, 172, 45, .15), transparent 36rem),
+      var(--bg);
+    color: var(--ink);
+    font-family: 'Avenir Next', 'Segoe UI', sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body::before {
+    position: fixed;
+    inset: -50%;
+    z-index: 3;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    content: '';
+    opacity: .035;
+    pointer-events: none;
+  }
+
+  a { color: var(--gold); text-underline-offset: 3px; }
+  a:hover { color: var(--gold-bright); }
+  :focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; border-radius: 5px; }
+  ::selection { background: var(--gold); color: var(--on-gold); }
+
+  .shell { width: min(100%, 1080px); margin: 0 auto; padding: 0 24px 72px; }
+
+  .site-header {
+    display: flex;
+    min-height: 68px;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  }
+
+  .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; }
+  .brand-mark {
+    display: grid;
+    width: 32px;
+    height: 32px;
+    place-items: center;
+    border: 1px solid #755522;
+    border-radius: 9px;
+    background: linear-gradient(145deg, #4B3516, #17100A 70%);
+    box-shadow: inset 0 0 10px rgba(244, 198, 106, .18), 0 0 16px rgba(242, 172, 45, .11);
+    color: var(--gold-bright);
+    font-family: Georgia, serif;
+    font-size: .85rem;
+    font-weight: 700;
+  }
+  .wordmark { font-family: Georgia, serif; font-size: 1.3rem; font-weight: 700; letter-spacing: .01em; }
+  .wordmark span { color: var(--gold); text-shadow: 0 0 16px rgba(242, 172, 45, .45); }
+
+  .site-links { display: flex; gap: 22px; }
+  .site-links a { color: var(--muted); font-size: .9rem; font-weight: 600; text-decoration: none; }
+  .site-links a:hover { color: var(--gold-bright); }
+
+  .hero { max-width: 780px; padding: 76px 0 44px; }
+  .kicker { margin-bottom: 14px; color: var(--gold); font-size: .76rem; font-weight: 700; letter-spacing: .17em; text-transform: uppercase; }
+  h1, h2, h3 { font-family: Georgia, serif; }
+  h1 { max-width: 13em; margin-bottom: 20px; font-size: clamp(2.65rem, 7vw, 4.65rem); line-height: 1.03; letter-spacing: -.025em; }
+  h1 em { color: var(--gold); font-style: normal; text-shadow: 0 0 38px rgba(242, 172, 45, .22); }
+  .lede { max-width: 40em; color: var(--muted); font-size: 1.12rem; }
+
+  .start-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(280px, .65fr); gap: 20px; }
+  .panel {
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    background: color-mix(in srgb, var(--surface) 93%, transparent);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, .22);
+  }
+  .connect-panel { padding: 30px; }
+  .account-panel { padding: 26px; }
+  .panel h2 { margin-bottom: 10px; font-size: 1.45rem; line-height: 1.2; }
+  .panel-copy { color: var(--muted); }
+
+  .server-address { margin-top: 24px; }
+  .field-label { display: block; margin-bottom: 7px; color: var(--quiet); font-size: .78rem; font-weight: 700; }
+  code {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-2);
+    color: var(--gold-bright);
+    font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  }
+  .server-address code { display: block; padding: 11px 13px; overflow-wrap: anywhere; }
+
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 22px; }
+  .button {
+    display: inline-flex;
+    min-height: 46px;
+    align-items: center;
+    justify-content: center;
+    padding: 11px 18px;
+    border: 1px solid var(--gold);
+    border-radius: 10px;
+    background: var(--gold);
+    color: var(--on-gold);
+    font-weight: 750;
+    text-decoration: none;
+  }
+  .button:hover { background: var(--gold-bright); color: var(--on-gold); text-decoration: none; }
+  .button-secondary { border-color: var(--border); background: transparent; color: var(--ink); }
+  .button-secondary:hover { border-color: var(--gold); background: var(--surface-2); color: var(--gold-bright); }
+  .connect-note { margin-top: 13px; color: var(--quiet); font-size: .85rem; }
+
+  .accounts { display: grid; gap: 10px; margin-top: 20px; }
+  .account {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 2px 14px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg-2);
+  }
+  .account dt { font-weight: 750; }
+  .account dd { grid-column: 1; color: var(--muted); font-size: .85rem; }
+  .account code { grid-column: 2; grid-row: 1 / span 2; align-self: center; padding: 5px 8px; }
+  .password { margin-top: 14px; color: var(--muted); font-size: .9rem; }
+  .password code { margin-left: 4px; padding: 4px 7px; }
+
+  .capabilities { padding-top: 70px; }
+  .section-heading { max-width: 700px; }
+  .section-heading h2 { margin-bottom: 10px; font-size: clamp(2rem, 4vw, 2.8rem); line-height: 1.12; }
+  .section-heading p { color: var(--muted); }
+  .capability-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 26px; }
+  .capability { padding: 22px; border-left: 3px solid var(--border); background: linear-gradient(90deg, rgba(42, 30, 20, .62), transparent); }
+  .capability h3 { margin-bottom: 7px; color: var(--gold-bright); font-size: 1.12rem; }
+  .capability p { color: var(--muted); font-size: .94rem; }
+
+  .more {
+    margin-top: 16px;
+    padding: 22px 24px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    color: var(--muted);
+    background: var(--bg-2);
+  }
+  .more strong { color: var(--ink); }
+
+  .sandbox {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    margin-top: 42px;
+    padding-top: 26px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+  }
+  .sandbox-dot { flex: 0 0 auto; width: 9px; height: 9px; margin-top: 8px; border-radius: 50%; background: var(--available); box-shadow: 0 0 12px rgba(114, 204, 145, .5); }
+  .sandbox strong { color: var(--ink); }
+
+  footer { display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: space-between; margin-top: 64px; color: var(--quiet); font-size: .82rem; }
+  footer a { color: var(--muted); }
+
+  @media (max-width: 760px) {
+    .hero { padding-top: 54px; }
+    .start-grid, .capability-grid { grid-template-columns: 1fr; }
+    .connect-panel, .account-panel { padding: 22px; }
+  }
+
+  @media (max-width: 480px) {
+    .shell { padding-inline: 18px; }
+    .site-header { min-height: 62px; }
+    .site-links { gap: 14px; }
+    .hero { padding-top: 44px; }
+    h1 { font-size: 2.55rem; }
+    .actions { display: grid; }
+    .button { width: 100%; }
+    .sandbox { gap: 12px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+  }
 </style>
 </head>
 <body>
-<div class="container">
-  <h1>Cantinarr</h1>
-  <p class="subtitle">Demo Server</p>
-  <div class="card">
-    <h3>Connect Your App</h3>
-    <p>Point your Cantinarr app at <code>__DEMO_SERVER_URL__</code> and sign in with either account below, or open the connect link on a device with the app installed.</p>
-  </div>
-  <div class="credentials">
-    <div class="cred"><div class="label">Admin Login</div><div class="value">admin / demo</div></div>
-    <div class="cred"><div class="label">User Login</div><div class="value">user / demo</div></div>
-  </div>
-  <div class="card">
-    <h3>Connect Link</h3>
-    <p>Signs a device in as the <em>user</em> account without a password:<br><a class="connect-link" href="cantinarr://connect?token=demo0000000000000000000000000000000000000000000000000000connect1&amp;server=__DEMO_SERVER_URL_QUERY__"><code style="word-break:break-all;font-size:.75rem">cantinarr://connect?token=demo0000000000000000000000000000000000000000000000000000connect1&amp;server=__DEMO_SERVER_URL_QUERY__</code></a></p>
-  </div>
-  <div class="card">
-    <h3>What You Can Try</h3>
-    <p>Discover public-domain movies &amp; TV, browse by genre, year, rating, language, streaming service, keyword, or studio, open any title for its cast and crew, studios, and release dates, request titles (books via Chaptarr and albums via Lidarr included), pick which library a request goes to, browse books by author and series and music by artist, follow what is trending on Hardcover, browse albums by popularity, release date, or genre, watch your request allowance count down and replenish, watch simulated downloads complete in real time, and chat with the AI assistant. Get access to a media server from the app: create a Jellyfin, Emby, or Audiobookshelf account, link one you already have, or ask for a Plex invite, then choose which app a Watch or Listen link opens. As <strong>admin</strong>, explore the full console: instance management, per-user library access, importing media-server users, download clients (SABnzbd, qBittorrent), monitoring (Tautulli, Tracearr), the music library and Import Doctor, issues with AI remediation, request approvals and allowances, TV matching corrections, Discord request alerts, and single sign-on settings.</p>
-  </div>
-  <p class="footer">All content is public domain or fictional. Explore freely — nothing here touches a real media server.</p>
+<div class="shell">
+  <header class="site-header">
+    <a class="brand" href="https://cantinarr.com" aria-label="Cantinarr home">
+      <span class="brand-mark" aria-hidden="true">C</span>
+      <span class="wordmark">Cantin<span>arr</span></span>
+    </a>
+    <nav class="site-links" aria-label="Cantinarr links">
+      <a href="https://cantinarr.com/roadmap/">Roadmap</a>
+      <a href="https://docs.cantinarr.com">Docs</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="demo-title">
+      <p class="kicker">Public demo</p>
+      <h1 id="demo-title">Explore Cantinarr without setting up a <em>server.</em></h1>
+      <p class="lede">Connect the app to a safe, simulated server. Browse and request media, follow downloads, and open the admin console without touching a real library.</p>
+    </section>
+
+    <section class="start-grid" aria-label="Connect to the demo">
+      <div class="panel connect-panel">
+        <h2>Start with one tap</h2>
+        <p class="panel-copy">Open this page on a phone with Cantinarr installed. The connect link signs you in to the household user account.</p>
+        <div class="actions">
+          <a class="button" href="cantinarr://connect?token=demo0000000000000000000000000000000000000000000000000000connect1&amp;server=__DEMO_SERVER_URL_QUERY__">Open in Cantinarr</a>
+          <a class="button button-secondary" href="https://docs.cantinarr.com/use/apps/">Get the app</a>
+        </div>
+        <p class="connect-note">The connect link is a reusable demo credential. Do not use it with your own server.</p>
+        <div class="server-address">
+          <span class="field-label">Connecting manually? Use this server address</span>
+          <code>__DEMO_SERVER_URL__</code>
+        </div>
+      </div>
+
+      <div class="panel account-panel">
+        <h2>Choose an account</h2>
+        <p class="panel-copy">Use the regular sign-in screen to switch between the household and admin views.</p>
+        <dl class="accounts">
+          <div class="account">
+            <dt>Household user</dt>
+            <dd>Browse and request</dd>
+            <code>user</code>
+          </div>
+          <div class="account">
+            <dt>Administrator</dt>
+            <dd>Full setup and management</dd>
+            <code>admin</code>
+          </div>
+        </dl>
+        <p class="password">Password for both accounts <code>demo</code></p>
+      </div>
+    </section>
+
+    <section class="capabilities" aria-labelledby="capabilities-title">
+      <div class="section-heading">
+        <h2 id="capabilities-title">A working sandbox, not a screenshot.</h2>
+        <p>Try the same requester and administrator flows you would use with your own Cantinarr server.</p>
+      </div>
+      <div class="capability-grid">
+        <article class="capability">
+          <h3>Browse and request</h3>
+          <p>Explore public-domain movies and books, fictional shows and music, then make requests across all four media types.</p>
+        </article>
+        <article class="capability">
+          <h3>Follow the work</h3>
+          <p>Watch simulated downloads move in real time, see availability change, and try request allowances and approvals.</p>
+        </article>
+        <article class="capability">
+          <h3>Manage the stack</h3>
+          <p>Sign in as admin to manage instances, users, access, queues, monitoring, issues, and proposed repairs.</p>
+        </article>
+        <article class="capability">
+          <h3>Try media access</h3>
+          <p>Create or link simulated Jellyfin, Emby, Plex, and Audiobookshelf access, then choose how Watch and Listen links open.</p>
+        </article>
+      </div>
+      <p class="more"><strong>There is more to explore:</strong> advanced search and filters, Chaptarr and Lidarr libraries, Tautulli and Tracearr activity, TV match corrections, Discord alerts, single sign-on settings, and the optional AI assistant.</p>
+    </section>
+
+    <aside class="sandbox" aria-label="Demo safety note">
+      <span class="sandbox-dot" aria-hidden="true"></span>
+      <p><strong>Explore freely.</strong> All content is public domain or fictional. Every integration is simulated, and nothing here touches a real media server.</p>
+    </aside>
+  </main>
+
+  <footer>
+    <span>Cantinarr demo server</span>
+    <span><a href="https://cantinarr.com">About Cantinarr</a> · <a href="https://github.com/windoze95/cantinarr">GitHub</a></span>
+  </footer>
 </div>
 </body>
 </html>
