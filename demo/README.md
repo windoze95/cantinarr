@@ -110,7 +110,7 @@ Full parity with the current Cantinarr API surface:
 | `data_ai.go` | Canned AI chat scripts + seeded external-settings-changes history |
 | `data_music.go` | Public-domain artists/albums/tracks/track files, Lidarr queue and history fixtures, the music cross-domain hooks |
 | `data_misc.go` | Genres and Trakt list fixtures |
-| `assets/` | `go:embed` — sample download file, landing HTML (covers are generated PNGs, not files) |
+| `assets/` | `go:embed` — sample download file, landing HTML, and the Cantinarr logo and favicon (covers are generated PNGs, not files) |
 | `tools/smoke.sh` | Read-mostly parity smoke test (about 310 checks; `--mutate` adds the create/approve/deny flows). Run it against a local or the live demo |
 
 ## Branch Workflow
