@@ -228,6 +228,15 @@ class _StubAdapter implements HttpClientAdapter {
           {'paused': false, 'speed_bps': 0, 'items': <Object>[]};
     } else if (path.contains('/downloads/') && path.endsWith('/history')) {
       body = {'items': <Object>[]};
+    } else if (path.endsWith('/api/admin/seerr-api')) {
+      // The Seerr-compatible API screen with a key issued, so its copy /
+      // show / replace / revoke row lays out instead of the empty state.
+      body = {
+        'configured': true,
+        'api_key': 'cantinarr-previewkeypreviewkeypreviewkeypreview',
+        'issued_by': 'admin',
+        'created_at': '2026-09-21T10:00:00Z',
+      };
     } else if (path.endsWith('/api/admin/discovery-settings')) {
       // Must beat the generic '/discover' branch below.
       body = {

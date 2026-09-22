@@ -84,6 +84,7 @@ import '../features/settings/ui/credentials_screen.dart';
 import '../features/settings/ui/devices_screen.dart';
 import '../features/settings/ui/discovery_settings_screen.dart';
 import '../features/settings/ui/discord_notifications_screen.dart';
+import '../features/settings/ui/seerr_api_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
 import '../features/settings/ui/pending_requests_screen.dart';
 import '../features/settings/ui/request_settings_screen.dart';
@@ -931,6 +932,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 const AppAmbientBackground(child: DiscordNotificationsScreen()),
           ),
           GoRoute(
+            path: '/settings/seerr-api',
+            builder: (_, __) =>
+                const AppAmbientBackground(child: SeerrApiScreen()),
+          ),
+          GoRoute(
             path: '/settings/discovery',
             onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
@@ -1122,6 +1128,7 @@ bool _isAdminOnlyRoute(String path) {
     '/settings/request-settings',
     '/settings/tv-matches',
     '/settings/discord-notifications',
+    '/settings/seerr-api',
     '/settings/push-notifications/server',
     '/settings/devices',
     '/settings/apple-tvs',

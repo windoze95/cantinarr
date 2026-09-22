@@ -347,6 +347,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
               ),
               _SettingsTile(
+                icon: Icons.hub_outlined,
+                title: 'Seerr-compatible API',
+                subtitle: 'Let Maintainerr and other apps read requests',
+                onTap: () => context.push('/settings/seerr-api'),
+              ),
+              _SettingsTile(
                 icon: Icons.devices,
                 title: 'Connected Devices',
                 subtitle: 'Manage all connected devices',

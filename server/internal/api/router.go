@@ -28,6 +28,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/push"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
 	"github.com/windoze95/cantinarr-server/internal/request"
+	"github.com/windoze95/cantinarr-server/internal/seerrcompat"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
 	"github.com/windoze95/cantinarr-server/internal/tdarr"
 	"github.com/windoze95/cantinarr-server/internal/update"
@@ -65,6 +66,7 @@ func NewRouter(
 	serverSettings *serversettings.Service,
 	contentPolicyHandler *contentpolicy.Handler,
 	discordNotifications *discordnotify.Service,
+	seerrHandler *seerrcompat.Handler,
 ) http.Handler {
 	configChanged := func() {
 		if wsHub != nil {
@@ -127,6 +129,14 @@ func NewRouter(
 	r.With(oauthLimiter.Middleware).Post("/api/auth/plex/mcp/begin", oauthHandler.BeginPlex)
 	r.Get("/passkeys/setup", oauthHandler.PasskeySetup)
 	r.Get("/passkeys/create", oauthHandler.PasskeyCreate)
+
+	// The Seerr-compatible surface. Its own mount because it speaks Seerr's
+	// contract (X-Api-Key, Seerr's shapes and error bodies) rather than the
+	// session API's, and /api/v1 is a prefix nothing else uses. Mounted ahead
+	// of /api so chi routes the deeper prefix here.
+	if seerrHandler != nil {
+		r.Mount("/api/v1", seerrHandler.Routes())
+	}
 
 	r.Route("/api", func(r chi.Router) {
 		// CORS: same-origin only. No CORS middleware is mounted on purpose —
@@ -284,6 +294,14 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/outbound-proxy", outboundProxyHandler(serverSettings))
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/outbound-proxy", updateOutboundProxyHandler(serverSettings))
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Post("/outbound-proxy/test", testOutboundProxyHandler(serverSettings, creds))
+
+			// The Seerr-compatible API key: read, issue (replacing the old
+			// one at once), revoke. The key acts as the issuing admin.
+			if seerrHandler != nil {
+				r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/seerr-api", seerrHandler.AdminKey)
+				r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Post("/seerr-api", seerrHandler.AdminKey)
+				r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Delete("/seerr-api", seerrHandler.AdminKey)
+			}
 
 			// Media-server accounts (Jellyfin, Emby, Plex): the linked-account
 			// rows the Users screen tags, the server's own account list for the

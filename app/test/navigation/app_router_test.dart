@@ -255,6 +255,7 @@ void main() {
       '/settings/users',
       '/settings/request-settings',
       '/settings/discord-notifications',
+      '/settings/seerr-api',
       '/settings/push-notifications/server',
       '/settings/agent-approval-rules',
       '/settings/devices',

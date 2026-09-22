@@ -74,6 +74,8 @@ type Movie struct {
 	MovieFileID int    `json:"movieFileId"`
 	MovieFile   struct {
 		ID int `json:"id"`
+		// DateAdded is when Radarr imported the file; absent without one.
+		DateAdded *time.Time `json:"dateAdded,omitempty"`
 	} `json:"movieFile"`
 	Monitored      bool   `json:"monitored"`
 	IsAvailable    bool   `json:"isAvailable"`

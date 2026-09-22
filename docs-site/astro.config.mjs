@@ -36,7 +36,7 @@ export default defineConfig({
         'integrations/instant-updates', 'integrations/push', 'integrations/discord',
         'integrations/monitoring', 'integrations/tdarr', 'integrations/guides/oidc',
         'integrations/guides/plex-sign-in', 'integrations/discovery-providers',
-        'integrations/outbound-proxy', 'integrations/mcp',
+        'integrations/outbound-proxy', 'integrations/mcp', 'integrations/seerr-api',
       ], collapsed: true },
       { label: 'Fix a problem', items: [{ autogenerate: { directory: 'troubleshooting' } }], collapsed: true },
       { label: 'Reference', items: [

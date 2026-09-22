@@ -17,16 +17,29 @@ const arrLibraryCacheTTL = 120 * time.Second
 
 // movieAvailability is the slice of Radarr state a request-side status needs:
 // whether a file is on disk and whether Radarr is still looking for one.
+// AddedAt is when Radarr imported the file (nil without one); only the
+// Seerr-compatible ledger reads it, as the "media added" date.
 type movieAvailability struct {
-	HasFile   bool `json:"has_file"`
-	Monitored bool `json:"monitored"`
+	HasFile   bool       `json:"has_file"`
+	Monitored bool       `json:"monitored"`
+	AddedAt   *time.Time `json:"added_at,omitempty"`
 }
 
 // seriesAvailability is the slice of Sonarr state a request-side status needs,
 // from season-statistics totals (EpisodeTotals semantics: every known episode
 // across real seasons, monitored or not — see Series.EpisodeTotals for why
-// monitored-only counts must not be used here).
+// monitored-only counts must not be used here). Seasons carries the same
+// counts per real season, for readers that answer season by season (the
+// Seerr-compatible ledger); specials stay out, as in EpisodeTotals.
 type seriesAvailability struct {
+	Files     int                        `json:"files"`
+	Total     int                        `json:"total"`
+	Monitored bool                       `json:"monitored"`
+	Seasons   map[int]seasonAvailability `json:"seasons,omitempty"`
+}
+
+// seasonAvailability is one season's slice of seriesAvailability.
+type seasonAvailability struct {
 	Files     int  `json:"files"`
 	Total     int  `json:"total"`
 	Monitored bool `json:"monitored"`
@@ -79,7 +92,12 @@ func (s *Service) movieDigestFor(client *radarr.Client, instanceID string) (map[
 		if m.TmdbID == 0 {
 			continue
 		}
-		digest[m.TmdbID] = movieAvailability{HasFile: m.HasFile, Monitored: m.Monitored}
+		entry := movieAvailability{HasFile: m.HasFile, Monitored: m.Monitored}
+		if m.HasFile && m.MovieFile.DateAdded != nil {
+			added := m.MovieFile.DateAdded.UTC()
+			entry.AddedAt = &added
+		}
+		digest[m.TmdbID] = entry
 	}
 
 	if s.libraryCache != nil {
@@ -137,7 +155,25 @@ func (s *Service) seriesDigestFor(client *sonarr.Client, instanceID string) (map
 			continue
 		}
 		files, total := sr.EpisodeTotals()
-		digest[sr.TvdbID] = seriesAvailability{Files: files, Total: total, Monitored: sr.Monitored}
+		entry := seriesAvailability{Files: files, Total: total, Monitored: sr.Monitored}
+		for _, season := range sr.Seasons {
+			if season.SeasonNumber <= 0 || season.Statistics == nil {
+				continue
+			}
+			seasonTotal := season.Statistics.TotalEpisodeCount
+			if seasonTotal == 0 {
+				seasonTotal = season.Statistics.EpisodeCount
+			}
+			if entry.Seasons == nil {
+				entry.Seasons = map[int]seasonAvailability{}
+			}
+			entry.Seasons[season.SeasonNumber] = seasonAvailability{
+				Files:     season.Statistics.EpisodeFileCount,
+				Total:     seasonTotal,
+				Monitored: season.Monitored,
+			}
+		}
+		digest[sr.TvdbID] = entry
 	}
 
 	if s.libraryCache != nil {
@@ -186,6 +222,26 @@ func (s *Service) InvalidateAvailabilityDigests(instanceID string) {
 	}
 	s.libraryCache.Delete("movie-availability:" + instanceID)
 	s.libraryCache.Delete("series-availability:" + instanceID)
+}
+
+// InvalidateAllAvailabilityDigests drops every Radarr and Sonarr digest, so
+// the next ledger read fetches fresh library state. It is what the
+// Seerr-compatible availability-sync job does: an integrator that just
+// deleted from a library asks for the change to show now, not after the
+// cache window.
+func (s *Service) InvalidateAllAvailabilityDigests() {
+	if s.registry == nil {
+		return
+	}
+	for _, serviceType := range []string{"radarr", "sonarr"} {
+		instances, err := s.registry.ListInstanceSummaries(serviceType)
+		if err != nil {
+			continue
+		}
+		for _, inst := range instances {
+			s.InvalidateAvailabilityDigests(inst.ID)
+		}
+	}
 }
 
 // InvalidateBookDigests drops the cached book availability and recency for one
