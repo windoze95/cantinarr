@@ -24,6 +24,8 @@ func registerRequests(r chi.Router) {
 	r.Post("/requests", reqCreateHandler)
 	r.Get("/requests", reqHistoryHandler)
 	r.Get("/requests/options", reqOptionsHandler)
+	r.Get("/requests/tv-library", tvLibraryGetHandler)
+	r.Post("/requests/tv-library", tvLibraryCreateHandler)
 	r.Get("/requests/{tmdb_id}/status", reqTmdbStatusHandler)
 }
 

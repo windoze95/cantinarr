@@ -46,6 +46,7 @@ const (
 	instChaptarr = "chaptarr-9c0d1e2f"
 	instSab      = "sabnzbd-3f4a5b6c"
 	instTautulli = "tautulli-7d8e9f0a"
+	instTdarr    = "tdarr-3a4b5c6d"
 
 	// A second download client (qBittorrent, stored in its API-key credential
 	// shape) and a second watch-history provider (Tracearr).
@@ -321,6 +322,11 @@ func seedCoreState() {
 			URL: "http://tracearr:3000", IsDefault: true, MediaDownloads: false,
 			MediaPathMappings: []map[string]string{},
 		},
+		{
+			ID: instTdarr, ServiceType: serviceTdarr, Name: "Tdarr",
+			URL: "http://tdarr:8266", IsDefault: true, MediaDownloads: false,
+			MediaPathMappings: []map[string]string{},
+		},
 		// Sibling arr libraries. Neither carries the global default flag —
 		// they reach a requester through an additive grant, which is exactly
 		// the shape the Library chooser exists for.
@@ -527,14 +533,14 @@ func permissionsFor(role string) []string {
 	case roleAdmin:
 		return []string{
 			"admin:*", "ai:chat", "ai_tools:manage", "arr:browse", "arr:read",
-			"arr:search", "credentials:manage", "downloads:manage", "downloads:read",
+			"arr:search", "credentials:manage", "downloads:activity", "downloads:manage", "downloads:read",
 			"instances:manage", "mcp:access", "media:discover", "media:download",
 			"media:request", "monitoring:read", "remediation:manage",
 			"requests:manage", "system:read", "users:manage",
 		}
 	case roleUser:
 		return []string{
-			"ai:chat", "arr:browse", "mcp:access", "media:discover",
+			"ai:chat", "arr:browse", "downloads:activity", "mcp:access", "media:discover",
 			"media:download", "media:request",
 		}
 	default:

@@ -38,8 +38,11 @@ const (
 	serviceNzbget       = "nzbget"
 	serviceQbittorrent  = "qbittorrent"
 	serviceTransmission = "transmission"
+	serviceDeluge       = "deluge"
+	serviceRutorrent    = "rutorrent"
 	serviceTautulli     = "tautulli"
 	serviceTracearr     = "tracearr"
+	serviceTdarr        = "tdarr"
 
 	// Media servers. Cantinarr manages user ACCESS on these, never library
 	// routing: they follow the Chaptarr rule (never a global default, granted

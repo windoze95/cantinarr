@@ -150,6 +150,9 @@ func cfgHandleConfig(w http.ResponseWriter, r *http.Request) {
 		"admin_catalog_browsing":   true,
 		"request_quotas":           true,
 		"tv_match_corrections":     true,
+		"tv_library_navigation":    true,
+		"downloads_activity":       true,
+		"downloads_user_scope":     dlActivityUserScope(),
 		"media_account_management": true,
 		"apple_tv_remote":          false,
 		"hidden_discover_tabs":     cfgHiddenDiscoverTabs(),
@@ -158,7 +161,7 @@ func cfgHandleConfig(w http.ResponseWriter, r *http.Request) {
 
 // ─── GET /api/admin/setup-status ────────────────────────
 
-// cfgSetupItems derives the 14-item setup checklist from live state on every
+// cfgSetupItems derives the 15-item setup checklist from live state on every
 // request (never stored). Titles/descriptions are verbatim from the real
 // server (api/setup_status.go buildSetupItems, same order); configured flags
 // are truthful for the demo. skipped rides only on optional items an admin
@@ -181,7 +184,7 @@ func cfgSetupItems() []map[string]any {
 			anyWatchHistory = true
 		}
 		switch inst.ServiceType {
-		case serviceSabnzbd, serviceNzbget, serviceQbittorrent, serviceTransmission:
+		case serviceSabnzbd, serviceNzbget, serviceQbittorrent, serviceTransmission, serviceDeluge, serviceRutorrent:
 			anyDownloadClient = true
 		}
 	}
@@ -242,7 +245,7 @@ func cfgSetupItems() []map[string]any {
 			discoveryDesc,
 			discoveryPrefsSaved(), true),
 		item("download_client", "Download activity",
-			"See and manage the live download queue (SABnzbd, qBittorrent, NZBGet, or Transmission).",
+			"See and manage the live download queue (SABnzbd, qBittorrent, NZBGet, Transmission, Deluge, or ruTorrent).",
 			anyDownloadClient, true),
 		item("media_downloads", "Completed media downloads",
 			"Mount media read-only on the server, then map paths inside each Radarr, Sonarr, Chaptarr, or Lidarr instance.",
@@ -252,6 +255,9 @@ func cfgSetupItems() []map[string]any {
 		item("tautulli", "Monitoring (Tautulli or Tracearr)",
 			"See live streams, watch history, and stats in the Monitoring module. Tautulli covers Plex; Tracearr covers Plex, Jellyfin, and Emby.",
 			anyWatchHistory, true),
+		item("tdarr", "Tdarr progress",
+			"See active processing jobs and library statistics in the Tdarr module.",
+			haveType[serviceTdarr], true),
 		item("books", "Books (Chaptarr)",
 			"Let users request ebooks and audiobooks; access is granted per user.",
 			haveType[serviceChaptarr], true),

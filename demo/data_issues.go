@@ -240,6 +240,7 @@ func issLockedIssueJSON(i *issIssue) map[string]any {
 		// every list row; only the single-issue GET overrides it for the
 		// reporter (issLockedCanConfirmFixed).
 		"can_confirm_fixed": false,
+		"can_reopen":        false,
 		"is_prevention":     i.IsPrevention,
 		"instance_id":       i.InstanceID,
 	}

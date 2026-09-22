@@ -257,7 +257,7 @@ func arrSSeriesJSON(st *arrSonarrSeries) map[string]any {
 			stats["nextAiring"] = nextAiring
 		}
 		seasons = append(seasons, map[string]any{
-			"seasonNumber": season.SeasonNumber,
+			"seasonNumber": arrSNativeSeasonNumber(st, season.SeasonNumber),
 			"monitored":    monitored,
 			"statistics":   stats,
 		})
@@ -339,7 +339,7 @@ func arrSEpisodeJSON(st *arrSonarrSeries, show *DemoShow, seasonNumber int, ep D
 	doc := map[string]any{
 		"id":                       ep.ID,
 		"seriesId":                 st.ID,
-		"seasonNumber":             seasonNumber,
+		"seasonNumber":             arrSNativeSeasonNumber(st, seasonNumber),
 		"episodeNumber":            ep.EpisodeNumber,
 		"absoluteEpisodeNumber":    arrSAbsoluteNumber(show, ep.ID),
 		"title":                    ep.Name,

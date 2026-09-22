@@ -56,7 +56,9 @@ Media types: `mediaTypeMovie` `mediaTypeTV` `mediaTypeBook` `mediaTypeMusic`
 (= `movie`/`tv`/`book`/`music`).
 Service types: `serviceRadarr` `serviceSonarr` `serviceChaptarr` `serviceLidarr`
 `serviceSabnzbd` `serviceNzbget` `serviceQbittorrent` `serviceTransmission`
-`serviceTautulli` `serviceTracearr` `serviceJellyfin` `serviceEmby` `servicePlex`
+`serviceDeluge` `serviceRutorrent` `serviceTautulli` `serviceTracearr`
+`serviceTdarr` `serviceJellyfin` `serviceEmby` `servicePlex`
+`serviceAudiobookshelf`
 (exact strings, lowercase). Media types describe media, service types describe
 services — never conflate. Lidarr follows the Chaptarr rule (never a global
 default; the per-user pin IS the grant). The watch-history providers are
@@ -111,10 +113,11 @@ Auth/session constants (state.go): `demoJWTSecret` = `"demo-jwt-secret-cantinarr
 | `instTracearr` | `tracearr-8e9f0a1b` | tracearr | Tracearr | http://tracearr:3000 | true | false | `[]` |
 | `instLidarr` | `lidarr-4d5e6f7a` | lidarr | Lidarr | http://lidarr:8686 | **false — lidarr is never default** | true | `/music` → `/media/music` |
 | `instAudiobookshelf` | `abs-2c3d4e5f` | audiobookshelf | Audiobookshelf | http://audiobookshelf:13378 | **false — never default** | false | `[]` |
+| `instTdarr` | `tdarr-3a4b5c6d` | tdarr | Tdarr | http://tdarr:8266 | true | false | `[]` |
 
-`instQbittorrent` is stored in qBittorrent's API-key credential shape
-(`instMgmtQbitKeyed` in instances.go), so its `/api/instances` row carries
-`has_api_key: true`; every other row omits the key. Submitting the other shape
+`instQbittorrent` and `instTdarr` are stored in their API-key credential shape,
+so their `/api/instances` rows carry `has_api_key: true`; every other row omits
+the key. Submitting the other qBittorrent shape
 (username + password) flips it, exactly like the real `applyQbittorrentAuthMode`.
 
 `plexDemoMachineIdentifier` = `d3m0p1exmach1ne0000000000000001` — the Plex
@@ -239,8 +242,8 @@ type DemoInstance struct {
 Permission lists (lexicographically sorted, matching the real
 `PermissionsForRole`):
 
-- user (6): `["ai:chat","arr:browse","mcp:access","media:discover","media:download","media:request"]`
-- admin (19): `["admin:*","ai:chat","ai_tools:manage","arr:browse","arr:read","arr:search","credentials:manage","downloads:manage","downloads:read","instances:manage","mcp:access","media:discover","media:download","media:request","monitoring:read","remediation:manage","requests:manage","system:read","users:manage"]`
+- user (7): `["ai:chat","arr:browse","downloads:activity","mcp:access","media:discover","media:download","media:request"]`
+- admin (20): `["admin:*","ai:chat","ai_tools:manage","arr:browse","arr:read","arr:search","credentials:manage","downloads:activity","downloads:manage","downloads:read","instances:manage","mcp:access","media:discover","media:download","media:request","monitoring:read","remediation:manage","requests:manage","system:read","users:manage"]`
 
 **Locking rule:** `stateMu` guards the core store and every accessor above
 acquires it internally. Domain files must NEVER lock `stateMu` directly, never
@@ -292,11 +295,13 @@ Register functions `main.go` mounts (must exist, exact names):
 alias for both provider types), `registerMediaFiles` (public — see rule 1),
 `registerSSO`, `registerAdminSettings`, `registerMediaApps`,
 `registerRequestQuotas`, `registerDelivery`, `registerTVMatches`,
-`registerBookDiscovery`, `registerHardcover`, `registerMusicDiscovery`.
+`registerBookDiscovery`, `registerHardcover`, `registerMusicDiscovery`,
+`registerDownloadActivity`, `registerTdarr`, `registerSeerrAdmin`.
 Two more mount on the PUBLIC `/api` router beside `registerAuth`:
 `registerSSOPublic` (the unauthenticated OIDC/Plex flow halves) and
 `registerArrWebhooks` (`POST /webhooks/arr/{id}` — Basic auth from an arr,
-never a session). Stage A provides `registerAuth` + `registerWS`. (`registerPlex` is gone: the
+never a session), while `registerSeerrCompat` uses only its own `X-Api-Key`.
+Stage A provides `registerAuth` + `registerWS`. (`registerPlex` is gone: the
 real server deleted the `/api/admin/plex/*` console when Plex became an
 instance, and `plex.go` is now only the shared PIN simulation.)
 `registerInstances` also owns the proxy dispatcher `/instances/{instanceID}/*`
@@ -539,7 +544,7 @@ snake_case vs arr camelCase).
   resolve a name; `PUT api/v3/movie/{id}` round-trips the whole document.
 - Watch history: one fixture set rendered per provider type; Tautulli names
   no server (`server: ""`, `server_type: "plex"`), Tracearr names three.
-- Setup checklist: 14 items; the `tautulli` key is kept (stored skips survive)
+- Setup checklist: 15 items; the `tautulli` key is kept (stored skips survive)
   but reads "Monitoring (Tautulli or Tracearr)"; skips live in `cfgSkipped`.
 - Notification preferences are the real 13-key row; PUT is a full-row replace.
 - Kids accounts: see §7 D10. The kid's certifications for the real films are

@@ -97,7 +97,7 @@ func buildRouter() chi.Router {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: []string{"*"},
 		AllowedMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"},
-		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type"},
+		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type", "X-Api-Key"},
 		ExposedHeaders: []string{"Link"},
 		MaxAge:         300,
 	}))
@@ -117,7 +117,8 @@ func buildRouter() chi.Router {
 		r.Use(middleware.SetHeader("Content-Type", "application/json"))
 
 		// Endpoints with their own auth transport (or none).
-		registerWS(r) // GET /ws — subprotocol auth
+		registerSeerrCompat(r) // /v1/* — X-Api-Key auth, no user session
+		registerWS(r)          // GET /ws — subprotocol auth
 		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		})
@@ -133,6 +134,7 @@ func buildRouter() chi.Router {
 		r.Group(func(r chi.Router) {
 			r.Use(requireAuth)
 			registerConfig(r)
+			registerSeerrAdmin(r)
 			registerSSO(r)
 			registerAdminSettings(r)
 			registerUsersAdmin(r)
@@ -160,6 +162,7 @@ func buildRouter() chi.Router {
 			registerProposals(r)
 			registerInstances(r)
 			registerDownloads(r)
+			registerTdarr(r)
 			registerWatchHistory(r)
 		})
 	})

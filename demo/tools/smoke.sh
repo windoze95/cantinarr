@@ -53,6 +53,31 @@ chk() {
   fi
 }
 
+# Seerr-compatible routes authenticate with their own X-Api-Key instead of a
+# Cantinarr session. Keep that transport separate so the regular table cannot
+# accidentally make a session token look valid there.
+chk_key() {
+  local method="$1" path="$2" want="$3" pred="$4" key="$5" body="${6:-}"
+  local out code
+  if [ -n "$body" ]; then
+    out=$(curl -sS -A "$UA" -o /tmp/smoke.body -w '%{http_code}' -X "$method" "$BASE$path" \
+      -H "X-Api-Key: $key" -H 'Content-Type: application/json' -d "$body")
+  else
+    out=$(curl -sS -A "$UA" -o /tmp/smoke.body -w '%{http_code}' -X "$method" "$BASE$path" \
+      -H "X-Api-Key: $key")
+  fi
+  code="$out"
+  local ok=1
+  [ "$code" = "$want" ] || ok=0
+  if [ $ok = 1 ] && [ -n "$pred" ]; then
+    local r; r=$(jq -r "$pred" /tmp/smoke.body 2>/dev/null || echo "jq-error")
+    [ "$r" = "true" ] || ok=0
+  fi
+  if [ $ok = 1 ]; then pass=$((pass+1)); else
+    fail=$((fail+1)); failures+=("$method $path [api-key] got $code want $want pred=$pred body=$(head -c 200 /tmp/smoke.body)")
+  fi
+}
+
 R="$BASE"
 # ── infrastructure / auth ────────────────────────────────
 chk GET /api/health none 200 '.status=="ok"'
@@ -63,10 +88,10 @@ chk GET /api/auth/me kid 200 '.child==true and .content_limits.max_movie_rating=
 chk GET /api/auth/passkeys user 200 'type=="array"'
 chk POST /api/auth/setup none 409 ''
 # ── config / setup ───────────────────────────────────────
-chk GET /api/config admin 200 '.services.lidarr==true and .services.radarr==true and (.instances|map(.service_type)|index("qbittorrent")!=null) and (.instances|map(.service_type)|index("tracearr")!=null) and (.version|type=="string") and (.min_app_version|type=="string")'
-chk GET /api/config user 200 '.services.lidarr==true and ([.instances[]|select(.service_type=="lidarr")]|length==1) and ([.instances[]|select(.service_type=="lidarr")][0].is_default==true)'
+chk GET /api/config admin 200 '.services.lidarr==true and .services.radarr==true and (.instances|map(.service_type)|index("qbittorrent")!=null) and (.instances|map(.service_type)|index("tracearr")!=null) and (.instances|map(.service_type)|index("tdarr")!=null) and .downloads_activity==true and .downloads_user_scope=="all" and .tv_library_navigation==true and (.version|type=="string") and (.min_app_version|type=="string")'
+chk GET /api/config user 200 '.services.lidarr==true and ([.instances[]|select(.service_type=="lidarr")]|length==1) and ([.instances[]|select(.service_type=="lidarr")][0].is_default==true) and .downloads_activity==true'
 chk GET /api/config kid 200 '.services.lidarr==false and .services.chaptarr==false and ([.instances[]|.service_type]|sort==["radarr","sonarr"])'
-chk GET /api/admin/setup-status admin 200 '(.items|length)==14 and ([.items[].key]|index("music")!=null) and ([.items[]|select(.key=="tautulli")][0].title|test("Tracearr")) and (.total==14) and (.configured|type=="number")'
+chk GET /api/admin/setup-status admin 200 '(.items|length)==15 and ([.items[].key]|index("music")!=null) and ([.items[].key]|index("tdarr")!=null) and ([.items[]|select(.key=="tautulli")][0].title|test("Tracearr")) and (.total==15) and (.configured|type=="number")'
 chk GET /api/admin/setup-status user 403 ''
 chk GET /api/admin/update-status admin 200 '.update.current|type=="string"'
 # ── users admin ──────────────────────────────────────────
@@ -196,7 +221,7 @@ chk "GET" "/api/requests/music-status?foreign_id=b0000000-d3a0-4000-8000-0000000
 chk "GET" "/api/requests/music-status?foreign_id=b0000000-d3a0-4000-8000-000000000099" user 200 '.status=="pending"'
 chk "GET" "/api/requests/music-status" user 400 '.error=="foreign_id required"'
 # ── instances / proxies ──────────────────────────────────
-chk GET /api/instances admin 200 'type=="array" and length==14 and ([.[]|select(.service_type=="qbittorrent")][0].has_api_key==true) and (all(.[]|select(.service_type!="qbittorrent"); has("has_api_key")|not)) and (all(.[]; has("id") and has("service_type") and has("name") and has("url") and has("username") and has("is_default") and has("media_path_mappings")))'
+chk GET /api/instances admin 200 'type=="array" and length==15 and ([.[]|select(.service_type=="qbittorrent")][0].has_api_key==true) and ([.[]|select(.service_type=="tdarr")][0].has_api_key==true) and (all(.[]|select(.service_type!="qbittorrent" and .service_type!="tdarr"); has("has_api_key")|not)) and (all(.[]; has("id") and has("service_type") and has("name") and has("url") and has("username") and has("is_default") and has("media_path_mappings")))'
 chk GET /api/instances user 403 ''
 chk GET /api/instances/media-roots admin 200 '.==["/media"]'
 chk POST /api/instances/test admin 400 '.error=="an API key, or a username and password, is required for qbittorrent"' '{"service_type":"qbittorrent","name":"q","url":"http://q:8081","username":"a"}'
@@ -222,6 +247,7 @@ chk GET /api/instances/radarr-1a2b3c4d/api/v3/rootfolder admin 200 'type=="array
 chk GET /api/instances/sonarr-5e6f7a8b/api/v3/series user 200 'type=="array" and length==7 and (all(.[]; has("imdbId")|not)) and (all(.[]; has("network")))'
 SPROFILE_IDS=$(curl -sS -A "$UA" -H "Authorization: Bearer $ADMIN" "$BASE/api/instances/sonarr-5e6f7a8b/api/v3/qualityprofile" | jq -c '[.[].id]')
 chk GET /api/instances/sonarr-5e6f7a8b/api/v3/series admin 200 "all(.[]; .qualityProfileId as \$q | ($SPROFILE_IDS|index(\$q))!=null)"
+chk GET /api/instances/sonarr-5e6f7a8b/api/v3/series/5 user 200 '([.seasons[].seasonNumber]|sort)==[1,3]'
 chk GET /api/instances/sonarr-5e6f7a8b/api/v3/series kid 200 'type=="array" and length==4'
 chk GET /api/instances/sonarr-5e6f7a8b/api/v3/series/2 kid 404 '.error=="not found"'
 chk "GET" "/api/instances/sonarr-5e6f7a8b/api/v3/episode?seriesId=2" kid 200 'type=="array" and length==0'
@@ -273,6 +299,18 @@ chk GET /api/downloads/sabnzbd-3f4a5b6c/history admin 200 '(.items|type=="array"
 chk GET /api/downloads/qbittorrent-4b5c6d7e/queue admin 200 '(.items|length)==5 and ([.items[].status]|index("stalledDL")!=null) and (all(.items[]; (.progress|type=="number") and has("eta_seconds") and has("size_left_bytes"))) and (.paused==false)'
 chk GET /api/downloads/qbittorrent-4b5c6d7e/history admin 200 '(.items|length)==5 and ([.items[]|select(.error!=null and .error!="")]|length)==1'
 chk GET /api/downloads/sabnzbd-3f4a5b6c/queue user 403 ''
+# ── content-first download activity ─────────────────────
+chk GET "/api/downloads/activity?scope=all" admin 200 '.scope=="all" and .user_scope=="all" and .count==(.groups|length) and .count>0 and (.jobs|length)>0 and (all(.jobs[]; (.name|length)>0 and (.control.instance_id|length)>0))'
+chk GET "/api/downloads/activity?scope=mine" user 200 '.scope=="mine" and .count==(.groups|length) and .count>0 and (.jobs|length)>0 and (all(.jobs[]; (has("name")|not) and (has("control")|not)))'
+chk GET "/api/downloads/summary?scope=mine" user 200 '.scope=="mine" and (.count|type=="number") and (has("groups")|not) and (has("jobs")|not)'
+chk GET "/api/downloads/activity?scope=invalid" user 400 '.error|test("scope must be all or mine")'
+chk GET /api/admin/downloads/settings admin 200 '.user_scope=="all"'
+chk GET /api/admin/downloads/settings user 403 ''
+# ── Tdarr ────────────────────────────────────────────────
+chk GET /api/tdarr/tdarr-3a4b5c6d/activity admin 200 '(.observed_at|type=="string") and (.nodes|length)==2 and ([.nodes[].workers[]]|length)==2'
+chk GET /api/tdarr/tdarr-3a4b5c6d/libraries admin 200 '(.items|length)==2 and ([.items[].id]|sort)==["movies","tv"]'
+chk GET "/api/tdarr/tdarr-3a4b5c6d/stats?library_id=movies" admin 200 '.library_id=="movies" and .total_files==612 and (.transcodes|length)>0 and (.health_checks|length)>0'
+chk GET /api/tdarr/tdarr-3a4b5c6d/activity user 403 ''
 # ── watch history (both prefixes, both providers) ────────
 chk GET /api/watch-history/tracearr-8e9f0a1b/activity admin 200 '(.streams|type=="array") and (.stream_count|type=="number") and (all(.streams[]; has("media_type") and has("server") and has("server_type"))) and ([.streams[]|select(.media_type=="track")]|length)==1'
 chk "GET" "/api/watch-history/tracearr-8e9f0a1b/history?limit=10" admin 200 '(.items|type=="array") and (.coverage.note|test("Tracearr")) and (.coverage|has("truncated")) and (all(.items[]; has("server_type")))'
@@ -290,6 +328,7 @@ chk "GET" "/api/media-servers/watch?media_type=movie&tmdb_id=961" user 200 'type
 chk GET /api/admin/media-servers/accounts admin 200 'type=="array"'
 chk GET /api/issues user 200 '(.issues|type=="array")'
 chk GET /api/admin/issues admin 200 '(.issues|type=="array") and ([.issues[]|select(.media_type=="music")]|length)>=1'
+chk GET /api/issues/1 admin 200 '.issue.can_reopen==true and .issue.status=="resolved"'
 chk GET /api/admin/agent-actions admin 200 'type=="array" or type=="object"'
 chk GET /api/admin/agent-approval-rules admin 200 'type=="array" or type=="object"'
 chk GET /api/admin/remediation-settings admin 200 'type=="object"'
@@ -319,6 +358,8 @@ chk GET /api/admin/tv-matches/90005 admin 200 '(.match.provenance=="bundled") an
 chk GET /api/admin/tv-matches/90001 admin 200 '.match.provenance=="default" and (.match.season_map|type=="object")'
 chk GET "/api/admin/tv-matches/candidates?q=lantern" admin 200 'type=="array" and length==1 and (.[0]|.tvdbId==390007 and (.seasons|type=="array"))'
 chk GET /api/admin/tv-matches/90005/repairs admin 200 'type=="array"'
+chk GET "/api/requests/tv-library?instance_id=sonarr-5e6f7a8b&series_id=1" user 200 '.tmdb_id==90001 and .series_id==1'
+chk GET "/api/requests/tv-library?instance_id=sonarr-5e6f7a8b&series_id=5" user 200 '.tmdb_id==null and .series_id==5 and (.revision|length)>0 and ([.detail.seasons[].season_number]|sort)==[1,3] and ([.status.seasons[].season_number]|sort)==[1,3] and .matches[0].series_id==5'
 
 # ── SSO: OIDC + Plex sign-in ─────────────────────────────
 chk GET /api/admin/oidc admin 200 '.enabled==false and .sso_only==false and (.callback_url|endswith("/api/auth/oidc/callback")) and (.additional_scopes|type=="array") and (has("client_secret")|not)'
@@ -343,6 +384,8 @@ chk POST /api/admin/discord-notifications/test admin 200 '.status=="sent" and (.
 chk POST /api/admin/discord-notifications/test admin 400 '(.error|test("discord.com/api/webhooks"))' '{"webhook_url":"https://example.com/hook"}'
 chk GET /api/admin/push-notifications admin 200 '.enabled==true and (.categories|length)==14 and .categories.media_server_access==true and .categories.request_auto_approved==true'
 chk GET /api/admin/push-notifications user 403 ''
+chk GET /api/admin/seerr-api admin 200 '.configured==false and (has("api_key")|not)'
+chk GET /api/v1/status none 401 '.message|test("X-Api-Key")'
 
 # ── media apps + audiobook access ────────────────────────
 chk GET /api/me/video-apps user 200 '(keys|sort)==["emby","jellyfin","plex"] and (.plex.ios=="")'
@@ -416,6 +459,22 @@ if [ $MUTATE = 1 ]; then
   chk PUT /api/admin/setup-status/skips admin 400 '.error=="only optional setup items can be skipped"' '{"key":"radarr","skipped":true}'
   chk PUT /api/admin/setup-status/skips admin 400 '.error=="unknown setup item"' '{"key":"nope","skipped":true}'
   chk PUT /api/admin/setup-status/skips admin 200 '' '{"key":"push","skipped":false}'
+  # content-first requester scope round-trip
+  chk PUT /api/admin/downloads/settings admin 200 '.user_scope=="mine"' '{"user_scope":"mine"}'
+  chk PUT /api/admin/downloads/settings admin 200 '.user_scope=="all"' '{"user_scope":"all"}'
+  # closed issues can return to manual review, and resolution notes are optional
+  chk POST /api/admin/issues/1/reopen admin 200 '.status=="needs_admin" and .closed_at==null'
+  chk GET /api/issues/1 admin 200 '.issue.can_reopen==false and .issue.status=="needs_admin"'
+  chk POST /api/admin/issues/1/resolve admin 200 '.status=="resolved" and .resolution=="Marked resolved."' '{"disposition":"resolved"}'
+  # key issuance and the session-independent Seerr-compatible transport
+  chk POST /api/admin/seerr-api admin 200 '.configured==true and (.api_key|startswith("cantinarr-"))'
+  SEERR_KEY=$(curl -sS -A "$UA" -H "Authorization: Bearer $ADMIN" "$BASE/api/admin/seerr-api" | jq -r '.api_key')
+  chk_key GET /api/v1/status 200 '.version=="demo" and .updateAvailable==false' "$SEERR_KEY"
+  chk_key GET /api/v1/request/count 200 '.total>0 and (.movie|type=="number") and (.tv|type=="number")' "$SEERR_KEY"
+  chk_key GET "/api/v1/request?take=5&skip=0" 200 '.pageInfo.pageSize==5 and (.results|length)>0 and (all(.results[]; .type=="movie" or .type=="tv"))' "$SEERR_KEY"
+  chk_key GET /api/v1/tv/90001/season/1 200 '.seasonNumber==1 and (.episodes|length)>0' "$SEERR_KEY"
+  chk DELETE /api/admin/seerr-api admin 200 '.configured==false'
+  chk_key GET /api/v1/status 401 '.message=="Invalid API key."' "$SEERR_KEY"
   # kids policy round-trip on user 2
   chk PUT /api/admin/users/2/content-policy admin 200 '.max_movie_rating=="PG" and .rating_region=="US" and (.blocked_movie_genres==[27])' '{"max_movie_rating":"pg","max_tv_rating":"tv-pg","rating_region":"us","block_unrated":false,"blocked_movie_genres":[27,27,0],"blocked_tv_genres":null}'
   chk GET /api/admin/users admin 200 '([.[]|select(.username=="user")][0].child==true)'

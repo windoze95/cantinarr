@@ -45,12 +45,15 @@ Full parity with the current Cantinarr API surface:
 - **Music browsing** — the Lidarr library by artist, Recently Added, owned-aware search, requestable albums that walk pending → requested → downloading → available, and the admin Music module (library, queue with the Import Doctor, wanted, calendar, history, release search)
 - **Music discovery** — public catalog browsing independent of the library: Popular and New Releases feeds, twelve genres, album and artist search, artist pages with their albums, and same-origin cover artwork. Grant-only for requesters; admins may browse before a library exists
 - **Request allowances** — per-category rolling limits (movies, TV seasons, eBooks, audiobooks, albums) with live counters and replenishment times, server defaults plus per-user overrides and resets, and a preview that answers "would this fit?" without charging. Admins are exempt; a spent allowance refuses with the app's `request_quota_exceeded` envelope
-- **TV matching corrections** — one bundled correction where a Sonarr series numbers its seasons differently from TMDB, the editor that maps them, a Sonarr series search, and the repair that re-sends an already-delivered request to the corrected target
+- **Downloads by content** — requester-safe All / My Requests views and current-job badges assembled from the same mutable SABnzbd and qBittorrent fixtures as the admin queues, with the server-wide requester scope setting
+- **TV matching and native library navigation** — one bundled correction where a Sonarr series numbers its seasons differently from TMDB, native-season title navigation, the editor that maps them, a Sonarr series search, and the repair that re-sends an already-delivered request to the corrected target
 - **Media-server access** — Jellyfin, Emby, Plex, and Audiobookshelf as instances: create your own account, link one you already have, sign in with Plex, ask where a title can be watched or listened to; admins tag the Users screen, link/unlink, hand access management back ("linked only"), import a server's existing accounts, and assign Audiobookshelf libraries per user
+- **Tdarr progress** — read-only active nodes and workers, library selection, and per-library transcode and health counts through the same normalized routes as the real server
 - **Player preferences** — which app a Watch or Listen link opens, per media server and per platform (Infuse on iOS; Audiobookshelf, ShelfPlayer, or TheShelf for audiobooks)
 - **Federated sign-in, configured but never federated** — OpenID Connect and Plex sign-in round-trip their admin settings and reflect into the sign-in screen, but every flow endpoint answers one clear refusal: the demo contacts no identity provider. SSO-only is refused outright so the published credentials always work
 - **AI chat** — streaming SSE assistant with tool calls and media results (kid-safe for the kids account), plus AI settings/credentials surfaces, the 41-tool registry, and the Codex and xAI Grok OAuth device flows
-- **Admin console** — instance management (arrs incl. Lidarr, download clients incl. a qBittorrent in API-key mode, Tautulli and Tracearr, media servers), per-user library grants, arr library browsing and editing (fake Radarr/Sonarr/Chaptarr/Lidarr proxies; Radarr Edit Movie, tags, refresh), download-client queue/history for two clients, Monitoring with both providers, issues + AI remediation (agent actions, runs, approval rules, music included), configuration change history, the external address invite links are built from, users/devices, the 14-item setup checklist with skippable items, and update status
+- **Seerr-compatible API** — an administrator-issued `X-Api-Key` and the bounded request, media, user, status, and availability-sync surface used by Maintainerr, Dashbrr, Homepage, and similar integrations
+- **Admin console** — instance management (arrs incl. Lidarr, download clients incl. a qBittorrent in API-key mode, Tautulli, Tracearr, Tdarr, and media servers), per-user library grants, arr library browsing and editing (fake Radarr/Sonarr/Chaptarr/Lidarr proxies; Radarr Edit Movie, tags, refresh), download-client queue/history for two clients, Monitoring with both providers, issues + AI remediation (agent actions, runs, approval rules, reopen, and music included), configuration change history, the external address invite links are built from, users/devices, the 15-item setup checklist with skippable items, and update status
 - **Live updates** — WebSocket hub pushing download progress, request status changes, queue snapshots, approvals, issues, agent actions, allowance changes, and Plex invite events to the right audiences
 - **Server settings** — the outbound proxy the server would route its own internet traffic through (password write-only), Discord request alerts with a recent-delivery log, and the master push-notification policy with a switch per category
 
@@ -72,6 +75,7 @@ Full parity with the current Cantinarr API surface:
 | `plex.go` | The simulated plex.tv PIN flow, shared by the instance editor and the user sign-in |
 | `instances.go` | Instance CRUD, media roots, per-instance users and grants, media-server libraries, Plex link, test, proxy dispatch |
 | `requests.go` | `/api/requests*` — create, options, TMDB status, lifecycle machine |
+| `tv_library.go` | Native Sonarr-series navigation and revision-guarded requests through `/api/requests/tv-library` |
 | `requests_admin.go` | Admin request queue, approve/deny, global request settings |
 | `books.go` | Book status/library/recent/authors/series + the book request lifecycle |
 | `music.go` | `/api/requests/music-*` (status, library, recent, artists, artist) + the music request lifecycle |
@@ -79,15 +83,17 @@ Full parity with the current Cantinarr API surface:
 | `trakt.go` | `/api/trakt/*` — flat lists, anticipated, calendar |
 | `ai.go` | `/api/ai/chat` SSE + AI settings/credentials + personal Codex and Grok OAuth flows |
 | `ai_admin.go` | Admin credentials, shared Codex/Grok, AI tools, debug, external settings changes |
-| `issues.go` | `/api/issues*` + `/api/admin/issues*` (+ activity) |
+| `issues.go` | `/api/issues*` + `/api/admin/issues*` (+ activity, optional resolution notes, and reopen) |
 | `remediation.go` | Agent actions, agent runs, approval rules, remediation settings |
 | `proposals.go` | `/api/admin/profile-change-proposals*` — list, detail, approve, reject |
 | `arr_radarr.go` | Fake Radarr v3 behind `/api/instances/{id}/api/v3` + non-admin allowlist |
 | `arr_sonarr.go` | Fake Sonarr v3 |
 | `arr_chaptarr.go` | Fake Chaptarr v1 + generated MediaCover image bytes (book and author covers) |
 | `arr_lidarr.go` | Fake Lidarr v1 behind `/api/instances/{id}/api/v1` (artists, albums, tracks, queue, history, wanted, calendar, releases, manual import, commands) + generated album and artist covers + the non-admin allowlist |
-| `downloads.go` | `/api/downloads/{instanceID}/*` — queue, history, actions for SABnzbd and qBittorrent |
+| `downloads.go` | `/api/downloads/{instanceID}/*` — client queue, history, and actions for SABnzbd and qBittorrent |
+| `download_activity.go` | Content-first `/api/downloads/activity`, summary badges, and requester-scope settings |
 | `watchhistory.go` | `/api/watch-history/{instanceID}/*` and the `/api/tautulli/{instanceID}/*` alias — activity, history, stats for Tautulli and Tracearr |
+| `tdarr.go` | Normalized read-only Tdarr activity, libraries, and statistics |
 | `mediafiles.go` | Media-file coverage, tickets, ticketed downloads |
 | `notifications.go` | Push tokens + notification preferences |
 | `sso.go` | OpenID Connect and Plex sign-in: admin configuration, linked identities, and the refusals every flow endpoint answers |
@@ -98,8 +104,9 @@ Full parity with the current Cantinarr API surface:
 | `hardcover.go` | Hardcover connections per Chaptarr instance, the trending books feed and its cover relay, and the retired Open Library routes |
 | `discovermusic.go` | Public music discovery: feeds, search, artists, genres, albums, artwork |
 | `delivery.go` | Saved request receipts and their delivery states, including saved music |
+| `seerr.go` | Administrator key management and the session-independent `/api/v1` Seerr-compatible surface |
 | `data_movies.go` | 18-film public-domain catalog with poster/backdrop maps |
-| `data_tv.go` | 6 fictional shows with seasons/episodes fixtures |
+| `data_tv.go` | 7 fictional shows with seasons/episodes fixtures |
 | `data_people.go` | Every person named on a title page (real cast, crew, and creators for the films; invented for the shows); credits are derived from `data_credits.go` |
 | `data_credits.go` | Per-title extras: cast and crew refs, studios, countries, budget and revenue, release milestones, networks, creators |
 | `data_browse.go` | Browse-filter vocabulary: watch providers by region, keywords, companies, languages, regions, and the title → attachment maps |
@@ -111,7 +118,7 @@ Full parity with the current Cantinarr API surface:
 | `data_music.go` | Public-domain artists/albums/tracks/track files, Lidarr queue and history fixtures, the music cross-domain hooks |
 | `data_misc.go` | Genres and Trakt list fixtures |
 | `assets/` | `go:embed` — sample download file, landing HTML, and the Cantinarr logo and favicon (covers are generated PNGs, not files) |
-| `tools/smoke.sh` | Read-mostly parity smoke test (about 310 checks; `--mutate` adds the create/approve/deny flows). Run it against a local or the live demo |
+| `tools/smoke.sh` | Read-mostly parity smoke test (about 325 checks; `--mutate` adds the state-changing flows). Run it against a local or the live demo |
 
 ## Branch Workflow
 

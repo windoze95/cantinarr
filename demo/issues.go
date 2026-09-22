@@ -24,6 +24,7 @@ func registerIssues(r chi.Router) {
 	r.With(requireAdmin).Get("/admin/issues", issHandleAdminListIssues)
 	r.With(requireAdmin).Post("/admin/issues/{id}/dismiss", issHandleAdminDismissIssue)
 	r.With(requireAdmin).Post("/admin/issues/{id}/resolve", issHandleAdminResolveIssue)
+	r.With(requireAdmin).Post("/admin/issues/{id}/reopen", issHandleAdminReopenIssue)
 	r.With(requireAdmin).Get("/admin/issues/{id}/activity", issHandleAdminIssueActivity)
 }
 
@@ -311,6 +312,9 @@ func issHandleGetIssue(w http.ResponseWriter, r *http.Request) {
 		i.Read = true
 	}
 	issueJSON := issLockedIssueJSON(i)
+	if isAdmin {
+		issueJSON["can_reopen"] = issLockedCanReopen(i)
+	}
 	// Whether the reporter may close this themselves is a live question about
 	// dispatch state, answered only on the single-issue read that renders the
 	// control (list reads leave it false).
@@ -670,9 +674,10 @@ func issHandleAdminResolveIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	note := strings.TrimSpace(body.Note)
-	if note == "" {
-		writeErr(w, http.StatusBadRequest, "resolution note is required")
-		return
+	if note == "" && body.Disposition == "resolved" {
+		note = "Marked resolved."
+	} else if note == "" {
+		note = "Closed without a fix."
 	}
 	if len(note) > 8192 {
 		writeErr(w, http.StatusBadRequest, "resolution note is too long")
@@ -717,6 +722,105 @@ func issHandleAdminResolveIssue(w http.ResponseWriter, r *http.Request) {
 			"issue_id": id, "status": "superseded", "pending_count": pending,
 		})
 	}
+	wsToAdmins(evtIssueUpdated, map[string]any{"issue_id": id})
+	if reporterID != 0 {
+		wsToUser(reporterID, evtIssueUpdated, map[string]any{"issue_id": id})
+	}
+	writeJSON(w, http.StatusOK, payload)
+}
+
+func issLockedCanReopen(i *issIssue) bool {
+	if i == nil || i.ClosedAt == nil {
+		return false
+	}
+	switch i.Status {
+	case "resolved", "wont_fix", "dismissed", "failed":
+		return true
+	}
+	return false
+}
+
+// issHandleAdminReopenIssue restores a closed conversation for manual review.
+// It does not revive an old run or approval proposal.
+func issHandleAdminReopenIssue(w http.ResponseWriter, r *http.Request) {
+	id, ok := issParseID(r)
+	if !ok || id <= 0 {
+		writeErr(w, http.StatusBadRequest, "invalid issue id")
+		return
+	}
+	u := userFrom(r)
+	issMu.Lock()
+	i := issIssues[id]
+	if i == nil {
+		issMu.Unlock()
+		writeErr(w, http.StatusNotFound, "issue not found")
+		return
+	}
+	if !issLockedCanReopen(i) {
+		issMu.Unlock()
+		writeErr(w, http.StatusConflict, "This issue is already open or has changed. Refresh it and try again.")
+		return
+	}
+	for _, action := range issActions {
+		if action.IssueID == id && action.Status == "executing" {
+			issMu.Unlock()
+			writeErr(w, http.StatusConflict, "A fix is still running. Wait for it to finish before reopening this issue.")
+			return
+		}
+	}
+	for _, other := range issIssues {
+		if other.ID == id || other.ClosedAt != nil || other.Source != i.Source ||
+			other.ReporterID != i.ReporterID || other.InstanceID != i.InstanceID ||
+			other.MediaType != i.MediaType || other.TmdbID != i.TmdbID ||
+			other.ForeignID != i.ForeignID || other.SeasonNumber != i.SeasonNumber ||
+			other.EpisodeNumber != i.EpisodeNumber || other.Category != i.Category {
+			continue
+		}
+		existingID := other.ID
+		issMu.Unlock()
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":             "Issue #" + strconv.Itoa(existingID) + " is already open for this problem. Continue there.",
+			"existing_issue_id": existingID,
+		})
+		return
+	}
+	previous := i.Status
+	provenance := i.ResolutionKind
+	if provenance == "" {
+		provenance = "unknown"
+	}
+	closedAt := "an unknown time"
+	if i.ClosedAt != nil {
+		closedAt = i.ClosedAt.UTC().Format(time.RFC3339)
+	}
+	issLockedAppendMsg(id, "admin", u.Username,
+		"Reopened issue.\n\nPrevious closure: "+previous+" via "+provenance+" ("+closedAt+").\n"+i.Resolution,
+		time.Now().UTC())
+	i.Status = "needs_admin"
+	i.ClosedAt = nil
+	i.Resolution = ""
+	i.ResolutionKind = ""
+	i.Read = true
+	i.UpdatedAt = time.Now().UTC()
+	for _, action := range issActions {
+		if action.IssueID == id && action.Status == "proposed" {
+			action.Status = "superseded"
+			action.ResultText = "Superseded when the issue was reopened for manual review."
+		}
+	}
+	for _, run := range issRuns {
+		if run.IssueID != id {
+			continue
+		}
+		switch run.Status {
+		case "running", "waiting_user", "waiting_approval", "resume_pending":
+			now := time.Now().UTC()
+			run.Status, run.StopReason, run.FinishedAt = "aborted", "admin_reopened", &now
+		}
+	}
+	payload := issLockedIssueJSON(i)
+	reporterID := i.ReporterID
+	issMu.Unlock()
 	wsToAdmins(evtIssueUpdated, map[string]any{"issue_id": id})
 	if reporterID != 0 {
 		wsToUser(reporterID, evtIssueUpdated, map[string]any{"issue_id": id})

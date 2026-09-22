@@ -31,11 +31,12 @@ const instMgmtMediaRoot = "/media"
 var instMgmtServiceTypes = map[string]bool{
 	serviceRadarr: true, serviceSonarr: true, serviceChaptarr: true, serviceLidarr: true,
 	serviceSabnzbd: true, serviceQbittorrent: true, serviceNzbget: true,
-	serviceTransmission: true, serviceTautulli: true, serviceTracearr: true,
-	serviceJellyfin: true, serviceEmby: true, servicePlex: true,
+	serviceTransmission: true, serviceDeluge: true, serviceRutorrent: true,
+	serviceTautulli: true, serviceTracearr: true, serviceTdarr: true,
+	serviceJellyfin: true, serviceEmby: true, servicePlex: true, serviceAudiobookshelf: true,
 }
 
-const instMgmtEnumError = "service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'lidarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli', 'tracearr', 'jellyfin', 'emby', 'plex'"
+const instMgmtEnumError = "service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'lidarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'deluge', 'rutorrent', 'tautulli', 'tracearr', 'tdarr', 'jellyfin', 'emby', 'plex', 'audiobookshelf'"
 
 const instMgmtMediaServerEnumError = "service_type must be a media server type ('jellyfin', 'emby', 'plex')"
 
@@ -50,7 +51,8 @@ var (
 	// username+password shape. The demo stores no credential values, so the
 	// shape IS the stored state: it is what has_api_key reports, and what the
 	// create/update/test rules merge the submitted fields against.
-	instMgmtQbitKeyed = map[string]bool{instQbittorrent: true}
+	instMgmtQbitKeyed  = map[string]bool{instQbittorrent: true}
+	instMgmtTdarrKeyed = map[string]bool{instTdarr: true}
 )
 
 // instMgmtQbitKeyedOf reports whether a qBittorrent instance holds an API key.
@@ -69,6 +71,22 @@ func instMgmtSetQbitKeyed(id string, keyed bool) {
 		return
 	}
 	delete(instMgmtQbitKeyed, id)
+}
+
+func instMgmtTdarrKeyedOf(id string) bool {
+	instMgmtMu.Lock()
+	defer instMgmtMu.Unlock()
+	return instMgmtTdarrKeyed[id]
+}
+
+func instMgmtSetTdarrKeyed(id string, keyed bool) {
+	instMgmtMu.Lock()
+	defer instMgmtMu.Unlock()
+	if keyed {
+		instMgmtTdarrKeyed[id] = true
+		return
+	}
+	delete(instMgmtTdarrKeyed, id)
 }
 
 // instMgmtResolve returns a defensive copy of the instance with the given id,
@@ -134,6 +152,9 @@ func instMgmtJSON(inst *DemoInstance) map[string]any {
 	if inst.ServiceType == serviceQbittorrent && instMgmtQbitKeyedOf(inst.ID) {
 		out["has_api_key"] = true
 	}
+	if inst.ServiceType == serviceTdarr && instMgmtTdarrKeyedOf(inst.ID) {
+		out["has_api_key"] = true
+	}
 	// media_server_config is present only for media servers, and only in its
 	// public shape — the server-managed link identity (client id, the Plex
 	// owner) is never served.
@@ -177,6 +198,9 @@ type instMgmtBody struct {
 	// PlexLinkPin references a PIN link this admin already approved. The
 	// token it yields is held server-side and never travels to the app.
 	PlexLinkPin int64 `json:"plex_link_pin"`
+	// Tdarr can run without auth. Removing a stored key must be explicit so a
+	// blank write-only field on an ordinary edit still means "keep it".
+	ClearAPIKey bool `json:"clear_api_key"`
 }
 
 // instMgmtMediaServerBody is the media-server config as an admin sends it.
@@ -381,6 +405,14 @@ func instMgmtHandleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, instMgmtEnumError)
 		return
 	}
+	if body.ClearAPIKey && body.ServiceType != serviceTdarr {
+		writeErr(w, http.StatusBadRequest, "clear_api_key is supported only for tdarr")
+		return
+	}
+	if body.ClearAPIKey && body.APIKey != "" {
+		writeErr(w, http.StatusBadRequest, "api_key and clear_api_key cannot both be set")
+		return
+	}
 	if body.Name == "" || body.URL == "" {
 		writeErr(w, http.StatusBadRequest, "name and url are required")
 		return
@@ -458,6 +490,9 @@ func instMgmtHandleCreate(w http.ResponseWriter, r *http.Request) {
 	if inst.ServiceType == serviceQbittorrent {
 		instMgmtSetQbitKeyed(inst.ID, creds.hasKey)
 	}
+	if inst.ServiceType == serviceTdarr {
+		instMgmtSetTdarrKeyed(inst.ID, creds.hasKey)
+	}
 
 	writeJSON(w, http.StatusCreated, instMgmtJSON(instMgmtResolve(inst.ID)))
 }
@@ -494,6 +529,8 @@ func instMgmtCredentialsFrom(serviceType string, body *instMgmtBody, existing *D
 		storedKeyed := true
 		if serviceType == serviceQbittorrent {
 			storedKeyed = instMgmtQbitKeyedOf(existing.ID)
+		} else if serviceType == serviceTdarr {
+			storedKeyed = instMgmtTdarrKeyedOf(existing.ID)
 		}
 		// Every stored instance was saved with the credential its type
 		// requires, so a blank field falls back to a present stored value.
@@ -515,6 +552,9 @@ func instMgmtCredentialsFrom(serviceType string, body *instMgmtBody, existing *D
 			creds.hasKey = false
 		}
 	}
+	if serviceType == serviceTdarr && body.ClearAPIKey {
+		creds.hasKey = false
+	}
 	return creds
 }
 
@@ -533,8 +573,13 @@ func instMgmtValidateCredentials(serviceType string, creds instMgmtCredentials) 
 		if creds.username == "" || !creds.hasPassword {
 			return fmt.Sprintf("username and password are required for %s", serviceType)
 		}
-	case serviceTransmission:
-		// Username/password are optional: Transmission RPC may run without auth.
+	case serviceTransmission, serviceRutorrent, serviceTdarr:
+		// Authentication is optional for these services. Tdarr uses an optional
+		// API key; Transmission and ruTorrent use optional username/password.
+	case serviceDeluge:
+		if !creds.hasPassword {
+			return "password is required for deluge"
+		}
 	case servicePlex:
 		// The PIN link is the credential.
 	default: // radarr, sonarr, chaptarr, lidarr, sabnzbd, tautulli, tracearr
@@ -559,6 +604,14 @@ func instMgmtHandleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	// service_type is immutable — the stored type wins.
 	serviceType := existing.ServiceType
+	if body.ClearAPIKey && serviceType != serviceTdarr {
+		writeErr(w, http.StatusBadRequest, "clear_api_key is supported only for tdarr")
+		return
+	}
+	if body.ClearAPIKey && body.APIKey != "" {
+		writeErr(w, http.StatusBadRequest, "api_key and clear_api_key cannot both be set")
+		return
+	}
 	if body.Name == "" || body.URL == "" {
 		writeErr(w, http.StatusBadRequest, "name and url are required")
 		return
@@ -626,6 +679,9 @@ func instMgmtHandleUpdate(w http.ResponseWriter, r *http.Request) {
 	if serviceType == serviceQbittorrent {
 		instMgmtSetQbitKeyed(id, creds.hasKey)
 	}
+	if serviceType == serviceTdarr {
+		instMgmtSetTdarrKeyed(id, creds.hasKey)
+	}
 	// The re-rendered row, so the editor reopens on the shape it just saved.
 	writeJSON(w, http.StatusOK, instMgmtJSON(instMgmtResolve(id)))
 }
@@ -653,6 +709,14 @@ func instMgmtHandleTest(w http.ResponseWriter, r *http.Request) {
 	}
 	if !instMgmtServiceTypes[serviceType] {
 		writeErr(w, http.StatusBadRequest, instMgmtEnumError)
+		return
+	}
+	if body.ClearAPIKey && serviceType != serviceTdarr {
+		writeErr(w, http.StatusBadRequest, "clear_api_key is supported only for tdarr")
+		return
+	}
+	if body.ClearAPIKey && body.APIKey != "" {
+		writeErr(w, http.StatusBadRequest, "api_key and clear_api_key cannot both be set")
 		return
 	}
 	// The test doesn't need a name (the real handler defaults it), so the
@@ -709,6 +773,7 @@ func instMgmtHandleDelete(w http.ResponseWriter, r *http.Request) {
 	delete(instMgmtSortOrders, id)
 	delete(instMgmtWebhookSet, id)
 	delete(instMgmtQbitKeyed, id)
+	delete(instMgmtTdarrKeyed, id)
 	instMgmtMu.Unlock()
 	// Access rows pointing at the deleted instance go with it: the grants,
 	// and any media-server accounts recorded against it.

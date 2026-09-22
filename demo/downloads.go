@@ -505,6 +505,7 @@ func dlAdvance(interval time.Duration) bool {
 var dlClientTypes = map[string]bool{
 	serviceSabnzbd: true, serviceQbittorrent: true,
 	serviceNzbget: true, serviceTransmission: true,
+	serviceDeluge: true, serviceRutorrent: true,
 }
 
 // dlResolveClient validates the {instanceID} route param as a download-client
@@ -525,6 +526,7 @@ func dlResolveClient(w http.ResponseWriter, r *http.Request) *DemoInstance {
 
 // registerDownloads mounts /api/downloads/{instanceID}/* (admin only).
 func registerDownloads(r chi.Router) {
+	registerDownloadActivity(r)
 	r.Route("/downloads/{instanceID}", func(sr chi.Router) {
 		sr.Use(requireAdmin)
 		sr.Get("/queue", dlHandleQueue)
