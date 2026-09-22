@@ -18,8 +18,8 @@ func TestLandingPageConnectsToConfiguredDemo(t *testing.T) {
 
 	for _, want := range []string{
 		`<html lang="en">`,
-		`<link rel="icon" href="/static/favicon.png" type="image/png">`,
-		`<img class="brand-mark" src="/static/logo.png" alt="" width="30" height="30">`,
+		`<link rel="icon" href="/static/favicon.png?v=2" type="image/png">`,
+		`<img class="brand-mark" src="/static/logo.png?v=2" alt="" width="30" height="30">`,
 		`Explore Cantinarr without setting up a <em>server.</em>`,
 		`<code>` + serverURL + `</code>`,
 		`href="cantinarr://connect?token=` + demoConnectTokenStr + `&amp;server=` + url.QueryEscape(serverURL) + `"`,
