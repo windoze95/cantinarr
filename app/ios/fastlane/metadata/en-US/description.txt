@@ -1,39 +1,32 @@
-Cantinarr is the intelligent control app for your self-hosted media server — discovery and requests for your household, control of Radarr, Sonarr, Chaptarr, and Lidarr for you, unified management of your download clients, plus diagnosis and admin-approved fixes when downloads get stuck.
+Browse and request movies, shows, books, and music. Follow downloads and get notified when something is ready. Manage your media services and investigate stuck downloads from your phone or tablet.
 
-You need a Cantinarr server to use this app. The server is open source and runs as a single Docker container; setup instructions are on GitHub.
+Cantinarr connects to a server you run on your computer or NAS. The server is open source and runs in one Docker container. Set it up at cantinarr.com, then connect the app with a link from your administrator.
 
 FOR YOUR HOUSEHOLD
 
-Everyone you share the server with gets a clean way to find and request things:
+• Explore movies and shows from TMDB and Trakt, plus books and music from your connected services
+• Search across your catalogs and see whether a title is Available, Requested, or Downloading
+• Request a movie, show, selected seasons, ebook, audiobook, or album
+• Follow request and download progress, with push notifications when content is ready
+• Report a problem with a title so an administrator can investigate it
 
-• Browse trending and popular movies and shows, powered by TMDB and Trakt
-• Search everything from one bar, with plain availability labels: Available, Requested, Downloading
-• Request in one tap, or pick exactly which seasons (or book formats) you want
-• Watch download progress live and get push notifications
-• Something wrong with a file? Report a problem right on the title and the server's AI agent can investigate
-• Ask the built-in AI assistant what to watch tonight; bring your own AI key or ChatGPT link, or use an admin-provided AI provider when granted
-
-No accounts to create and no passwords to remember: your admin sends a connect link, you open it, you're in. Passkey and password sign-in are there when an admin enables them.
+Your administrator chooses which services and titles you can access, and which requests need approval. Connect links make sign-in simple; passwords and passkeys are available when enabled.
 
 FOR ADMINS
 
-The management side goes as deep as you want:
+• Review requests and set approval, quality, and access rules for your household
+• Manage Radarr, Sonarr, Chaptarr, Lidarr, and supported download clients from one app
+• Open a series, season, or episode, search for releases, and check live queues
+• Use Import Doctor to understand stuck downloads and review proposed fixes
+• Share Plex, Jellyfin, Emby, and Audiobookshelf access; check activity through Tautulli or Tracearr
+• Set up push notifications, accounts, services, and devices from the app
 
-• Approve or deny requests from the queue or straight from the push notification, with per-user policies for seasons and quality
-• Drill into Radarr and Sonarr: series → season → episode, batch searches, Edit Series, interactive release search
-• One download queue across SABnzbd, qBittorrent, NZBGet, Transmission, Deluge, and ruTorrent
-• Import Doctor: stuck downloads explain themselves in plain English, with one-click fixes
-• See what's playing through Tautulli or Tracearr — active streams, history, top stats
-• Plex invites, Jellyfin and Emby accounts, a guided setup checklist, per-user defaults, and device management
-• Push notifications with a single line of server config — no Apple developer account, certificates, or Firebase project on your side
-• Your server is an MCP server too: connect Claude or any MCP client and manage your library with the same tools that power the built-in assistant
-
-Works on iPhone and iPad, with a sidebar layout on bigger screens.
+An AI provider is optional. If you connect one, the assistant can look up your library, suggest titles, and make requests. The repair agent can investigate persistent download problems and bring actions to an administrator for review. Cantinarr also offers MCP tools for clients you authorize.
 
 PRIVACY
 
-The app connects to your own server. API keys stay server-side, availability is computed live from your services, and there are no ads, analytics, or tracking. Poster art loads from the TMDB image CDN. When you use the assistant, your server sends its prompt and context to your personal AI provider or an included provider granted by your admin. If you choose to link ChatGPT, the app opens OpenAI's sign-in page in your browser; your password never passes through Cantinarr.
+The app connects to your own server. Service credentials stay server-side. There are no ads, analytics, or tracking. Poster art loads from the TMDB image CDN. AI features send prompts and context to the provider you or your administrator choose. If you link ChatGPT, sign-in happens in your browser; your password never passes through Cantinarr.
 
 Website: https://cantinarr.com
 Community: https://discord.gg/zAgRwGwmVB
-Cantinarr is open source (AGPL-3.0): https://github.com/windoze95/cantinarr
+Open source (AGPL-3.0): https://github.com/windoze95/cantinarr

@@ -1,1 +1,1 @@
-Discover, request, manage, and fix stuck downloads on your media server.
+Request media and manage your self-hosted server from one app.
