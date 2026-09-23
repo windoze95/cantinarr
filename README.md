@@ -1,6 +1,6 @@
 # Cantinarr
 
-**Your media server just learned to run itself.**
+**Media requests and server management. One app.**
 
 **[cantinarr.com](https://cantinarr.com)** · **[Documentation](https://docs.cantinarr.com)** · **[Discord](https://discord.gg/zAgRwGwmVB)** · **[Live demo](https://demo.cantinarr.com)** · **[iPhone beta](https://testflight.apple.com/join/bCPDwCsD)** · **[Android beta](https://cantinarr.com/#android-beta)** · **[Request a feature](https://cantinarr.com/roadmap/)**
 
