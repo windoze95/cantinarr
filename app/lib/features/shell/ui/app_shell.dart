@@ -108,9 +108,9 @@ class _AppShellState extends ConsumerState<AppShell>
   SearchMode _prevMode = SearchMode.search;
   bool? _prevReduceMotion;
 
-  /// Whether the drawer's "Needs attention" row is showing its queues.
-  /// Deliberately not persisted: the group is a peek, so a reopened drawer
-  /// starts collapsed again and the navigation stays one screen of modules.
+  /// Whether "Needs attention" is showing its queues. Desktop navigation
+  /// preserves this state; closing the mobile drawer resets it so reopening
+  /// the drawer starts with the module list.
   bool _attentionExpanded = false;
 
   @override
@@ -1222,6 +1222,7 @@ class _AppShellState extends ConsumerState<AppShell>
           semanticsIdentifier: 'nav-action-agent-fixes',
           count: pendingAgentActions,
           route: '/agent-actions',
+          detailRoutePrefix: '/agent-runs',
         ),
       if (showProfileApprovals)
         _AttentionEntry(
@@ -1487,11 +1488,10 @@ class _AppShellState extends ConsumerState<AppShell>
                                     title: entry.title,
                                     semanticsIdentifier:
                                         entry.semanticsIdentifier,
+                                    selected:
+                                        entry.matchesPath(widget.currentPath),
                                     badgeCount: entry.count,
                                     onTap: () {
-                                      setState(
-                                        () => _attentionExpanded = false,
-                                      );
                                       if (isOverlay) Navigator.pop(context);
                                       context.push(entry.route);
                                     },
@@ -1803,6 +1803,7 @@ class _AttentionEntry {
     required this.semanticsIdentifier,
     required this.count,
     required this.route,
+    this.detailRoutePrefix,
   });
 
   final IconData icon;
@@ -1812,6 +1813,14 @@ class _AttentionEntry {
   /// How many items are waiting in this queue; 0 renders no badge.
   final int count;
   final String route;
+
+  /// Detail pages that live outside the queue's own route.
+  final String? detailRoutePrefix;
+
+  bool matchesPath(String path) =>
+      path == route ||
+      path.startsWith('$route/') ||
+      (detailRoutePrefix != null && path.startsWith('$detailRoutePrefix/'));
 }
 
 /// A page entry nested under the active module in the desktop sidebar —
