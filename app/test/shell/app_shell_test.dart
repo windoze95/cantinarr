@@ -1045,9 +1045,46 @@ void main() {
     expect(find.text('Profile approvals'), findsNothing);
   });
 
-  testWidgets('closing the drawer collapses the attention group again',
+  testWidgets('desktop attention queues stay expanded through navigation',
       (tester) async {
-    await _pumpAdminDrawer(tester, requests: const [
+    SharedPreferences.setMockInitialValues({
+      'approvals_menu_only_when_pending': false,
+      'issues_menu_only_when_active': false,
+      'agent_fixes_menu_only_when_awaiting_review': false,
+      'profile_approvals_menu_only_when_pending': false,
+    });
+    final router = await _pumpAdminDrawer(tester, desktop: true);
+
+    await tester.tap(find.text('Needs attention'));
+    await tester.pumpAndSettle();
+
+    for (final entry in _attentionRoutes.entries) {
+      await tester.tap(find.widgetWithText(ListTile, entry.key));
+      await tester.pumpAndSettle();
+
+      expect(find.text(entry.value), findsOneWidget);
+      for (final label in _attentionRoutes.keys) {
+        expect(find.widgetWithText(ListTile, label), findsOneWidget,
+            reason: 'opening ${entry.key} keeps the sidebar queues available');
+      }
+    }
+
+    router.pop();
+    await tester.pumpAndSettle();
+    expect(find.text('/agent-actions'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, 'Approvals'), findsOneWidget);
+
+    await tester.tap(find.text('Needs attention'));
+    await tester.pumpAndSettle();
+    for (final label in _attentionRoutes.keys) {
+      expect(find.widgetWithText(ListTile, label), findsNothing,
+          reason: 'the sidebar group still collapses when explicitly toggled');
+    }
+  });
+
+  testWidgets('closing or navigating from the drawer collapses its queues',
+      (tester) async {
+    final router = await _pumpAdminDrawer(tester, requests: const [
       {'id': 1, 'title': 'One'},
     ]);
 
@@ -1066,6 +1103,19 @@ void main() {
       findsNothing,
       reason: 'the group is a peek, so a reopened drawer starts collapsed',
     );
+
+    await tester.tap(find.text('Needs attention'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ListTile, 'Approvals'));
+    await tester.pumpAndSettle();
+    expect(find.text('/approvals'), findsOneWidget);
+
+    router.pop();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ListTile, 'Approvals'), findsNothing,
+        reason: 'navigation closes the mobile drawer and resets its group');
   });
 
   testWidgets('the collapsed row totals the queues it hides', (tester) async {
@@ -1729,7 +1779,14 @@ void main() {
   });
 }
 
-Future<void> _pumpAdminDrawer(
+const _attentionRoutes = {
+  'Approvals': '/approvals',
+  'Issues': '/issues',
+  'Agent fixes': '/agent-actions',
+  'Profile approvals': '/settings/profile-approvals',
+};
+
+Future<GoRouter> _pumpAdminDrawer(
   WidgetTester tester, {
   List<Map<String, dynamic>> requests = const [],
   List<Map<String, dynamic>> issues = const [],
@@ -1758,6 +1815,11 @@ Future<void> _pumpAdminDrawer(
             path: '/dashboard/movies',
             builder: (_, __) => const Scaffold(body: Text('Dashboard home')),
           ),
+          for (final route in _attentionRoutes.values)
+            GoRoute(
+              path: route,
+              builder: (_, __) => Scaffold(body: Text(route)),
+            ),
         ],
       ),
     ],
@@ -1788,6 +1850,7 @@ Future<void> _pumpAdminDrawer(
     await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
   }
+  return router;
 }
 
 /// Shell over long scrollable pages: two module routes and one pushed route.

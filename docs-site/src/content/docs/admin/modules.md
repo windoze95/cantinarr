@@ -25,6 +25,8 @@ Skipping does not configure the feature, grant a user access, or change Discover
 
 Administrators can keep Approvals, Issues, Agent fixes, and Profile approvals pinned, or show them only when relevant work exists. These preferences are local to the device.
 
+On desktop, choosing a queue keeps **Needs attention** expanded. Select **Needs attention** again to collapse it. On mobile, the group resets when the navigation drawer closes.
+
 The group's badge reflects its actionable entries. Quietly observed issues can remain accessible without increasing the actionable count. Settings always offers a way to reopen a hidden queue.
 
 ## Media server access guide

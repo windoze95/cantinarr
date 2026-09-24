@@ -108,9 +108,9 @@ class _AppShellState extends ConsumerState<AppShell>
   SearchMode _prevMode = SearchMode.search;
   bool? _prevReduceMotion;
 
-  /// Whether the drawer's "Needs attention" row is showing its queues.
-  /// Deliberately not persisted: the group is a peek, so a reopened drawer
-  /// starts collapsed again and the navigation stays one screen of modules.
+  /// Whether "Needs attention" is showing its queues. Desktop navigation
+  /// preserves this state; closing the mobile drawer resets it so reopening
+  /// the drawer starts with the module list.
   bool _attentionExpanded = false;
 
   @override
@@ -1489,9 +1489,6 @@ class _AppShellState extends ConsumerState<AppShell>
                                         entry.semanticsIdentifier,
                                     badgeCount: entry.count,
                                     onTap: () {
-                                      setState(
-                                        () => _attentionExpanded = false,
-                                      );
                                       if (isOverlay) Navigator.pop(context);
                                       context.push(entry.route);
                                     },
