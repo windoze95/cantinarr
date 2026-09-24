@@ -18,6 +18,7 @@ The [complete searchable-settings catalog](/reference/generated/settings/) is bu
 | See remaining requests | Request allowance | [Requests](/use/requests/) |
 | Choose playback apps | Video apps, Listening apps | [Playback](/use/playback/) |
 | Mute a category | Push Notifications | [Notifications](/integrations/push/) |
+| Mark 4K titles on covers | Display > 4K badges | [4K on covers](/use/status/#4k-on-covers) |
 | Switch servers | Sign out | [Apps](/use/apps/) |
 
 ## Server and household

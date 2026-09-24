@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/layout/adaptive.dart';
 import '../../../core/providers/library_refresh_provider.dart';
+import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/media_card.dart';
@@ -237,6 +238,7 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
       searchResults: items,
       movies: snapshot.movies,
       series: snapshot.series,
+      show4K: ref.watch(cover4KBadgesProvider),
     );
     final isTv = query.type == MediaType.tv;
     final error = _notifier.error;
@@ -312,6 +314,7 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
                           statusLabel: status?.label,
                           statusColor: status?.color,
                           subtitle: status?.episodeSubtitle,
+                          is4K: status?.is4K ?? false,
                           width: cardWidth,
                           onTap: () => context.push(
                             '/detail/${item.mediaType.name}/${item.id}',

@@ -89,7 +89,29 @@ func (s *Service) tvLiveStatus(userID int64, tmdbID int, instanceID string) (*St
 	}
 	out.Status, out.Progress = statusFromCompletion(total, requested)
 	sort.Slice(out.Seasons, func(i, j int) bool { return out.Seasons[i].SeasonNumber < out.Seasons[j].SeasonNumber })
+	if epErr == nil {
+		out.tvFileIDs = countedEpisodeFiles(episodes, m.SeasonMap)
+	}
 	return out, nil
+}
+
+// countedEpisodeFiles lists the files behind the episodes this status counted:
+// only the mapped seasons, each file once (one file can hold two episodes).
+func countedEpisodeFiles(episodes []sonarr.Episode, seasonMap map[int]int) []int {
+	targets := map[int]bool{}
+	for _, target := range seasonMap {
+		targets[target] = true
+	}
+	seen := map[int]bool{}
+	var ids []int
+	for _, ep := range episodes {
+		if !targets[ep.SeasonNumber] || !ep.HasFile || ep.EpisodeFileID <= 0 || seen[ep.EpisodeFileID] {
+			continue
+		}
+		seen[ep.EpisodeFileID] = true
+		ids = append(ids, ep.EpisodeFileID)
+	}
+	return ids
 }
 
 // Overlay only this TMDB title's saved source seasons, preserving live files.

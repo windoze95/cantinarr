@@ -8,6 +8,7 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/models/user_profile.dart';
 import '../../../core/network/api_error_message.dart';
+import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/attention_menu_visibility_switch.dart';
@@ -435,6 +436,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 subtitle: 'Send new media requests to a Discord channel',
                 onTap: () => context.push('/settings/discord-notifications'),
               ),
+
+            // Display: how posters look on this device.
+            const SizedBox(height: 16),
+            const _SectionHeader(title: 'Display'),
+            SettingsHighlight(
+              anchorId: SettingsAnchors.rootCover4KBadges,
+              highlightId: _activeHighlight,
+              child: _SettingsTile(
+                icon: Icons.four_k_outlined,
+                title: '4K badges',
+                subtitle: "Mark covers when your library's copy is 4K",
+                onTap: () => ref
+                    .read(cover4KBadgesProvider.notifier)
+                    .set(!ref.read(cover4KBadgesProvider)),
+                trailing: Switch(
+                  key: const ValueKey('cover-4k-badges'),
+                  value: ref.watch(cover4KBadgesProvider),
+                  onChanged: (value) =>
+                      ref.read(cover4KBadgesProvider.notifier).set(value),
+                ),
+              ),
+            ),
 
             if (user?.isAdmin == true) ...[
               const SizedBox(height: 16),

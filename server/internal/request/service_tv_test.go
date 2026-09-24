@@ -27,6 +27,10 @@ type fakeSonarrTV struct {
 	episodesJSON map[string]string // GET /api/v3/episode keyed by seasonNumber query ("" = all)
 	episodesFail bool              // force the episode fetch to fail (statistics fallback)
 
+	episodeFilesJSON string // GET /api/v3/episodefile?seriesId= body
+	episodeFilesFail bool   // force the episode file fetch to fail
+	episodeFileReads int
+
 	addBody     map[string]any
 	seriesPut   map[string]any
 	monitorBody map[string]any
@@ -65,6 +69,13 @@ func (f *fakeSonarrTV) handler(t *testing.T) http.Handler {
 				return
 			}
 			_, _ = w.Write([]byte(f.episodesJSON[r.URL.Query().Get("seasonNumber")]))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episodefile":
+			f.episodeFileReads++
+			if f.episodeFilesFail {
+				http.Error(w, "boom", http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write([]byte(f.episodeFilesJSON))
 		case r.Method == http.MethodPut && r.URL.Path == "/api/v3/episode/monitor":
 			data, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(data, &f.monitorBody)

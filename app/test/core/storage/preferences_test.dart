@@ -55,6 +55,22 @@ void main() {
     });
   }
 
+  test('4K badges start off and persist across provider containers', () async {
+    final first = ProviderContainer();
+    addTearDown(first.dispose);
+    expect(first.read(cover4KBadgesProvider), isFalse);
+    await pumpEventQueue();
+    expect(first.read(cover4KBadgesProvider), isFalse);
+
+    await first.read(cover4KBadgesProvider.notifier).set(true);
+    expect(first.read(cover4KBadgesProvider), isTrue);
+
+    final restored = ProviderContainer();
+    addTearDown(restored.dispose);
+    restored.read(cover4KBadgesProvider);
+    await _waitFor(() => restored.read(cover4KBadgesProvider));
+  });
+
   test('conditional menu preferences update independently', () async {
     SharedPreferences.setMockInitialValues({
       'approvals_menu_only_when_pending': false,

@@ -685,6 +685,14 @@ type StatusResponse struct {
 	// grade means no Downloading state and up to the digest TTL of lag — the
 	// documented tradeoff the history overlay already accepts.
 	InstanceStatuses map[string]InstanceStatus `json:"instance_statuses,omitempty"`
+	// Is4K is set only for a TV status read that asked for it (include_4k)
+	// when the selected library holds the whole show and Sonarr measured every
+	// counted episode file at 4K. Unknown is never reported as 4K.
+	Is4K bool `json:"is_4k,omitempty"`
+
+	// tvFileIDs are the episode files a TV status counted, kept so the
+	// optional 4K check needs no second episode read. Never serialized.
+	tvFileIDs []int
 }
 
 // InstanceStatus is one library's digest-grade status inside

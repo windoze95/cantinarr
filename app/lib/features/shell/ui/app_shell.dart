@@ -574,11 +574,13 @@ class _AppShellState extends ConsumerState<AppShell>
         plexInvitesWaiting;
     final showSearchResults = searchState.searchMode == SearchMode.search ||
         searchState.searchMode == SearchMode.aiReady;
+    final show4K = ref.watch(cover4KBadgesProvider);
     final libraryStatus = searchState.isSearching && showSearchResults
         ? buildSearchLibraryStatus(
             searchResults: searchState.searchResults,
             movies: _radarrNotifier?.state.movies ?? const [],
             series: _sonarrNotifier?.state.series ?? const [],
+            show4K: show4K,
           )
         : const <(MediaType, int), LibraryStatus>{};
 

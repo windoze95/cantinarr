@@ -17,6 +17,7 @@ abstract final class SettingsAnchors {
   static const rootAttentionAgentFixes = 'root.attention-agent-fixes';
   static const rootAttentionProfileApprovals =
       'root.attention-profile-approvals';
+  static const rootCover4KBadges = 'root.cover-4k-badges';
 
   // /settings/request-settings
   static const requestsRequireApproval = 'requests.require-approval';

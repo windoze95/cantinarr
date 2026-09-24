@@ -312,6 +312,7 @@ class _SearchResultTile extends StatelessWidget {
       context,
       semanticLabel: 'View ${item.title}, ${item.mediaType.displayName}'
           '${status == null ? '' : ', ${status!.label}'}'
+          '${status?.is4K == true ? ' in 4K' : ''}'
           '${status?.episodeSubtitle == null ? '' : ', ${status!.episodeSubtitle}'}',
       onPressed: () {
         onTap?.call();
@@ -382,6 +383,9 @@ class _SearchResultTile extends StatelessWidget {
                               if (status != null) _Chip(
                                 label: status!.label, color: status!.color,
                                 backgroundColor: status!.color.withValues(alpha: 0.15)),
+                              if (status?.is4K == true) _Chip(
+                                label: '4K', color: AppTheme.textPrimary,
+                                backgroundColor: AppTheme.textPrimary.withValues(alpha: 0.08)),
                             ],
                           )),
                           if (item.voteAverage != null &&

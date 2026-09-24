@@ -57,6 +57,11 @@ class MediaCard extends StatelessWidget {
   /// Drawn when there is no artwork. Books want a book, not a film reel.
   final IconData placeholderIcon;
 
+  /// Marks the library's copy as 4K with a tag in the artwork's bottom-right
+  /// corner, clear of the status badge and the rating. Callers set it only
+  /// from a measured file, never from a quality profile or release name.
+  final bool is4K;
+
   const MediaCard({
     super.key,
     required this.id,
@@ -72,6 +77,7 @@ class MediaCard extends StatelessWidget {
     this.posterHeaders,
     this.placeholderIcon = Icons.movie_outlined,
     this.artworkAspectRatio = 2 / 3,
+    this.is4K = false,
   });
 
   @override
@@ -83,7 +89,10 @@ class MediaCard extends StatelessWidget {
     final semantics = [
       title,
       if (subtitle != null) subtitle!,
-      if (statusLabel != null) statusLabel!,
+      if (statusLabel != null)
+        is4K ? '${statusLabel!} in 4K' : statusLabel!
+      else if (is4K)
+        '4K',
       if (rating != null && rating! > 0) 'Rated ${rating!.toStringAsFixed(1)}',
     ].join(', ');
 
@@ -106,6 +115,7 @@ class MediaCard extends StatelessWidget {
         posterHeaders: posterHeaders,
         placeholderIcon: placeholderIcon,
         artworkAspectRatio: artworkAspectRatio,
+        is4K: is4K,
       ),
     );
   }
@@ -125,6 +135,7 @@ class _InteractiveMediaCard extends StatefulWidget {
   final Map<String, String>? posterHeaders;
   final IconData placeholderIcon;
   final double artworkAspectRatio;
+  final bool is4K;
 
   const _InteractiveMediaCard({
     required this.onTap,
@@ -140,6 +151,7 @@ class _InteractiveMediaCard extends StatefulWidget {
     required this.posterHeaders,
     required this.placeholderIcon,
     required this.artworkAspectRatio,
+    required this.is4K,
   });
 
   @override
@@ -307,6 +319,46 @@ class _InteractiveMediaCardState extends State<_InteractiveMediaCard> {
                                       ),
                                     ),
                                   ],
+                                ),
+                              ),
+                            ),
+                          // A squared outline reads as a format mark, apart
+                          // from the round status and rating pills. Its text
+                          // grows only a little, like an icon: on a 108px
+                          // phone card at double text size a full-scale tag
+                          // would cover the rating's number. The card's
+                          // label still says "in 4K".
+                          if (widget.is4K)
+                            Positioned(
+                              right: 7,
+                              bottom: 7,
+                              child: MediaQuery.withClampedTextScaling(
+                                maxScaleFactor: 1.3,
+                                child: Container(
+                                  key: const ValueKey('media-card-4k'),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 5,
+                                    vertical: 3,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.background
+                                        .withValues(alpha: 0.82),
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(
+                                      color: AppTheme.textPrimary
+                                          .withValues(alpha: 0.7),
+                                    ),
+                                  ),
+                                  child: const Text(
+                                    '4K',
+                                    style: TextStyle(
+                                      color: AppTheme.textPrimary,
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w900,
+                                      height: 1,
+                                      letterSpacing: 0.4,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),

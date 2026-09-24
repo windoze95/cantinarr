@@ -8,6 +8,7 @@ import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/network/websocket_client.dart';
 import 'package:cantinarr/core/providers/library_refresh_provider.dart';
 import 'package:cantinarr/core/providers/realtime_provider.dart';
+import 'package:cantinarr/core/storage/preferences.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/discover/data/tmdb_models.dart';
@@ -22,12 +23,15 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 const _ids = [113988, 225634, 286801, 299939];
 const _legacy = LibraryStatus(label: 'Available', color: AppTheme.available);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  // The 4K badges setting is device storage; no test may inherit another's.
+  setUp(() => SharedPreferences.setMockInitialValues({}));
 
   test('TV card labels preserve authoritative statuses and source counts', () {
     for (final status in RequestStatus.values) {
@@ -167,6 +171,45 @@ void main() {
     await h.container.pump();
     expect(await h.container.read(tvCardStatusProvider(299939).future), isNull);
     expect(h.adapter.statusReads.length, expectedReads);
+  });
+
+  test('4K is asked for only while badges are on; switching refetches', () async {
+    final h = await _harness();
+    final sub = h.container.listen(tvCardStatusProvider(299939), (_, __) {});
+    addTearDown(sub.close);
+    h.adapter.statuses[299939] = 'available';
+    h.adapter.fourK.add(299939);
+    final off = await h.container.read(tvCardStatusProvider(299939).future);
+    expect(off?.label, 'Available');
+    expect(off?.is4K, isFalse);
+    expect(h.adapter.statusReads.single.queryParameters.containsKey('include_4k'), isFalse);
+
+    await h.container.read(cover4KBadgesProvider.notifier).set(true);
+    await h.container.pump();
+    final on = await h.container.read(tvCardStatusProvider(299939).future);
+    expect(on?.label, 'Available');
+    expect(on?.is4K, isTrue);
+    expect(h.adapter.statusReads, hasLength(2));
+    expect(h.adapter.statusReads.last.queryParameters['include_4k'], isTrue);
+
+    // A server that says nothing about 4K never gets a claim made for it.
+    h.adapter.fourK.clear();
+    h.container.read(libraryRefreshTickProvider.notifier).state++;
+    expect((await h.container.read(tvCardStatusProvider(299939).future))?.is4K, isFalse);
+  });
+
+  testWidgets('a whole show in 4K carries the tag on its row card', (tester) async {
+    SharedPreferences.setMockInitialValues({'cover_4k_badges': true});
+    final h = await _harness();
+    h.adapter.statuses[299939] = 'available';
+    h.adapter.fourK.add(299939);
+    await _pump(tester, h, _surface('row'));
+    await tester.pumpAndSettle();
+    expect(find.text('Available'), findsOneWidget);
+    expect(find.text('4K'), findsOneWidget);
+    expect(h.adapter.statusReads.last.queryParameters['include_4k'], isTrue);
+    await tester.pumpWidget(const SizedBox.shrink());
+    h.container.dispose();
   });
 
   test('a session switch cancels and discards an in-flight result', () async {
@@ -340,6 +383,7 @@ class _Adapter implements HttpClientAdapter {
   DateTime Function() now = DateTime.now;
   final statusReads = <RequestOptions>[];
   final statuses = <int, String>{};
+  final fourK = <int>{};
   bool unknown = false;
   @override
   Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? requestStream,
@@ -353,6 +397,8 @@ class _Adapter implements HttpClientAdapter {
           'season_map': {'1': _ids.indexOf(id) + 1}},
         'seasons': [{'season_number': 1, 'status': statuses[id] ?? 'unavailable',
           'episode_file_count': 2, 'episode_count': 8}],
+        if (options.queryParameters['include_4k'] == true && fourK.contains(id))
+          'is_4k': true,
       };
     } else if (options.path == '/api/discover/tv/top-rated') {
       body = {'page': 1, 'total_pages': 1, 'total_results': 1,

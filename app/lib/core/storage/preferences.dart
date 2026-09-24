@@ -94,6 +94,37 @@ final profileApprovalsMenuOnlyWhenPendingProvider =
   ),
 );
 
+const _cover4KBadgesKey = 'cover_4k_badges';
+
+/// Whether movie and show covers mark titles the library holds in 4K. A
+/// device-local display choice, off until someone turns it on. While it is
+/// off the app does not ask the server for the per-show check.
+class Cover4KBadgesNotifier extends StateNotifier<bool> {
+  Cover4KBadgesNotifier() : super(false) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    // Poster grids watch this, so unreadable storage must leave the badges
+    // off rather than fail the grid.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      state = prefs.getBool(_cover4KBadgesKey) ?? false;
+    } catch (_) {}
+  }
+
+  Future<void> set(bool value) async {
+    state = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_cover4KBadgesKey, value);
+  }
+}
+
+final cover4KBadgesProvider =
+    StateNotifierProvider<Cover4KBadgesNotifier, bool>(
+  (ref) => Cover4KBadgesNotifier(),
+);
+
 const _dismissedAppSkewPairKey = 'dismissed_app_skew_pair';
 const _dismissedServerSkewPairKey = 'dismissed_server_skew_pair';
 

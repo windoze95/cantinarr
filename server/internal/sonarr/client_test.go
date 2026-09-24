@@ -549,6 +549,34 @@ func TestGetEpisodeFilesReadsSeriesScopedFileFacts(t *testing.T) {
 	}
 }
 
+// Sonarr 4.0.20 serves the measurement as a "WxH" string on the file record,
+// null when analysis never ran. The quality name comes from the release name
+// when analysis is off, so it must never decide the answer.
+func TestFileMediaInfoMeasures4K(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"uhd", `{"quality":{"quality":{"name":"WEBDL-2160p"}},"mediaInfo":{"resolution":"3840x2160"}}`, true},
+		{"wide film", `{"mediaInfo":{"resolution":"3840x1600"}}`, true},
+		{"dci", `{"mediaInfo":{"resolution":"4096x1716"}}`, true},
+		{"hd", `{"mediaInfo":{"resolution":"1920x1080"}}`, false},
+		{"hd named 2160p", `{"quality":{"quality":{"name":"WEBDL-2160p"}},"mediaInfo":{"resolution":"1920x1080"}}`, false},
+		{"never analysed", `{"quality":{"quality":{"name":"WEBDL-2160p"}},"mediaInfo":null}`, false},
+		{"unreadable", `{"mediaInfo":{"resolution":"0x0"}}`, false},
+		{"malformed", `{"mediaInfo":{"resolution":"2160p"}}`, false},
+	} {
+		var file EpisodeFile
+		if err := json.Unmarshal([]byte(tc.raw), &file); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := file.MediaInfo.Measures4K(); got != tc.want {
+			t.Errorf("%s: Measures4K() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestDeleteEpisodeFileUsesExactAuthenticatedEndpoint(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

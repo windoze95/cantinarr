@@ -532,6 +532,27 @@ const List<SettingsSearchEntry> _rootEntries = [
     keywords: ['container', 'update link', 'unraid', 'portainer'],
     gate: gateAdmin,
   ),
+  SettingsSearchEntry(
+    id: 'root.cover-4k-badges',
+    title: '4K badges',
+    icon: Icons.four_k_outlined,
+    route: '/settings',
+    screenTitle: 'Settings',
+    section: 'Display',
+    keywords: [
+      '4k',
+      'uhd',
+      'ultra hd',
+      '2160p',
+      'resolution',
+      'quality',
+      'poster',
+      'cover',
+      'badge',
+    ],
+    gate: gateEveryone,
+    anchorId: SettingsAnchors.rootCover4KBadges,
+  ),
   // The attention rows double as each queue's stable doorway: the row opens
   // the queue, the switch governs its conditional menu entry.
   SettingsSearchEntry(
