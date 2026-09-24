@@ -24,6 +24,7 @@ import '../../../core/widgets/shimmer_border.dart';
 import '../../ai_assistant/logic/ai_chat_provider.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
+import '../../discover/logic/cover_4k_badges_provider.dart';
 import '../../discover/logic/search_library_status.dart';
 import '../../discover/ui/book_search_results_view.dart';
 import '../../discover/ui/music_search_results_view.dart';

@@ -9,10 +9,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
-import '../../../core/storage/preferences.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../request/data/request_service.dart';
 import '../data/tmdb_models.dart';
+import 'cover_4k_badges_provider.dart';
 import 'search_library_status.dart';
 
 typedef TVCardContext = ({bool supported, String? instanceId, String identity,

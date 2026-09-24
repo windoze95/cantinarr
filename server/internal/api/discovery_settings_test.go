@@ -191,3 +191,41 @@ func TestDiscoveryHidePartialUpdatesAndNotifications(t *testing.T) {
 		t.Fatalf("partial restore failed: %+v", got)
 	}
 }
+
+// The app saves the whole Discover form, so a save that leaves 4K badges as
+// they were must not send every open app to reread its config, and turning
+// badges on is not a headline-row decision.
+func TestDiscoveryCover4KBadgesSaveAndNotifyOnlyOnChange(t *testing.T) {
+	settings, creds := newDiscoverySettingsEnv(t, false)
+	events := 0
+	update := func(body string) discoverySettingsResponse {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		updateDiscoverySettingsHandler(settings, creds, func() { events++ })(rec, httptest.NewRequest(http.MethodPut, "/", strings.NewReader(body)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+		return decodeDiscoveryResponse(t, rec.Body.String())
+	}
+	rec := httptest.NewRecorder()
+	discoverySettingsHandler(settings, creds)(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if got := decodeDiscoveryResponse(t, rec.Body.String()); got.Cover4KBadges || !strings.Contains(rec.Body.String(), `"cover_4k_badges":false`) {
+		t.Fatalf("default = %s, want cover_4k_badges false and present", rec.Body.String())
+	}
+
+	if got := update(`{"cover_4k_badges":true}`); !got.Cover4KBadges || events != 1 {
+		t.Fatalf("turn on: %+v events=%d", got, events)
+	}
+	if settings.DiscoveryChosen() {
+		t.Fatal("a 4K-only write recorded a headline-row decision")
+	}
+	if got := update(`{"source":"tmdb_trending","english_only":true,"cover_4k_badges":true}`); !got.Cover4KBadges || events != 1 {
+		t.Fatalf("unchanged save notified apps: %+v events=%d", got, events)
+	}
+	if got := update(`{"source":"tmdb_trending","english_only":true}`); !got.Cover4KBadges || events != 1 {
+		t.Fatalf("an older app's save dropped the switch: %+v events=%d", got, events)
+	}
+	if got := update(`{"source":"tmdb_trending","english_only":true,"cover_4k_badges":false}`); got.Cover4KBadges || events != 2 {
+		t.Fatalf("turn off: %+v events=%d", got, events)
+	}
+}

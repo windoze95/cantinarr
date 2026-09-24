@@ -215,26 +215,6 @@ void main() {
     );
   });
 
-  testWidgets('any user can turn 4K badges on for this device',
-      (tester) async {
-    final container =
-        await _pumpSettings(tester, _settings(source: AiAccessSource.none));
-    final toggle = find.byKey(const ValueKey('cover-4k-badges'));
-    await _dragSettingsUntilFound(tester, toggle);
-    expect(find.text('DISPLAY'), findsOneWidget);
-    expect(find.text('4K badges'), findsOneWidget);
-    expect(tester.widget<Switch>(toggle).value, isFalse);
-
-    await tester.ensureVisible(toggle);
-    await tester.pumpAndSettle();
-    await tester.tap(toggle);
-    await tester.pumpAndSettle();
-    expect(tester.widget<Switch>(toggle).value, isTrue);
-    expect(container.read(cover4KBadgesProvider), isTrue);
-    final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getBool('cover_4k_badges'), isTrue);
-  });
-
   testWidgets('About section links to GitHub but hides Donate in store builds',
       (tester) async {
     await _pumpSettings(tester, _settings(source: AiAccessSource.shared));

@@ -119,6 +119,33 @@ void main() {
         isFalse);
   });
 
+  test('4K badges follow the server through restore, refresh and persistence',
+      () async {
+    final storage = snapshotStorage();
+    final snapshot = jsonDecode(storage[StorageKeys.sessionConnection]!)
+        as Map<String, dynamic>;
+    snapshot['cover_4k_badges'] = true;
+    storage[StorageKeys.sessionConnection] = jsonEncode(snapshot);
+    // An admin has since turned them off.
+    final fake = _FakeAuthService(refreshResult: freshResp, config: config);
+    final container = makeContainer(storage, fake);
+    final optimistic = await container.read(authProvider.future);
+    expect(optimistic.connection!.cover4KBadges, isTrue);
+    await _pumpUntil(
+        () => !container.read(authProvider).valueOrNull!.isReconnecting);
+    expect(container.read(authProvider).requireValue.connection!.cover4KBadges,
+        isFalse);
+    expect(jsonDecode(storage[StorageKeys.sessionConnection]!)['cover_4k_badges'],
+        isFalse);
+    fake.config = const ServerConfig(
+        serverName: 'Home', services: AvailableServices(), cover4KBadges: true);
+    await container.read(authProvider.notifier).refreshConfig();
+    expect(container.read(authProvider).requireValue.connection!.cover4KBadges,
+        isTrue);
+    expect(jsonDecode(storage[StorageKeys.sessionConnection]!)['cover_4k_badges'],
+        isTrue);
+  });
+
   test(
       'configuration refreshes defer during setup, including an in-flight read',
       () async {

@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/layout/adaptive.dart';
 import '../../../core/providers/library_refresh_provider.dart';
-import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/media_card.dart';
@@ -13,6 +12,7 @@ import '../data/discover_api_service.dart';
 import '../data/tmdb_models.dart';
 import '../logic/browse_grid_notifier.dart';
 import '../logic/browse_query.dart';
+import '../logic/cover_4k_badges_provider.dart';
 import '../logic/library_snapshot_provider.dart';
 import '../logic/search_library_status.dart';
 import 'catalog_status_builder.dart';

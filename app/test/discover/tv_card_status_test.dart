@@ -8,7 +8,6 @@ import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/network/websocket_client.dart';
 import 'package:cantinarr/core/providers/library_refresh_provider.dart';
 import 'package:cantinarr/core/providers/realtime_provider.dart';
-import 'package:cantinarr/core/storage/preferences.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/discover/data/tmdb_models.dart';
@@ -23,15 +22,12 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 const _ids = [113988, 225634, 286801, 299939];
 const _legacy = LibraryStatus(label: 'Available', color: AppTheme.available);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  // The 4K badges setting is device storage; no test may inherit another's.
-  setUp(() => SharedPreferences.setMockInitialValues({}));
 
   test('TV card labels preserve authoritative statuses and source counts', () {
     for (final status in RequestStatus.values) {
@@ -173,7 +169,7 @@ void main() {
     expect(h.adapter.statusReads.length, expectedReads);
   });
 
-  test('4K is asked for only while badges are on; switching refetches', () async {
+  test('4K is asked for only while an admin has badges on; switching refetches', () async {
     final h = await _harness();
     final sub = h.container.listen(tvCardStatusProvider(299939), (_, __) {});
     addTearDown(sub.close);
@@ -184,7 +180,9 @@ void main() {
     expect(off?.is4K, isFalse);
     expect(h.adapter.statusReads.single.queryParameters.containsKey('include_4k'), isFalse);
 
-    await h.container.read(cover4KBadgesProvider.notifier).set(true);
+    // An admin turns 4K badges on; the server's config says so.
+    h.auth.switchTo(_state.copyWith(
+        connection: _state.connection!.copyWith(cover4KBadges: true)));
     await h.container.pump();
     final on = await h.container.read(tvCardStatusProvider(299939).future);
     expect(on?.label, 'Available');
@@ -199,8 +197,7 @@ void main() {
   });
 
   testWidgets('a whole show in 4K carries the tag on its row card', (tester) async {
-    SharedPreferences.setMockInitialValues({'cover_4k_badges': true});
-    final h = await _harness();
+    final h = await _harness(cover4K: true);
     h.adapter.statuses[299939] = 'available';
     h.adapter.fourK.add(299939);
     await _pump(tester, h, _surface('row'));
@@ -337,9 +334,10 @@ Widget _surface(String surface) => switch (surface) {
 typedef _Harness = ({ProviderContainer container, _Adapter adapter,
   _Auth auth, StreamController<WsEvent> events});
 
-Future<_Harness> _harness({bool capable = true}) async {
+Future<_Harness> _harness({bool capable = true, bool cover4K = false}) async {
   final adapter = _Adapter();
-  final auth = _Auth(_state.copyWith(connection: _state.connection!.copyWith(tvMatchCorrections: capable)));
+  final auth = _Auth(_state.copyWith(connection: _state.connection!.copyWith(
+    tvMatchCorrections: capable, cover4KBadges: cover4K)));
   final events = StreamController<WsEvent>.broadcast();
   final container = ProviderContainer(overrides: [
     authProvider.overrideWith(() => auth),

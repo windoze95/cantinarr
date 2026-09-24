@@ -16,12 +16,18 @@ import (
 // read. The TTL only covers Sonarr re-analysing a file in place.
 const tv4KCacheTTL = 30 * time.Minute
 
-// markTV4K sets Is4K on a TV status that the selected library holds in full
-// when Sonarr measured every counted episode file at 4K. A show with any file
-// below 4K, any file Sonarr never analysed, or missing episodes gets no claim,
-// and neither does a failed read. The response has already passed the
-// library grant and content policy checks; this reads the same library.
+// markTV4K sets Is4K on a TV status, while the admin's 4K badges switch is
+// on, when the selected library holds the whole show and Sonarr measured
+// every counted episode file at 4K. A show with any file below 4K, any file
+// Sonarr never analysed, or missing episodes gets no claim, and neither does
+// a failed read. The response has already passed the library grant and
+// content policy checks; this reads the same library.
 func (s *Service) markTV4K(userID int64, instanceID string, resp *StatusResponse) {
+	// Off means off: an app cannot buy the Sonarr read the admin did not
+	// turn on.
+	if s.cover4KBadges == nil || !s.cover4KBadges() {
+		return
+	}
 	if resp == nil || resp.Status != StatusAvailable || resp.StatusKnown == nil || !*resp.StatusKnown ||
 		resp.Match == nil || resp.Match.SeriesID <= 0 || len(resp.tvFileIDs) == 0 {
 		return

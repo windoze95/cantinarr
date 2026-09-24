@@ -259,10 +259,17 @@ type Service struct {
 	// see the status of, or list a title outside their limits. nil until
 	// wired (SetContentPolicy); a server without it gates nothing.
 	contentPolicy *contentpolicy.Service
+
+	// cover4KBadges reads the admin's 4K badges switch. nil until wired
+	// (SetCover4KBadges), which answers no show 4K checks.
+	cover4KBadges func() bool
 }
 
 // SetContentPolicy wires the kids-account service.
 func (s *Service) SetContentPolicy(svc *contentpolicy.Service) { s.contentPolicy = svc }
+
+// SetCover4KBadges wires the server-wide 4K badges switch.
+func (s *Service) SetCover4KBadges(enabled func() bool) { s.cover4KBadges = enabled }
 
 var (
 	// ErrTitleNotAvailable is a kids account asking for a title outside its

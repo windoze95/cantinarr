@@ -67,6 +67,15 @@ func TestTVStatus4KRequiresEveryCountedFileMeasured(t *testing.T) {
 		return w.Code, status, w.Body.String()
 	}
 
+	// With the admin switch off, an app asking still gets nothing, and
+	// Sonarr's files are never read.
+	enabled := false
+	s.SetCover4KBadges(func() bool { return enabled })
+	if code, st, body := read("include_4k=true"); code != http.StatusOK || st.Status != StatusAvailable || st.Is4K || strings.Contains(body, "is_4k") || f.episodeFileReads != 0 {
+		t.Fatalf("switch off: %d %s (file reads %d)", code, body, f.episodeFileReads)
+	}
+	enabled = true
+
 	// Without the opt-in nothing extra is read or claimed.
 	if code, st, body := read(""); code != http.StatusOK || st.Status != StatusAvailable || st.Is4K || strings.Contains(body, "is_4k") || f.episodeFileReads != 0 {
 		t.Fatalf("default read: %d %s (file reads %d)", code, body, f.episodeFileReads)
@@ -130,6 +139,7 @@ func TestMovieStatusIgnoresInclude4K(t *testing.T) {
 		"/api/v3/queue": `{"records":[]}`,
 	})
 	s, uid := newHistoryTestService(t, radarr.URL, "", "")
+	s.SetCover4KBadges(func() bool { return true })
 	r := httptest.NewRequest(http.MethodGet, "/api/requests/603/status?media_type=movie&include_4k=true", nil)
 	ctx := chi.NewRouteContext()
 	ctx.URLParams.Add("tmdb_id", "603")

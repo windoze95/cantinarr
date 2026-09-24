@@ -900,6 +900,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 		}
 		hiddenTabs := []string{}
 		downloadsUserScope := "all"
+		cover4KBadges := false
 		configured := map[string]bool{}
 		for _, inst := range allInstances {
 			configured[inst.ServiceType] = true
@@ -911,6 +912,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 				return
 			}
 			downloadsUserScope = preferences.DownloadsUserScope
+			cover4KBadges = preferences.Cover4KBadges
 			for _, mediaType := range []string{"movie", "tv", "book", "music"} {
 				if preferences.HiddenWhenUnconfigured[mediaType] && !configured[serversettings.DiscoverServices()[mediaType]] {
 					hiddenTabs = append(hiddenTabs, mediaType)
@@ -1002,6 +1004,9 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"apple_tv_remote":          len(appleTVCapability) > 0 && appleTVCapability[0](),
 			"media_account_management": true,
 			"hidden_discover_tabs":     hiddenTabs,
+			// An admin choice for every cover on this server; see the
+			// status route's include_4k for how shows are answered.
+			"cover_4k_badges": cover4KBadges,
 		})
 	}
 }

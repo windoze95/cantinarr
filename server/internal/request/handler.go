@@ -125,10 +125,10 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Opt-in because answering costs a Sonarr read per whole show; the app
-	// asks only while its 4K badges setting is on. Movies need no server
-	// help: the Radarr list the app already reads carries each file's
-	// measurement.
+	// Opt-in because answering costs a Sonarr read per whole show: catalog
+	// cards ask while the admin's 4K badges switch is on, and the server
+	// checks the switch itself. Movies need no server help: the Radarr list
+	// the app already reads carries each file's measurement.
 	include4K := false
 	if raw := r.URL.Query().Get("include_4k"); raw != "" {
 		include4K, err = strconv.ParseBool(raw)

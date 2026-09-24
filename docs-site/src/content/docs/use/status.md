@@ -39,7 +39,7 @@ An available file can have an incorrect episode, audio track, or copy. Report th
 
 ## 4K on covers
 
-Turn on **Settings > Display > 4K badges** to mark titles your library holds in 4K. The setting applies to the device you change it on. Posters then carry a small **4K** tag in the bottom-right corner, and search results show a **4K** chip beside the status. Screen readers hear "Available in 4K".
+An administrator can turn on **Settings > Discover > Show 4K badges** to mark titles your library holds in 4K. It applies to everyone on the server and starts off. Posters then carry a small **4K** tag in the bottom-right corner, and search results show a **4K** chip beside the status. Screen readers hear "Available in 4K".
 
 | Title | Shows 4K when |
 | --- | --- |

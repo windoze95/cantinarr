@@ -18,7 +18,6 @@ The [complete searchable-settings catalog](/reference/generated/settings/) is bu
 | See remaining requests | Request allowance | [Requests](/use/requests/) |
 | Choose playback apps | Video apps, Listening apps | [Playback](/use/playback/) |
 | Mute a category | Push Notifications | [Notifications](/integrations/push/) |
-| Mark 4K titles on covers | Display > 4K badges | [4K on covers](/use/status/#4k-on-covers) |
 | Switch servers | Sign out | [Apps](/use/apps/) |
 
 ## Server and household
@@ -40,6 +39,7 @@ The [complete searchable-settings catalog](/reference/generated/settings/) is bu
 | You want to | Look for | Read |
 | --- | --- | --- |
 | Choose catalog feeds or language | Discover | [Catalog providers](/integrations/discovery-providers/) |
+| Mark 4K titles on covers | Discover > Show 4K badges | [4K on covers](/use/status/#4k-on-covers) |
 | Hide an unconfigured tab | Modules > Discover > Discover tabs | [Navigation](/admin/modules/) |
 | Configure included AI | Providers & Credentials | [AI administration](/admin/ai/) |
 | Control assistant tools | AI Tools | [MCP](/integrations/mcp/) |
