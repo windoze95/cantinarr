@@ -27,6 +27,8 @@ Administrators can keep Approvals, Issues, Agent fixes, and Profile approvals pi
 
 On desktop, choosing a queue keeps **Needs attention** expanded. Select **Needs attention** again to collapse it. On mobile, the group resets when the navigation drawer closes.
 
+The displayed entry is highlighted in the menu. **Issues** stays highlighted in issue threads, and **Agent fixes** stays highlighted on run details. The highlight follows the current page when using Back or opening a direct link.
+
 The group's badge reflects its actionable entries. Quietly observed issues can remain accessible without increasing the actionable count. Settings always offers a way to reopen a hidden queue.
 
 ## Media server access guide

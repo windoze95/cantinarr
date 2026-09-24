@@ -1066,6 +1066,11 @@ void main() {
       for (final label in _attentionRoutes.keys) {
         expect(find.widgetWithText(ListTile, label), findsOneWidget,
             reason: 'opening ${entry.key} keeps the sidebar queues available');
+        expect(
+          tester.widget<ListTile>(find.widgetWithText(ListTile, label)).selected,
+          label == entry.key,
+          reason: 'only the queue currently on screen is highlighted',
+        );
       }
     }
 
@@ -1073,6 +1078,26 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('/agent-actions'), findsOneWidget);
     expect(find.widgetWithText(ListTile, 'Approvals'), findsOneWidget);
+    expect(
+      tester.widget<ListTile>(find.widgetWithText(ListTile, 'Agent fixes'))
+          .selected,
+      isTrue,
+      reason: 'Back restores the previous queue highlight',
+    );
+
+    router.go('/dashboard/movies');
+    await tester.pumpAndSettle();
+    for (final label in _attentionRoutes.keys) {
+      expect(
+        tester.widget<ListTile>(find.widgetWithText(ListTile, label)).selected,
+        isFalse,
+        reason: 'leaving the queues clears their highlight',
+      );
+    }
+    expect(
+      tester.widget<ListTile>(find.widgetWithText(ListTile, 'Discover')).selected,
+      isTrue,
+    );
 
     await tester.tap(find.text('Needs attention'));
     await tester.pumpAndSettle();
@@ -1081,6 +1106,38 @@ void main() {
           reason: 'the sidebar group still collapses when explicitly toggled');
     }
   });
+
+  for (final desktop in [false, true]) {
+    for (final entry in {
+      '/issues/42': 'Issues',
+      '/agent-runs/7': 'Agent fixes',
+    }.entries) {
+      testWidgets(
+          '${desktop ? 'desktop' : 'mobile'} highlights ${entry.value} '
+          'on a direct detail link', (tester) async {
+        SharedPreferences.setMockInitialValues({
+          'approvals_menu_only_when_pending': false,
+          'issues_menu_only_when_active': false,
+          'agent_fixes_menu_only_when_awaiting_review': false,
+          'profile_approvals_menu_only_when_pending': false,
+        });
+        await _pumpAdminDrawer(tester,
+            desktop: desktop, initialLocation: entry.key);
+
+        await tester.tap(find.text('Needs attention'));
+        await tester.pumpAndSettle();
+
+        expect(find.text(entry.key), findsOneWidget);
+        for (final label in _attentionRoutes.keys) {
+          expect(
+            tester.widget<ListTile>(find.widgetWithText(ListTile, label))
+                .selected,
+            label == entry.value,
+          );
+        }
+      });
+    }
+  }
 
   testWidgets('closing or navigating from the drawer collapses its queues',
       (tester) async {
@@ -1793,6 +1850,7 @@ Future<GoRouter> _pumpAdminDrawer(
   bool failAttentionQueues = false,
   bool hangAttentionQueues = false,
   bool desktop = false,
+  String initialLocation = '/dashboard/movies',
   int setupRemaining = 0,
   Map<String, dynamic>? setupStatus,
 }) async {
@@ -1805,7 +1863,7 @@ Future<GoRouter> _pumpAdminDrawer(
   });
 
   final router = GoRouter(
-    initialLocation: '/dashboard/movies',
+    initialLocation: initialLocation,
     routes: [
       ShellRoute(
         builder: (context, state, child) =>
@@ -1819,6 +1877,11 @@ Future<GoRouter> _pumpAdminDrawer(
             GoRoute(
               path: route,
               builder: (_, __) => Scaffold(body: Text(route)),
+            ),
+          for (final route in ['/issues/:id', '/agent-runs/:id'])
+            GoRoute(
+              path: route,
+              builder: (_, state) => Scaffold(body: Text(state.uri.path)),
             ),
         ],
       ),
