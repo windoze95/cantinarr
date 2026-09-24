@@ -9,6 +9,9 @@ import 'paged_loader.dart';
 /// items, so the same helper backs a notifier-owned row and a screen-local
 /// grid alike.
 class PagedFeed {
+  PagedFeed({this.pageLimit = maxPage});
+
+  final int pageLimit;
   /// The server's English-only filter thins a page without touching
   /// `total_pages`, so a page that adds nothing new is normal rather than the
   /// end of the feed. Walk this many further pages within one call before
@@ -20,16 +23,17 @@ class PagedFeed {
   /// TMDB refuses pages past 500 while still reporting `total_pages` above it.
   static const maxPage = 500;
 
-  final PagedLoader _loader = PagedLoader();
-  final Set<int> _seen = {};
+  PagedLoader _loader = PagedLoader();
+  Set<int> _seen = {};
   int _generation = 0;
   Object? _lastError;
+  bool _refreshing = false;
 
   /// Whether another page can be asked for.
-  bool get hasMore => _loader.hasMore && _loader.page <= maxPage;
+  bool get hasMore => _loader.hasMore && _loader.page <= pageLimit;
 
   /// Whether a [nextPage] call is in flight.
-  bool get isLoading => _loader.isLoading;
+  bool get isLoading => _refreshing || _loader.isLoading;
 
   /// The page the next fetch will ask for.
   int get page => _loader.page;
@@ -46,6 +50,40 @@ class PagedFeed {
     _loader.reset();
     _seen.clear();
     _generation++;
+    _refreshing = false;
+    _lastError = null;
+  }
+
+  /// Read the loaded window into a separate buffer. A failed page preserves
+  /// the entire previous window and cursor; a successful empty read replaces
+  /// it. Refresh supersedes pagination without letting its late page append.
+  Future<List<MediaItem>?> refresh(
+    Future<TmdbPage<MediaItem>> Function(int page) fetch,
+  ) async {
+    if (_refreshing) return null;
+    final generation = ++_generation;
+    _loader.cancelLoading();
+    _refreshing = true;
+    final window = (_loader.page - 1).clamp(1, pageLimit);
+    final draft = PagedFeed(
+      pageLimit: _loader.page == 1 ? pageLimit : window,
+    );
+    final items = <MediaItem>[];
+    while (draft.page <= window && draft.hasMore) {
+      final fresh = await draft.nextPage(fetch);
+      if (generation != _generation) return null;
+      if (draft.lastError != null) {
+        _lastError = draft.lastError;
+        _refreshing = false;
+        return const [];
+      }
+      items.addAll(fresh ?? const []);
+    }
+    _loader = draft._loader;
+    _seen = draft._seen;
+    _lastError = null;
+    _refreshing = false;
+    return items;
   }
 
   /// The items from the next page(s) that have not been handed out before.
@@ -60,6 +98,7 @@ class PagedFeed {
   Future<List<MediaItem>?> nextPage(
     Future<TmdbPage<MediaItem>> Function(int page) fetch,
   ) async {
+    if (_refreshing) return null;
     final generation = _generation;
     _lastError = null;
     var emptyPages = 0;

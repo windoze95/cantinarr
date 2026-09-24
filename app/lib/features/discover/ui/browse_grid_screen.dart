@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/layout/adaptive.dart';
-import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/media_card.dart';
@@ -11,6 +10,10 @@ import '../../../core/widgets/section_sort_menu.dart';
 import '../data/discover_api_service.dart';
 import '../data/tmdb_models.dart';
 import '../logic/browse_grid_notifier.dart';
+import '../logic/browse_session_provider.dart';
+import '../logic/discover_session.dart';
+import 'discover_refresh.dart';
+import 'package:flutter/rendering.dart';
 import '../logic/browse_query.dart';
 import '../logic/cover_4k_badges_provider.dart';
 import '../logic/library_snapshot_provider.dart';
@@ -21,7 +24,7 @@ import 'filter_sheet.dart';
 /// A feed as a full-page poster grid that keeps loading: the "See all" behind
 /// every discovery row, and the Browse page when the feed is the filterable
 /// one. Posters carry the same Available / Requested badges the rows do.
-class BrowseGridScreen extends ConsumerStatefulWidget {
+class BrowseGridScreen extends ConsumerWidget {
   const BrowseGridScreen({super.key, required this.query});
 
   final BrowseQuery query;
@@ -38,12 +41,28 @@ class BrowseGridScreen extends ConsumerStatefulWidget {
   static const double loadMoreThreshold = 400;
 
   @override
-  ConsumerState<BrowseGridScreen> createState() => _BrowseGridScreenState();
+  Widget build(BuildContext context, WidgetRef ref) => _BrowseGridBody(
+    key: ValueKey(ref.watch(discoverSessionProvider)),
+    query: query,
+    session: ref.watch(browseSessionProvider),
+  );
 }
 
-class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
-  late final BrowseGridNotifier _notifier;
-  final ScrollController _scrollController = ScrollController();
+class _BrowseGridBody extends ConsumerStatefulWidget {
+  const _BrowseGridBody({super.key, required this.query, required this.session});
+  final BrowseQuery query;
+  final BrowseSession session;
+  @override
+  ConsumerState<_BrowseGridBody> createState() => _BrowseGridScreenState();
+}
+
+class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
+  late BrowseGridNotifier _notifier;
+  final _gridKey = GlobalKey();
+  List<MediaItem> _displayedItems = const [];
+  int _columns = 1;
+  double _rowExtent = 1;
+  late final ScrollController _scrollController;
   List<Genre> _genres = const [];
   List<TmdbLanguage> _languages = const [];
   List<WatchRegion> _regions = const [];
@@ -62,25 +81,56 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
   @override
   void initState() {
     super.initState();
-    _notifier =
-        BrowseGridNotifier(ref.read(discoverServiceProvider), widget.query)
-          ..addListener(_onFeedChanged);
-    _scrollController.addListener(_maybeLoadMore);
+    _notifier = widget.session.acquire(widget.query)..addListener(_onFeedChanged);
+    _scrollController = ScrollController(
+        initialScrollOffset: _notifier.scrollOffset, keepScrollOffset: false)
+      ..addListener(_maybeLoadMore);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _notifier.load();
-      // Badges come from the shared library snapshot: free when a tab just
-      // filled it, one fetch on a deep link or once it has gone stale.
-      ref.read(librarySnapshotProvider.notifier).refresh();
-      if (widget.query.feed.isFilterable) _loadFilterLists();
+      if (mounted && widget.query.feed.isFilterable) _loadFilterLists();
     });
   }
 
   @override
+  void didUpdateWidget(covariant _BrowseGridBody oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.query.toLocation() != oldWidget.query.toLocation() &&
+        widget.query.toLocation() != _notifier.query.toLocation()) {
+      _selectQuery(widget.query, updateLocation: false);
+    }
+  }
+
+  Future<void> _refresh() async {
+    widget.session.touch(_notifier);
+    await Future.wait([
+      _notifier.refresh(),
+      ref.read(librarySnapshotProvider.notifier)
+          .refresh(force: true, type: _notifier.query.type),
+    ]);
+  }
+
+  void _selectQuery(BrowseQuery query, {bool updateLocation = true}) {
+    _notifier.removeListener(_onFeedChanged);
+    widget.session.release(_notifier);
+    setState(() {
+      _notifier = widget.session.acquire(query)..addListener(_onFeedChanged);
+      _displayedItems = const [];
+    });
+    final entry = _notifier;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !identical(entry, _notifier)) return;
+      if (_scrollController.hasClients) {
+        _scrollController.jumpTo(entry.scrollOffset.clamp(
+            0.0, _scrollController.position.maxScrollExtent));
+      }
+      _refresh();
+    });
+    if (updateLocation) GoRouter.maybeOf(context)?.replace(query.toLocation());
+  }
+
+  @override
   void dispose() {
-    _notifier
-      ..removeListener(_onFeedChanged)
-      ..dispose();
+    _notifier.removeListener(_onFeedChanged);
+    widget.session.release(_notifier);
     _scrollController
       ..removeListener(_maybeLoadMore)
       ..dispose();
@@ -89,16 +139,38 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
 
   void _onFeedChanged() {
     if (!mounted) return;
+    double? anchorOffset;
+    final oldOffset = _scrollController.hasClients ? _scrollController.offset : 0.0;
+    // Use the laid-out grid's scroll offset, which excludes filters/padding.
+    final grid = _gridKey.currentContext?.findRenderObject();
+    if (grid is RenderSliverGrid && _displayedItems.isNotEmpty &&
+        !identical(_displayedItems, _notifier.items)) {
+      final index = (grid.constraints.scrollOffset / _rowExtent).floor() * _columns;
+      if (index < _displayedItems.length) {
+        final anchor = _displayedItems[index];
+        final next = _notifier.items.indexWhere(
+            (item) => item.id == anchor.id && item.mediaType == anchor.mediaType);
+        if (next >= 0) {
+          anchorOffset = oldOffset +
+              ((next ~/ _columns) - (index ~/ _columns)) * _rowExtent;
+        }
+      }
+    }
     setState(() {});
-    // A wide grid whose first page does not reach the bottom never scrolls,
-    // so ask again after each page lands whether the next is already due.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _maybeLoadMore();
+      if (!mounted) return;
+      if (anchorOffset != null && _scrollController.hasClients &&
+          _scrollController.offset == oldOffset) {
+        _scrollController.jumpTo(anchorOffset.clamp(
+            0.0, _scrollController.position.maxScrollExtent));
+      }
+      _maybeLoadMore();
     });
   }
 
   void _maybeLoadMore() {
     if (!_scrollController.hasClients) return;
+    _notifier.scrollOffset = _scrollController.offset;
     if (_scrollController.position.extentAfter <
         BrowseGridScreen.loadMoreThreshold) {
       _notifier.loadMore();
@@ -169,16 +241,16 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
       ),
     );
     if (result == null || !mounted) return;
-    await _notifier.setQuery(_notifier.query.copyWith(filters: result));
+    _selectQuery(_notifier.query.copyWith(filters: result));
   }
 
   void _setSort(BrowseSort sort) {
     if (sort == _notifier.query.sort) return;
-    _notifier.setQuery(_notifier.query.copyWith(sort: sort));
+    _selectQuery(_notifier.query.copyWith(sort: sort));
   }
 
   void _clearFilters() =>
-      _notifier.setQuery(_notifier.query.copyWith(filters: BrowseFilters.none));
+      _selectQuery(_notifier.query.copyWith(filters: BrowseFilters.none));
 
   String get _title {
     final query = _notifier.query;
@@ -228,12 +300,10 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
 
   @override
   Widget build(BuildContext context) {
-    ref.listen(libraryRefreshTickProvider, (_, __) {
-      ref.read(librarySnapshotProvider.notifier).refresh(force: true);
-    });
     final snapshot = ref.watch(librarySnapshotProvider);
     final query = _notifier.query;
     final items = _notifier.items;
+    _displayedItems = items;
     final libraryStatus = buildSearchLibraryStatus(
       searchResults: items,
       movies: snapshot.movies,
@@ -242,107 +312,127 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
     );
     final isTv = query.type == MediaType.tv;
     final error = _notifier.error;
-    final settled = !_notifier.isLoading && items.isEmpty;
+    final settled = !_notifier.isLoading && items.isEmpty &&
+        (_notifier.hasLoaded || error != null);
 
-    return Scaffold(
-      appBar: AppBar(title: Text(_title)),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final horizontalPadding =
-              AppBreakpoints.isDesktop(context) ? 24.0 : 16.0;
-          final usable = constraints.maxWidth - 2 * horizontalPadding;
-          final columns = (usable / BrowseGridScreen.minCardWidth)
-              .floor()
-              .clamp(BrowseGridScreen.minColumns, BrowseGridScreen.maxColumns);
-          final cardWidth =
-              (usable - BrowseGridScreen.columnSpacing * (columns - 1)) /
-                  columns;
-          final extent = cardWidth * 1.5 +
-              MediaCard.rowExtraHeight(context, withSubtitle: isTv);
+    return DiscoverRefresh(
+      path: Uri.parse(query.toLocation()).path,
+      onRefresh: _refresh,
+      child: Scaffold(
+        appBar: AppBar(title: Text(_title)),
+        body: LayoutBuilder(
+          builder: (context, constraints) {
+            final horizontalPadding =
+                AppBreakpoints.isDesktop(context) ? 24.0 : 16.0;
+            final usable = constraints.maxWidth - 2 * horizontalPadding;
+            final columns = (usable / BrowseGridScreen.minCardWidth)
+                .floor()
+                .clamp(BrowseGridScreen.minColumns, BrowseGridScreen.maxColumns);
+            final cardWidth =
+                (usable - BrowseGridScreen.columnSpacing * (columns - 1)) /
+                    columns;
+            final extent = cardWidth * 1.5 +
+                MediaCard.rowExtraHeight(context, withSubtitle: isTv);
 
-          return CustomScrollView(
-            controller: _scrollController,
-            physics: const AlwaysScrollableScrollPhysics(),
-            slivers: [
-              if (query.feed.isFilterable)
-                SliverToBoxAdapter(child: _controls(horizontalPadding)),
-              if (settled && error != null)
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: FullScreenError(
-                    message: 'These titles could not be loaded.',
-                    onRetry: _notifier.load,
-                  ),
-                )
-              else if (settled)
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: _EmptyState(
-                    message: _emptyMessage,
-                    onClearFilters: query.feed.isFilterable &&
-                            !query.filters.isEmpty
-                        ? _clearFilters
-                        : null,
-                  ),
-                )
-              else
-                SliverPadding(
-                  padding: EdgeInsets.fromLTRB(
-                    horizontalPadding,
-                    8,
-                    horizontalPadding,
-                    8,
-                  ),
-                  sliver: SliverGrid(
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: columns,
-                      mainAxisExtent: extent,
-                      crossAxisSpacing: BrowseGridScreen.columnSpacing,
-                      mainAxisSpacing: BrowseGridScreen.rowSpacing,
-                    ),
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final item = items[index];
-                        return CatalogStatusBuilder(
-                          item: item,
-                          legacyStatus: libraryStatus[(item.mediaType, item.id)],
-                          builder: (status) => MediaCard(
-                          id: item.id,
-                          title: item.title,
-                          posterPath: item.posterPath,
-                          rating: item.voteAverage,
-                          statusLabel: status?.label,
-                          statusColor: status?.color,
-                          subtitle: status?.episodeSubtitle,
-                          is4K: status?.is4K ?? false,
-                          width: cardWidth,
-                          onTap: () => context.push(
-                            '/detail/${item.mediaType.name}/${item.id}',
-                          ),
-                          ),
-                        );
-                      },
-                      childCount: items.length,
-                    ),
-                  ),
-                ),
-              if (_notifier.isLoading)
-                const SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(vertical: 24),
-                    child: Center(
-                      child: SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+            _columns = columns;
+            _rowExtent = extent + BrowseGridScreen.rowSpacing;
+            return Stack(children: [
+              CustomScrollView(
+                controller: _scrollController,
+                physics: const AlwaysScrollableScrollPhysics(),
+                slivers: [
+                  if (query.feed.isFilterable)
+                    SliverToBoxAdapter(child: _controls(horizontalPadding)),
+                  if (settled && error != null)
+                    SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: FullScreenError(
+                        message: 'These titles could not be loaded.',
+                        onRetry: _notifier.load,
+                      ),
+                    )
+                  else if (settled)
+                    SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: _EmptyState(
+                        message: _emptyMessage,
+                        onClearFilters: query.feed.isFilterable &&
+                                !query.filters.isEmpty
+                            ? _clearFilters
+                            : null,
+                      ),
+                    )
+                  else
+                    SliverPadding(
+                      padding: EdgeInsets.fromLTRB(
+                        horizontalPadding,
+                        8,
+                        horizontalPadding,
+                        8,
+                      ),
+                      sliver: SliverGrid(
+                        key: _gridKey,
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: columns,
+                          mainAxisExtent: extent,
+                          crossAxisSpacing: BrowseGridScreen.columnSpacing,
+                          mainAxisSpacing: BrowseGridScreen.rowSpacing,
+                        ),
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final item = items[index];
+                            return CatalogStatusBuilder(
+                              key: ValueKey((item.mediaType, item.id)),
+                              item: item,
+                              legacyStatus: libraryStatus[(item.mediaType, item.id)],
+                              builder: (status) => MediaCard(
+                              id: item.id,
+                              title: item.title,
+                              posterPath: item.posterPath,
+                              rating: item.voteAverage,
+                              statusLabel: status?.label,
+                              statusColor: status?.color,
+                              subtitle: status?.episodeSubtitle,
+                              is4K: status?.is4K ?? false,
+                              width: cardWidth,
+                              onTap: () => context.push(
+                                '/detail/${item.mediaType.name}/${item.id}',
+                              ),
+                              ),
+                            );
+                          },
+                          childCount: items.length,
+                        ),
                       ),
                     ),
-                  ),
+                  if (_notifier.isLoading || (!_notifier.hasLoaded && error == null))
+                    const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 24),
+                        child: Center(
+                          child: SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
+                      ),
+                    ),
+                  const SliverToBoxAdapter(child: SizedBox(height: 24)),
+                ],
+              ),
+              if (items.isNotEmpty && (error != null ||
+                  (isTv ? snapshot.seriesFailed : snapshot.moviesFailed)))
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: SafeArea(child: ErrorBanner(
+                    message: 'Could not refresh these titles. Showing the last loaded results.',
+                    onRetry: _refresh,
+                  )),
                 ),
-              const SliverToBoxAdapter(child: SizedBox(height: 24)),
-            ],
-          );
-        },
+            ]);
+          },
+        ),
       ),
     );
   }

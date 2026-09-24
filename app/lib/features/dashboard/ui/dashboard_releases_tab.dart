@@ -1,11 +1,10 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import '../../../core/network/app_image_cache.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/day_sections.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../lidarr/data/lidarr_api_service.dart';
@@ -487,33 +486,17 @@ class _ReleaseTile extends StatelessWidget {
   }
 
   Widget _poster(bool isTv, bool isMusic) {
-    final placeholder = Container(
-      color: AppTheme.surfaceVariant,
-      child: Center(
-        child: Icon(
-          isMusic
-              ? Icons.album_outlined
-              : (isTv ? Icons.tv : Icons.movie_outlined),
-          color: AppTheme.textSecondary,
-          size: 20,
-        ),
-      ),
-    );
-
     return ClipRRect(
       borderRadius: BorderRadius.circular(6),
       child: SizedBox(
         width: 44,
         height: 66,
-        child: event.posterUrl != null
-            ? CachedNetworkImage(
-                imageUrl: event.posterUrl!,
-                fit: BoxFit.cover,
-                cacheManager: appImageCache,
-                placeholder: (_, __) => placeholder,
-                errorWidget: (_, __, ___) => placeholder,
-              )
-            : placeholder,
+        child: CachedImage(
+          url: event.posterUrl,
+          icon: isMusic
+              ? Icons.album_outlined
+              : (isTv ? Icons.tv : Icons.movie_outlined),
+        ),
       ),
     );
   }
