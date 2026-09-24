@@ -170,6 +170,11 @@ class _InteractiveMediaCardState extends State<_InteractiveMediaCard> {
     final badgeForeground = badgeColor.computeLuminance() > 0.24
         ? AppTheme.background
         : AppTheme.textPrimary;
+    // Both bottom badges share the rating's scaled line height, 4px vertical
+    // padding and 1px border. The 4K text stays capped but remains centered.
+    final bottomBadgeHeight =
+        (MediaQuery.textScalerOf(context).scale(10.5) * 1.45)
+            .clamp(12.0, double.infinity) + 10;
 
     return AnimatedScale(
       scale: emphasized && !reduceMotion ? 1.025 : 1,
@@ -288,10 +293,8 @@ class _InteractiveMediaCardState extends State<_InteractiveMediaCard> {
                               left: 7,
                               bottom: 7,
                               child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 7,
-                                  vertical: 4,
-                                ),
+                                height: bottomBadgeHeight,
+                                padding: const EdgeInsets.symmetric(horizontal: 7),
                                 decoration: BoxDecoration(
                                   color: AppTheme.background
                                       .withValues(alpha: 0.82),
@@ -316,6 +319,7 @@ class _InteractiveMediaCardState extends State<_InteractiveMediaCard> {
                                         color: AppTheme.textPrimary,
                                         fontSize: 10.5,
                                         fontWeight: FontWeight.w800,
+                                        height: 1.45,
                                       ),
                                     ),
                                   ],
@@ -336,10 +340,8 @@ class _InteractiveMediaCardState extends State<_InteractiveMediaCard> {
                                 maxScaleFactor: 1.3,
                                 child: Container(
                                   key: const ValueKey('media-card-4k'),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 5,
-                                    vertical: 3,
-                                  ),
+                                  height: bottomBadgeHeight,
+                                  padding: const EdgeInsets.symmetric(horizontal: 5),
                                   decoration: BoxDecoration(
                                     color: AppTheme.background
                                         .withValues(alpha: 0.82),
@@ -349,14 +351,17 @@ class _InteractiveMediaCardState extends State<_InteractiveMediaCard> {
                                           .withValues(alpha: 0.7),
                                     ),
                                   ),
-                                  child: const Text(
-                                    '4K',
-                                    style: TextStyle(
-                                      color: AppTheme.textPrimary,
-                                      fontSize: 10.5,
-                                      fontWeight: FontWeight.w900,
-                                      height: 1,
-                                      letterSpacing: 0.4,
+                                  child: const Center(
+                                    widthFactor: 1,
+                                    child: Text(
+                                      '4K',
+                                      style: TextStyle(
+                                        color: AppTheme.textPrimary,
+                                        fontSize: 10.5,
+                                        fontWeight: FontWeight.w900,
+                                        height: 1.45,
+                                        letterSpacing: 0.4,
+                                      ),
                                     ),
                                   ),
                                 ),
