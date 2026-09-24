@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -140,9 +141,62 @@ void main() {
     expect(find.byType(FullScreenError), findsNothing);
     expect(find.text('Movie 201'), findsOneWidget);
   });
+  testWidgets('Back paints all loaded pages at the same offset during slow and failed refreshes', (tester) async {
+    final adapter = _Adapter(topRatedPages: {
+      1: [for (var id = 201; id <= 220; id++) id],
+      2: [for (var id = 221; id <= 240; id++) id],
+    });
+    final router = await _pumpGrid(tester, adapter, '/browse/movie/top-rated');
+    ScrollController controller() => tester.widget<CustomScrollView>(
+        find.byType(CustomScrollView)).controller!;
+    controller().jumpTo(controller().position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(adapter.topRatedPagesRequested, [1, 2]);
+    final offset = controller().offset;
+    final titles = tester.widgetList<MediaCard>(find.byType(MediaCard))
+        .map((card) => card.title).toList();
+    router.push('/detail/movie/201');
+    await tester.pumpAndSettle();
+    final pending = Completer<void>();
+    adapter.pendingTopRated = pending;
+    router.pop();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 650));
+    expect(controller().offset, offset);
+    expect(tester.widgetList<MediaCard>(find.byType(MediaCard))
+        .map((card) => card.title), titles);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    adapter.failTopRated = true;
+    pending.complete();
+    await tester.pumpAndSettle();
+    expect(find.byType(ErrorBanner), findsOneWidget);
+    expect(controller().offset, offset);
+    expect(tester.widgetList<MediaCard>(find.byType(MediaCard))
+        .map((card) => card.title), titles);
+    expect(adapter.topRatedPagesRequested, [1, 2, 1]);
+  });
+
+  testWidgets('successful refresh keeps the visible title anchored after a rank change', (tester) async {
+    final pages = {1: [for (var id = 201; id <= 240; id++) id]};
+    final adapter = _Adapter(topRatedPages: pages);
+    final router = await _pumpGrid(tester, adapter, '/browse/movie/top-rated');
+    final scroll = tester.widget<CustomScrollView>(find.byType(CustomScrollView)).controller!;
+    scroll.jumpTo(700);
+    await tester.pumpAndSettle();
+    final grid = tester.widget<SliverGrid>(find.byType(SliverGrid));
+    final layout = grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount;
+    final expected = scroll.offset + layout.mainAxisExtent! + layout.mainAxisSpacing;
+    router.push('/detail/movie/201');
+    await tester.pumpAndSettle();
+    pages[1] = [101, 102, for (var id = 201; id <= 238; id++) id];
+    router.pop();
+    await tester.pumpAndSettle();
+    expect(scroll.offset, closeTo(expected, 0.01));
+  });
+
 }
 
-Future<void> _pumpGrid(
+Future<GoRouter> _pumpGrid(
   WidgetTester tester,
   _Adapter adapter,
   String location,
@@ -157,6 +211,8 @@ Future<void> _pumpGrid(
   final router = GoRouter(
     initialLocation: location,
     routes: [
+      GoRoute(path: '/detail/:type/:id', builder: (_, __) =>
+          const Scaffold(body: Text('Detail fixture'))),
       GoRoute(
         path: '/browse/:type/:feed',
         builder: (_, state) =>
@@ -177,6 +233,8 @@ Future<void> _pumpGrid(
     ),
   );
   await tester.pumpAndSettle();
+  addTearDown(router.dispose);
+  return router;
 }
 
 const _state = AuthState(
@@ -224,6 +282,7 @@ class _Adapter implements HttpClientAdapter {
   final Map<int, List<int>> topRatedPages;
   final List<int> discoverIds;
   bool failTopRated;
+  Completer<void>? pendingTopRated;
 
   final List<int> topRatedPagesRequested = [];
   final List<Uri> discoverRequests = [];
@@ -260,6 +319,7 @@ class _Adapter implements HttpClientAdapter {
         ];
       case '/api/discover/movies/top-rated':
         topRatedPagesRequested.add(page);
+        await pendingTopRated?.future;
         if (failTopRated) {
           return ResponseBody.fromString('{"error":"down"}', 503, headers: {
             'content-type': ['application/json'],

@@ -115,7 +115,7 @@ void main() {
     expect(_pagesOf(h.adapter, topRated), [1, 2]);
   });
 
-  test('bootstrap after paging restarts the row from page one', () async {
+  test('bootstrap refreshes every loaded page without shrinking the row', () async {
     final h = _harness((uri) => switch (uri.path) {
           upcoming => _tmdbPage(_page(uri), [_page(uri)], totalPages: 5),
           _ => _empty,
@@ -126,8 +126,58 @@ void main() {
     expect(_ids(h.notifier.state.upcoming), [1, 2]);
 
     await h.notifier.bootstrap();
-    expect(_ids(h.notifier.state.upcoming), [1]);
-    expect(_pagesOf(h.adapter, upcoming), [1, 2, 1]);
+    expect(_ids(h.notifier.state.upcoming), [1, 2]);
+    expect(_pagesOf(h.adapter, upcoming), [1, 2, 1, 2]);
+  });
+
+  test('slow overlapping refreshes retain rows and suppress pagination', () async {
+    final pending = Completer<Object>();
+    var refreshing = false;
+    final h = _harness((uri) {
+      if (uri.path != topRated) return _empty;
+      if (refreshing) return pending.future;
+      return _tmdbPage(_page(uri), [_page(uri)], totalPages: 4);
+    });
+    await h.notifier.bootstrap();
+    refreshing = true;
+    final first = h.notifier.bootstrap();
+    final second = h.notifier.bootstrap();
+    expect(_ids(h.notifier.state.topRated), [1]);
+    expect(h.notifier.state.isLoadingTopRated, isFalse);
+    await h.notifier.loadMoreTopRated();
+    pending.complete(_tmdbPage(1, [9], totalPages: 4));
+    await Future.wait([first, second]);
+    expect(_ids(h.notifier.state.topRated), [9]);
+    expect(_pagesOf(h.adapter, topRated), [1, 1]);
+  });
+
+  test('failed refresh retains its row and offers retry; empty success clears it', () async {
+    var fail = false;
+    var empty = false;
+    final h = _harness((uri) {
+      if (uri.path != topRated) return _empty;
+      if (fail) throw StateError('offline');
+      return empty ? _empty : _tmdbPage(1, [1], totalPages: 1);
+    });
+    await h.notifier.bootstrap();
+    fail = true;
+    await h.notifier.bootstrap();
+    expect(_ids(h.notifier.state.topRated), [1]);
+    expect(h.notifier.state.failedRows, contains('topRated'));
+    fail = false;
+    empty = true;
+    await h.notifier.bootstrap();
+    expect(h.notifier.state.topRated, isEmpty);
+    expect(h.notifier.state.failedRows, isNot(contains('topRated')));
+  });
+
+  test('disposing during a refresh discards its late responses', () async {
+    final pending = Completer<Object>();
+    final h = _harness((_) => pending.future);
+    final read = h.notifier.bootstrap();
+    h.notifier.dispose();
+    pending.complete(_empty);
+    await read;
   });
 
   test('Airing This Week loads from the on-the-air feed', () async {

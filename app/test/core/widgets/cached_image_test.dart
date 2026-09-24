@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cached_network_image_platform_interface/cached_network_image_platform_interface.dart'
     show ImageRenderMethodForWeb;
@@ -6,6 +8,62 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('web visible and prefetched artwork use the standard provider with headers', () {
+    const source = (url: 'https://cantina.example/art.jpg',
+        headers: {'Authorization': 'Bearer test'});
+    final provider = cachedImageProvider(source, isWeb: true) as NetworkImage;
+    expect(provider.headers, source.headers);
+    expect(provider.webHtmlElementStrategy, WebHtmlElementStrategy.never);
+    expect(provider, cachedImageProvider(source, isWeb: true));
+  });
+
+  test('headered cache keys survive token rotation but isolate access contexts', () async {
+    ImageProvider provider(String token, String scope) => cachedImageProvider(
+        (url: 'https://cantina.example/art.jpg', headers: {'Authorization': 'Bearer $token'}),
+        isWeb: true, cacheScope: scope);
+    final before = provider('old', 'account-one') as SessionNetworkImage;
+    final rotated = provider('new', 'account-one') as SessionNetworkImage;
+    expect(before, isNot(rotated), reason: 'retry failed reads with fresh headers');
+    final oldKey = await before.obtainKey(ImageConfiguration.empty);
+    final newKey = await rotated.obtainKey(ImageConfiguration.empty);
+    expect(oldKey, newKey);
+    expect(oldKey.hashCode, newKey.hashCode);
+    expect(rotated.networkImage.headers, {'Authorization': 'Bearer new'});
+    expect(newKey, isNot(await provider('new', 'account-two').obtainKey(ImageConfiguration.empty)));
+  });
+
+  testWidgets('token rotation reuses a decoded image and retries a failed old-token read', (tester) async {
+    Widget frame(_NetworkFixture network, String scope) => MaterialApp(home: Image(
+      image: SessionNetworkImage(network, scope),
+      errorBuilder: (_, __, ___) => const Text('Unavailable'),
+    ));
+    final image = (await tester.runAsync(() => createTestImage(width: 4, height: 4)))!;
+    addTearDown(image.dispose);
+    final first = _NetworkFixture('old', image);
+    await tester.pumpWidget(frame(first, 'account-one'));
+    await tester.pumpAndSettle();
+    final decoded = tester.widget<RawImage>(find.byType(RawImage)).image;
+    expect(decoded, isNotNull);
+    final rotated = _NetworkFixture('new', image);
+    await tester.pumpWidget(frame(rotated, 'account-one'));
+    await tester.pump();
+    expect(rotated.reads, 0);
+    expect(tester.widget<RawImage>(find.byType(RawImage)).image, same(decoded));
+
+    final denied = _NetworkFixture('expired', image, fail: true);
+    await tester.pumpWidget(frame(denied, 'account-two'));
+    await tester.pumpAndSettle();
+    expect(find.text('Unavailable'), findsOneWidget);
+    final refreshed = _NetworkFixture('fresh', image);
+    await tester.pumpWidget(frame(refreshed, 'account-two'));
+    await tester.pumpAndSettle();
+    expect(refreshed.reads, 1);
+    expect(find.text('Unavailable'), findsNothing);
+    expect(tester.widget<RawImage>(find.byType(RawImage)).image, isNotNull);
+    await tester.pumpWidget(const SizedBox());
+    PaintingBinding.instance.imageCache.clear();
+  });
+
   group('Hardcover web artwork', () {
     const source = (
       url: 'https://assets.hardcover.app/edition/1/cover.jpg',
@@ -234,7 +292,7 @@ void main() {
   });
 
   group('CachedImage render method', () {
-    testWidgets('headered requests use the HTTP fetch path on web',
+    testWidgets('native headered artwork retains its cached transport',
         (tester) async {
       await tester.pumpWidget(
         const MaterialApp(
@@ -267,4 +325,32 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
     });
   });
+}
+
+class _NetworkFixture extends ImageProvider<NetworkImage> implements NetworkImage {
+  _NetworkFixture(String token, this.image, {this.fail = false})
+      : headers = {'Authorization': 'Bearer $token'};
+  final bool fail;
+  final ui.Image image;
+  int reads = 0;
+  @override
+  final Map<String, String> headers;
+  @override
+  String get url => 'https://fixture.invalid/poster.png';
+  @override
+  double get scale => 1;
+  @override
+  WebHtmlElementStrategy get webHtmlElementStrategy => WebHtmlElementStrategy.never;
+  @override
+  Future<NetworkImage> obtainKey(ImageConfiguration configuration) async => this;
+  @override
+  ImageStreamCompleter loadImage(NetworkImage key, ImageDecoderCallback decode) =>
+      OneFrameImageStreamCompleter(() async {
+        reads++;
+        if (fail) throw StateError('expired image credentials');
+        return ImageInfo(image: image.clone());
+      }());
+  @override
+  ImageStreamCompleter loadBuffer(NetworkImage key, DecoderBufferCallback decode) =>
+      throw UnimplementedError();
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -6,6 +7,9 @@ import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/discover/logic/library_snapshot_provider.dart';
+import 'package:cantinarr/features/discover/data/tmdb_models.dart';
+import 'package:cantinarr/features/discover/logic/browse_session_provider.dart';
+import 'package:cantinarr/features/discover/logic/browse_query.dart';
 import 'package:cantinarr/features/radarr/data/radarr_models.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,33 +24,34 @@ void main() {
     h.notifier.seed(movies: [_movie(1)]);
     expect(h.container.read(librarySnapshotProvider).movies, hasLength(1));
 
-    await h.notifier.refresh();
+    await h.notifier.refresh(type: MediaType.movie);
     expect(h.adapter.requested, isEmpty);
   });
 
   test('an empty snapshot fetches both libraries once, then rests', () async {
     final h = await _harness();
     await h.notifier.refresh();
-    expect(h.adapter.requested, [_moviesPath, _seriesPath]);
+    expect(h.adapter.requested, [_moviesPath, _seriesPath, '/api/instances/movies/api/v3/queue',
+      '/api/instances/shows/api/v3/history', '/api/instances/shows/api/v3/calendar']);
     final snapshot = h.container.read(librarySnapshotProvider);
     expect(snapshot.movies.single.tmdbId, 603);
     expect(snapshot.series.single.title, 'Severance');
 
     await h.notifier.refresh();
-    expect(h.adapter.requested, hasLength(2));
+    expect(h.adapter.requested, hasLength(5));
   });
 
   test('a forced refresh fetches even while fresh', () async {
     final h = await _harness();
     await h.notifier.refresh();
     await h.notifier.refresh(force: true);
-    expect(h.adapter.requested, hasLength(4));
+    expect(h.adapter.requested, hasLength(10));
   });
 
   test('concurrent readers share one fetch', () async {
     final h = await _harness();
     await Future.wait([h.notifier.refresh(), h.notifier.refresh()]);
-    expect(h.adapter.requested, hasLength(2));
+    expect(h.adapter.requested, hasLength(5));
   });
 
   test('an unreadable library keeps the last good list', () async {
@@ -75,8 +80,76 @@ void main() {
     final snapshot = h.container.read(librarySnapshotProvider);
     expect(snapshot.serverUrl, 'http://elsewhere');
     expect(snapshot.movies.single.tmdbId, 603);
-    expect(h.adapter.requested, [_moviesPath, _seriesPath]);
+    expect(h.adapter.requested, [_moviesPath, _seriesPath, '/api/instances/movies/api/v3/queue',
+      '/api/instances/shows/api/v3/history', '/api/instances/shows/api/v3/calendar']);
   });
+  test('seeding Movies does not mark an unread TV library fresh', () async {
+    final h = await _harness();
+    h.notifier.seed(movies: [_movie(1)]);
+    await h.notifier.refresh(type: MediaType.tv);
+    expect(h.adapter.requested, contains(_seriesPath));
+    expect(h.adapter.requested, isNot(contains(_moviesPath)));
+  });
+
+  test('token rotation retains libraries and browse cache', () async {
+    final h = await _harness();
+    h.notifier.seed(movies: [_movie(1)]);
+    final cache = h.container.read(browseSessionProvider);
+    h.auth.switchTo(_state.copyWith(connection:
+        _state.connection!.copyWith(accessToken: 'rotated')));
+    await h.container.pump();
+    expect(h.container.read(librarySnapshotProvider).movies.single.tmdbId, 1);
+    expect(h.container.read(browseSessionProvider), same(cache));
+  });
+
+  test('account, permissions, content limits, grants and defaults clear session data', () async {
+    final changes = [
+      _state.copyWith(user: const UserProfile(id: 2, username: 'second', role: 'user')),
+      _state.copyWith(user: const UserProfile(id: 1, username: 'tester', role: 'user',
+          permissions: ['media:discover'])),
+      _state.copyWith(user: const UserProfile(id: 1, username: 'tester', role: 'user',
+          child: true, contentLimits: ContentLimits(maxMovieRating: 'PG',
+              maxTvRating: 'TV-G', ratingRegion: 'US'))),
+      _state.copyWith(connection: _state.connection!.copyWith(instances: [])),
+      _state.copyWith(connection: _state.connection!.copyWith(instances: [
+        const ServiceInstance(id: 'other', serviceType: 'radarr', name: 'Other'),
+      ])),
+    ];
+    for (final changed in changes) {
+      final h = await _harness();
+      h.notifier.seed(movies: [_movie(1)]);
+      final cache = h.container.read(browseSessionProvider);
+      cache.acquire(const BrowseQuery(type: MediaType.movie, feed: BrowseFeed.popular));
+      h.auth.switchTo(changed);
+      await h.container.pump();
+      expect(h.container.read(librarySnapshotProvider).movies, isEmpty);
+      expect(h.container.read(browseSessionProvider), isNot(same(cache)));
+    }
+  });
+
+  test('a late library response cannot repopulate a changed account', () async {
+    final h = await _harness();
+    final pending = Completer<void>();
+    h.adapter.waitForMovies = pending;
+    final read = h.notifier.refresh(type: MediaType.movie);
+    await Future<void>.delayed(Duration.zero);
+    h.auth.switchTo(_state.copyWith(user: const UserProfile(
+        id: 2, username: 'second', role: 'user')));
+    await h.container.pump();
+    pending.complete();
+    await read;
+    expect(h.container.read(librarySnapshotProvider).movies, isEmpty);
+  });
+
+  test('denied reads clear cached titles instead of presenting stale access', () async {
+    final h = await _harness();
+    h.notifier.seed(movies: [_movie(1)]);
+    h.adapter.movieStatus = 403;
+    await h.notifier.refresh(force: true, type: MediaType.movie);
+    expect(h.container.read(librarySnapshotProvider).movies, isEmpty);
+    expect(h.container.read(librarySnapshotProvider).moviesFailed, isTrue);
+  });
+
 }
 
 RadarrMovie _movie(int tmdbId) => RadarrMovie.fromJson({
@@ -153,6 +226,8 @@ class _SwitchableAuth extends AuthNotifier {
 class _Adapter implements HttpClientAdapter {
   final List<String> requested = [];
   bool failMovies = false;
+  Completer<void>? waitForMovies;
+  int movieStatus = 200;
 
   @override
   Future<ResponseBody> fetch(
@@ -161,6 +236,14 @@ class _Adapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     requested.add(options.path);
+    if (options.path == _moviesPath) {
+      await waitForMovies?.future;
+      if (movieStatus != 200) {
+        return ResponseBody.fromString('{}', movieStatus, headers: {
+          'content-type': ['application/json'],
+        });
+      }
+    }
     if (options.path == _moviesPath && failMovies) {
       return ResponseBody.fromString('{"error":"down"}', 503, headers: {
         'content-type': ['application/json'],
@@ -187,6 +270,8 @@ class _Adapter implements HttpClientAdapter {
             'images': <Object>[],
           },
         ],
+      '/api/instances/movies/api/v3/queue' ||
+      '/api/instances/shows/api/v3/history' => {'records': <Object>[]},
       _ => <Object>[],
     };
     return ResponseBody.fromString(jsonEncode(body), 200, headers: {

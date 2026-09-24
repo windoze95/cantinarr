@@ -6,6 +6,7 @@ import 'package:cantinarr/features/discover/data/discover_api_service.dart';
 import 'package:cantinarr/features/discover/data/tmdb_models.dart';
 import 'package:cantinarr/features/discover/logic/browse_grid_notifier.dart';
 import 'package:cantinarr/features/discover/logic/browse_query.dart';
+import 'package:cantinarr/features/discover/logic/browse_session_provider.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -312,4 +313,155 @@ void main() {
     await h.notifier.load();
     expect(h.notifier.featuredSource, 'trakt_trending');
   });
+  test('refresh commits the complete loaded window and retains it on a failed page', () async {
+    var changed = false;
+    var failPageTwo = false;
+    final pending = Completer<Object>();
+    final h = _harness(
+      const BrowseQuery(type: MediaType.movie, feed: BrowseFeed.popular),
+      (uri) {
+        final page = _pageOf(uri);
+        if (failPageTwo && page == 2) return 503;
+        if (changed && page == 1) return pending.future;
+        return _page(page, [page + (changed ? 10 : 0)], totalPages: 3);
+      },
+    );
+    await h.notifier.load();
+    await h.notifier.loadMore();
+    h.notifier.scrollOffset = 200;
+    changed = true;
+    failPageTwo = true;
+    final first = h.notifier.refresh();
+    final second = h.notifier.refresh();
+    expect(_ids(h.notifier.items), [1, 2]);
+    expect(h.notifier.isLoading, isFalse);
+    await h.notifier.loadMore();
+    pending.complete(_page(1, [11], totalPages: 3));
+    await Future.wait([first, second]);
+    expect(_ids(h.notifier.items), [1, 2]);
+    expect(h.notifier.error, isNotNull);
+    expect(h.notifier.scrollOffset, 200);
+    expect(h.adapter.requested.map(_pageOf), [1, 2, 1, 2]);
+    failPageTwo = false;
+    await h.notifier.refresh();
+    expect(_ids(h.notifier.items), [11, 12]);
+    expect(h.notifier.error, isNull);
+    await h.notifier.loadMore();
+    expect(_ids(h.notifier.items), [11, 12, 13]);
+  });
+
+  test('refresh fences a pending pagination result', () async {
+    final pending = Completer<Object>();
+    var changed = false;
+    final h = _harness(
+      const BrowseQuery(type: MediaType.tv, feed: BrowseFeed.popular),
+      (uri) => _pageOf(uri) == 2 ? pending.future
+          : _page(1, [changed ? 9 : 1], totalPages: 3),
+    );
+    await h.notifier.load();
+    final more = h.notifier.loadMore();
+    await Future<void>.delayed(Duration.zero);
+    changed = true;
+    await h.notifier.refresh();
+    pending.complete(_page(2, [2], totalPages: 3));
+    await more;
+    expect(_ids(h.notifier.items), [9]);
+    expect(h.notifier.isLoading, isFalse);
+  });
+
+  test('successful empty refresh clears old titles; denied refresh clears them too', () async {
+    final h = _harness(
+      const BrowseQuery(type: MediaType.movie, feed: BrowseFeed.popular),
+      (_) => _page(1, [1]),
+    );
+    await h.notifier.load();
+    h.adapter.respond = (_) => _page(1, []);
+    await h.notifier.refresh();
+    expect(h.notifier.items, isEmpty);
+    expect(h.notifier.error, isNull);
+    expect(h.notifier.hasLoaded, isTrue);
+    h.adapter.respond = (_) => _page(1, [2]);
+    await h.notifier.refresh();
+    h.adapter.respond = (_) => 403;
+    await h.notifier.refresh();
+    expect(h.notifier.items, isEmpty);
+    expect(h.notifier.error, isNotNull);
+  });
+
+  test('fifty-page limit also bounds empty-page walking and refresh', () async {
+    final h = _harness(
+      const BrowseQuery(type: MediaType.movie, feed: BrowseFeed.popular),
+      (uri) => _page(_pageOf(uri), _pageOf(uri) == 50 ? [] : [_pageOf(uri)],
+          totalPages: 500),
+    );
+    await h.notifier.load();
+    for (var page = 2; page <= 52; page++) { await h.notifier.loadMore(); }
+    expect(h.adapter.requested.map(_pageOf).last, 50);
+    await h.notifier.refresh();
+    expect(h.adapter.requested.map(_pageOf).last, 50);
+    expect(h.notifier.items, hasLength(49));
+  });
+
+  test('query changes and disposal reject late refresh results', () async {
+    final pending = Completer<Object>();
+    final h = _harness(
+      const BrowseQuery(type: MediaType.movie, feed: BrowseFeed.discover),
+      (uri) => uri.queryParameters['with_genres'] == '28'
+          ? _page(1, [28]) : pending.future,
+    );
+    final first = h.notifier.refresh();
+    await h.notifier.setQuery(h.notifier.query.copyWith(
+        filters: const BrowseFilters(genreIds: [28])));
+    pending.complete(_page(1, [1]));
+    await first;
+    expect(_ids(h.notifier.items), [28]);
+    final pendingAgain = Completer<Object>();
+    h.adapter.respond = (_) => pendingAgain.future;
+    final read = h.notifier.refresh();
+    h.notifier.dispose();
+    pendingAgain.complete(_page(1, [2]));
+    await read;
+  });
+
+  test('session cache reuses complete queries and evicts the least recently used', () async {
+    final adapter = _RecordingAdapter((uri) => _page(1, [1]));
+    final cache = BrowseSession(DiscoverApiService(backendDio:
+        Dio(BaseOptions(baseUrl: 'http://cantinarr.test'))..httpClientAdapter = adapter));
+    addTearDown(cache.dispose);
+    const query = BrowseQuery(type: MediaType.movie, feed: BrowseFeed.discover,
+        filters: BrowseFilters(language: 'ko', providerIds: [8], watchRegion: 'GB',
+          keywords: [TaggedId(id: 1)], companies: [TaggedId(id: 2)]));
+    final first = cache.acquire(query);
+    await first.load();
+    first.scrollOffset = 120;
+    cache.release(first);
+    final sameQuery = cache.acquire(BrowseQuery.tryParse(Uri.parse(query.toLocation()))!);
+    expect(sameQuery, same(first));
+    expect(sameQuery.scrollOffset, 120);
+    expect(sameQuery.items, hasLength(1));
+    cache.release(sameQuery);
+    for (var i = 0; i < BrowseSession.maxQueries; i++) {
+      final entry = cache.acquire(query.copyWith(filters: BrowseFilters(yearFrom: 2000 + i)));
+      cache.release(entry);
+    }
+    expect(cache.acquire(query), isNot(same(first)));
+  });
+
+  test('returning to a mounted query renews its place in the cache', () {
+    final cache = BrowseSession(DiscoverApiService(backendDio: Dio()));
+    addTearDown(cache.dispose);
+    BrowseQuery query(int id) => BrowseQuery(type: MediaType.movie,
+        feed: BrowseFeed.similar, id: id);
+    final first = cache.acquire(query(1));
+    cache.release(first);
+    for (var id = 2; id <= 8; id++) {
+      final entry = cache.acquire(query(id));
+      cache.release(entry);
+    }
+    cache.touch(first);
+    final ninth = cache.acquire(query(9));
+    cache.release(ninth);
+    expect(cache.acquire(query(1)), same(first));
+  });
+
 }

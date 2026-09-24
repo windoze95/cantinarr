@@ -28,6 +28,7 @@ class CategoryRow extends StatelessWidget {
   /// *later* badge-arrival transition.
   final bool isTvRow;
   final bool resolveTVStatus;
+  final int paginationRevision;
 
   /// Availability badge data keyed by (media type, TMDB id). Defaults to
   /// empty so every existing call site keeps compiling and a row not yet fed
@@ -45,6 +46,7 @@ class CategoryRow extends StatelessWidget {
     required this.isLoading,
     required this.isTvRow,
     this.resolveTVStatus = false,
+    this.paginationRevision = 0,
     this.onLoadMore,
     this.libraryStatus = const {},
     this.onSeeAll,
@@ -82,6 +84,9 @@ class CategoryRow extends StatelessWidget {
           const SizedBox(height: 12),
           HorizontalItemRow<MediaItem>(
             items: items,
+            itemKey: (item) => (item.mediaType, item.id),
+            itemExtent: cardWidth + 14,
+            paginationRevision: paginationRevision,
             isLoading: isLoading,
             height: cardWidth * 1.5 + rowExtra,
             onItemAppear: onLoadMore,
