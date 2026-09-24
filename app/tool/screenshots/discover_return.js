@@ -108,7 +108,8 @@ async function compareArtwork(page, before, after) {
     ]) {
       const browser = await engine.launch({ headless: true, ...options });
       try {
-        for (const route of ['/dashboard/movies', '/dashboard/tv', '/browse/movie/featured', '/browse/tv/featured']) {
+        for (const route of (process.argv.includes('--detail-only') ? [] :
+          ['/dashboard/movies', '/dashboard/tv', '/browse/movie/featured', '/browse/tv/featured'])) {
           mode = {};
           const page = await browser.newPage({ viewport: { width: 1440, height: 1080 }, deviceScaleFactor: 1 });
           const warnings = [];
@@ -160,6 +161,55 @@ async function compareArtwork(page, before, after) {
           console.log('PASS', stem, JSON.stringify(cases.map(c => c.fraction)));
           await page.close();
         }
+        // Keep both related rows and the hero visible so Back is checked
+        // before any scroll can repaint a broken browser texture.
+        mode = {};
+        const page = await browser.newPage({ viewport: { width: 1440, height: 2400 }, deviceScaleFactor: 1 });
+        const route = '/detail/movie/687163';
+        const stem = `${name}-movie-detail-related`;
+        const warnings = [];
+        let phase = 'initial';
+        page.on('console', msg => { if (/Resource has no data|Uploading zeros/.test(msg.text())) warnings.push({ phase, text: msg.text() }); });
+        await page.goto(`${base}/#${route}`);
+        await page.locator('flt-semantics').first().waitFor({ timeout: 60000 });
+        await page.waitForTimeout(2200);
+        await page.mouse.move(0, 0);
+        const heroClip = { x: 280, y: 90, width: 1160, height: 300 };
+        const before = await page.screenshot({ clip: heroClip, path: path.join(output, `${stem}-before.png`) });
+        const baseline = await compareArtwork(page, before, before);
+        assert(baseline.artworkPixels > 15000, `${stem}: hero artwork did not load (${baseline.artworkPixels})`);
+        const cases = [];
+        for (const section of ['Recommended', 'Similar', 'Recommended']) {
+          const target = page.getByRole('button', { name: /The Super Mario Galaxy Movie/ })
+            .nth(section === 'Recommended' ? 0 : 1);
+          const bounds = await target.boundingBox();
+          assert(bounds && bounds.y >= 0 && bounds.y + bounds.height <= 2400,
+            `${stem}: ${section} must be visible without scrolling`);
+          phase = 'detail';
+          await target.click();
+          await page.waitForURL(/#\/detail\/movie\/1226863/);
+          await page.waitForTimeout(1500);
+          await page.mouse.move(0, 0);
+          const relatedHero = await page.screenshot({ clip: heroClip });
+          const relatedPixels = await compareArtwork(page, relatedHero, relatedHero);
+          assert(relatedPixels.artworkPixels > 15000, `${stem}: authenticated related hero did not load`);
+          const imageCount = images.length;
+          phase = 'back';
+          await page.goBack();
+          await page.waitForURL(url => url.hash === `#${route}`);
+          await page.mouse.move(0, 0);
+          await page.waitForTimeout(1100);
+          const after = await page.screenshot({ clip: heroClip, path: path.join(output, `${stem}-back-${cases.length}.png`) });
+          const pixels = await compareArtwork(page, before, after);
+          assert(pixels.fraction > 0.99, `${stem}: ${section} hero blanked on Back: ${JSON.stringify(pixels)}`);
+          assert.equal(images.length, imageCount, `${stem}: unchanged hero fetched again on Back`);
+          cases.push({ section, ...pixels, additionalImageReads: images.length - imageCount });
+        }
+        assert.equal(warnings.filter(w => w.phase === 'back').length, 0, `${stem}: empty hero texture on Back`);
+        report.push({ browser: name, version: browser.version(), route, cases, warnings });
+        fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify(report, null, 2));
+        console.log('PASS', stem, JSON.stringify(cases.map(c => c.fraction)));
+        await page.close();
       } finally { await browser.close(); }
     }
     assert(images.some(i => i.authenticated), 'Authenticated artwork was not exercised');
