@@ -599,6 +599,10 @@ class ServerConfig {
   final bool downloadsActivity;
   final String downloadsUserScope;
 
+  /// An admin's 4K badges switch (Settings > Discover): covers mark titles
+  /// whose library copy measures 4K. False on servers that predate it.
+  final bool cover4KBadges;
+
   /// Null means the server predates Discover visibility preferences.
   final List<String>? hiddenDiscoverTabs;
 
@@ -619,6 +623,7 @@ class ServerConfig {
     this.requestQuotas = false,
     this.downloadsActivity = false,
     this.downloadsUserScope = 'all',
+    this.cover4KBadges = false,
     this.hiddenDiscoverTabs,
   });
 
@@ -647,6 +652,7 @@ class ServerConfig {
       requestQuotas: json['request_quotas'] as bool? ?? false,
       downloadsActivity: json['downloads_activity'] as bool? ?? false,
       downloadsUserScope: json['downloads_user_scope'] as String? ?? 'all',
+      cover4KBadges: json['cover_4k_badges'] as bool? ?? false,
       hiddenDiscoverTabs:
           (json['hidden_discover_tabs'] as List?)?.cast<String>(),
     );

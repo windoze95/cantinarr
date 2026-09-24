@@ -395,6 +395,7 @@ void main() {
           'english_only': false,
           'sources': <dynamic>[],
           'trakt_configured': false,
+          'cover_4k_badges': false,
         },
       }),
     );

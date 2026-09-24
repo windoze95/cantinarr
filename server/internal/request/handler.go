@@ -125,10 +125,26 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	resp, err := h.service.getUserStatus(claims.UserID, tmdbID, mediaType, r.URL.Query().Get("instance_id"), includeInstances)
+	// Opt-in because answering costs a Sonarr read per whole show: catalog
+	// cards ask while the admin's 4K badges switch is on, and the server
+	// checks the switch itself. Movies need no server help: the Radarr list
+	// the app already reads carries each file's measurement.
+	include4K := false
+	if raw := r.URL.Query().Get("include_4k"); raw != "" {
+		include4K, err = strconv.ParseBool(raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid include_4k"})
+			return
+		}
+	}
+	instanceID := r.URL.Query().Get("instance_id")
+	resp, err := h.service.getUserStatus(claims.UserID, tmdbID, mediaType, instanceID, includeInstances)
 	if err != nil {
 		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
+	}
+	if include4K && mediaType == "tv" {
+		h.service.markTV4K(claims.UserID, instanceID, resp)
 	}
 
 	writeJSON(w, http.StatusOK, resp)

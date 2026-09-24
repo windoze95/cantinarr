@@ -39,6 +39,7 @@ The [complete searchable-settings catalog](/reference/generated/settings/) is bu
 | You want to | Look for | Read |
 | --- | --- | --- |
 | Choose catalog feeds or language | Discover | [Catalog providers](/integrations/discovery-providers/) |
+| Mark 4K titles on covers | Discover > Show 4K badges | [4K on covers](/use/status/#4k-on-covers) |
 | Hide an unconfigured tab | Modules > Discover > Discover tabs | [Navigation](/admin/modules/) |
 | Configure included AI | Providers & Credentials | [AI administration](/admin/ai/) |
 | Control assistant tools | AI Tools | [MCP](/integrations/mcp/) |

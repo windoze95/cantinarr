@@ -113,6 +113,10 @@ type Settings struct {
 	// media type. Configured instances always restore their tab, even offline.
 	HiddenWhenUnconfigured map[string]bool `json:"hidden_when_unconfigured,omitempty"`
 
+	// Cover4KBadges marks movie and show covers whose library copy measures
+	// 4K, for everyone on the server. Off until an admin turns it on.
+	Cover4KBadges bool `json:"cover_4k_badges,omitempty"`
+
 	// SetupSkippedItems are the checklist keys an admin has skipped, so unused
 	// features stop counting as unfinished. The set is server-wide and every
 	// skip is reversible from the checklist. The handler validates known keys.
@@ -306,6 +310,7 @@ type DiscoveryPatch struct {
 	Source                 *string         `json:"source"`
 	EnglishOnly            *bool           `json:"english_only"`
 	HiddenWhenUnconfigured map[string]bool `json:"hidden_when_unconfigured"`
+	Cover4KBadges          *bool           `json:"cover_4k_badges"`
 }
 
 // DiscoverServices maps media identities onto the configured service inventory.
@@ -354,6 +359,10 @@ func (s *Service) UpdateDiscovery(p DiscoveryPatch) (Settings, error) {
 	}
 	for mediaType, hidden := range p.HiddenWhenUnconfigured {
 		next.HiddenWhenUnconfigured[mediaType] = hidden
+	}
+	// Like a hide choice, this is not a row decision and freezes no default.
+	if p.Cover4KBadges != nil {
+		next.Cover4KBadges = *p.Cover4KBadges
 	}
 	return s.save(next)
 }

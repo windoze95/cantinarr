@@ -194,6 +194,10 @@ class RadarrMovieFile {
   /// Radarr, which can predate the file by months.
   final DateTime? dateAdded;
 
+  /// The picture size Radarr measured from the file, as `WIDTHxHEIGHT`. Null
+  /// when Radarr never analysed the file.
+  final String? videoResolution;
+
   const RadarrMovieFile({
     required this.id,
     this.relativePath,
@@ -203,6 +207,7 @@ class RadarrMovieFile {
     this.qualityCutoffNotMet = false,
     this.releaseGroup,
     this.dateAdded,
+    this.videoResolution,
   });
 
   factory RadarrMovieFile.fromJson(Map<String, dynamic> json) =>
@@ -216,10 +221,26 @@ class RadarrMovieFile {
         qualityCutoffNotMet: json['qualityCutoffNotMet'] as bool? ?? false,
         releaseGroup: json['releaseGroup'] as String?,
         dateAdded: DateTime.tryParse(json['dateAdded'] as String? ?? ''),
+        videoResolution: (json['mediaInfo'] as Map<String, dynamic>?)?[
+            'resolution'] as String?,
       );
 
   String get sizeFormatted =>
       (size == null || size! <= 0) ? 'Unknown' : _formatBytes(size!);
+
+  /// Whether Radarr measured the file at 4K: at least 3200 pixels wide or
+  /// 2100 tall, the line Radarr itself draws for 2160p, so a wide 3840x1600
+  /// film counts. [quality] is deliberately ignored: with file analysis
+  /// switched off Radarr takes it from the release name alone. A file Radarr
+  /// never measured is not 4K.
+  bool get measures4K {
+    final parts = (videoResolution ?? '').trim().split('x');
+    if (parts.length != 2) return false;
+    final width = int.tryParse(parts[0]) ?? 0;
+    final height = int.tryParse(parts[1]) ?? 0;
+    if (width <= 0 || height <= 0) return false;
+    return width >= 3200 || height >= 2100;
+  }
 }
 
 class RadarrQualityProfile {

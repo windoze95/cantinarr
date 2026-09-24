@@ -78,3 +78,36 @@ func TestConfigInventoryFailureDoesNotReportMissingServices(t *testing.T) {
 		t.Fatalf("status=%d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+// An admin's 4K badges switch reaches every role's config, so a requester's
+// covers follow it without a setting of their own.
+func TestConfigCarriesTheAdmin4KBadgesSwitchForEveryRole(t *testing.T) {
+	store, creds, remediationSvc, userID := newConfigHandlerTestState(t)
+	settings, _ := newDiscoverySettingsEnv(t, false)
+	read := func(role string) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+		req = req.WithContext(context.WithValue(req.Context(), auth.ClaimsKey, &auth.Claims{UserID: userID, Role: role}))
+		rec := httptest.NewRecorder()
+		configHandler(&config.Config{}, store, creds, nil, remediationSvc, settings)(rec, req)
+		var got map[string]json.RawMessage
+		if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &got) != nil {
+			t.Fatalf("status=%d: %s", rec.Code, rec.Body.String())
+		}
+		return string(got["cover_4k_badges"])
+	}
+	for _, role := range []string{auth.RoleAdmin, auth.RoleUser} {
+		if got := read(role); got != "false" {
+			t.Fatalf("%s before: %s", role, got)
+		}
+	}
+	on := true
+	if _, err := settings.UpdateDiscovery(serversettings.DiscoveryPatch{Cover4KBadges: &on}); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []string{auth.RoleAdmin, auth.RoleUser} {
+		if got := read(role); got != "true" {
+			t.Fatalf("%s after: %s", role, got)
+		}
+	}
+}

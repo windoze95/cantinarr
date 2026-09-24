@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1101,6 +1102,30 @@ type FileMediaInfo struct {
 	VideoCodec        string  `json:"videoCodec"`
 	VideoDynamicRange string  `json:"videoDynamicRange"`
 	Subtitles         string  `json:"subtitles"`
+}
+
+// Measures4K reports whether Sonarr's analysis measured the file at 4K: at
+// least 3200 pixels wide or 2100 tall, the line Sonarr itself draws for
+// 2160p, so a wide 3840x1600 film counts. The quality name is deliberately not
+// consulted: with analysis switched off, Sonarr takes it from the release name
+// alone. A file with no measurement never counts.
+func (m *FileMediaInfo) Measures4K() bool {
+	if m == nil {
+		return false
+	}
+	width, height := m.Width, m.Height
+	if width <= 0 || height <= 0 {
+		w, h, ok := strings.Cut(strings.TrimSpace(m.Resolution), "x")
+		if !ok {
+			return false
+		}
+		width, _ = strconv.Atoi(w)
+		height, _ = strconv.Atoi(h)
+	}
+	if width <= 0 || height <= 0 {
+		return false
+	}
+	return width >= 3200 || height >= 2100
 }
 
 // GetEpisodeFile returns live metadata for one completed file in Sonarr.

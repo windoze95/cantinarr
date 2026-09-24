@@ -18,6 +18,7 @@ type discoverySettingsResponse struct {
 	Sources                []string        `json:"sources"`
 	TraktConfigured        bool            `json:"trakt_configured"`
 	HiddenWhenUnconfigured map[string]bool `json:"hidden_when_unconfigured"`
+	Cover4KBadges          bool            `json:"cover_4k_badges"`
 }
 
 func discoverySettingsPayload(current serversettings.Settings, creds *credentials.Registry) discoverySettingsResponse {
@@ -31,6 +32,7 @@ func discoverySettingsPayload(current serversettings.Settings, creds *credential
 		EnglishOnly:            current.DiscoveryEnglishOnly,
 		Sources:                serversettings.DiscoverySources(),
 		TraktConfigured:        creds.Trakt() != nil,
+		Cover4KBadges:          current.Cover4KBadges,
 	}
 }
 
@@ -62,12 +64,15 @@ func updateDiscoverySettingsHandler(settings *serversettings.Service, creds *cre
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
+		before := settings.Get()
 		saved, err := settings.UpdateDiscovery(body)
 		if err != nil {
 			http.Error(w, `{"error":"could not save settings, retry shortly"}`, http.StatusServiceUnavailable)
 			return
 		}
-		if len(body.HiddenWhenUnconfigured) > 0 && configChanged != nil {
+		// Open apps reread /api/config: hidden tabs and 4K badges live there.
+		// The app sends the whole form on save, so only a real 4K change counts.
+		if (len(body.HiddenWhenUnconfigured) > 0 || saved.Cover4KBadges != before.Cover4KBadges) && configChanged != nil {
 			configChanged()
 		}
 		_ = json.NewEncoder(w).Encode(discoverySettingsPayload(saved, creds))

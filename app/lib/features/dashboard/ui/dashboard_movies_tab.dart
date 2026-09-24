@@ -10,6 +10,7 @@ import '../../../core/widgets/section_header.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../discover/logic/browse_query.dart';
+import '../../discover/logic/cover_4k_badges_provider.dart';
 import '../../discover/logic/library_snapshot_provider.dart';
 import '../../discover/logic/search_library_status.dart';
 import '../../discover/ui/category_row.dart';
@@ -145,6 +146,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
   Widget build(BuildContext context) {
     final discover = ref.watch(movieDiscoverProvider);
     final discoverNotifier = ref.watch(movieDiscoverProvider.notifier);
+    final show4K = ref.watch(cover4KBadgesProvider);
     // searchResults is genuinely unused here: buildSearchLibraryStatus keys
     // movies straight off the Radarr list and returns early when series is
     // empty, so passing the browse-row items would build a list for nothing.
@@ -156,6 +158,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
       searchResults: const [],
       movies: _libraryMovies,
       series: const [],
+      show4K: show4K,
     );
 
     return RefreshIndicator(
@@ -245,16 +248,21 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
               items: _recentlyDownloaded,
               badgeBuilder: (_) =>
                   (label: 'Downloaded', color: AppTheme.available),
+              mark4K: show4K,
             ),
         ],
       ),
     );
   }
 
+  /// [mark4K] tags movies whose file measures 4K. Only the downloaded row
+  /// sets it: beside Downloading or Requested it would describe a file the
+  /// badge says is not the one arriving.
   Widget _buildRow({
     required String title,
     required List<RadarrMovie> items,
     required ({String label, Color color}) Function(RadarrMovie) badgeBuilder,
+    bool mark4K = false,
   }) {
     final viewportWidth = MediaQuery.sizeOf(context).width;
     final cardWidth =
@@ -284,6 +292,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
                 posterPath: movie.posterUrl,
                 statusLabel: badge.label,
                 statusColor: badge.color,
+                is4K: mark4K && (movie.movieFile?.measures4K ?? false),
                 width: cardWidth,
                 onTap: (movie.tmdbId ?? 0) > 0
                     ? () => context.push('/detail/movie/${movie.tmdbId}')

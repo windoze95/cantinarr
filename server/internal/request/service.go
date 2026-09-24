@@ -259,10 +259,17 @@ type Service struct {
 	// see the status of, or list a title outside their limits. nil until
 	// wired (SetContentPolicy); a server without it gates nothing.
 	contentPolicy *contentpolicy.Service
+
+	// cover4KBadges reads the admin's 4K badges switch. nil until wired
+	// (SetCover4KBadges), which answers no show 4K checks.
+	cover4KBadges func() bool
 }
 
 // SetContentPolicy wires the kids-account service.
 func (s *Service) SetContentPolicy(svc *contentpolicy.Service) { s.contentPolicy = svc }
+
+// SetCover4KBadges wires the server-wide 4K badges switch.
+func (s *Service) SetCover4KBadges(enabled func() bool) { s.cover4KBadges = enabled }
 
 var (
 	// ErrTitleNotAvailable is a kids account asking for a title outside its
@@ -685,6 +692,14 @@ type StatusResponse struct {
 	// grade means no Downloading state and up to the digest TTL of lag — the
 	// documented tradeoff the history overlay already accepts.
 	InstanceStatuses map[string]InstanceStatus `json:"instance_statuses,omitempty"`
+	// Is4K is set only for a TV status read that asked for it (include_4k)
+	// when the selected library holds the whole show and Sonarr measured every
+	// counted episode file at 4K. Unknown is never reported as 4K.
+	Is4K bool `json:"is_4k,omitempty"`
+
+	// tvFileIDs are the episode files a TV status counted, kept so the
+	// optional 4K check needs no second episode read. Never serialized.
+	tvFileIDs []int
 }
 
 // InstanceStatus is one library's digest-grade status inside

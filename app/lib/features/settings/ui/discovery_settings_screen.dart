@@ -37,6 +37,7 @@ class _DiscoverySettingsScreenState
         _edited?.source,
         _edited?.englishOnly,
         _edited?.hiddenWhenUnconfigured,
+        _edited?.cover4KBadges,
         _tmdbController.text,
         _traktIdController.text,
       ];
@@ -331,6 +332,33 @@ class _DiscoverySettingsScreenState
               'Hides titles whose original language is not English from the '
               'movie and TV discovery and recommendation rows. Search still finds everything.',
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            ),
+          ),
+        ),
+        const _SectionLabel('Covers'),
+        SettingsHighlight(
+          anchorId: SettingsAnchors.discoveryCover4KBadges,
+          highlightId: widget.highlightId,
+          child: SwitchListTile(
+            key: const Key('discovery-cover-4k-badges'),
+            value: edited.cover4KBadges ?? false,
+            // A server that predates the setting would silently drop it.
+            onChanged: edited.cover4KBadges == null
+                ? null
+                : (v) => setState(
+                    () => _edited = edited.copyWith(cover4KBadges: v)),
+            title: const Text(
+              'Show 4K badges',
+              style: TextStyle(
+                  color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+            ),
+            subtitle: Text(
+              edited.cover4KBadges == null
+                  ? 'Update your Cantinarr server to show 4K badges.'
+                  : 'Marks movie and show covers when the library\'s copy '
+                      'is 4K, for everyone on this server.',
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ),
         ),

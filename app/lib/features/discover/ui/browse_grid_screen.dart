@@ -12,6 +12,7 @@ import '../data/discover_api_service.dart';
 import '../data/tmdb_models.dart';
 import '../logic/browse_grid_notifier.dart';
 import '../logic/browse_query.dart';
+import '../logic/cover_4k_badges_provider.dart';
 import '../logic/library_snapshot_provider.dart';
 import '../logic/search_library_status.dart';
 import 'catalog_status_builder.dart';
@@ -237,6 +238,7 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
       searchResults: items,
       movies: snapshot.movies,
       series: snapshot.series,
+      show4K: ref.watch(cover4KBadgesProvider),
     );
     final isTv = query.type == MediaType.tv;
     final error = _notifier.error;
@@ -312,6 +314,7 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
                           statusLabel: status?.label,
                           statusColor: status?.color,
                           subtitle: status?.episodeSubtitle,
+                          is4K: status?.is4K ?? false,
                           width: cardWidth,
                           onTap: () => context.push(
                             '/detail/${item.mediaType.name}/${item.id}',

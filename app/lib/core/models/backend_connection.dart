@@ -88,6 +88,10 @@ class BackendConnection {
   final bool downloadsActivity;
   final String downloadsUserScope;
 
+  /// Whether covers mark titles whose library copy measures 4K, as an
+  /// admin chose for the whole server.
+  final bool cover4KBadges;
+
   /// Null means the server predates Discover visibility preferences.
   final List<String>? hiddenDiscoverTabs;
 
@@ -115,6 +119,7 @@ class BackendConnection {
     this.requestQuotas = false,
     this.downloadsActivity = false,
     this.downloadsUserScope = 'all',
+    this.cover4KBadges = false,
     this.hiddenDiscoverTabs,
     this.configConfirmed = false,
   });
@@ -139,6 +144,7 @@ class BackendConnection {
     bool? requestQuotas,
     bool? downloadsActivity,
     String? downloadsUserScope,
+    bool? cover4KBadges,
     List<String>? hiddenDiscoverTabs,
     bool clearHiddenDiscoverTabs = false,
     bool? configConfirmed,
@@ -157,6 +163,7 @@ class BackendConnection {
         requestQuotas: requestQuotas ?? this.requestQuotas,
         downloadsActivity: downloadsActivity ?? this.downloadsActivity,
         downloadsUserScope: downloadsUserScope ?? this.downloadsUserScope,
+        cover4KBadges: cover4KBadges ?? this.cover4KBadges,
         mediaAccountManagement:
             mediaAccountManagement ?? this.mediaAccountManagement,
         hiddenDiscoverTabs: clearHiddenDiscoverTabs

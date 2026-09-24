@@ -98,6 +98,7 @@ class CategoryRow extends StatelessWidget {
                 statusLabel: status?.label,
                 statusColor: status?.color,
                 subtitle: status?.episodeSubtitle,
+                is4K: status?.is4K ?? false,
                 width: cardWidth,
                 onTap: () => context.push(
                   '/detail/${item.mediaType.name}/${item.id}',

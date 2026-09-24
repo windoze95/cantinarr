@@ -397,6 +397,8 @@ func main() {
 	proxyHandler.SetContentPolicy(contentPolicy)
 	// browse_titles honors the same English-only default the browse grid does.
 	toolServer.SetDiscoveryPrefs(serverSettings)
+	// Show covers get their 4K answer only while an admin has it switched on.
+	requestService.SetCover4KBadges(func() bool { return serverSettings.Get().Cover4KBadges })
 
 	// Arr webhook receiver (Sonarr/Radarr → Connect → Webhook): pushes
 	// out-of-band library changes (manual imports, deletes) into the same WS

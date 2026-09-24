@@ -12,17 +12,21 @@ import '../../../core/providers/realtime_provider.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../request/data/request_service.dart';
 import '../data/tmdb_models.dart';
+import 'cover_4k_badges_provider.dart';
 import 'search_library_status.dart';
 
-typedef TVCardContext = ({bool supported, String? instanceId, String identity});
+typedef TVCardContext = ({bool supported, String? instanceId, String identity,
+  bool show4K});
 
 final tvCardStatusClockProvider = Provider<DateTime Function()>((_) => DateTime.now);
 
 /// Capability is not admin-only: requesters need corrected badges too. Tokens
 /// are deliberately excluded, but account, grants and content-policy changes
-/// replace the entire cache, including reads that have not completed yet.
+/// replace the entire cache, including reads that have not completed yet. So
+/// does the 4K badges setting, which changes what each read asks for.
 final tvCardContextProvider = Provider<TVCardContext>((ref) {
-  return ref.watch(authProvider.select((value) {
+  final show4K = ref.watch(cover4KBadgesProvider);
+  final scope = ref.watch(authProvider.select((value) {
     final auth = value.valueOrNull;
     final connection = auth?.connection;
     final user = auth?.user;
@@ -37,6 +41,8 @@ final tvCardContextProvider = Provider<TVCardContext>((ref) {
       ]),
     );
   }));
+  return (supported: scope.supported, instanceId: scope.instanceId,
+    identity: scope.identity, show4K: show4K);
 });
 
 final tvCardStatusCacheProvider =
@@ -46,7 +52,7 @@ final tvCardStatusCacheProvider =
   final cache = TVCardStatusCache(now: ref.watch(tvCardStatusClockProvider), load: (id, cancelToken) =>
     service.checkStatusDetail(id, MediaType.tv,
       instanceId: context.instanceId, includeInstanceStatuses: false,
-      cancelToken: cancelToken));
+      include4K: context.show4K, cancelToken: cancelToken));
   final lifecycle = WidgetsBinding.instance.lifecycleState;
   cache.foreground = lifecycle == null || lifecycle == AppLifecycleState.resumed;
   Timer? debounce;
