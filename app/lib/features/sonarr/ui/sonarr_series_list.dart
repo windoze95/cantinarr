@@ -6,7 +6,7 @@ import '../../../core/widgets/cached_image.dart';
 import '../data/sonarr_models.dart';
 
 /// List or artwork grid of Sonarr series
-/// with explicit actions and progress indicators.
+/// with explicit actions and list-view progress indicators.
 /// Long-pressing a tile opens the series action sheet when [onLongPress] is
 /// wired.
 class SonarrSeriesList extends StatelessWidget {
@@ -150,10 +150,6 @@ class _SeriesTile extends StatelessWidget {
             runSpacing: 4,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              if (show.year != null)
-                Text('${show.year}',
-                    style: const TextStyle(
-                        color: AppTheme.textSecondary, fontSize: 13)),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                 decoration: BoxDecoration(
@@ -175,10 +171,16 @@ class _SeriesTile extends StatelessWidget {
                   style: const TextStyle(
                       color: AppTheme.textSecondary, fontSize: 11),
                 ),
+                if (!grid && stats.sizeOnDisk > 0)
+                  Text(
+                    stats.sizeFormatted,
+                    style: const TextStyle(
+                        color: AppTheme.textSecondary, fontSize: 11),
+                  ),
               ],
             ],
           ),
-          if (stats != null && stats.episodeCount > 0) ...[
+          if (!grid && stats != null && stats.episodeCount > 0) ...[
             const SizedBox(height: 6),
             ClipRRect(
               borderRadius: BorderRadius.circular(3),
