@@ -3,19 +3,14 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/storage/library_view_preferences.dart';
 import '../../../core/widgets/library_collection.dart';
 import '../../../core/widgets/cached_image.dart';
+import '../../../core/widgets/library_actions.dart';
 import '../data/sonarr_models.dart';
 
-/// List or artwork grid of Sonarr series
-/// with explicit actions and list-view progress indicators.
-/// Long-pressing a tile opens the series action sheet when [onLongPress] is
-/// wired.
+/// Library tiles share their popup and long-press actions.
 class SonarrSeriesList extends StatelessWidget {
   final List<SonarrSeries> series;
-  final void Function(int id, {bool deleteFiles}) onDelete;
-  final void Function(int id) onSearch;
-  final void Function(SonarrSeries show)? onInteractiveSearch;
-  final void Function(SonarrSeries show)? onOpen;
-  final void Function(SonarrSeries show)? onLongPress;
+  final void Function(SonarrSeries)? onOpen;
+  final void Function(SonarrSeries, LibraryAction)? onAction;
   final bool embedded;
   final LibraryViewMode viewMode;
   final String scrollKey;
@@ -23,108 +18,36 @@ class SonarrSeriesList extends StatelessWidget {
   const SonarrSeriesList({
     super.key,
     required this.series,
-    required this.onDelete,
-    required this.onSearch,
-    this.onInteractiveSearch,
     this.onOpen,
-    this.onLongPress,
+    this.onAction,
     this.embedded = false,
     this.viewMode = LibraryViewMode.list,
     this.scrollKey = 'sonarr-library',
   });
 
   @override
-  Widget build(BuildContext context) {
-    return LibraryCollection(
-      viewMode: viewMode,
-      scrollKey: scrollKey,
-      embedded: embedded,
-      emptyMessage: 'No series found',
-      itemCount: series.length,
-      itemBuilder: (context, index) {
-        final show = series[index];
-        return _SeriesTile(
-          key: ValueKey(show.id),
-          grid: viewMode == LibraryViewMode.grid,
-          show: show,
-          onDelete: () async {
-            final deleteFiles = await _confirmDelete(context, show.title);
-            if (deleteFiles == null) return;
-            onDelete(show.id, deleteFiles: deleteFiles);
-          },
-          onSearch: () => onSearch(show.id),
-          onInteractiveSearch: onInteractiveSearch != null
-              ? () => onInteractiveSearch!(show)
-              : null,
-          onOpen: onOpen != null ? () => onOpen!(show) : null,
-          onLongPress: onLongPress != null ? () => onLongPress!(show) : null,
-        );
-      },
-    );
-  }
-
-  /// Delete confirmation with an opt-in "also delete files" choice.
-  /// Resolves to the delete-files flag, or null when cancelled.
-  Future<bool?> _confirmDelete(BuildContext context, String title) {
-    var deleteFiles = false;
-    return showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setState) => AlertDialog(
-          backgroundColor: AppTheme.surface,
-          title: const Text('Delete Series'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Remove "$title" from Sonarr?'),
-              const SizedBox(height: 8),
-              CheckboxListTile(
-                value: deleteFiles,
-                onChanged: (v) => setState(() => deleteFiles = v ?? false),
-                title: const Text('Also delete files from disk',
-                    style: TextStyle(fontSize: 14)),
-                contentPadding: EdgeInsets.zero,
-                controlAffinity: ListTileControlAffinity.leading,
-                activeColor: AppTheme.error,
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel')),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, deleteFiles),
-              style: TextButton.styleFrom(foregroundColor: AppTheme.error),
-              child: const Text('Delete'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => LibraryCollection(
+    viewMode: viewMode, scrollKey: scrollKey, embedded: embedded,
+    emptyMessage: 'No series found', itemCount: series.length,
+    itemBuilder: (context, index) {
+      final show = series[index];
+      return _SeriesTile(
+        key: ValueKey(show.id), grid: viewMode == LibraryViewMode.grid,
+        show: show,
+        onOpen: onOpen == null ? null : () => onOpen!(show),
+        onAction: onAction == null ? null : (action) => onAction!(show, action),
+      );
+    },
+  );
 }
 
 class _SeriesTile extends StatelessWidget {
   final bool grid;
   final SonarrSeries show;
-  final VoidCallback onDelete;
-  final VoidCallback onSearch;
-  final VoidCallback? onInteractiveSearch;
   final VoidCallback? onOpen;
-  final VoidCallback? onLongPress;
-
-  const _SeriesTile({
-    super.key,
-    required this.grid,
-    required this.show,
-    required this.onDelete,
-    required this.onSearch,
-    this.onInteractiveSearch,
-    this.onOpen,
-    this.onLongPress,
-  });
+  final ValueChanged<LibraryAction>? onAction;
+  const _SeriesTile({super.key, required this.grid, required this.show,
+    this.onOpen, this.onAction});
 
   @override
   Widget build(BuildContext context) {
@@ -141,7 +64,8 @@ class _SeriesTile extends StatelessWidget {
       grid: grid,
       name: show.title,
       onTap: onOpen,
-      onLongPress: onLongPress,
+      onLongPress: onAction == null ? null : () => showLibraryActionMenu(
+        context, title: show.title, actions: libraryActions('series', monitored: show.monitored), onSelected: onAction!),
       artwork: CachedImage(
         url: show.posterUrl,
         fit: BoxFit.cover,
@@ -193,73 +117,8 @@ class _SeriesTile extends StatelessWidget {
           ],
         ],
       ),
-      actions: PopupMenuButton<String>(
-        icon: const Icon(Icons.more_vert, color: AppTheme.textSecondary),
-        color: AppTheme.surfaceVariant,
-        tooltip: 'Actions for ${show.title}',
-        onSelected: (value) {
-          switch (value) {
-            case 'search':
-              onSearch();
-            case 'interactive':
-              onInteractiveSearch?.call();
-            case 'more':
-              onLongPress?.call();
-            case 'remove':
-              onDelete();
-          }
-        },
-        itemBuilder: (_) => [
-          const PopupMenuItem(
-            value: 'search',
-            child: Row(
-              children: [
-                Icon(Icons.search, size: 18, color: AppTheme.textSecondary),
-                SizedBox(width: 10),
-                Flexible(child: Text('Automatic search')),
-              ],
-            ),
-          ),
-          if (onInteractiveSearch != null)
-            const PopupMenuItem(
-              value: 'interactive',
-              child: Row(
-                children: [
-                  Icon(Icons.manage_search,
-                      size: 18, color: AppTheme.textSecondary),
-                  SizedBox(width: 10),
-                  Flexible(child: Text('Interactive search')),
-                ],
-              ),
-            ),
-          if (onLongPress != null)
-            const PopupMenuItem(
-              value: 'more',
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.more_horiz_rounded,
-                    size: 18,
-                    color: AppTheme.textSecondary,
-                  ),
-                  SizedBox(width: 10),
-                  Flexible(child: Text('More actions…')),
-                ],
-              ),
-            ),
-          const PopupMenuDivider(),
-          const PopupMenuItem(
-            value: 'remove',
-            child: Row(
-              children: [
-                Icon(Icons.delete_outline, size: 18, color: AppTheme.error),
-                SizedBox(width: 10),
-                Text('Remove…', style: TextStyle(color: AppTheme.error)),
-              ],
-            ),
-          ),
-        ],
-      ),
+      actions: onAction == null ? null : LibraryActionMenu(
+        title: show.title, actions: libraryActions('series', monitored: show.monitored), onSelected: onAction!),
     );
   }
 

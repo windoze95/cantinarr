@@ -20,8 +20,6 @@ void main() {
           body: RadarrMovieList(
             movies: const [movie],
             viewMode: mode,
-            onDelete: (_, {bool deleteFiles = false}) {},
-            onSearch: (_) {},
           ),
         ),
       ));

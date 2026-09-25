@@ -20,7 +20,7 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   WidgetsBinding.instance.ensureSemantics();
   final module = Uri.base.queryParameters['module'] ?? 'radarr';
-  final adapter = LibraryFixtureAdapter();
+  final adapter = LibraryFixtureAdapter(managementFixtures: true);
   if (module == 'radarr' || module == 'sonarr') {
     adapter.records = (screenshotBodyFor(
         '/api/instances/$module-one/api/v3/${module == 'radarr' ? 'movie' : 'series'}',

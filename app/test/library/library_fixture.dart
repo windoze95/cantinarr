@@ -40,6 +40,8 @@ Map<String, dynamic> libraryRecord(int id, {String? name, bool monitored = true}
 };
 
 class LibraryFixtureAdapter implements HttpClientAdapter {
+  LibraryFixtureAdapter({this.managementFixtures = false});
+  final bool managementFixtures;
   List<Map<String, dynamic>> records = [
     libraryRecord(1, name: 'Example one'),
     libraryRecord(2, name: 'Example two', monitored: false),
@@ -61,6 +63,17 @@ class LibraryFixtureAdapter implements HttpClientAdapter {
     }
     if (RegExp(r'/(movie|series|author|artist)/\d+$').hasMatch(path)) {
       body = records.firstWhere((r) => '${r['id']}' == path.split('/').last);
+      if (managementFixtures) {
+        body = {
+        ...body as Map<String, dynamic>,
+        'qualityProfileId': 1, 'metadataProfileId': 1, 'tags': [1],
+        'ebookMonitored': true, 'audiobookMonitored': false,
+        'ebookMonitorNewItems': 'none', 'audiobookMonitorNewItems': 'all',
+        'ebookQualityProfileId': 1, 'audiobookQualityProfileId': 2,
+        'ebookMetadataProfileId': 1, 'audiobookMetadataProfileId': 2,
+        'ebookTags': [1], 'audiobookTags': [], 'monitorNewItems': 'all',
+        };
+      }
     }
     if (path.endsWith('/queue') || path.contains('/history')) {
       body = {'records': []};
@@ -68,6 +81,15 @@ class LibraryFixtureAdapter implements HttpClientAdapter {
     if (path.endsWith('/book') || path.endsWith('/album') ||
         path.endsWith('/qualityprofile') || path.endsWith('/tag')) {
       body = [];
+    }
+    if (managementFixtures) {
+      if (path.endsWith('/qualityprofile') || path.endsWith('/metadataprofile')) {
+        body = [
+          {'id': 1, 'name': 'Standard', 'profileType': 'ebook'},
+          {'id': 2, 'name': 'Audiobooks', 'profileType': 'audiobook'},
+        ];
+      }
+      if (path.endsWith('/tag')) body = [{'id': 1, 'label': 'Favorites'}];
     }
     return ResponseBody.fromString(jsonEncode(body), status,
         headers: {'content-type': ['application/json']});

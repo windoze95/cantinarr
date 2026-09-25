@@ -5,13 +5,13 @@ import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/storage/library_view_preferences.dart';
 import '../../../core/widgets/error_banner.dart';
+import '../../../core/widgets/library_actions.dart';
 import '../../../core/widgets/library_command_header.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import '../logic/sonarr_series_provider.dart';
 import 'series_actions.dart';
-import 'sonarr_releases_screen.dart';
 import 'sonarr_series_detail_screen.dart';
 import 'sonarr_series_list.dart';
 
@@ -55,22 +55,10 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
     super.dispose();
   }
 
-  Future<void> _triggerAutomaticSearch(int seriesId) async {
-    try {
-      await _notifier!.searchForSeries(seriesId);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Series search started')));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to start search: $e')));
-    }
-  }
-
   Future<void> _openSeries(SonarrSeries show) async {
     final instanceId = ref.read(instanceProvider).activeSonarrInstance?.id;
     if (instanceId == null) return;
+    final notifier = _notifier;
     await Navigator.of(context, rootNavigator: true).push(
       AmbientPageRoute(
         builder: (_) => SonarrSeriesDetailScreen(
@@ -80,13 +68,19 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
       ),
     );
     // The detail screen can edit or remove the series; refresh on return.
-    _notifier?.loadSeries();
+    if (mounted && identical(_notifier, notifier)) notifier?.loadSeries();
   }
 
-  /// Long-press menu: search monitored / edit / refresh / remove / monitor.
-  void _showSeriesActions(SonarrSeries show) {
+  /// Tile and detail menus run the same actions.
+  void _showSeriesActions(SonarrSeries show, LibraryAction action) {
     final instanceId = ref.read(instanceProvider).activeSonarrInstance?.id;
     if (instanceId == null) return;
+    final notifier = _notifier;
+    void reload() {
+      if (mounted && identical(_notifier, notifier)) {
+        notifier?.loadSeries();
+      }
+    }
     showSeriesActions(
       context,
       service: SonarrApiService(
@@ -95,58 +89,9 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
       ),
       instanceId: instanceId,
       series: show,
-      onChanged: () => _notifier?.loadSeries(),
-      onRemoved: () => _notifier?.loadSeries(),
-    );
-  }
-
-  /// Sonarr's interactive search is per-season, so pick a season first.
-  Future<void> _openInteractiveSearch(SonarrSeries show) async {
-    final instanceId = ref.read(instanceProvider).activeSonarrInstance?.id;
-    if (instanceId == null) return;
-
-    final seasons = [...show.seasons]
-      ..sort((a, b) => a.seasonNumber.compareTo(b.seasonNumber));
-    if (seasons.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('No seasons available')));
-      return;
-    }
-
-    final seasonNumber = await showDialog<int>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        backgroundColor: AppTheme.surface,
-        title: const Text('Select Season'),
-        children: seasons
-            .map((s) => SimpleDialogOption(
-                  onPressed: () => Navigator.pop(ctx, s.seasonNumber),
-                  child: Text(
-                    s.seasonNumber == 0
-                        ? 'Specials'
-                        : 'Season ${s.seasonNumber}',
-                    style: TextStyle(
-                      color: show.monitored && s.monitored
-                          ? AppTheme.textPrimary
-                          : AppTheme.textSecondary,
-                      fontSize: 15,
-                    ),
-                  ),
-                ))
-            .toList(),
-      ),
-    );
-    if (seasonNumber == null || !mounted) return;
-
-    Navigator.of(context, rootNavigator: true).push(
-      AmbientPageRoute(
-        builder: (_) => SonarrReleasesScreen(
-          instanceId: instanceId,
-          seriesId: show.id,
-          seasonNumber: seasonNumber,
-          seriesTitle: show.title,
-        ),
-      ),
+      selectedAction: action,
+      onChanged: reload,
+      onRemoved: reload,
     );
   }
 
@@ -245,12 +190,8 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
                             viewMode: viewMode,
                             scrollKey: 'sonarr-$instanceId',
                             series: state.filtered,
-                            onDelete: (id, {bool deleteFiles = false}) => _notifier!
-                                .deleteSeries(id, deleteFiles: deleteFiles),
-                            onSearch: _triggerAutomaticSearch,
-                            onInteractiveSearch: _openInteractiveSearch,
                             onOpen: _openSeries,
-                            onLongPress: _showSeriesActions,
+                            onAction: _showSeriesActions,
                           ),
                         ),
             ),

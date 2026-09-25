@@ -9,6 +9,7 @@ const http = require('node:http');
 const zlib = require('node:zlib');
 const build = path.resolve(process.argv[2]);
 const output = path.resolve(process.argv[3]);
+const actionsOnly = process.argv.includes('--actions');
 fs.mkdirSync(output, { recursive: true });
 function crc32(bytes) {
   let crc = -1;
@@ -78,7 +79,7 @@ const server = http.createServer((req, res) => {
   const report = [];
   const artworkCache = new Map();
   try {
-    for (const width of [340, 390, 1440]) {
+    for (const width of (actionsOnly ? [390, 1440] : [340, 390, 1440])) {
       const context = await browser.newContext({ viewport: { width, height: width < 600 ? 844 : 1000 } });
       // CDN photos are visual fixtures. Fetch outside browser CORS, preserving
       // actual image content; authenticated library artwork uses the server.
@@ -100,6 +101,36 @@ const server = http.createServer((req, res) => {
         const grid = page.getByRole('button', { name: /^Grid/ });
         await grid.waitFor({ timeout: 60000 });
         await page.waitForTimeout(1500);
+        if (actionsOnly) {
+          for (const mode of ['list', 'grid']) {
+            if (mode === 'grid') {
+              await grid.click();
+              await page.waitForTimeout(600);
+            }
+            await page.getByRole('button', { name: /^Actions for / }).first().click();
+            await page.waitForTimeout(700);
+            await page.getByRole('menuitem', { name: 'Rescan files', exact: true }).waitFor();
+            await page.waitForTimeout(300);
+            await page.screenshot({ path: path.join(output, `${module}-${width}-${mode}-menu.png`) });
+            for (const label of ['Automatic search', 'Interactive search', 'Refresh metadata', 'Rescan files', 'Remove…']) {
+              assert.equal(await page.getByRole('menuitem', { name: label, exact: true }).count(), 1);
+            }
+            await page.keyboard.press('Escape');
+            await page.waitForTimeout(300);
+          }
+          assert.equal(errors.length, 0, `${module}: ${errors.join('; ')}`);
+          if (module === 'chaptarr' || module === 'lidarr') {
+            await page.getByRole('button', { name: /^Actions for / }).first().click();
+            await page.getByRole('menuitem', { name: module === 'chaptarr' ? 'Edit author' : 'Edit artist', exact: true }).click();
+            await page.getByRole('button', { name: /^Quality profile/ }).first().waitFor();
+            await page.waitForTimeout(500);
+            await page.screenshot({ path: path.join(output, `${module}-${width}-settings.png`) });
+          }
+          report.push({ module, width, actionMenus: true, errors });
+          console.log('PASS menus', module, width);
+          await page.close();
+          continue;
+        }
         await page.screenshot({ path: path.join(output, `${module}-${width}-list.png`) });
         const beforeToggle = await page.getByRole('textbox').boundingBox();
         await grid.click();
@@ -146,7 +177,7 @@ const server = http.createServer((req, res) => {
       }
       await context.close();
     }
-    assert(imageReads.length > 0 && imageReads.every(read => read.authorized), 'Instance artwork must retain authentication');
+    assert((actionsOnly || imageReads.length > 0) && imageReads.every(read => read.authorized), 'Instance artwork must retain authentication');
     fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ report, imageReads }, null, 2));
   } finally {
     await browser.close();

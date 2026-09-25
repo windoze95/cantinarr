@@ -3,15 +3,14 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/storage/library_view_preferences.dart';
 import '../../../core/widgets/library_collection.dart';
 import '../../../core/widgets/cached_image.dart';
+import '../../../core/widgets/library_actions.dart';
 import '../data/lidarr_models.dart';
 
-/// List or artwork grid of Lidarr artists
-/// with explicit actions and progress indicators.
-/// Mirrors [ChaptarrAuthorList] adapted to the artist-centric music library.
+/// Library tiles share their popup and long-press actions.
 class LidarrArtistList extends StatelessWidget {
   final List<LidarrArtist> artists;
   final void Function(LidarrArtist) onTap;
-  final void Function(LidarrArtist)? onSearch;
+  final void Function(LidarrArtist, LibraryAction)? onAction;
   final bool embedded;
   final LibraryViewMode viewMode;
   final String scrollKey;
@@ -21,7 +20,7 @@ class LidarrArtistList extends StatelessWidget {
     super.key,
     required this.artists,
     required this.onTap,
-    this.onSearch,
+    this.onAction,
     this.embedded = false,
     this.viewMode = LibraryViewMode.list,
     this.scrollKey = 'lidarr-library',
@@ -29,45 +28,31 @@ class LidarrArtistList extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    return LibraryCollection(
-      viewMode: viewMode,
-      scrollKey: scrollKey,
-      embedded: embedded,
-      emptyMessage: 'No artists found',
-      itemCount: artists.length,
-      itemBuilder: (context, index) {
-        final artist = artists[index];
-        return _ArtistTile(
-          key: ValueKey(artist.id),
-          grid: viewMode == LibraryViewMode.grid,
-          image: imageSourceFor == null
-              ? (url: artist.imageUrl ?? '', headers: null)
-              : imageSourceFor!(artist),
-          artist: artist,
-          onTap: () => onTap(artist),
-          onSearch: onSearch != null ? () => onSearch!(artist) : null,
-        );
-      },
-    );
-  }
+  Widget build(BuildContext context) => LibraryCollection(
+    viewMode: viewMode, scrollKey: scrollKey, embedded: embedded,
+    emptyMessage: 'No artists found', itemCount: artists.length,
+    itemBuilder: (context, index) {
+      final artist = artists[index];
+      return _ArtistTile(
+        key: ValueKey(artist.id), grid: viewMode == LibraryViewMode.grid,
+        artist: artist,
+        onTap: () => onTap(artist),
+        onAction: onAction == null ? null : (action) => onAction!(artist, action),
+        image: imageSourceFor == null
+            ? (url: artist.imageUrl ?? '', headers: null) : imageSourceFor!(artist),
+      );
+    },
+  );
 }
 
 class _ArtistTile extends StatelessWidget {
   final bool grid;
-  final ImageSource? image;
   final LidarrArtist artist;
   final VoidCallback onTap;
-  final VoidCallback? onSearch;
-
-  const _ArtistTile({
-    super.key,
-    required this.grid,
-    this.image,
-    required this.artist,
-    required this.onTap,
-    this.onSearch,
-  });
+  final ValueChanged<LibraryAction>? onAction;
+  final ImageSource? image;
+  const _ArtistTile({super.key, required this.grid, required this.artist,
+    required this.onTap, this.onAction, this.image});
 
   @override
   Widget build(BuildContext context) {
@@ -79,6 +64,8 @@ class _ArtistTile extends StatelessWidget {
       name: artist.artistName,
       artworkAspectRatio: 1,
       onTap: onTap,
+      onLongPress: onAction == null ? null : () => showLibraryActionMenu(
+        context, title: artist.artistName, actions: libraryActions('artist', monitored: artist.monitored), onSelected: onAction!),
       artwork: CachedImage(
         url: image?.url,
         headers: image?.headers,
@@ -132,13 +119,8 @@ class _ArtistTile extends StatelessWidget {
           ],
         ],
       ),
-      actions: onSearch != null
-          ? IconButton(
-              icon: const Icon(Icons.search, color: AppTheme.textSecondary),
-              tooltip: 'Find albums automatically',
-              onPressed: onSearch,
-            )
-          : null,
+      actions: onAction == null ? null : LibraryActionMenu(
+        title: artist.artistName, actions: libraryActions('artist', monitored: artist.monitored), onSelected: onAction!),
     );
   }
 

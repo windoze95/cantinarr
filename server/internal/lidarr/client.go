@@ -742,10 +742,10 @@ func (c *Client) ProcessMonitoredDownloads() error {
 }
 
 // RescanArtist rescans the files on disk for an artist. Lidarr has no
-// per-artist rescan command; RescanFolders scoped by artistId is its
+// per-artist rescan command; RescanFolders scoped by artistIds is its
 // equivalent.
 func (c *Client) RescanArtist(artistID int) error {
-	return c.triggerCommand(map[string]any{"name": "RescanFolders", "artistId": artistID})
+	return c.triggerCommand(map[string]any{"name": "RescanFolders", "artistIds": []int{artistID}})
 }
 
 // GetTrackFilesForArtist lists the music files on disk for one artist.

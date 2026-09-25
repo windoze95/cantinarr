@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../core/network/library_settings_service.dart';
+import 'author_actions.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/error_banner.dart';
@@ -220,6 +222,17 @@ class _ChaptarrAuthorDetailScreenState
     }
   }
 
+  void _showActions() {
+    final author = _author;
+    if (author == null) return;
+    showAuthorActions(context, service: _service,
+      settings: LibrarySettingsService(dio: ref.read(backendClientProvider),
+        instanceId: widget.instanceId, kind: LibrarySettingsKind.author, id: author.id),
+      instanceId: widget.instanceId, author: author,
+      onChanged: () { if (mounted) _load(); },
+      onRemoved: () { if (mounted) Navigator.of(context).pop(); });
+  }
+
   @override
   Widget build(BuildContext context) {
     final title = _author?.authorName ?? widget.authorName ?? 'Author';
@@ -242,6 +255,8 @@ class _ChaptarrAuthorDetailScreenState
         backgroundColor: AppTheme.background,
         title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
+          IconButton(onPressed: _author == null ? null : _showActions,
+            icon: const Icon(Icons.more_vert), tooltip: 'Author actions'),
           IconButton(
             icon: const Icon(Icons.refresh, color: AppTheme.textPrimary),
             tooltip: 'Refresh',

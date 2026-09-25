@@ -50,6 +50,11 @@ class LidarrApiService {
     return LidarrArtist.fromJson(resp.data as Map<String, dynamic>);
   }
 
+  Future<void> deleteArtist(int id, {bool deleteFiles = false}) async {
+    await _dio.delete('$_basePath/artist/$id',
+        queryParameters: {'deleteFiles': deleteFiles});
+  }
+
   Future<List<LidarrArtist>> lookupArtist(String term) async {
     final resp = await _dio
         .get('$_basePath/artist/lookup', queryParameters: {'term': term});
@@ -262,11 +267,16 @@ class LidarrApiService {
         data: {'name': 'ProcessMonitoredDownloads'});
   }
 
+  Future<void> refreshArtist(int artistId) async {
+    await _dio.post('$_basePath/command',
+        data: {'name': 'RefreshArtist', 'artistId': artistId});
+  }
+
   /// Rescans an artist's files on disk. Lidarr has no per-artist rescan
-  /// command; RescanFolders scoped by artistId is its equivalent.
+  /// command; RescanFolders scoped by artistIds is its equivalent.
   Future<void> rescanArtist(int artistId) async {
     await _dio.post('$_basePath/command',
-        data: {'name': 'RescanFolders', 'artistId': artistId});
+        data: {'name': 'RescanFolders', 'artistIds': [artistId]});
   }
 
   /// Interactive release search for one album. Queries every indexer live,
