@@ -5,6 +5,7 @@ import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/storage/library_view_preferences.dart';
 import '../../../core/widgets/error_banner.dart';
+import '../../../core/widgets/library_actions.dart';
 import '../../../core/widgets/library_command_header.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../data/radarr_api_service.dart';
@@ -13,7 +14,6 @@ import '../logic/radarr_movies_provider.dart';
 import 'movie_actions.dart';
 import 'radarr_movie_detail_screen.dart';
 import 'radarr_movie_list.dart';
-import 'radarr_releases_screen.dart';
 
 /// Radarr library management screen (used in the Radarr module).
 /// Instance-aware: uses the active Radarr instance from the instance provider.
@@ -55,36 +55,10 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
     super.dispose();
   }
 
-  Future<void> _triggerAutomaticSearch(int movieId) async {
-    try {
-      await _notifier!.searchForMovie(movieId);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Movie search started')));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to start search: $e')));
-    }
-  }
-
-  void _openInteractiveSearch(RadarrMovie movie) {
-    final instanceId = ref.read(instanceProvider).activeRadarrInstance?.id;
-    if (instanceId == null) return;
-    Navigator.of(context, rootNavigator: true).push(
-      AmbientPageRoute(
-        builder: (_) => RadarrReleasesScreen(
-          instanceId: instanceId,
-          movieId: movie.id,
-          movieTitle: movie.title,
-        ),
-      ),
-    );
-  }
-
   Future<void> _openMovie(RadarrMovie movie) async {
     final instanceId = ref.read(instanceProvider).activeRadarrInstance?.id;
     if (instanceId == null) return;
+    final notifier = _notifier;
     await Navigator.of(context, rootNavigator: true).push(
       AmbientPageRoute(
         builder: (_) => RadarrMovieDetailScreen(
@@ -94,13 +68,19 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
       ),
     );
     // The detail screen can edit or remove the movie; refresh on return.
-    _notifier?.loadMovies();
+    if (mounted && identical(_notifier, notifier)) notifier?.loadMovies();
   }
 
-  /// Long-press menu: search / edit / refresh / remove / monitor.
-  void _showMovieActions(RadarrMovie movie) {
+  /// Tile and detail menus run the same actions.
+  void _showMovieActions(RadarrMovie movie, LibraryAction action) {
     final instanceId = ref.read(instanceProvider).activeRadarrInstance?.id;
     if (instanceId == null) return;
+    final notifier = _notifier;
+    void reload() {
+      if (mounted && identical(_notifier, notifier)) {
+        notifier?.loadMovies();
+      }
+    }
     showMovieActions(
       context,
       service: RadarrApiService(
@@ -109,8 +89,9 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
       ),
       instanceId: instanceId,
       movie: movie,
-      onChanged: () => _notifier?.loadMovies(),
-      onRemoved: () => _notifier?.loadMovies(),
+      selectedAction: action,
+      onChanged: reload,
+      onRemoved: reload,
     );
   }
 
@@ -212,12 +193,8 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
                             viewMode: viewMode,
                             scrollKey: 'radarr-$instanceId',
                             movies: state.filtered,
-                            onDelete: (id, {bool deleteFiles = false}) => _notifier!
-                                .deleteMovie(id, deleteFiles: deleteFiles),
-                            onSearch: _triggerAutomaticSearch,
-                            onInteractiveSearch: _openInteractiveSearch,
                             onOpen: _openMovie,
-                            onLongPress: _showMovieActions,
+                            onAction: _showMovieActions,
                           ),
                         ),
             ),

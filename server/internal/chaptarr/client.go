@@ -1545,7 +1545,7 @@ func (c *Client) ProcessMonitoredDownloads() error {
 
 // RescanAuthor rescans the files on disk for an author.
 func (c *Client) RescanAuthor(authorID int) error {
-	return c.triggerCommand(map[string]any{"name": "RescanFolders", "authorId": authorID})
+	return c.triggerCommand(map[string]any{"name": "RescanFolders", "authorIds": []int{authorID}})
 }
 
 // GetDiskSpace reports disk usage for Chaptarr's mounted volumes.

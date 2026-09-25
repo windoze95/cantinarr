@@ -1219,8 +1219,7 @@ func TestRescanMediaMovieRescansThenRunsImportPass(t *testing.T) {
 		t.Fatalf("mutations = %+v, want rescan then import pass", mutations)
 	}
 	rescan := decodeBody(t, mutations[0].Body)
-	movieIDs, _ := rescan["movieIds"].([]any)
-	if rescan["name"] != "RescanMovie" || len(movieIDs) != 1 || movieIDs[0] != float64(7) {
+	if len(rescan) != 2 || rescan["name"] != "RescanMovie" || rescan["movieId"] != float64(7) {
 		t.Fatalf("first command = %v, want RescanMovie for movie 7", rescan)
 	}
 	if importPass := decodeBody(t, mutations[1].Body); importPass["name"] != "ProcessMonitoredDownloads" {

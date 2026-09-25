@@ -640,3 +640,22 @@ func TestGetImportHistorySinceSkipsUndatedRecords(t *testing.T) {
 		t.Fatalf("in-window records = %+v, want only book 7", records)
 	}
 }
+
+func TestRescanAuthorScopesProviderCommand(t *testing.T) {
+	var got map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/command" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	t.Cleanup(server.Close)
+	if err := NewClient(server.URL, "test-key").RescanAuthor(7); err != nil {
+		t.Fatal(err)
+	}
+	ids, _ := got["authorIds"].([]any)
+	if got["name"] != "RescanFolders" || len(ids) != 1 || ids[0] != float64(7) {
+		t.Fatalf("scoped rescan = %#v", got)
+	}
+}

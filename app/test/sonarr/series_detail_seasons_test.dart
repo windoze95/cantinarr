@@ -264,7 +264,7 @@ void main() {
       await _pump(tester, adapter);
       await tester.tap(find.byTooltip('Series actions'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Unmonitor Series'));
+      await tester.tap(find.text('Unmonitor series'));
       await tester.pumpAndSettle();
 
       expect(adapter.writes, hasLength(1));
@@ -292,7 +292,7 @@ void main() {
 
       await tester.tap(find.byTooltip('Series actions'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Monitor Series'));
+      await tester.tap(find.text('Monitor series'));
       await tester.pumpAndSettle();
       expect(adapter.writes, hasLength(2));
       expect(adapter.writes.last['monitored'], isTrue);

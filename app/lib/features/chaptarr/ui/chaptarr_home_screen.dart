@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../core/network/library_settings_service.dart';
+import '../../../core/widgets/library_actions.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/storage/library_view_preferences.dart';
@@ -11,6 +13,7 @@ import '../data/chaptarr_api_service.dart';
 import '../data/chaptarr_models.dart';
 import '../data/chaptarr_image.dart';
 import '../logic/chaptarr_library_provider.dart';
+import 'author_actions.dart';
 import 'chaptarr_author_detail_screen.dart';
 import 'chaptarr_author_list.dart';
 
@@ -54,23 +57,29 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
     super.dispose();
   }
 
-  Future<void> _triggerAutomaticSearch(ChaptarrAuthor author) async {
-    try {
-      await _notifier!.searchForAuthor(author.id);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Author search started')));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to start search: $e')));
-    }
-  }
-
-  void _openAuthor(ChaptarrAuthor author) {
+  void _showActions(ChaptarrAuthor author, LibraryAction action) {
     final instanceId = ref.read(instanceProvider).activeChaptarrInstance?.id;
     if (instanceId == null) return;
-    Navigator.of(context, rootNavigator: true).push(
+    final notifier = _notifier;
+    final dio = ref.read(backendClientProvider);
+    void reload() {
+      if (mounted && identical(_notifier, notifier)) {
+        notifier?.loadAuthors();
+      }
+    }
+    showAuthorActions(context,
+      service: ChaptarrApiService(backendDio: dio, instanceId: instanceId),
+      settings: LibrarySettingsService(dio: dio, instanceId: instanceId,
+        kind: LibrarySettingsKind.author, id: author.id),
+      instanceId: instanceId, author: author, selectedAction: action,
+      onChanged: reload, onRemoved: reload);
+  }
+
+  Future<void> _openAuthor(ChaptarrAuthor author) async {
+    final instanceId = ref.read(instanceProvider).activeChaptarrInstance?.id;
+    if (instanceId == null) return;
+    final notifier = _notifier;
+    await Navigator.of(context, rootNavigator: true).push(
       AmbientPageRoute(
         builder: (_) => ChaptarrAuthorDetailScreen(
           instanceId: instanceId,
@@ -79,6 +88,7 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
         ),
       ),
     );
+    if (mounted && identical(_notifier, notifier)) notifier?.loadAuthors();
   }
 
   @override
@@ -181,10 +191,7 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
                                 : chaptarrImageSource(ref, item.portraitUrl, instanceId),
                             authors: state.filtered,
                             onTap: _openAuthor,
-                            onSearch: _triggerAutomaticSearch,
-                            onDelete: (author, {bool deleteFiles = false}) =>
-                                _notifier!.deleteAuthor(author.id,
-                                    deleteFiles: deleteFiles),
+                            onAction: _showActions,
                           ),
                         ),
             ),

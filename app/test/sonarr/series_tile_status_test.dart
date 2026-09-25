@@ -1,3 +1,4 @@
+import 'package:cantinarr/core/widgets/library_actions.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/storage/library_view_preferences.dart';
 import 'package:cantinarr/features/sonarr/data/sonarr_models.dart';
@@ -35,12 +36,16 @@ Future<void> _pump(
 }) {
   return tester.pumpWidget(MaterialApp(
     home: Scaffold(
-      body: SonarrSeriesList(
+      body: Builder(builder: (context) => SonarrSeriesList(
         series: [show],
         viewMode: viewMode,
-        onDelete: onDelete ?? (_, {bool deleteFiles = false}) {},
-        onSearch: (_) {},
-      ),
+        onAction: (item, action) async {
+          if (action != LibraryAction.remove) return;
+          final files = await confirmLibraryRemoval(context,
+              title: item.title, noun: 'series', service: 'Sonarr');
+          if (files != null) onDelete?.call(item.id, deleteFiles: files);
+        },
+      )),
     ),
   ));
 }
@@ -124,7 +129,7 @@ void main() {
 
     await _openRemoveConfirmation(tester);
 
-    expect(find.text('Delete Series'), findsOneWidget);
+    expect(find.text('Remove series'), findsOneWidget);
     expect(find.text('Also delete files from disk'), findsOneWidget);
     final checkbox =
         tester.widget<CheckboxListTile>(find.byType(CheckboxListTile));
@@ -162,14 +167,14 @@ void main() {
     );
 
     await _openRemoveConfirmation(tester);
-    await tester.tap(find.text('Delete'));
+    await tester.tap(find.text('Remove'));
     await tester.pumpAndSettle();
     expect(deletions, [(id: 1, deleteFiles: false)]);
 
     await _openRemoveConfirmation(tester);
     await tester.tap(find.text('Also delete files from disk'));
     await tester.pump();
-    await tester.tap(find.text('Delete'));
+    await tester.tap(find.text('Remove'));
     await tester.pumpAndSettle();
     expect(
       deletions,

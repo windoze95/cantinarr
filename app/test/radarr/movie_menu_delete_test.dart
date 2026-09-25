@@ -1,3 +1,4 @@
+import 'package:cantinarr/features/radarr/ui/movie_actions.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -52,12 +53,12 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
-            body: RadarrMovieList(
+            body: Builder(builder: (context) => RadarrMovieList(
               movies: const [_movie],
-              onDelete: (id, {bool deleteFiles = false}) =>
-                  service.deleteMovie(id, deleteFiles: deleteFiles),
-              onSearch: (_) {},
-            ),
+              onAction: (item, action) => showMovieActions(context,
+                service: service, instanceId: 'inst1', movie: item, selectedAction: action,
+              ),
+            )),
           ),
         ),
       );
@@ -70,7 +71,7 @@ void main() {
     Future<void> openDeleteConfirmation(WidgetTester tester) async {
       await tester.tap(find.byTooltip('Actions for Example Movie'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Delete…'));
+      await tester.tap(find.text('Remove…'));
       await tester.pumpAndSettle();
     }
 
@@ -81,7 +82,7 @@ void main() {
       await pumpList(tester);
       expect(find.byType(Dismissible), findsNothing);
       await openDeleteConfirmation(tester);
-      expect(find.text('Delete Movie'), findsOneWidget);
+      expect(find.text('Remove movie'), findsOneWidget);
       expect(find.text('Also delete files from disk'), findsOneWidget);
       final box =
           tester.widget<CheckboxListTile>(find.byType(CheckboxListTile));
@@ -102,7 +103,7 @@ void main() {
         (tester) async {
       await pumpList(tester);
       await openDeleteConfirmation(tester);
-      await tester.tap(find.text('Delete'));
+      await tester.tap(find.text('Remove'));
       await tester.pumpAndSettle();
 
       final d = deletes();
@@ -116,7 +117,7 @@ void main() {
       await openDeleteConfirmation(tester);
       await tester.tap(find.text('Also delete files from disk'));
       await tester.pump();
-      await tester.tap(find.text('Delete'));
+      await tester.tap(find.text('Remove'));
       await tester.pumpAndSettle();
 
       final d = deletes();

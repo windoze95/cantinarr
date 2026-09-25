@@ -162,14 +162,24 @@ void main() {
             String method) =>
         adapter.requests.where((r) => r.method == method).toList();
 
+    testWidgets('rescan queues only the selected series', (tester) async {
+      await pumpHarness(tester);
+      await tester.tap(find.text('Rescan files'));
+      await tester.pumpAndSettle();
+      final posts = ofMethod('POST');
+      expect(posts, hasLength(1));
+      expect(posts.single.path, endsWith('/command'));
+      expect(posts.single.body, {'name': 'RescanSeries', 'seriesId': 7});
+    });
+
     testWidgets('shows every action for a monitored series', (tester) async {
       await pumpHarness(tester);
       for (final label in [
-        'Search Monitored',
-        'Edit Series',
-        'Refresh Series',
-        'Remove Series',
-        'Unmonitor Series',
+        'Automatic search',
+        'Edit series',
+        'Refresh metadata',
+        'Remove…',
+        'Unmonitor series',
       ]) {
         expect(find.text(label), findsOneWidget);
       }
@@ -178,7 +188,7 @@ void main() {
     testWidgets('Search Monitored posts a SeriesSearch command',
         (tester) async {
       await pumpHarness(tester);
-      await tester.tap(find.text('Search Monitored'));
+      await tester.tap(find.text('Automatic search'));
       await tester.pumpAndSettle();
 
       final posts = ofMethod('POST');
@@ -190,7 +200,7 @@ void main() {
     testWidgets('Refresh Series posts RefreshSeries and reloads',
         (tester) async {
       await pumpHarness(tester);
-      await tester.tap(find.text('Refresh Series'));
+      await tester.tap(find.text('Refresh metadata'));
       await tester.pumpAndSettle();
 
       final posts = ofMethod('POST');
@@ -202,7 +212,7 @@ void main() {
         'Unmonitor round-trips the whole series with only monitored flipped',
         (tester) async {
       await pumpHarness(tester);
-      await tester.tap(find.text('Unmonitor Series'));
+      await tester.tap(find.text('Unmonitor series'));
       await tester.pumpAndSettle();
 
       final puts = ofMethod('PUT');
@@ -222,7 +232,7 @@ void main() {
     testWidgets('Remove asks for confirmation and defaults to keeping files',
         (tester) async {
       await pumpHarness(tester);
-      await tester.tap(find.text('Remove Series'));
+      await tester.tap(find.text('Remove…'));
       await tester.pumpAndSettle();
 
       final checkbox =
@@ -238,7 +248,7 @@ void main() {
       // Again, accept the safe default: keep files on disk.
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Remove Series'));
+      await tester.tap(find.text('Remove…'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Remove'));
       await tester.pumpAndSettle();
@@ -253,7 +263,7 @@ void main() {
     testWidgets('Remove can opt in to deleting files from disk',
         (tester) async {
       await pumpHarness(tester);
-      await tester.tap(find.text('Remove Series'));
+      await tester.tap(find.text('Remove…'));
       await tester.pumpAndSettle();
 
       // Check the opt-in "delete files" box, then confirm.
@@ -273,7 +283,7 @@ void main() {
         'Edit Series opens the editor; saving PUTs the patch and reloads',
         (tester) async {
       await pumpHarness(tester);
-      await tester.tap(find.text('Edit Series'));
+      await tester.tap(find.text('Edit series'));
       await tester.pumpAndSettle();
 
       // The editor loaded the fresh series + profiles + tags.
@@ -381,8 +391,8 @@ void main() {
       // The overflow opens the same series action sheet.
       await tester.tap(find.byTooltip('Series actions'));
       await tester.pumpAndSettle();
-      expect(find.text('Search Monitored'), findsOneWidget);
-      await tester.tap(find.text('Search Monitored'));
+      expect(find.text('Automatic search'), findsOneWidget);
+      await tester.tap(find.text('Automatic search'));
       await tester.pumpAndSettle();
       final posts = adapter.requests.where((r) => r.method == 'POST').toList();
       expect(posts.single.body, {'name': 'SeriesSearch', 'seriesId': 7});

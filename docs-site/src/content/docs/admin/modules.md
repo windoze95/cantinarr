@@ -27,6 +27,19 @@ Switching views keeps the same items in view along with your current search, sta
 
 If artwork cannot load, the item keeps its name and a placeholder icon. If the library cannot load, use **Retry** in the error message. An empty result after a successful load means no items matched; clear the search or change the status filter to broaden it.
 
+### Library actions
+
+As an administrator, open an item's three-dot menu in List or Grid, or long-press the item. The same actions are available from its detail page:
+
+- **Automatic search** asks the service to find downloads for that movie or the monitored items in the selected series, author, or artist.
+- **Interactive search** lets you choose a release. Sonarr first asks for a season, Chaptarr for a book and format, and Lidarr for an album.
+- **Edit** opens the item's settings. Author and artist editors include quality and metadata profiles and tags. Chaptarr keeps eBook and audiobook settings separate; only compatible profiles appear.
+- **Monitor / Unmonitor** pauses or resumes the movie, series, or artist without changing individual season, episode, or album selections. Chaptarr's **Manage monitoring** opens separate eBook and audiobook controls, including monitoring for newly added titles. Older Chaptarr versions that do not expose those controls say to manage monitoring in Chaptarr.
+- **Refresh metadata** queues a provider refresh. The provider may also scan files according to its settings. **Rescan files** queues a scan scoped to this item's files.
+- **Remove…** asks for confirmation. Files stay on disk unless you select **Also delete files from disk**.
+
+A queued search, refresh, or scan is not a completion message. Refresh the library after the provider finishes. If an action fails, the message identifies the failure; check that the selected instance is reachable before trying again.
+
 ## Setup checklist
 
 The checklist reads the server's actual configuration. **Skip** removes an optional item from reminders and progress counts. Skipped items stay visible on the checklist and can be restored.

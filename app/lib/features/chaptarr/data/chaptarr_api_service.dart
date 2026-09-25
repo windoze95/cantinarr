@@ -407,10 +407,15 @@ class ChaptarrApiService {
         data: {'name': 'ProcessMonitoredDownloads'});
   }
 
+  Future<void> refreshAuthor(int authorId) async {
+    await _dio.post('$_basePath/command',
+        data: {'name': 'RefreshAuthor', 'authorId': authorId});
+  }
+
   /// Rescans an author's files on disk (retries imports blocked by a transient
   /// path/permissions problem).
   Future<void> rescanAuthor(int authorId) async {
     await _dio.post('$_basePath/command',
-        data: {'name': 'RescanAuthor', 'authorId': authorId});
+        data: {'name': 'RescanFolders', 'authorIds': [authorId]});
   }
 }
