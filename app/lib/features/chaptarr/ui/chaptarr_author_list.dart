@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/storage/library_view_preferences.dart';
+import '../../../core/widgets/library_collection.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../data/chaptarr_models.dart';
 
-/// List of Chaptarr authors with explicit row actions and progress indicators.
+/// List or artwork grid of Chaptarr authors
+/// with explicit actions and progress indicators.
 /// Mirrors [SonarrSeriesList] adapted to the author-centric book library.
 class ChaptarrAuthorList extends StatelessWidget {
   final List<ChaptarrAuthor> authors;
@@ -11,6 +14,9 @@ class ChaptarrAuthorList extends StatelessWidget {
   final void Function(ChaptarrAuthor)? onSearch;
   final void Function(ChaptarrAuthor, {bool deleteFiles})? onDelete;
   final bool embedded;
+  final LibraryViewMode viewMode;
+  final String scrollKey;
+  final ImageSource? Function(ChaptarrAuthor)? imageSourceFor;
 
   const ChaptarrAuthorList({
     super.key,
@@ -19,26 +25,27 @@ class ChaptarrAuthorList extends StatelessWidget {
     this.onSearch,
     this.onDelete,
     this.embedded = false,
+    this.viewMode = LibraryViewMode.list,
+    this.scrollKey = 'chaptarr-library',
+    this.imageSourceFor,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (authors.isEmpty) {
-      return const Center(
-        child: Text('No authors found',
-            style: TextStyle(color: AppTheme.textSecondary)),
-      );
-    }
-
-    return ListView.separated(
-      shrinkWrap: embedded,
-      physics: embedded ? const NeverScrollableScrollPhysics() : null,
+    return LibraryCollection(
+      viewMode: viewMode,
+      scrollKey: scrollKey,
+      embedded: embedded,
+      emptyMessage: 'No authors found',
       itemCount: authors.length,
-      separatorBuilder: (_, __) =>
-          const Divider(color: AppTheme.border, height: 1),
       itemBuilder: (context, index) {
         final author = authors[index];
         return _AuthorTile(
+          key: ValueKey(author.id),
+          grid: viewMode == LibraryViewMode.grid,
+          image: imageSourceFor == null
+              ? (url: author.coverUrl ?? '', headers: null)
+              : imageSourceFor!(author),
           author: author,
           onTap: () => onTap(author),
           onSearch: onSearch != null ? () => onSearch!(author) : null,
@@ -99,12 +106,17 @@ class ChaptarrAuthorList extends StatelessWidget {
 }
 
 class _AuthorTile extends StatelessWidget {
+  final bool grid;
+  final ImageSource? image;
   final ChaptarrAuthor author;
   final VoidCallback onTap;
   final VoidCallback? onSearch;
   final VoidCallback? onDelete;
 
   const _AuthorTile({
+    super.key,
+    required this.grid,
+    this.image,
     required this.author,
     required this.onTap,
     this.onSearch,
@@ -116,33 +128,24 @@ class _AuthorTile extends StatelessWidget {
     final stats = author.statistics;
     final percent = author.percentComplete;
 
-    return ListTile(
+    return LibraryItem(
+      grid: grid,
+      name: author.authorName,
       onTap: onTap,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      leading: ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        child: SizedBox(
-          width: 45,
-          height: 67,
-          child: CachedImage(
-            url: author.coverUrl,
-            fit: BoxFit.cover,
-            icon: Icons.person,
-          ),
-        ),
+      artwork: CachedImage(
+        url: image?.url,
+        headers: image?.headers,
+        fit: BoxFit.cover,
+        icon: Icons.person,
       ),
-      title: Text(
-        author.authorName,
-        style: const TextStyle(
-            color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: Column(
+      details: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SizedBox(height: 4),
-          Row(
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
@@ -160,7 +163,6 @@ class _AuthorTile extends StatelessWidget {
                 ),
               ),
               if (stats != null) ...[
-                const SizedBox(width: 6),
                 Text(
                   author.bookCountLabel,
                   style: const TextStyle(
@@ -183,7 +185,7 @@ class _AuthorTile extends StatelessWidget {
           ],
         ],
       ),
-      trailing: onSearch != null || onDelete != null
+      actions: onSearch != null || onDelete != null
           ? PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert, color: AppTheme.textSecondary),
               color: AppTheme.surfaceVariant,
@@ -205,7 +207,7 @@ class _AuthorTile extends StatelessWidget {
                         Icon(Icons.search,
                             size: 18, color: AppTheme.textSecondary),
                         SizedBox(width: 10),
-                        Text('Find books automatically'),
+                        Flexible(child: Text('Find books automatically')),
                       ],
                     ),
                   ),

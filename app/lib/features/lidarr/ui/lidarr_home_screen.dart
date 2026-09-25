@@ -3,11 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/storage/library_view_preferences.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/library_command_header.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../data/lidarr_api_service.dart';
 import '../data/lidarr_models.dart';
+import '../data/lidarr_image.dart';
 import '../logic/lidarr_library_provider.dart';
 import 'lidarr_artist_list.dart';
 import 'lidarr_artist_screen.dart';
@@ -90,6 +92,9 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
           child: CircularProgressIndicator(color: AppTheme.accent));
     }
 
+    final viewMode = ref.watch(libraryViewModeProvider('lidarr'));
+    final instanceId = ref.watch(instanceProvider).activeLidarrInstance?.id;
+
     return ListenableBuilder(
       listenable: _notifier!,
       builder: (context, _) {
@@ -100,6 +105,9 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
         return Column(
           children: [
             LibraryCommandHeader(
+              viewMode: viewMode,
+              onViewModeChanged: (value) => ref
+                  .read(libraryViewModeProvider('lidarr').notifier).set(value),
               title: 'Artist library',
               subtitle: '$instanceName  /  Lidarr',
               stats: [
@@ -157,15 +165,22 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
               child: state.isLoading && state.artists.isEmpty
                   ? const Center(
                       child: CircularProgressIndicator(color: AppTheme.accent))
-                  : RefreshIndicator(
-                      onRefresh: _notifier!.loadArtists,
-                      color: AppTheme.accent,
-                      child: LidarrArtistList(
-                        artists: state.filtered,
-                        onTap: _openArtist,
-                        onSearch: _triggerAutomaticSearch,
-                      ),
-                    ),
+                  : state.error != null && state.artists.isEmpty
+                      ? const SizedBox.shrink()
+                      : RefreshIndicator(
+                          onRefresh: _notifier!.loadArtists,
+                          color: AppTheme.accent,
+                          child: LidarrArtistList(
+                            viewMode: viewMode,
+                            scrollKey: 'lidarr-$instanceId',
+                            imageSourceFor: (item) => instanceId == null
+                                ? null
+                                : lidarrImageSource(ref, item.portraitUrl, instanceId),
+                            artists: state.filtered,
+                            onTap: _openArtist,
+                            onSearch: _triggerAutomaticSearch,
+                          ),
+                        ),
             ),
           ],
         );

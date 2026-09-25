@@ -3,11 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/storage/library_view_preferences.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/library_command_header.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../data/chaptarr_api_service.dart';
 import '../data/chaptarr_models.dart';
+import '../data/chaptarr_image.dart';
 import '../logic/chaptarr_library_provider.dart';
 import 'chaptarr_author_detail_screen.dart';
 import 'chaptarr_author_list.dart';
@@ -90,6 +92,9 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
           child: CircularProgressIndicator(color: AppTheme.accent));
     }
 
+    final viewMode = ref.watch(libraryViewModeProvider('chaptarr'));
+    final instanceId = ref.watch(instanceProvider).activeChaptarrInstance?.id;
+
     return ListenableBuilder(
       listenable: _notifier!,
       builder: (context, _) {
@@ -101,6 +106,9 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
         return Column(
           children: [
             LibraryCommandHeader(
+              viewMode: viewMode,
+              onViewModeChanged: (value) => ref
+                  .read(libraryViewModeProvider('chaptarr').notifier).set(value),
               title: 'Author library',
               subtitle: '$instanceName  /  Chaptarr',
               stats: [
@@ -158,18 +166,25 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
               child: state.isLoading && state.authors.isEmpty
                   ? const Center(
                       child: CircularProgressIndicator(color: AppTheme.accent))
-                  : RefreshIndicator(
-                      onRefresh: _notifier!.loadAuthors,
-                      color: AppTheme.accent,
-                      child: ChaptarrAuthorList(
-                        authors: state.filtered,
-                        onTap: _openAuthor,
-                        onSearch: _triggerAutomaticSearch,
-                        onDelete: (author, {bool deleteFiles = false}) =>
-                            _notifier!.deleteAuthor(author.id,
-                                deleteFiles: deleteFiles),
-                      ),
-                    ),
+                  : state.error != null && state.authors.isEmpty
+                      ? const SizedBox.shrink()
+                      : RefreshIndicator(
+                          onRefresh: _notifier!.loadAuthors,
+                          color: AppTheme.accent,
+                          child: ChaptarrAuthorList(
+                            viewMode: viewMode,
+                            scrollKey: 'chaptarr-$instanceId',
+                            imageSourceFor: (item) => instanceId == null
+                                ? null
+                                : chaptarrImageSource(ref, item.portraitUrl, instanceId),
+                            authors: state.filtered,
+                            onTap: _openAuthor,
+                            onSearch: _triggerAutomaticSearch,
+                            onDelete: (author, {bool deleteFiles = false}) =>
+                                _notifier!.deleteAuthor(author.id,
+                                    deleteFiles: deleteFiles),
+                          ),
+                        ),
             ),
           ],
         );

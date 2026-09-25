@@ -15,6 +15,16 @@ Change these choices under **Settings > Modules > Discover > Discover tabs**. Hi
 
 Releases hides only when Movies, TV Shows, and Music are all hidden. An empty release schedule alone does not hide it.
 
+## Library views
+
+Open the **Library** tab in Radarr, Sonarr, Chaptarr, or Lidarr, then choose **List** or **Grid** beside the library filter controls. On narrow screens, the switch sits below the search field.
+
+Grid displays movie and series posters, author covers, or artist artwork. Phones show three columns; wider screens fit more. Select an item to open its details. The visible item actions work with a pointer or keyboard in either view.
+
+Switching views keeps your current search, status filter, and results. Each module remembers its own choice on this device, including after an app restart. The choice applies to all configured instances of that module. List is the initial default.
+
+If artwork cannot load, the item keeps its name and a placeholder icon. If the library cannot load, use **Retry** in the error message. An empty result after a successful load means no items matched; clear the search or change the status filter to broaden it.
+
 ## Setup checklist
 
 The checklist reads the server's actual configuration. **Skip** removes an optional item from reminders and progress counts. Skipped items stay visible on the checklist and can be restored.

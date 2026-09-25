@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
+import '../storage/library_view_preferences.dart';
 import 'app_panel.dart';
 
 class LibraryStat {
@@ -15,7 +16,7 @@ class LibraryStat {
   });
 }
 
-/// Shared command header for the three admin library workbenches.
+/// Shared command header for the four admin libraries.
 ///
 /// It gives every library a visible identity, separates local filtering from
 /// global discovery search, and keeps operational counts readable at all
@@ -28,6 +29,8 @@ class LibraryCommandHeader extends StatelessWidget {
   final ValueChanged<String> onSearch;
   final String searchHint;
   final Widget filter;
+  final LibraryViewMode viewMode;
+  final ValueChanged<LibraryViewMode> onViewModeChanged;
 
   const LibraryCommandHeader({
     super.key,
@@ -38,6 +41,8 @@ class LibraryCommandHeader extends StatelessWidget {
     required this.onSearch,
     required this.searchHint,
     required this.filter,
+    required this.viewMode,
+    required this.onViewModeChanged,
   });
 
   @override
@@ -49,6 +54,20 @@ class LibraryCommandHeader extends StatelessWidget {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final wide = constraints.maxWidth >= 620;
+          final viewControl = SegmentedButton<LibraryViewMode>(
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment(value: LibraryViewMode.list,
+                  icon: Icon(Icons.view_list_rounded), label: Text('List'),
+                  tooltip: 'List view'),
+              ButtonSegment(value: LibraryViewMode.grid,
+                  icon: Icon(Icons.grid_view_rounded), label: Text('Grid'),
+                  tooltip: 'Grid view'),
+            ],
+            selected: {viewMode},
+            onSelectionChanged: (selection) =>
+                onViewModeChanged(selection.single),
+          );
           final identity = Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
@@ -72,9 +91,10 @@ class LibraryCommandHeader extends StatelessWidget {
               ),
             ],
           );
-          final metrics = Row(
-            mainAxisSize: wide ? MainAxisSize.min : MainAxisSize.max,
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          final metrics = Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            alignment: wide ? WrapAlignment.end : WrapAlignment.spaceBetween,
             children: [
               for (final stat in stats) _Metric(stat: stat),
             ],
@@ -135,8 +155,16 @@ class LibraryCommandHeader extends StatelessWidget {
                     ),
                     child: filter,
                   ),
+                  if (wide) ...[
+                    const SizedBox(width: 12),
+                    viewControl,
+                  ],
                 ],
               ),
+              if (!wide) ...[
+                const SizedBox(height: 12),
+                Align(alignment: Alignment.centerRight, child: viewControl),
+              ],
             ],
           );
         },
@@ -154,7 +182,6 @@ class _Metric extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       constraints: const BoxConstraints(minWidth: 76),
-      margin: const EdgeInsets.only(left: 7),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
         color: stat.color.withValues(alpha: 0.075),

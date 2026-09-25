@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/storage/library_view_preferences.dart';
+import '../../../core/widgets/library_collection.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../data/sonarr_models.dart';
 
-/// List of Sonarr series with explicit row actions and progress indicators.
+/// List or artwork grid of Sonarr series
+/// with explicit actions and progress indicators.
 /// Long-pressing a tile opens the series action sheet when [onLongPress] is
 /// wired.
 class SonarrSeriesList extends StatelessWidget {
@@ -14,6 +17,8 @@ class SonarrSeriesList extends StatelessWidget {
   final void Function(SonarrSeries show)? onOpen;
   final void Function(SonarrSeries show)? onLongPress;
   final bool embedded;
+  final LibraryViewMode viewMode;
+  final String scrollKey;
 
   const SonarrSeriesList({
     super.key,
@@ -24,26 +29,23 @@ class SonarrSeriesList extends StatelessWidget {
     this.onOpen,
     this.onLongPress,
     this.embedded = false,
+    this.viewMode = LibraryViewMode.list,
+    this.scrollKey = 'sonarr-library',
   });
 
   @override
   Widget build(BuildContext context) {
-    if (series.isEmpty) {
-      return const Center(
-        child: Text('No series found',
-            style: TextStyle(color: AppTheme.textSecondary)),
-      );
-    }
-
-    return ListView.separated(
-      shrinkWrap: embedded,
-      physics: embedded ? const NeverScrollableScrollPhysics() : null,
+    return LibraryCollection(
+      viewMode: viewMode,
+      scrollKey: scrollKey,
+      embedded: embedded,
+      emptyMessage: 'No series found',
       itemCount: series.length,
-      separatorBuilder: (_, __) =>
-          const Divider(color: AppTheme.border, height: 1),
       itemBuilder: (context, index) {
         final show = series[index];
         return _SeriesTile(
+          key: ValueKey(show.id),
+          grid: viewMode == LibraryViewMode.grid,
           show: show,
           onDelete: () async {
             final deleteFiles = await _confirmDelete(context, show.title);
@@ -105,6 +107,7 @@ class SonarrSeriesList extends StatelessWidget {
 }
 
 class _SeriesTile extends StatelessWidget {
+  final bool grid;
   final SonarrSeries show;
   final VoidCallback onDelete;
   final VoidCallback onSearch;
@@ -113,6 +116,8 @@ class _SeriesTile extends StatelessWidget {
   final VoidCallback? onLongPress;
 
   const _SeriesTile({
+    super.key,
+    required this.grid,
     required this.show,
     required this.onDelete,
     required this.onSearch,
@@ -126,40 +131,29 @@ class _SeriesTile extends StatelessWidget {
     final stats = show.statistics;
     final percent = show.percentComplete;
 
-    return ListTile(
+    return LibraryItem(
+      grid: grid,
+      name: show.title,
       onTap: onOpen,
       onLongPress: onLongPress,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      leading: ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        child: SizedBox(
-          width: 45,
-          height: 67,
-          child: CachedImage(
-            url: show.posterUrl,
-            fit: BoxFit.cover,
-            icon: Icons.tv,
-          ),
-        ),
+      artwork: CachedImage(
+        url: show.posterUrl,
+        fit: BoxFit.cover,
+        icon: Icons.tv,
       ),
-      title: Text(
-        show.title,
-        style: const TextStyle(
-            color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: Column(
+      details: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SizedBox(height: 4),
-          Row(
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               if (show.year != null)
                 Text('${show.year}',
                     style: const TextStyle(
                         color: AppTheme.textSecondary, fontSize: 13)),
-              const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                 decoration: BoxDecoration(
@@ -176,7 +170,6 @@ class _SeriesTile extends StatelessWidget {
                 ),
               ),
               if (stats != null) ...[
-                const SizedBox(width: 6),
                 Text(
                   '${stats.episodeFileCount}/${stats.episodeCount} eps',
                   style: const TextStyle(
@@ -199,7 +192,7 @@ class _SeriesTile extends StatelessWidget {
           ],
         ],
       ),
-      trailing: PopupMenuButton<String>(
+      actions: PopupMenuButton<String>(
         icon: const Icon(Icons.more_vert, color: AppTheme.textSecondary),
         color: AppTheme.surfaceVariant,
         tooltip: 'Actions for ${show.title}',
@@ -222,7 +215,7 @@ class _SeriesTile extends StatelessWidget {
               children: [
                 Icon(Icons.search, size: 18, color: AppTheme.textSecondary),
                 SizedBox(width: 10),
-                Text('Automatic search'),
+                Flexible(child: Text('Automatic search')),
               ],
             ),
           ),
@@ -234,7 +227,7 @@ class _SeriesTile extends StatelessWidget {
                   Icon(Icons.manage_search,
                       size: 18, color: AppTheme.textSecondary),
                   SizedBox(width: 10),
-                  Text('Interactive search'),
+                  Flexible(child: Text('Interactive search')),
                 ],
               ),
             ),
@@ -249,7 +242,7 @@ class _SeriesTile extends StatelessWidget {
                     color: AppTheme.textSecondary,
                   ),
                   SizedBox(width: 10),
-                  Text('More actions…'),
+                  Flexible(child: Text('More actions…')),
                 ],
               ),
             ),
