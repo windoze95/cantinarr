@@ -87,6 +87,7 @@ import '../features/settings/ui/discord_notifications_screen.dart';
 import '../features/settings/ui/seerr_api_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
 import '../features/settings/ui/pending_requests_screen.dart';
+import '../features/settings/ui/request_history_screen.dart';
 import '../features/settings/ui/request_settings_screen.dart';
 import '../features/request/ui/tv_matches_screen.dart';
 import '../features/settings/ui/settings_screen.dart';
@@ -864,6 +865,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: '/approvals',
             builder: (_, __) =>
                 const AppAmbientBackground(child: PendingRequestsScreen()),
+          ),
+          GoRoute(
+            path: '/approvals/history',
+            builder: (_, __) =>
+                const AppAmbientBackground(child: RequestHistoryScreen()),
           ),
           GoRoute(
             path: '/issues',

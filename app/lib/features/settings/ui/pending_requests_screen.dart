@@ -517,7 +517,17 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Approvals')),
+      appBar: AppBar(
+        title: const Text('Approvals'),
+        actions: [
+          TextButton.icon(
+            onPressed: () => context.push('/approvals/history'),
+            icon: const Icon(Icons.history),
+            label: const Text('History'),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
       body: CenteredContent(
         child: Column(
           children: [

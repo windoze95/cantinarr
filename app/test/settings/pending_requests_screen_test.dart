@@ -24,6 +24,26 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
+  testWidgets('History stays available when the approval queue is empty', (tester) async {
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = _ApprovalsAdapter(pending: const []);
+    final router = GoRouter(routes: [
+      GoRoute(path: '/', builder: (_, __) => const PendingRequestsScreen()),
+      GoRoute(path: '/approvals/history', builder: (_, __) =>
+        const Scaffold(body: Text('History destination'))),
+    ]);
+    addTearDown(router.dispose);
+    await tester.pumpWidget(ProviderScope(overrides: [
+      authProvider.overrideWith(_FakeAuthNotifier.new),
+      backendClientProvider.overrideWithValue(dio),
+      realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
+    ], child: MaterialApp.router(routerConfig: router)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('History'));
+    await tester.pumpAndSettle();
+    expect(find.text('History destination'), findsOneWidget);
+  });
+
   test('blank requester names use safe, trimmed approval copy', () {
     PendingRequestItem item(String username, int requesterCount) =>
         PendingRequestItem.fromJson({

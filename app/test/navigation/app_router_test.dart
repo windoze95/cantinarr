@@ -245,6 +245,7 @@ void main() {
       // The old module path stays admin-only through its redirect.
       '/tautulli/activity',
       '/approvals',
+      '/approvals/history',
       '/agent-actions',
       '/agent-runs/1',
       '/setup',
