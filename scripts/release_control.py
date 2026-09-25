@@ -26,6 +26,10 @@ class ReleaseError(Exception):
     pass
 
 
+class ReleasePaused(ReleaseError):
+    """A release freeze has taken public beta ownership from an unchanged main."""
+
+
 class ArtifactMissing(ReleaseError):
     pass
 
@@ -133,7 +137,18 @@ def current(source, *, server=False):
         if server and source["ref"] == "refs/heads/main":
             allowed |= {"paused", "beta"}
         if channel not in allowed or channel == "superseded":
+            if source["channel"] == "beta" and channel == "paused":
+                raise ReleasePaused("Publishing paused: a release branch now owns public betas")
             raise ReleaseError(f"Publishing stopped: source is now {channel}")
+
+
+def report_pause():
+    message = ("A release branch now owns public beta publishing. This main run "
+               "skipped further publishing; resume it after the release closes.")
+    print(f"::notice::{message}")
+    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(summary, "a") as stream:
+            stream.write(f"### Publishing paused\n\n{message}\n\n")
 
 
 def artifact_json(run, name, filename):
@@ -336,6 +351,8 @@ def main():
     parser.add_argument("--sha")
     parser.add_argument("--ci-head")
     parser.add_argument("--minutes", type=int, default=45)
+    parser.add_argument("--skip-paused", action="store_true",
+                        help="For current, emit enabled=false instead of failing an expected beta freeze")
     args = parser.parse_args()
     try:
         if args.action == "prepare":
@@ -343,7 +360,15 @@ def main():
         elif args.action == "manifest":
             candidate_manifest()
         elif args.action == "current":
-            current(json.loads(os.environ["SOURCE_JSON"]), server=args.platform == "server")
+            try:
+                current(json.loads(os.environ["SOURCE_JSON"]), server=args.platform == "server")
+            except ReleasePaused:
+                if not args.skip_paused:
+                    raise
+                emit({"enabled": "false"})
+                report_pause()
+            else:
+                emit({"enabled": "true"})
         elif args.action == "record":
             write_record(json.loads(os.environ["SOURCE_JSON"]), args.platform)
         elif args.action == "ci":

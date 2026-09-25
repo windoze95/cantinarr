@@ -1,8 +1,10 @@
 import io
+from contextlib import redirect_stdout
 import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -88,6 +90,66 @@ class PreviewTests(unittest.TestCase):
                 rc, "api", return_value={**self.pr, "merge_commit_sha": "d" * 40}):
             with self.assertRaises(rc.ReleaseError):
                 rc.current(source)
+
+
+class PublishingStatusTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.output = Path(directory.name) / "output"
+        self.summary = Path(directory.name) / "summary"
+        self.source = {"sha": COMMIT, "ref": "refs/heads/main", "channel": "beta"}
+        environment = patch.dict(os.environ, {
+            "SOURCE_JSON": json.dumps(self.source),
+            "GITHUB_OUTPUT": str(self.output),
+            "GITHUB_STEP_SUMMARY": str(self.summary),
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def run_current(self, branches, *flags):
+        output = io.StringIO()
+        with patch.object(sys, "argv", ["release_control.py", "current", *flags]), \
+                patch.object(rc, "branch_state", return_value=branches), redirect_stdout(output):
+            rc.main()
+        return output.getvalue()
+
+    def test_late_freeze_emits_disabled_and_reports_a_successful_pause(self):
+        log = self.run_current({"main": COMMIT, "release/1.0.0": OTHER}, "--skip-paused")
+        self.assertEqual(self.output.read_text(), "enabled=false\n")
+        self.assertIn("::notice::", log)
+        self.assertIn("skipped further publishing", self.summary.read_text())
+
+    def test_current_main_and_edge_server_remain_publishable(self):
+        self.run_current({"main": COMMIT}, "--skip-paused")
+        self.assertEqual(self.output.read_text(), "enabled=true\n")
+        self.assertFalse(self.summary.exists())
+        self.output.unlink()
+        self.run_current({"main": COMMIT, "release/1.0.0": OTHER}, "--platform", "server")
+        self.assertEqual(self.output.read_text(), "enabled=true\n")
+
+    def test_strict_callers_still_fail_during_freeze(self):
+        with self.assertRaises(SystemExit):
+            self.run_current({"main": COMMIT, "release/1.0.0": OTHER})
+        self.assertFalse(self.output.exists())
+
+    def test_skip_paused_does_not_hide_changed_or_ambiguous_sources(self):
+        for branches in (
+            {"main": OTHER},
+            {"main": OTHER, "release/1.0.0": OTHER},
+            {"main": COMMIT, "release/wip": OTHER},
+            {"main": COMMIT, "release/1.0.0": COMMIT, "release/1.1.0": OTHER},
+        ):
+            with self.subTest(branches=branches), self.assertRaises(SystemExit):
+                self.run_current(branches, "--skip-paused")
+            self.assertFalse(self.output.exists())
+
+    def test_skip_paused_does_not_hide_unreadable_ownership(self):
+        with patch.object(sys, "argv", ["release_control.py", "current", "--skip-paused"]), \
+                patch.object(rc, "branch_state", side_effect=rc.ReleaseError("GitHub unavailable")), \
+                self.assertRaises(SystemExit):
+            rc.main()
+        self.assertFalse(self.output.exists())
 
 
 class ReceiptTests(unittest.TestCase):

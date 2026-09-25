@@ -25,6 +25,10 @@ mobile betas and listing updates. Main keeps running CI and publishing `edge`; m
 workflows exit without publishing while frozen. Before each upload, the workflow checks the
 branch head and ownership again. TestFlight checks again after Apple processing, immediately
 before its external review submission and group assignment. An obsolete queued build cannot overwrite a newer source.
+If a freeze starts after a main mobile run begins, its remaining publishing steps are skipped
+with a notice and a workflow summary instead of failing the run. A skipped upload creates no
+uploaded-build receipt and cannot start TestFlight distribution. Source changes, invalid release
+ownership, and unreadable ownership state still fail the publishing check.
 After deleting the release branch, main publishing resumes on its next relevant push or manual
 dispatch. Public TestFlight and Play opt-in links stay the same.
 
