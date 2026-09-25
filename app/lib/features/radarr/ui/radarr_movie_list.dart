@@ -173,7 +173,7 @@ class _MovieTile extends StatelessWidget {
               ),
             ),
           ),
-          if (movie.movieFile != null) ...[
+          if (!grid && movie.movieFile != null) ...[
             Text(
               movie.movieFile!.sizeFormatted,
               style:
