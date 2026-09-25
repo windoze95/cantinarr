@@ -234,6 +234,10 @@ class CachedImage extends StatelessWidget {
       // which can dispose the browser image still used by a cached frame.
       return Image(
         image: cachedImageProvider(source, cacheScope: cacheScope),
+        // CanvasKit can lose medium-quality mipmaps when a texture is recreated
+        // under cache pressure. Unrelated hover repaints then change the artwork.
+        // Bicubic sampling stays consistent across those texture cache states.
+        filterQuality: FilterQuality.high,
         fit: fit,
         width: width,
         height: height,
