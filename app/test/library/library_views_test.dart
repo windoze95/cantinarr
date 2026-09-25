@@ -68,7 +68,7 @@ void main() {
       expect(find.text('Example two'), findsNothing);
       final requests = adapter.requests.length;
       for (final label in ['Grid', 'List', 'Grid']) {
-        await tester.tap(find.text(label));
+        await tester.tap(find.byTooltip('$label view'));
         await tester.pumpAndSettle();
         expect(find.text('Example one'), findsOneWidget);
         expect(find.text('Example two'), findsNothing);
@@ -136,6 +136,12 @@ void main() {
         ];
         await pumpLibrary(tester, module, adapter, scale: 2);
         await tester.pumpAndSettle();
+        final field = tester.getCenter(find.byType(TextField));
+        final toggle = tester.getCenter(find.byType(SegmentedButton<LibraryViewMode>));
+        expect(toggle.dy, closeTo(field.dy, 1));
+        expect(tester.getSize(find.byType(TextField)).width, greaterThanOrEqualTo(100));
+        expect(find.text('List'), width < 600 ? findsNothing : findsOneWidget);
+        expect(find.text('Grid'), width < 600 ? findsNothing : findsOneWidget);
         final cards = find.byType(LibraryItem);
         final top = tester.getTopLeft(cards.at(0)).dy;
         final columns = cards.evaluate().where((element) =>
@@ -155,16 +161,16 @@ void main() {
     await tester.drag(find.byType(ListView), const Offset(0, -800));
     await tester.pumpAndSettle();
     final listOffset = tester.state<ScrollableState>(find.byType(Scrollable).last).position.pixels;
-    await tester.tap(find.text('Grid'));
+    await tester.tap(find.byTooltip('Grid view'));
     await tester.pumpAndSettle();
     expect(find.byType(LibraryItem).evaluate().length, lessThan(40));
     await tester.drag(find.byType(ListView), const Offset(0, -600));
     await tester.pumpAndSettle();
     final gridOffset = tester.state<ScrollableState>(find.byType(Scrollable).last).position.pixels;
-    await tester.tap(find.text('List'));
+    await tester.tap(find.byTooltip('List view'));
     await tester.pumpAndSettle();
     expect(tester.state<ScrollableState>(find.byType(Scrollable).last).position.pixels, listOffset);
-    await tester.tap(find.text('Grid'));
+    await tester.tap(find.byTooltip('Grid view'));
     await tester.pumpAndSettle();
     expect(tester.state<ScrollableState>(find.byType(Scrollable).last).position.pixels, gridOffset);
   });

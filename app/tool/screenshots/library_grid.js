@@ -65,7 +65,7 @@ const server = http.createServer((req, res) => {
   const report = [];
   const artworkCache = new Map();
   try {
-    for (const width of [390, 1440]) {
+    for (const width of [340, 390, 1440]) {
       const context = await browser.newContext({ viewport: { width, height: width < 600 ? 844 : 1000 } });
       // CDN photos are visual fixtures. Fetch outside browser CORS, preserving
       // actual image content; authenticated library artwork uses the server.

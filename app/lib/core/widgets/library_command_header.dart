@@ -56,12 +56,17 @@ class LibraryCommandHeader extends StatelessWidget {
           final wide = constraints.maxWidth >= 620;
           final viewControl = SegmentedButton<LibraryViewMode>(
             showSelectedIcon: false,
-            segments: const [
+            style: wide ? null : SegmentedButton.styleFrom(
+              padding: EdgeInsets.zero,
+            ),
+            segments: [
               ButtonSegment(value: LibraryViewMode.list,
-                  icon: Icon(Icons.view_list_rounded), label: Text('List'),
+                  icon: const Icon(Icons.view_list_rounded),
+                  label: wide ? const Text('List') : null,
                   tooltip: 'List view'),
               ButtonSegment(value: LibraryViewMode.grid,
-                  icon: Icon(Icons.grid_view_rounded), label: Text('Grid'),
+                  icon: const Icon(Icons.grid_view_rounded),
+                  label: wide ? const Text('Grid') : null,
                   tooltip: 'Grid view'),
             ],
             selected: {viewMode},
@@ -129,7 +134,8 @@ class LibraryCommandHeader extends StatelessWidget {
                         textInputAction: TextInputAction.search,
                         decoration: InputDecoration(
                           hintText: searchHint,
-                          prefixIcon: const Icon(Icons.filter_alt_outlined),
+                          prefixIcon: wide
+                              ? const Icon(Icons.filter_alt_outlined) : null,
                           suffixIcon: searchController.text.isEmpty
                               ? null
                               : IconButton(
@@ -144,10 +150,10 @@ class LibraryCommandHeader extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  SizedBox(width: wide ? 8 : 6),
                   Container(
-                    width: 52,
-                    height: 52,
+                    width: wide ? 52 : 48,
+                    height: wide ? 52 : 48,
                     decoration: BoxDecoration(
                       color: AppTheme.surfaceRaised,
                       borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
@@ -155,16 +161,10 @@ class LibraryCommandHeader extends StatelessWidget {
                     ),
                     child: filter,
                   ),
-                  if (wide) ...[
-                    const SizedBox(width: 12),
-                    viewControl,
-                  ],
+                  SizedBox(width: wide ? 12 : 6),
+                  SizedBox(width: wide ? null : 96, child: viewControl),
                 ],
               ),
-              if (!wide) ...[
-                const SizedBox(height: 12),
-                Align(alignment: Alignment.centerRight, child: viewControl),
-              ],
             ],
           );
         },

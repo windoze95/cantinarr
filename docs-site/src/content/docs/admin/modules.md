@@ -17,7 +17,7 @@ Releases hides only when Movies, TV Shows, and Music are all hidden. An empty re
 
 ## Library views
 
-Open the **Library** tab in Radarr, Sonarr, Chaptarr, or Lidarr, then choose **List** or **Grid** beside the library filter controls. On narrow screens, the switch sits below the search field.
+Open the **Library** tab in Radarr, Sonarr, Chaptarr, or Lidarr, then choose **List** or **Grid** beside the library filter controls. On narrow screens, the switch uses list and grid icons in the search row. Each icon has a tooltip and an accessible label.
 
 Grid displays movie and series posters, author covers, or artist artwork. Phones show three columns; wider screens fit more. Select an item to open its details. The visible item actions work with a pointer or keyboard in either view.
 
