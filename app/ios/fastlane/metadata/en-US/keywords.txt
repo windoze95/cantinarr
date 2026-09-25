@@ -1,1 +1,1 @@
-radarr,sonarr,plex,jellyfin,emby,lidarr,sabnzbd,qbittorrent,nzbget,usenet,movies,tv,books,music,arr
+radarr,sonarr,plex,jellyfin,emby,lidarr,sabnzbd,qbittorrent,nzbget,usenet,movies,tv,books,music,nas
