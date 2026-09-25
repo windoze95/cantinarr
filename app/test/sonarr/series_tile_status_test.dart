@@ -63,8 +63,8 @@ void main() {
     await _pump(tester, _series(status: 'ended', files: 2, count: 3,
         sizeOnDisk: 2 * 1024 * 1024 * 1024));
 
-    expect(find.text('2.0 GB'), findsOneWidget);
-    expect(find.text('2/3'), findsOneWidget);
+    expect(find.text('2/3 · 2.0 GB'), findsOneWidget);
+    expect(find.text('2/3'), findsNothing);
     expect(find.text('2/3 eps'), findsNothing);
     expect(find.text('2020'), findsNothing);
     expect(find.byType(LinearProgressIndicator), findsOneWidget);

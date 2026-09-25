@@ -130,6 +130,12 @@ class _SeriesTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final stats = show.statistics;
     final percent = show.percentComplete;
+    final episodeDetails = stats == null
+        ? null
+        : [
+            '${stats.episodeFileCount}/${stats.episodeCount}',
+            if (!grid && stats.sizeOnDisk > 0) stats.sizeFormatted,
+          ].join(' · ');
 
     return LibraryItem(
       grid: grid,
@@ -165,19 +171,12 @@ class _SeriesTile extends StatelessWidget {
                   ),
                 ),
               ),
-              if (stats != null) ...[
+              if (episodeDetails != null)
                 Text(
-                  '${stats.episodeFileCount}/${stats.episodeCount}',
+                  episodeDetails,
                   style: const TextStyle(
                       color: AppTheme.textSecondary, fontSize: 11),
                 ),
-                if (!grid && stats.sizeOnDisk > 0)
-                  Text(
-                    stats.sizeFormatted,
-                    style: const TextStyle(
-                        color: AppTheme.textSecondary, fontSize: 11),
-                  ),
-              ],
             ],
           ),
           if (!grid && stats != null && stats.episodeCount > 0) ...[
