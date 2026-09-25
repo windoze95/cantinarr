@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/storage/library_view_preferences.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/library_command_header.dart';
 import '../../../navigation/ambient_page_route.dart';
@@ -124,6 +125,9 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
           child: CircularProgressIndicator(color: AppTheme.accent));
     }
 
+    final viewMode = ref.watch(libraryViewModeProvider('radarr'));
+    final instanceId = ref.watch(instanceProvider).activeRadarrInstance?.id;
+
     return ListenableBuilder(
       listenable: _notifier!,
       builder: (context, _) {
@@ -131,9 +135,13 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
         final instanceName =
             ref.watch(instanceProvider).activeRadarrInstance?.name ?? 'Radarr';
 
-        return Column(
-          children: [
-            LibraryCommandHeader(
+        return LibraryCommandLayout(
+          key: ValueKey('radarr-$instanceId'),
+          headerBuilder: (collapsed) => LibraryCommandHeader(
+              collapsed: collapsed,
+              viewMode: viewMode,
+              onViewModeChanged: (value) => ref
+                  .read(libraryViewModeProvider('radarr').notifier).set(value),
               title: 'Movie library',
               subtitle: '$instanceName  /  Radarr',
               stats: [
@@ -183,6 +191,7 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
               ),
             ),
 
+          children: [
             if (state.error != null)
               ErrorBanner(
                 message: state.error!,
@@ -194,19 +203,23 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
               child: state.isLoading && state.movies.isEmpty
                   ? const Center(
                       child: CircularProgressIndicator(color: AppTheme.accent))
-                  : RefreshIndicator(
-                      onRefresh: _notifier!.loadMovies,
-                      color: AppTheme.accent,
-                      child: RadarrMovieList(
-                        movies: state.filtered,
-                        onDelete: (id, {bool deleteFiles = false}) => _notifier!
-                            .deleteMovie(id, deleteFiles: deleteFiles),
-                        onSearch: _triggerAutomaticSearch,
-                        onInteractiveSearch: _openInteractiveSearch,
-                        onOpen: _openMovie,
-                        onLongPress: _showMovieActions,
-                      ),
-                    ),
+                  : state.error != null && state.movies.isEmpty
+                      ? const SizedBox.shrink()
+                      : RefreshIndicator(
+                          onRefresh: _notifier!.loadMovies,
+                          color: AppTheme.accent,
+                          child: RadarrMovieList(
+                            viewMode: viewMode,
+                            scrollKey: 'radarr-$instanceId',
+                            movies: state.filtered,
+                            onDelete: (id, {bool deleteFiles = false}) => _notifier!
+                                .deleteMovie(id, deleteFiles: deleteFiles),
+                            onSearch: _triggerAutomaticSearch,
+                            onInteractiveSearch: _openInteractiveSearch,
+                            onOpen: _openMovie,
+                            onLongPress: _showMovieActions,
+                          ),
+                        ),
             ),
           ],
         );

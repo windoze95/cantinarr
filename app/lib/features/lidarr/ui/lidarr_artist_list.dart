@@ -1,15 +1,21 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/storage/library_view_preferences.dart';
+import '../../../core/widgets/library_collection.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../data/lidarr_models.dart';
 
-/// List of Lidarr artists with explicit row actions and progress indicators.
+/// List or artwork grid of Lidarr artists
+/// with explicit actions and progress indicators.
 /// Mirrors [ChaptarrAuthorList] adapted to the artist-centric music library.
 class LidarrArtistList extends StatelessWidget {
   final List<LidarrArtist> artists;
   final void Function(LidarrArtist) onTap;
   final void Function(LidarrArtist)? onSearch;
   final bool embedded;
+  final LibraryViewMode viewMode;
+  final String scrollKey;
+  final ImageSource? Function(LidarrArtist)? imageSourceFor;
 
   const LidarrArtistList({
     super.key,
@@ -17,26 +23,27 @@ class LidarrArtistList extends StatelessWidget {
     required this.onTap,
     this.onSearch,
     this.embedded = false,
+    this.viewMode = LibraryViewMode.list,
+    this.scrollKey = 'lidarr-library',
+    this.imageSourceFor,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (artists.isEmpty) {
-      return const Center(
-        child: Text('No artists found',
-            style: TextStyle(color: AppTheme.textSecondary)),
-      );
-    }
-
-    return ListView.separated(
-      shrinkWrap: embedded,
-      physics: embedded ? const NeverScrollableScrollPhysics() : null,
+    return LibraryCollection(
+      viewMode: viewMode,
+      scrollKey: scrollKey,
+      embedded: embedded,
+      emptyMessage: 'No artists found',
       itemCount: artists.length,
-      separatorBuilder: (_, __) =>
-          const Divider(color: AppTheme.border, height: 1),
       itemBuilder: (context, index) {
         final artist = artists[index];
         return _ArtistTile(
+          key: ValueKey(artist.id),
+          grid: viewMode == LibraryViewMode.grid,
+          image: imageSourceFor == null
+              ? (url: artist.imageUrl ?? '', headers: null)
+              : imageSourceFor!(artist),
           artist: artist,
           onTap: () => onTap(artist),
           onSearch: onSearch != null ? () => onSearch!(artist) : null,
@@ -47,11 +54,16 @@ class LidarrArtistList extends StatelessWidget {
 }
 
 class _ArtistTile extends StatelessWidget {
+  final bool grid;
+  final ImageSource? image;
   final LidarrArtist artist;
   final VoidCallback onTap;
   final VoidCallback? onSearch;
 
   const _ArtistTile({
+    super.key,
+    required this.grid,
+    this.image,
     required this.artist,
     required this.onTap,
     this.onSearch,
@@ -62,33 +74,25 @@ class _ArtistTile extends StatelessWidget {
     final stats = artist.statistics;
     final percent = artist.percentComplete;
 
-    return ListTile(
+    return LibraryItem(
+      grid: grid,
+      name: artist.artistName,
+      artworkAspectRatio: 1,
       onTap: onTap,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      leading: ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        child: SizedBox(
-          width: 45,
-          height: 67,
-          child: CachedImage(
-            url: artist.imageUrl,
-            fit: BoxFit.cover,
-            icon: Icons.mic_external_on,
-          ),
-        ),
+      artwork: CachedImage(
+        url: image?.url,
+        headers: image?.headers,
+        fit: BoxFit.cover,
+        icon: Icons.mic_external_on,
       ),
-      title: Text(
-        artist.artistName,
-        style: const TextStyle(
-            color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: Column(
+      details: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SizedBox(height: 4),
-          Row(
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
@@ -106,7 +110,6 @@ class _ArtistTile extends StatelessWidget {
                 ),
               ),
               if (stats != null) ...[
-                const SizedBox(width: 6),
                 Text(
                   artist.albumCountLabel,
                   style: const TextStyle(
@@ -129,7 +132,7 @@ class _ArtistTile extends StatelessWidget {
           ],
         ],
       ),
-      trailing: onSearch != null
+      actions: onSearch != null
           ? IconButton(
               icon: const Icon(Icons.search, color: AppTheme.textSecondary),
               tooltip: 'Find albums automatically',

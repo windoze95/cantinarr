@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/storage/library_view_preferences.dart';
+import '../../../core/widgets/library_collection.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../data/radarr_models.dart';
 
-/// List of Radarr movies with explicit, keyboard-accessible row actions.
+/// List or artwork grid of Radarr movies
+/// with explicit, keyboard-accessible actions.
 /// Long-pressing a tile opens the movie action sheet when [onLongPress] is
 /// wired.
 class RadarrMovieList extends StatelessWidget {
@@ -14,6 +17,8 @@ class RadarrMovieList extends StatelessWidget {
   final void Function(RadarrMovie movie)? onOpen;
   final void Function(RadarrMovie movie)? onLongPress;
   final bool embedded;
+  final LibraryViewMode viewMode;
+  final String scrollKey;
 
   const RadarrMovieList({
     super.key,
@@ -24,26 +29,23 @@ class RadarrMovieList extends StatelessWidget {
     this.onOpen,
     this.onLongPress,
     this.embedded = false,
+    this.viewMode = LibraryViewMode.list,
+    this.scrollKey = 'radarr-library',
   });
 
   @override
   Widget build(BuildContext context) {
-    if (movies.isEmpty) {
-      return const Center(
-        child: Text('No movies found',
-            style: TextStyle(color: AppTheme.textSecondary)),
-      );
-    }
-
-    return ListView.separated(
-      shrinkWrap: embedded,
-      physics: embedded ? const NeverScrollableScrollPhysics() : null,
+    return LibraryCollection(
+      viewMode: viewMode,
+      scrollKey: scrollKey,
+      embedded: embedded,
+      emptyMessage: 'No movies found',
       itemCount: movies.length,
-      separatorBuilder: (_, __) =>
-          const Divider(color: AppTheme.border, height: 1),
       itemBuilder: (context, index) {
         final movie = movies[index];
         return _MovieTile(
+          key: ValueKey(movie.id),
+          grid: viewMode == LibraryViewMode.grid,
           movie: movie,
           onDelete: () async {
             final deleteFiles = await _confirmDelete(context, movie.title);
@@ -105,6 +107,7 @@ class RadarrMovieList extends StatelessWidget {
 }
 
 class _MovieTile extends StatelessWidget {
+  final bool grid;
   final RadarrMovie movie;
   final VoidCallback onDelete;
   final VoidCallback onSearch;
@@ -113,6 +116,8 @@ class _MovieTile extends StatelessWidget {
   final VoidCallback? onLongPress;
 
   const _MovieTile({
+    super.key,
+    required this.grid,
     required this.movie,
     required this.onDelete,
     required this.onSearch,
@@ -123,35 +128,24 @@ class _MovieTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
+    return LibraryItem(
+      grid: grid,
+      name: movie.title,
       onTap: onOpen,
       onLongPress: onLongPress,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      leading: ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        child: SizedBox(
-          width: 45,
-          height: 67,
-          child: CachedImage(
-            url: movie.posterUrl,
-            fit: BoxFit.cover,
-            icon: Icons.movie,
-          ),
-        ),
+      artwork: CachedImage(
+        url: movie.posterUrl,
+        fit: BoxFit.cover,
+        icon: Icons.movie,
       ),
-      title: Text(
-        movie.title,
-        style: const TextStyle(
-            color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: Row(
+      details: Wrap(
+        spacing: 6,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           Text('${movie.year}',
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-          const SizedBox(width: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
             decoration: BoxDecoration(
@@ -180,7 +174,6 @@ class _MovieTile extends StatelessWidget {
             ),
           ),
           if (movie.movieFile != null) ...[
-            const SizedBox(width: 6),
             Text(
               movie.movieFile!.sizeFormatted,
               style:
@@ -189,7 +182,7 @@ class _MovieTile extends StatelessWidget {
           ],
         ],
       ),
-      trailing: PopupMenuButton<String>(
+      actions: PopupMenuButton<String>(
         icon: const Icon(Icons.more_vert, color: AppTheme.textSecondary),
         color: AppTheme.surfaceVariant,
         tooltip: 'Actions for ${movie.title}',
@@ -212,7 +205,7 @@ class _MovieTile extends StatelessWidget {
               children: [
                 Icon(Icons.search, size: 18, color: AppTheme.textSecondary),
                 SizedBox(width: 10),
-                Text('Automatic search'),
+                Flexible(child: Text('Automatic search')),
               ],
             ),
           ),
@@ -224,7 +217,7 @@ class _MovieTile extends StatelessWidget {
                   Icon(Icons.manage_search,
                       size: 18, color: AppTheme.textSecondary),
                   SizedBox(width: 10),
-                  Text('Interactive search'),
+                  Flexible(child: Text('Interactive search')),
                 ],
               ),
             ),
@@ -239,7 +232,7 @@ class _MovieTile extends StatelessWidget {
                     color: AppTheme.textSecondary,
                   ),
                   SizedBox(width: 10),
-                  Text('More actions…'),
+                  Flexible(child: Text('More actions…')),
                 ],
               ),
             ),

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/storage/library_view_preferences.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/library_command_header.dart';
 import '../../../navigation/ambient_page_route.dart';
@@ -160,6 +161,9 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
           child: CircularProgressIndicator(color: AppTheme.accent));
     }
 
+    final viewMode = ref.watch(libraryViewModeProvider('sonarr'));
+    final instanceId = ref.watch(instanceProvider).activeSonarrInstance?.id;
+
     return ListenableBuilder(
       listenable: _notifier!,
       builder: (context, _) {
@@ -167,9 +171,13 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
         final instanceName =
             ref.watch(instanceProvider).activeSonarrInstance?.name ?? 'Sonarr';
 
-        return Column(
-          children: [
-            LibraryCommandHeader(
+        return LibraryCommandLayout(
+          key: ValueKey('sonarr-$instanceId'),
+          headerBuilder: (collapsed) => LibraryCommandHeader(
+              collapsed: collapsed,
+              viewMode: viewMode,
+              onViewModeChanged: (value) => ref
+                  .read(libraryViewModeProvider('sonarr').notifier).set(value),
               title: 'Series library',
               subtitle: '$instanceName  /  Sonarr',
               stats: [
@@ -218,6 +226,7 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
                     .toList(),
               ),
             ),
+          children: [
             if (state.error != null)
               ErrorBanner(
                 message: state.error!,
@@ -227,19 +236,23 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
               child: state.isLoading && state.series.isEmpty
                   ? const Center(
                       child: CircularProgressIndicator(color: AppTheme.accent))
-                  : RefreshIndicator(
-                      onRefresh: _notifier!.loadSeries,
-                      color: AppTheme.accent,
-                      child: SonarrSeriesList(
-                        series: state.filtered,
-                        onDelete: (id, {bool deleteFiles = false}) => _notifier!
-                            .deleteSeries(id, deleteFiles: deleteFiles),
-                        onSearch: _triggerAutomaticSearch,
-                        onInteractiveSearch: _openInteractiveSearch,
-                        onOpen: _openSeries,
-                        onLongPress: _showSeriesActions,
-                      ),
-                    ),
+                  : state.error != null && state.series.isEmpty
+                      ? const SizedBox.shrink()
+                      : RefreshIndicator(
+                          onRefresh: _notifier!.loadSeries,
+                          color: AppTheme.accent,
+                          child: SonarrSeriesList(
+                            viewMode: viewMode,
+                            scrollKey: 'sonarr-$instanceId',
+                            series: state.filtered,
+                            onDelete: (id, {bool deleteFiles = false}) => _notifier!
+                                .deleteSeries(id, deleteFiles: deleteFiles),
+                            onSearch: _triggerAutomaticSearch,
+                            onInteractiveSearch: _openInteractiveSearch,
+                            onOpen: _openSeries,
+                            onLongPress: _showSeriesActions,
+                          ),
+                        ),
             ),
           ],
         );
