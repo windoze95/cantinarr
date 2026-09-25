@@ -1140,6 +1140,7 @@ class _AppShellState extends ConsumerState<AppShell>
     if (path.startsWith('/browse/')) return 'Browse';
     if (path.startsWith('/detail/')) return 'Media details';
     if (path.startsWith('/settings')) return 'Settings';
+    if (path == '/approvals/history') return 'Request history';
     if (path.startsWith('/approvals')) return 'Approvals';
     if (path.startsWith('/issues')) return 'Issues';
     if (path.startsWith('/agent-')) return 'Agent workspace';

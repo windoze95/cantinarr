@@ -13,6 +13,18 @@ You can require approval for new requests globally or per user. Pending approval
 
 Review the exact title, target library, seasons or book formats, and selected quality before approving. A delivery outage is separate from approval. Approved requests can wait for service recovery without re-entering the approval queue.
 
+## Request history
+
+Open **Approvals > History** to see saved requests from everyone on the server, including requests accepted without manual approval. If Approvals is hidden in the navigation menu, open **Settings > Approvals**, then choose **History**.
+
+Search by title or filter by requester, media type, and decision. The list starts with the newest saved request; **Load older requests** reads the next page. Shared book requests also appear when filtering by a subscriber.
+
+Select a row to see the target library, requested seasons or book formats, recorded reviewer and decision date, and any denial reason. Older or automatic requests can have no reviewer or decision date recorded. A missing value is shown explicitly.
+
+An approval records a decision, not proof that a file is available now. Choose **View title** to check current availability in the requested library. Historical books or albums without a usable identity or library have no title link. Removed files do not erase decisions, but this screen cannot recover request records already deleted from the server.
+
+If history cannot load, use **Retry**. A refresh failure keeps the last successful results visible with a warning. An older server without this endpoint prompts you to update it.
+
 ## Season and quality choices
 
 Choose whether users may select TV seasons and quality profiles. If choice is disabled, the configured defaults apply. Quality profiles come from the relevant library manager; their names and behavior are not universal between instances.

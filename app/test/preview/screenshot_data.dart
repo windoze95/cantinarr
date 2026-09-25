@@ -17,6 +17,8 @@
 // reason — see the Books section below.
 library;
 
+import '../settings/request_history_fixture.dart';
+
 // ─── Image helpers ──────────────────────────────────────────────────────────
 
 const String _tmdbW500 = 'https://image.tmdb.org/t/p/w500';
@@ -1531,6 +1533,7 @@ Object? screenshotBodyFor(String rawPath, Map<String, dynamic> query) {
   }
 
   // ── Admin approvals + boot badges ──
+  if (path.endsWith('/api/admin/requests/history')) return historyFixturePage(query);
   if (path.endsWith('/api/admin/request-settings')) {
     return _adminRequestSettings();
   }

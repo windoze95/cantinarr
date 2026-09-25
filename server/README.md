@@ -403,6 +403,13 @@ POST   /api/requests                       # user: create (movie/tv by tmdb_id; 
                                            #   "not available" (503 when the limit could not be checked)
 GET    /api/requests                       # user: own request history (a kids account's hidden
                                            #   movie/show rows are left out)
+GET    /api/admin/requests/history         # admin: all saved requests, newest ID first; q (literal title substring,
+                                           #   max 200 characters), media_type (movie|tv|book|music), user_id
+                                           #   (owner or shared book subscriber), decision
+                                           #   (pending|approved|denied|cancelled|unknown), before (exclusive ID),
+                                           #   limit (1-100, default 50). Returns requests, requester options,
+                                           #   next_before when more exist. Decisions and recorded reviewer/date
+                                           #   never claim live availability; artwork is best effort.
 GET    /api/requests/options               # user: what this user may choose (seasons, quality);
                                            #   optional instance_id scopes quality profiles to that library
 GET    /api/requests/tv-library            # user: required instance_id and native series_id;
