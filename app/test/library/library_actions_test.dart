@@ -98,18 +98,21 @@ void main() {
         await tester.tap(find.text('Example'));
         await tester.pumpAndSettle();
         expect(calls.where((c) => c == 'open:7'), hasLength(2));
-        if (module != 'radarr') {
-          if (module == 'sonarr' && mode == LibraryViewMode.grid) {
-            expect(find.byType(LinearProgressIndicator), findsNothing);
-          } else {
+        final status = module == 'radarr'
+            ? 'Missing'
+            : module == 'lidarr' ? 'Active' : 'Continuing';
+        if (mode == LibraryViewMode.grid) {
+          expect(find.byType(LinearProgressIndicator), findsNothing);
+          expect(find.text(status), findsNothing);
+          expect(tester.widget<Text>(find.text('Example')).maxLines, 1);
+        } else {
+          expect(find.text(status), findsOneWidget);
+          if (module != 'radarr') {
             final bar = tester.widget<LinearProgressIndicator>(
                 find.byType(LinearProgressIndicator));
             expect(bar.value, 0.5);
             expect(bar.valueColor?.value, AppTheme.error);
           }
-          expect(find.text(module == 'lidarr' ? 'Active' : 'Continuing'), findsOneWidget);
-        } else {
-          expect(find.text('Missing'), findsOneWidget);
         }
       });
     }

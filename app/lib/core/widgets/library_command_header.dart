@@ -102,11 +102,8 @@ class LibraryCommandHeader extends StatelessWidget {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final wide = constraints.maxWidth >= 620;
-          final viewControl = SegmentedButton<LibraryViewMode>(
+          final wideViewControl = SegmentedButton<LibraryViewMode>(
             showSelectedIcon: false,
-            style: wide ? null : SegmentedButton.styleFrom(
-              padding: EdgeInsets.zero,
-            ),
             segments: [
               ButtonSegment(value: LibraryViewMode.list,
                   icon: const Icon(Icons.view_list_rounded),
@@ -120,6 +117,23 @@ class LibraryCommandHeader extends StatelessWidget {
             selected: {viewMode},
             onSelectionChanged: (selection) =>
                 onViewModeChanged(selection.single),
+          );
+          final nextViewMode = viewMode == LibraryViewMode.list
+              ? LibraryViewMode.grid : LibraryViewMode.list;
+          final compactViewControl = Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: AppTheme.surfaceRaised,
+              borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: IconButton(
+              tooltip: '${nextViewMode == LibraryViewMode.grid ? 'Grid' : 'List'} view',
+              icon: Icon(nextViewMode == LibraryViewMode.grid
+                  ? Icons.grid_view_rounded : Icons.view_list_rounded),
+              onPressed: () => onViewModeChanged(nextViewMode),
+            ),
           );
           final identity = Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -225,7 +239,7 @@ class LibraryCommandHeader extends StatelessWidget {
                     child: filter,
                   ),
                   SizedBox(width: wide ? 12 : 6),
-                  SizedBox(width: wide ? null : 96, child: viewControl),
+                  wide ? wideViewControl : compactViewControl,
                 ],
               ),
             ],

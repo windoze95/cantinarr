@@ -133,7 +133,7 @@ class _SeriesTile extends StatelessWidget {
     final episodeDetails = stats == null
         ? null
         : [
-            '${stats.episodeFileCount}/${stats.episodeCount}',
+            '${stats.episodeFileCount}/${stats.episodeCount} episodes',
             if (!grid && stats.sizeOnDisk > 0) stats.sizeFormatted,
           ].join(' · ');
 
@@ -156,7 +156,7 @@ class _SeriesTile extends StatelessWidget {
             runSpacing: 4,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Container(
+              if (!grid) Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                 decoration: BoxDecoration(
                   color: _statusColor.withValues(alpha: 0.15),

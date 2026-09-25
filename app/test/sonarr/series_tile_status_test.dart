@@ -63,19 +63,19 @@ void main() {
     await _pump(tester, _series(status: 'ended', files: 2, count: 3,
         sizeOnDisk: 2 * 1024 * 1024 * 1024));
 
-    expect(find.text('2/3 · 2.0 GB'), findsOneWidget);
+    expect(find.text('2/3 episodes · 2.0 GB'), findsOneWidget);
     expect(find.text('2/3'), findsNothing);
     expect(find.text('2/3 eps'), findsNothing);
     expect(find.text('2020'), findsNothing);
     expect(find.byType(LinearProgressIndicator), findsOneWidget);
   });
 
-  testWidgets('grid omits year, disk size, and progress bar', (tester) async {
+  testWidgets('grid keeps episode count without status or progress', (tester) async {
     await _pump(tester, _series(status: 'ended', files: 2, count: 3,
         sizeOnDisk: 2 * 1024 * 1024 * 1024), viewMode: LibraryViewMode.grid);
 
-    expect(find.text('Ended'), findsOneWidget);
-    expect(find.text('2/3'), findsOneWidget);
+    expect(find.text('Ended'), findsNothing);
+    expect(find.text('2/3 episodes'), findsOneWidget);
     expect(find.text('2/3 eps'), findsNothing);
     expect(find.text('2020'), findsNothing);
     expect(find.text('2.0 GB'), findsNothing);
