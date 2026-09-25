@@ -167,7 +167,7 @@ class _SeriesTile extends StatelessWidget {
               ),
               if (stats != null) ...[
                 Text(
-                  '${stats.episodeFileCount}/${stats.episodeCount} eps',
+                  '${stats.episodeFileCount}/${stats.episodeCount}',
                   style: const TextStyle(
                       color: AppTheme.textSecondary, fontSize: 11),
                 ),

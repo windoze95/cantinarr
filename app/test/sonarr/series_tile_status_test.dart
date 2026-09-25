@@ -64,6 +64,8 @@ void main() {
         sizeOnDisk: 2 * 1024 * 1024 * 1024));
 
     expect(find.text('2.0 GB'), findsOneWidget);
+    expect(find.text('2/3'), findsOneWidget);
+    expect(find.text('2/3 eps'), findsNothing);
     expect(find.text('2020'), findsNothing);
     expect(find.byType(LinearProgressIndicator), findsOneWidget);
   });
@@ -73,7 +75,8 @@ void main() {
         sizeOnDisk: 2 * 1024 * 1024 * 1024), viewMode: LibraryViewMode.grid);
 
     expect(find.text('Ended'), findsOneWidget);
-    expect(find.text('2/3 eps'), findsOneWidget);
+    expect(find.text('2/3'), findsOneWidget);
+    expect(find.text('2/3 eps'), findsNothing);
     expect(find.text('2020'), findsNothing);
     expect(find.text('2.0 GB'), findsNothing);
     expect(find.byType(LinearProgressIndicator), findsNothing);
