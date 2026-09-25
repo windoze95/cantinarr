@@ -146,7 +146,7 @@ class _MovieTile extends StatelessWidget {
           Text('${movie.year}',
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-          Container(
+          if (!grid) Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
             decoration: BoxDecoration(
               color: movie.hasFile
@@ -173,7 +173,7 @@ class _MovieTile extends StatelessWidget {
               ),
             ),
           ),
-          if (movie.movieFile != null) ...[
+          if (!grid && movie.movieFile != null) ...[
             Text(
               movie.movieFile!.sizeFormatted,
               style:

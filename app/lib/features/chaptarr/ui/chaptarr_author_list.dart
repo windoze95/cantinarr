@@ -147,7 +147,7 @@ class _AuthorTile extends StatelessWidget {
             runSpacing: 4,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Container(
+              if (!grid) Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                 decoration: BoxDecoration(
                   color: _statusColor.withValues(alpha: 0.15),
@@ -171,7 +171,7 @@ class _AuthorTile extends StatelessWidget {
               ],
             ],
           ),
-          if (stats != null && stats.bookCount > 0) ...[
+          if (!grid && stats != null && stats.bookCount > 0) ...[
             const SizedBox(height: 6),
             ClipRRect(
               borderRadius: BorderRadius.circular(3),

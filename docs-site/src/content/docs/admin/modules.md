@@ -17,13 +17,13 @@ Releases hides only when Movies, TV Shows, and Music are all hidden. An empty re
 
 ## Library views
 
-Open the **Library** tab in Radarr, Sonarr, Chaptarr, or Lidarr, then choose **List** or **Grid** beside the library filter controls. On narrow screens, the switch uses list and grid icons in the search row. Each icon has a tooltip and an accessible label.
+Open the **Library** tab in Radarr, Sonarr, Chaptarr, or Lidarr, then choose **List** or **Grid** beside the library filter controls. On narrow screens, one icon button switches to the other view; its label names the view it will open.
 
 On phones, scrolling down fades and collapses the library title and counts to make room for more items. The filter field, filter menu, and view switch stay visible. Scroll up to bring the title and counts back.
 
-Grid displays movie and series posters, author covers, or artist artwork. Phones show three columns; wider screens fit more. Select an item to open its details. The visible item actions work with a pointer or keyboard in either view.
+Grid displays movie and series posters, author covers, or artist artwork. Phones show three columns; wider screens fit more. Titles use one line, and status badges and progress bars stay in List. Select an item to open its details. The visible item actions work with a pointer or keyboard in either view.
 
-Switching views keeps your current search, status filter, and results. Each module remembers its own choice on this device, including after an app restart. The choice applies to all configured instances of that module. List is the initial default.
+Switching views keeps the same items in view along with your current search, status filter, and results. Each module remembers its own choice on this device, including after an app restart. The choice applies to all configured instances of that module. List is the initial default.
 
 If artwork cannot load, the item keeps its name and a placeholder icon. If the library cannot load, use **Retry** in the error message. An empty result after a successful load means no items matched; clear the search or change the status filter to broaden it.
 

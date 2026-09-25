@@ -1,6 +1,6 @@
-// Visual QA for #657. Uses actual library widgets with fixture API data.
-// From app/: flutter build web --release --no-pub -t test/preview/library_grid_main.dart --output=/tmp/cantinarr-657-preview
-// Then: node tool/screenshots/library_grid.js /tmp/cantinarr-657-preview /tmp/cantinarr-657-evidence
+// Visual QA for the four library modules. Uses actual widgets with fixture API data.
+// From app/: flutter build web --release --no-pub -t test/preview/library_grid_main.dart --output=/tmp/cantinarr-library-preview
+// Then: node tool/screenshots/library_grid.js /tmp/cantinarr-library-preview /tmp/cantinarr-library-evidence
 const { chromium } = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -24,13 +24,25 @@ function chunk(name, data) {
   const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(Buffer.concat([type, data])));
   return Buffer.concat([length, type, data, crc]);
 }
-function artwork() {
+function artwork(variant) {
   const width = 120, height = 180;
+  const palettes = [
+    [[34, 48, 72], [141, 92, 100], [240, 180, 126]],
+    [[28, 58, 67], [68, 128, 119], [215, 188, 141]],
+    [[52, 42, 78], [123, 79, 132], [223, 160, 171]],
+  ];
+  const [dark, mid, light] = palettes[variant % palettes.length];
   const pixels = Buffer.alloc(height * (1 + width * 4));
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
     const i = y * (1 + width * 4) + 1 + x * 4;
-    const color = (Math.floor(x / 30) + Math.floor(y / 30)) % 2
-      ? [20, 210, 130, 255] : [210, 70, 200, 255];
+    const fade = y / height;
+    const glow = Math.max(0, 1 - Math.hypot((x - 70) / 70, (y - 85) / 85));
+    const ring = Math.abs(Math.hypot(x - 52, y - 83) - 42) < 3 ? 0.42 : 0;
+    const color = [0, 1, 2].map(channel => Math.min(255, Math.round(
+      dark[channel] * (1 - fade) + mid[channel] * fade +
+      (light[channel] - mid[channel]) * (glow * 0.7 + ring)
+    )));
+    color.push(255);
     pixels.set(color, i);
   }
   const header = Buffer.alloc(13);
@@ -39,7 +51,7 @@ function artwork() {
     chunk('IHDR', header), chunk('IDAT', zlib.deflateSync(pixels)), chunk('IEND', Buffer.alloc(0))]);
 }
 
-const png = artwork();
+const pngs = [0, 1, 2].map(artwork);
 const imageReads = [];
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -47,7 +59,8 @@ const server = http.createServer((req, res) => {
     imageReads.push({ path: url.pathname, authorized: req.headers.authorization === 'Bearer library-fixture' });
     if (req.headers.authorization !== 'Bearer library-fixture') { res.writeHead(401); return res.end(); }
     res.writeHead(200, { 'Content-Type': 'image/png' });
-    return res.end(png);
+    const variant = Number(url.pathname.match(/\/(\d+)\.jpg$/)?.[1] || 0);
+    return res.end(pngs[variant % pngs.length]);
   }
   let target = path.resolve(build, '.' + decodeURIComponent(url.pathname));
   if (!target.startsWith(build + path.sep) && target !== build) { res.writeHead(403); return res.end(); }
@@ -88,19 +101,30 @@ const server = http.createServer((req, res) => {
         await grid.waitFor({ timeout: 60000 });
         await page.waitForTimeout(1500);
         await page.screenshot({ path: path.join(output, `${module}-${width}-list.png`) });
+        const beforeToggle = await page.getByRole('textbox').boundingBox();
         await grid.click();
         await page.waitForTimeout(2500);
+        const afterToggle = await page.getByRole('textbox').boundingBox();
+        assert(Math.abs(afterToggle.y - beforeToggle.y) < 2,
+          `${module}: switching views at the top moved the library header`);
         await page.mouse.move(0, 0);
         await page.waitForTimeout(800);
         await page.screenshot({ path: path.join(output, `${module}-${width}-grid.png`) });
         assert.equal(errors.length, 0, `${module}: ${errors.join('; ')}`);
         await page.reload();
-        await grid.waitFor({ timeout: 60000 });
+        const savedViewControl = width < 600
+          ? page.getByRole('button', { name: /^List view$/ })
+          : grid;
+        await savedViewControl.waitFor({ timeout: 60000 });
         await page.waitForTimeout(700);
-        assert.equal(await grid.getAttribute('aria-current'), 'true', `${module}: grid preference did not survive reload`);
+        if (width >= 600) {
+          assert.equal(await grid.getAttribute('aria-current'), 'true', `${module}: grid preference did not survive reload`);
+        } else {
+          assert.equal(await grid.count(), 0, `${module}: grid preference did not survive reload`);
+        }
         if (width < 600) {
           await page.goto(`${base}/?module=${module}&scroll=1`);
-          await grid.waitFor({ timeout: 60000 });
+          await page.getByRole('button', { name: /^List view$/ }).waitFor({ timeout: 60000 });
           await page.waitForTimeout(1200);
           const field = page.getByRole('textbox');
           const expanded = await field.boundingBox();

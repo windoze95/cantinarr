@@ -28,6 +28,29 @@ Widget libraryScreen(String module) => switch (module) {
   _ => const LidarrHomeScreen(),
 };
 
+String firstVisibleItem(WidgetTester tester) {
+  final viewport = tester.getRect(find.byType(ListView));
+  final visible = <(double, String)>[];
+  for (final element in find.byType(LibraryItem).evaluate()) {
+    final item = element.widget as LibraryItem;
+    final rect = tester.getRect(find.byWidget(item));
+    if (rect.bottom > viewport.top && rect.top < viewport.bottom) {
+      visible.add((rect.top, item.name));
+    }
+  }
+  visible.sort((a, b) => a.$1.compareTo(b.$1));
+  return visible.first.$2;
+}
+
+bool itemIsVisible(WidgetTester tester, String name) {
+  final viewport = tester.getRect(find.byType(ListView));
+  final item = find.byType(LibraryItem).evaluate()
+      .where((element) => (element.widget as LibraryItem).name == name)
+      .first.widget;
+  final rect = tester.getRect(find.byWidget(item));
+  return rect.bottom > viewport.top && rect.top < viewport.bottom;
+}
+
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
@@ -57,6 +80,57 @@ void main() {
   }
 
   for (final module in libraryModules) {
+    testWidgets('$module phone view control toggles in one slot', (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await pumpLibrary(tester, module, LibraryFixtureAdapter());
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SegmentedButton<LibraryViewMode>), findsNothing);
+      expect(tester.getSize(find.byTooltip('Grid view')).width,
+          closeTo(48, 2));
+      final header = find.byType(LibraryCommandHeader);
+      final expandedHeight = tester.getSize(header).height;
+      await tester.tap(find.byTooltip('Grid view'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<LibraryCollection>(find.byType(LibraryCollection)).viewMode,
+          LibraryViewMode.grid);
+      expect(tester.getSize(header).height, expandedHeight);
+      expect(find.byTooltip('Grid view'), findsNothing);
+      await tester.tap(find.byTooltip('List view'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<LibraryCollection>(find.byType(LibraryCollection)).viewMode,
+          LibraryViewMode.list);
+    });
+
+    testWidgets('$module phone keeps the visible item when changing views',
+        (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final adapter = LibraryFixtureAdapter()..records = [
+        for (var i = 0; i < 100; i++) libraryRecord(i),
+      ];
+      await pumpLibrary(tester, module, adapter);
+      await tester.pumpAndSettle();
+      await tester.drag(find.byType(ListView), const Offset(0, -650));
+      await tester.pumpAndSettle();
+      final listAnchor = firstVisibleItem(tester);
+      await tester.tap(find.byTooltip('Grid view'));
+      await tester.pumpAndSettle();
+      expect(itemIsVisible(tester, listAnchor), isTrue);
+
+      await tester.drag(find.byType(ListView), const Offset(0, -450));
+      await tester.pumpAndSettle();
+      final gridAnchor = firstVisibleItem(tester);
+      await tester.tap(find.byTooltip('List view'));
+      await tester.pumpAndSettle();
+      expect(itemIsVisible(tester, gridAnchor), isTrue);
+    });
+
     testWidgets('$module switches filtered results without fetching and retains module choice', (tester) async {
       final adapter = LibraryFixtureAdapter();
       final container = await pumpLibrary(tester, module, adapter);
@@ -124,7 +198,8 @@ void main() {
         expect(collapsedHeight, lessThan(transitioningHeight));
         expect(expandedHeight - collapsedHeight, greaterThan(100));
         expect(find.byType(TextField).hitTestable(), findsOneWidget);
-        expect(find.byTooltip('Grid view').hitTestable(), findsOneWidget);
+        expect(find.byTooltip(mode == LibraryViewMode.list
+            ? 'Grid view' : 'List view').hitTestable(), findsOneWidget);
         expect(find.byIcon(Icons.tune_rounded).hitTestable(), findsOneWidget);
 
         // Upward scrolling restores the summary before reaching the top.
@@ -181,9 +256,13 @@ void main() {
         await pumpLibrary(tester, module, adapter, scale: 2);
         await tester.pumpAndSettle();
         final field = tester.getCenter(find.byType(TextField));
-        final toggle = tester.getCenter(find.byType(SegmentedButton<LibraryViewMode>));
+        final toggle = tester.getCenter(width < 600
+            ? find.byTooltip('List view')
+            : find.byType(SegmentedButton<LibraryViewMode>));
         expect(toggle.dy, closeTo(field.dy, 1));
         expect(tester.getSize(find.byType(TextField)).width, greaterThanOrEqualTo(100));
+        expect(find.byType(SegmentedButton<LibraryViewMode>), width < 600
+            ? findsNothing : findsOneWidget);
         expect(find.text('List'), width < 600 ? findsNothing : findsOneWidget);
         expect(find.text('Grid'), width < 600 ? findsNothing : findsOneWidget);
         final cards = find.byType(LibraryItem);
@@ -245,7 +324,7 @@ void main() {
     expect(tester.getSize(header).height, height);
   });
 
-  testWidgets('grid builds large libraries lazily and restores each layout offset', (tester) async {
+  testWidgets('view changes keep visible items in a large lazy library', (tester) async {
     final adapter = LibraryFixtureAdapter()..records = [
       for (var i = 0; i < 2000; i++) libraryRecord(i),
     ];
@@ -253,19 +332,23 @@ void main() {
     await tester.pumpAndSettle();
     await tester.drag(find.byType(ListView), const Offset(0, -800));
     await tester.pumpAndSettle();
-    final listOffset = tester.state<ScrollableState>(find.byType(Scrollable).last).position.pixels;
+    final listAnchor = firstVisibleItem(tester);
     await tester.tap(find.byTooltip('Grid view'));
     await tester.pumpAndSettle();
     expect(find.byType(LibraryItem).evaluate().length, lessThan(40));
+    expect(itemIsVisible(tester, listAnchor), isTrue);
     await tester.drag(find.byType(ListView), const Offset(0, -600));
     await tester.pumpAndSettle();
-    final gridOffset = tester.state<ScrollableState>(find.byType(Scrollable).last).position.pixels;
+    final gridAnchor = firstVisibleItem(tester);
     await tester.tap(find.byTooltip('List view'));
     await tester.pumpAndSettle();
-    expect(tester.state<ScrollableState>(find.byType(Scrollable).last).position.pixels, listOffset);
+    expect(itemIsVisible(tester, gridAnchor), isTrue);
+    await tester.drag(find.byType(ListView), const Offset(0, -400));
+    await tester.pumpAndSettle();
+    final nextListAnchor = firstVisibleItem(tester);
     await tester.tap(find.byTooltip('Grid view'));
     await tester.pumpAndSettle();
-    expect(tester.state<ScrollableState>(find.byType(Scrollable).last).position.pixels, gridOffset);
+    expect(itemIsVisible(tester, nextListAnchor), isTrue);
   });
 
   testWidgets('artist grid resolves authenticated instance artwork', (tester) async {
