@@ -98,7 +98,25 @@ const server = http.createServer((req, res) => {
         await grid.waitFor({ timeout: 60000 });
         await page.waitForTimeout(700);
         assert.equal(await grid.getAttribute('aria-current'), 'true', `${module}: grid preference did not survive reload`);
-        report.push({ module, width, errors, savedGrid: true });
+        if (width < 600) {
+          await page.goto(`${base}/?module=${module}&scroll=1`);
+          await grid.waitFor({ timeout: 60000 });
+          await page.waitForTimeout(1200);
+          const field = page.getByRole('textbox');
+          const expanded = await field.boundingBox();
+          await page.mouse.move(width / 2, 650);
+          await page.mouse.wheel(0, 500);
+          await page.waitForTimeout(600);
+          const collapsed = await field.boundingBox();
+          assert(collapsed.y < expanded.y - 100, `${module}: summary did not collapse`);
+          await page.screenshot({ path: path.join(output, `${module}-${width}-collapsed.png`) });
+          await page.mouse.wheel(0, -100);
+          await page.waitForTimeout(600);
+          const restored = await field.boundingBox();
+          assert(Math.abs(restored.y - expanded.y) < 1, `${module}: summary did not return on upward scroll`);
+        }
+        assert.equal(errors.length, 0, `${module}: ${errors.join('; ')}`);
+        report.push({ module, width, errors, savedGrid: true, scrollCollapse: width < 600 });
         console.log('PASS', module, width);
         await page.close();
       }

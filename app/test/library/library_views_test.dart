@@ -7,6 +7,7 @@ import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/widgets/cached_image.dart';
 import 'package:cantinarr/core/widgets/error_banner.dart';
 import 'package:cantinarr/core/widgets/library_collection.dart';
+import 'package:cantinarr/core/widgets/library_command_header.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/chaptarr/ui/chaptarr_home_screen.dart';
 import 'package:cantinarr/features/lidarr/ui/lidarr_home_screen.dart';
@@ -31,7 +32,7 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   Future<ProviderContainer> pumpLibrary(WidgetTester tester, String module,
-      LibraryFixtureAdapter adapter, {double scale = 1}) async {
+      LibraryFixtureAdapter adapter, {double scale = 1, bool disableAnimations = false}) async {
     final container = ProviderContainer(overrides: [
       authProvider.overrideWith(LibraryFixtureAuth.new),
       backendClientProvider.overrideWithValue(
@@ -45,7 +46,8 @@ void main() {
       container: container,
       child: MaterialApp(theme: AppTheme.dark,
         builder: (context, child) => MediaQuery(
-          data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(scale)),
+          data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(scale),
+              disableAnimations: disableAnimations),
           child: child!,
         ),
         home: Scaffold(body: libraryScreen(module))),
@@ -95,6 +97,48 @@ void main() {
     });
 
     for (final mode in LibraryViewMode.values) {
+      testWidgets('$module ${mode.name} collapses the phone summary and restores it on upward scroll', (tester) async {
+        tester.view.physicalSize = const Size(390, 844);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        SharedPreferences.setMockInitialValues({'library_view_$module': mode.name});
+        final adapter = LibraryFixtureAdapter()..records = [
+          for (var i = 0; i < 100; i++) libraryRecord(i),
+        ];
+        await pumpLibrary(tester, module, adapter);
+        await tester.pumpAndSettle();
+        final header = find.byType(LibraryCommandHeader);
+        final expandedHeight = tester.getSize(header).height;
+        final requests = adapter.requests.length;
+        final gesture = await tester.startGesture(tester.getCenter(find.byType(ListView)));
+        await gesture.moveBy(const Offset(0, -24));
+        await gesture.moveBy(const Offset(0, -180));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 80));
+        final transitioningHeight = tester.getSize(header).height;
+        expect(transitioningHeight, lessThan(expandedHeight));
+        await gesture.up();
+        await tester.pumpAndSettle();
+        final collapsedHeight = tester.getSize(header).height;
+        expect(collapsedHeight, lessThan(transitioningHeight));
+        expect(expandedHeight - collapsedHeight, greaterThan(100));
+        expect(find.byType(TextField).hitTestable(), findsOneWidget);
+        expect(find.byTooltip('Grid view').hitTestable(), findsOneWidget);
+        expect(find.byIcon(Icons.tune_rounded).hitTestable(), findsOneWidget);
+
+        // Upward scrolling restores the summary before reaching the top.
+        await tester.drag(find.byType(ListView), const Offset(0, -600));
+        await tester.pumpAndSettle();
+        await tester.drag(find.byType(ListView), const Offset(0, 100));
+        await tester.pumpAndSettle();
+        expect(tester.state<ScrollableState>(find.byType(Scrollable).last).position.pixels,
+            greaterThan(0));
+        expect(tester.getSize(header).height, expandedHeight);
+        expect(adapter.requests.length, requests);
+        expect(tester.takeException(), isNull);
+      });
+
       testWidgets('$module ${mode.name} distinguishes loading, empty and failed reads', (tester) async {
         SharedPreferences.setMockInitialValues({'library_view_$module': mode.name});
         final load = Completer<void>();
@@ -151,6 +195,55 @@ void main() {
       });
     }
   }
+
+  testWidgets('phone summary ignores nested scrolls, respects reduced motion and resets for another instance', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final adapter = LibraryFixtureAdapter()..records = [
+      for (var i = 0; i < 100; i++) libraryRecord(i),
+    ];
+    final container = await pumpLibrary(tester, 'radarr', adapter, disableAnimations: true);
+    await tester.pumpAndSettle();
+    final header = find.byType(LibraryCommandHeader);
+    final expandedHeight = tester.getSize(header).height;
+    final context = tester.element(find.byType(ListView));
+    for (final horizontal in [true, false]) {
+      ScrollUpdateNotification(
+        metrics: FixedScrollMetrics(minScrollExtent: 0, maxScrollExtent: 1000,
+          pixels: 100, viewportDimension: 300, devicePixelRatio: 1,
+          axisDirection: horizontal ? AxisDirection.right : AxisDirection.down),
+        context: context, scrollDelta: 100, depth: horizontal ? 0 : 1,
+      ).dispatch(context);
+      await tester.pumpAndSettle();
+      expect(tester.getSize(header).height, expandedHeight);
+    }
+    await tester.drag(find.byType(ListView), const Offset(0, -400));
+    await tester.pump();
+    expect(tester.getSize(header).height, lessThan(expandedHeight - 100));
+    expect(tester.binding.transientCallbackCount, 0);
+    container.read(instanceProvider.notifier).setActiveRadarrInstance('radarr-two');
+    await tester.pumpAndSettle();
+    expect(tester.getSize(header).height, expandedHeight);
+  });
+
+  testWidgets('desktop summary stays visible while browsing', (tester) async {
+    tester.view.physicalSize = const Size(1440, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final adapter = LibraryFixtureAdapter()..records = [
+      for (var i = 0; i < 100; i++) libraryRecord(i),
+    ];
+    await pumpLibrary(tester, 'radarr', adapter);
+    await tester.pumpAndSettle();
+    final header = find.byType(LibraryCommandHeader);
+    final height = tester.getSize(header).height;
+    await tester.drag(find.byType(ListView), const Offset(0, -400));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(header).height, height);
+  });
 
   testWidgets('grid builds large libraries lazily and restores each layout offset', (tester) async {
     final adapter = LibraryFixtureAdapter()..records = [

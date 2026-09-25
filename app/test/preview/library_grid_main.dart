@@ -43,6 +43,12 @@ void main() {
       ],
     }];
   }
+  if (Uri.base.queryParameters['scroll'] == '1') {
+    final originals = adapter.records;
+    adapter.records = [for (var i = 0; i < 60; i++) {
+      ...originals[i % originals.length], 'id': i + 1,
+    }];
+  }
   runApp(ProviderScope(overrides: [
     authProvider.overrideWith(() => LibraryFixtureAuth(serverUrl: Uri.base.origin)),
     backendClientProvider.overrideWithValue(

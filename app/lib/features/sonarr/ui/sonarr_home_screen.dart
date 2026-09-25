@@ -171,9 +171,10 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
         final instanceName =
             ref.watch(instanceProvider).activeSonarrInstance?.name ?? 'Sonarr';
 
-        return Column(
-          children: [
-            LibraryCommandHeader(
+        return LibraryCommandLayout(
+          key: ValueKey('sonarr-$instanceId'),
+          headerBuilder: (collapsed) => LibraryCommandHeader(
+              collapsed: collapsed,
               viewMode: viewMode,
               onViewModeChanged: (value) => ref
                   .read(libraryViewModeProvider('sonarr').notifier).set(value),
@@ -225,6 +226,7 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
                     .toList(),
               ),
             ),
+          children: [
             if (state.error != null)
               ErrorBanner(
                 message: state.error!,

@@ -135,9 +135,10 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
         final instanceName =
             ref.watch(instanceProvider).activeRadarrInstance?.name ?? 'Radarr';
 
-        return Column(
-          children: [
-            LibraryCommandHeader(
+        return LibraryCommandLayout(
+          key: ValueKey('radarr-$instanceId'),
+          headerBuilder: (collapsed) => LibraryCommandHeader(
+              collapsed: collapsed,
               viewMode: viewMode,
               onViewModeChanged: (value) => ref
                   .read(libraryViewModeProvider('radarr').notifier).set(value),
@@ -190,6 +191,7 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
               ),
             ),
 
+          children: [
             if (state.error != null)
               ErrorBanner(
                 message: state.error!,

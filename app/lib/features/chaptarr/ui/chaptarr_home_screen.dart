@@ -103,9 +103,10 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
             ref.watch(instanceProvider).activeChaptarrInstance?.name ??
                 'Chaptarr';
 
-        return Column(
-          children: [
-            LibraryCommandHeader(
+        return LibraryCommandLayout(
+          key: ValueKey('chaptarr-$instanceId'),
+          headerBuilder: (collapsed) => LibraryCommandHeader(
+              collapsed: collapsed,
               viewMode: viewMode,
               onViewModeChanged: (value) => ref
                   .read(libraryViewModeProvider('chaptarr').notifier).set(value),
@@ -157,6 +158,7 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
                     .toList(),
               ),
             ),
+          children: [
             if (state.error != null)
               ErrorBanner(
                 message: state.error!,

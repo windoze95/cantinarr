@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../layout/adaptive.dart';
 import '../theme/app_theme.dart';
 import '../storage/library_view_preferences.dart';
 import 'app_panel.dart';
@@ -14,6 +15,51 @@ class LibraryStat {
     required this.value,
     required this.color,
   });
+}
+
+/// Lets phone libraries reclaim the summary area while browsing. Notifications
+/// keep bubbling so the shell's global search follows the same scroll gesture.
+class LibraryCommandLayout extends StatefulWidget {
+  final Widget Function(bool collapsed) headerBuilder;
+  final List<Widget> children;
+
+  const LibraryCommandLayout({
+    super.key,
+    required this.headerBuilder,
+    required this.children,
+  });
+
+  @override
+  State<LibraryCommandLayout> createState() => _LibraryCommandLayoutState();
+}
+
+class _LibraryCommandLayoutState extends State<LibraryCommandLayout> {
+  bool _collapsed = false;
+
+  bool _handleScroll(ScrollNotification notification) {
+    if (!AppBreakpoints.isMobile(context) || notification.depth != 0 ||
+        notification.metrics.axis != Axis.vertical ||
+        notification is! ScrollUpdateNotification) {
+      return false;
+    }
+
+    final delta = notification.scrollDelta ?? 0;
+    final atTop = notification.metrics.pixels <=
+        notification.metrics.minScrollExtent + 4;
+    final collapsed = atTop || delta < -2
+        ? false : delta > 2 ? true : _collapsed;
+    if (_collapsed != collapsed) setState(() => _collapsed = collapsed);
+    return false;
+  }
+
+  @override
+  Widget build(BuildContext context) => NotificationListener<ScrollNotification>(
+    onNotification: _handleScroll,
+    child: Column(children: [
+      widget.headerBuilder(_collapsed && AppBreakpoints.isMobile(context)),
+      ...widget.children,
+    ]),
+  );
 }
 
 /// Shared command header for the four admin libraries.
@@ -31,6 +77,7 @@ class LibraryCommandHeader extends StatelessWidget {
   final Widget filter;
   final LibraryViewMode viewMode;
   final ValueChanged<LibraryViewMode> onViewModeChanged;
+  final bool collapsed;
 
   const LibraryCommandHeader({
     super.key,
@@ -43,6 +90,7 @@ class LibraryCommandHeader extends StatelessWidget {
     required this.filter,
     required this.viewMode,
     required this.onViewModeChanged,
+    this.collapsed = false,
   });
 
   @override
@@ -108,20 +156,35 @@ class LibraryCommandHeader extends StatelessWidget {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (wide)
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Expanded(child: identity),
-                    metrics,
-                  ],
-                )
-              else ...[
-                identity,
-                const SizedBox(height: 15),
-                metrics,
-              ],
-              const SizedBox(height: 15),
+              TweenAnimationBuilder<double>(
+                tween: Tween(begin: 1, end: collapsed ? 0 : 1),
+                duration: MediaQuery.disableAnimationsOf(context)
+                    ? Duration.zero : const Duration(milliseconds: 200),
+                curve: Curves.easeOut,
+                builder: (context, value, child) => ClipRect(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    heightFactor: value,
+                    child: Opacity(opacity: value, child: child),
+                  ),
+                ),
+                child: ExcludeSemantics(
+                  excluding: collapsed,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (wide)
+                        Row(children: [Expanded(child: identity), metrics])
+                      else ...[
+                        identity,
+                        const SizedBox(height: 15),
+                        metrics,
+                      ],
+                      const SizedBox(height: 15),
+                    ],
+                  ),
+                ),
+              ),
               Row(
                 children: [
                   Expanded(

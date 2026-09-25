@@ -102,9 +102,10 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
         final instanceName =
             ref.watch(instanceProvider).activeLidarrInstance?.name ?? 'Lidarr';
 
-        return Column(
-          children: [
-            LibraryCommandHeader(
+        return LibraryCommandLayout(
+          key: ValueKey('lidarr-$instanceId'),
+          headerBuilder: (collapsed) => LibraryCommandHeader(
+              collapsed: collapsed,
               viewMode: viewMode,
               onViewModeChanged: (value) => ref
                   .read(libraryViewModeProvider('lidarr').notifier).set(value),
@@ -156,6 +157,7 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
                     .toList(),
               ),
             ),
+          children: [
             if (state.error != null)
               ErrorBanner(
                 message: state.error!,
