@@ -99,9 +99,14 @@ void main() {
         await tester.pumpAndSettle();
         expect(calls.where((c) => c == 'open:7'), hasLength(2));
         if (module != 'radarr') {
-          final bar = tester.widget<LinearProgressIndicator>(find.byType(LinearProgressIndicator));
-          expect(bar.value, 0.5);
-          expect(bar.valueColor?.value, AppTheme.error);
+          if (module == 'sonarr' && mode == LibraryViewMode.grid) {
+            expect(find.byType(LinearProgressIndicator), findsNothing);
+          } else {
+            final bar = tester.widget<LinearProgressIndicator>(
+                find.byType(LinearProgressIndicator));
+            expect(bar.value, 0.5);
+            expect(bar.valueColor?.value, AppTheme.error);
+          }
           expect(find.text(module == 'lidarr' ? 'Active' : 'Continuing'), findsOneWidget);
         } else {
           expect(find.text('Missing'), findsOneWidget);
