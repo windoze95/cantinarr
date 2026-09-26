@@ -223,11 +223,13 @@ func (s *Service) discordTVAvailability(ctx context.Context, id int64, r *resolv
 		return out, ErrTVMatchStale
 	}
 	scopes := map[int]int{}
+	selectedMapping := map[int]int{}
 	for i, source := range target.SourceSeasons {
 		if i >= len(target.TargetSeasons) || m.SeasonMap[source] != target.TargetSeasons[i] || target.TargetSeasons[i] <= 0 {
 			return out, ErrTVMatchStale
 		}
 		scopes[target.TargetSeasons[i]] = source
+		selectedMapping[source] = target.TargetSeasons[i]
 	}
 	// Cache provider data briefly and independently of recipients. The caller
 	// still rechecks every recipient after this shared read.
@@ -262,7 +264,7 @@ func (s *Service) discordTVAvailability(ctx context.Context, id int64, r *resolv
 	if snap.Series == nil {
 		return out, nil
 	}
-	if err = validateTVSeasons(m.SeasonMap, target.SourceSeasons, snap.Series.Seasons); err != nil {
+	if err = validateTVSeasons(selectedMapping, target.SourceSeasons, snap.Series.Seasons); err != nil {
 		return out, err
 	}
 	imports := []sonarr.ImportedEpisode{}

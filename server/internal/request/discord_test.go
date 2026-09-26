@@ -179,3 +179,35 @@ func TestDiscordTVUsesCorrectedStoryPilotAndCurrentContentPolicy(t *testing.T) {
 		t.Fatal("paused mapping was announced")
 	}
 }
+
+func TestDiscordTVAnnouncesOnlySelectedSeasonOfMultiSeasonShow(t *testing.T) {
+	s, uid, _, l := newCorrectionLab(t)
+	l.extraSource = true
+	l.lookupTVDB = 999999
+	req := tvRequest(12345, "")
+	req.Seasons = []int{2}
+	response, err := s.CreateMediaRequest(uid, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.Exec(`UPDATE request_dispatch SET next_attempt_at=0 WHERE request_id=?`, response.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	s.SweepDispatch(context.Background())
+	l.mu.Lock()
+	l.parent["tmdbId"] = req.TmdbID
+	for _, ep := range l.episodes {
+		ep["hasFile"] = true
+	}
+	l.mu.Unlock()
+	s.InvalidateAvailabilityDigests(response.InstanceID)
+	view, err := s.DiscordAvailability(context.Background(), response.RequestID)
+	if err != nil || len(view.Units) != 2 {
+		t.Fatalf("selected season: %+v %v", view, err)
+	}
+	for i, label := range []string{"S02E01", "S02E02"} {
+		if view.Units[i].Label != label {
+			t.Fatalf("unrequested episode: %+v", view.Units)
+		}
+	}
+}
