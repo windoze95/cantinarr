@@ -26,7 +26,11 @@ MANAGE YOUR MEDIA SERVER
 
 Cantinarr runs its own request system and offers a Seerr-compatible API for supported integrations, including Maintainerr and Homepage.
 
-An AI provider is optional. If you connect one, the assistant can look up your library, suggest titles, and make requests. The repair agent can investigate persistent download problems and bring actions to an administrator for review. Cantinarr also offers MCP tools for clients you authorize.
+OPTIONAL AI AGENT
+
+Connect an AI provider to let Cantinarr's AI agent find media, check your library, and make requests. Open AI Assistant to chat; administrators can also manage libraries and downloads, troubleshoot issues, and update supported service settings. Available actions depend on your connected services, permissions, and enabled tools.
+
+The remediation agent investigates persistent download problems and proposes repairs. Administrators review fixes or allow specific fixes to run automatically. Cantinarr also offers MCP tools for clients you authorize.
 
 PRIVACY
 

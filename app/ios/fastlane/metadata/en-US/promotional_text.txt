@@ -1,1 +1,1 @@
-One app for household media requests and mobile server management. Discover movies, TV, books, and music, approve requests, and keep your downloads moving.
+Media requests and server management, with an optional AI agent to find titles, make requests, and help admins troubleshoot connected services.
