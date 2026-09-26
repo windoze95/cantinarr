@@ -14,6 +14,11 @@
 </p>
 
 <p align="center">
+  <a href="https://testflight.apple.com/join/bCPDwCsD"><img src="https://img.shields.io/badge/TestFlight-iOS%20beta-0D96F6?style=for-the-badge&amp;logo=apple&amp;logoColor=white" alt="iPhone and iPad beta on TestFlight"></a>
+  <a href="https://play.google.com/apps/testing/codes.julian.cantinarr"><img src="https://img.shields.io/badge/Google_Play-Android%20beta-414141?style=for-the-badge&amp;logo=googleplay&amp;logoColor=white" alt="Android beta on Google Play"></a>
+</p>
+
+<p align="center">
   <a href="https://cantinarr.com">Website</a> ·
   <a href="https://docs.cantinarr.com">Documentation</a> ·
   <a href="https://demo.cantinarr.com">Live demo</a>
@@ -24,10 +29,13 @@ Cantinarr lets your household browse and request movies, TV shows, ebooks, audio
 ## Preview
 
 <p align="center">
-  <a href="app/ios/fastlane/screenshots/en-US/iphone69_01_discover.png"><img src="app/ios/fastlane/screenshots/en-US/iphone69_01_discover.png" alt="Discover movies and see what is available or requested" width="32%"></a>
-  <a href="app/ios/fastlane/screenshots/en-US/iphone69_02_seasons.png"><img src="app/ios/fastlane/screenshots/en-US/iphone69_02_seasons.png" alt="Choose TV seasons to request and follow their availability" width="32%"></a>
-  <a href="app/ios/fastlane/screenshots/en-US/iphone69_04_books.png"><img src="app/ios/fastlane/screenshots/en-US/iphone69_04_books.png" alt="Browse ebooks and audiobooks by title, author, or series" width="32%"></a>
+  <a href="app/ios/fastlane/screenshots/en-US/iphone69_01_discover.png"><img src="app/ios/fastlane/screenshots/en-US/iphone69_01_discover.png" alt="Discover movies and see what is available or requested" width="24%"></a>
+  <a href="app/ios/fastlane/screenshots/en-US/iphone69_02_seasons.png"><img src="app/ios/fastlane/screenshots/en-US/iphone69_02_seasons.png" alt="Choose TV seasons to request and follow their availability" width="24%"></a>
+  <a href="app/ios/fastlane/screenshots/en-US/iphone69_04_books.png"><img src="app/ios/fastlane/screenshots/en-US/iphone69_04_books.png" alt="Browse ebooks and audiobooks by title, author, or series" width="24%"></a>
+  <a href="docs/images/music.jpg"><img src="docs/images/music.jpg" alt="Discover albums and genres with Music enabled in the navigation" width="24%"></a>
 </p>
+
+Navigation adapts to your services and permissions.
 
 ## Features
 
