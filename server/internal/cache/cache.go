@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -50,6 +51,17 @@ func (c *Cache) Delete(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.entries, key)
+}
+
+// DeletePrefix invalidates related entries after an upstream library change.
+func (c *Cache) DeletePrefix(prefix string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key := range c.entries {
+		if strings.HasPrefix(key, prefix) {
+			delete(c.entries, key)
+		}
+	}
 }
 
 // Close stops the eviction goroutine.

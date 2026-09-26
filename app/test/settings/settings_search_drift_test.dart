@@ -17,6 +17,7 @@ import 'package:cantinarr/features/settings/ui/credentials_screen.dart';
 import 'package:cantinarr/features/settings/ui/discovery_settings_screen.dart';
 import 'package:cantinarr/features/settings/ui/request_settings_screen.dart';
 import 'package:cantinarr/features/settings/ui/settings_screen.dart';
+import 'package:cantinarr/features/settings/ui/discord_notifications_screen.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -59,6 +60,7 @@ const _userGates = SettingsSearchGates(user: _user);
 /// The sub-screens pumped by this file. Root-rendered entries are covered by
 /// the root pumps instead.
 const _pumpedRoutes = {
+  '/settings/discord-notifications/server',
   '/settings/request-settings',
   '/settings/push-notifications',
   '/settings/push-notifications/server',
@@ -196,6 +198,15 @@ Future<void> _pumpScreen(
 }
 
 void main() {
+  testWidgets('Discord server settings search title matches its child page', (tester) async {
+    await tester.pumpWidget(ProviderScope(overrides: [
+      backendClientProvider.overrideWithValue(_dioFor(const {
+        '/api/admin/discord-notifications': {'enabled': false, 'has_webhook': false, 'events': <String, dynamic>{}, 'recent': <dynamic>[]},
+      })),
+    ], child: const MaterialApp(home: DiscordNotificationsScreen())));
+    await tester.pumpAndSettle();
+    await _assertTitles(tester, _controlsFor('/settings/discord-notifications/server'), _adminGates);
+  });
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     PackageInfo.setMockInitialValues(

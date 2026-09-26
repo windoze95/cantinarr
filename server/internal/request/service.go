@@ -214,16 +214,17 @@ type Notifier interface {
 }
 
 type Service struct {
-	Quotas           *requestquota.Service
-	tvMatchMu        sync.Mutex
-	MusicCatalog     musicdiscovery.Catalog
-	dispatchMu       sync.Mutex
-	dispatchWake     chan struct{}
-	db               *sql.DB
-	registry         *instance.Registry
-	bridge           *tmdb.Bridge
-	notifier         Notifier
-	creationObserver CreationObserver
+	Quotas                  *requestquota.Service
+	tvMatchMu               sync.Mutex
+	MusicCatalog            musicdiscovery.Catalog
+	dispatchMu              sync.Mutex
+	dispatchWake            chan struct{}
+	db                      *sql.DB
+	registry                *instance.Registry
+	bridge                  *tmdb.Bridge
+	notifier                Notifier
+	creationObserver        CreationObserver
+	discordAvailabilityWake func()
 	// libraryCache holds reduced Chaptarr library digests keyed by instance id,
 	// so the owned-books digest doesn't refetch the whole library on every call.
 	libraryCache *cache.Cache
@@ -4309,6 +4310,7 @@ func (s *Service) fulfillPendingRequest(actorID, requestID int64, override *Deci
 
 	if s.notifier != nil && r.mediaType != "book" {
 		data := map[string]interface{}{
+			"request_id": requestID,
 			"decision":   "approved",
 			"tmdb_id":    r.tmdbID,
 			"media_type": r.mediaType,
@@ -4359,6 +4361,7 @@ func (s *Service) fulfillPendingRequest(actorID, requestID int64, override *Deci
 				continue
 			}
 			data := map[string]interface{}{
+				"request_id":   requestID,
 				"decision":     "approved",
 				"tmdb_id":      r.tmdbID,
 				"media_type":   r.mediaType,
@@ -4844,6 +4847,7 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 	}
 	if s.notifier != nil && r.mediaType != "book" {
 		data := map[string]interface{}{
+			"request_id": requestID,
 			"decision":   "denied",
 			"tmdb_id":    r.tmdbID,
 			"media_type": r.mediaType,
@@ -4867,6 +4871,7 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 	if s.notifier != nil && r.mediaType == "book" {
 		for _, subscriber := range audience {
 			data := map[string]interface{}{
+				"request_id":  requestID,
 				"decision":    "denied",
 				"tmdb_id":     r.tmdbID,
 				"media_type":  r.mediaType,

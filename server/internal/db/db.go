@@ -150,10 +150,11 @@ CREATE TABLE IF NOT EXISTS book_request_waiters (
 );
 
 -- Discord records delivery history, never current library availability.
--- One receipt per new request survives retries and process restarts.
+-- Stable event receipts survive retries and process restarts.
 CREATE TABLE IF NOT EXISTS discord_notifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    request_id INTEGER NOT NULL UNIQUE REFERENCES request_log(id) ON DELETE CASCADE,
+    request_id INTEGER REFERENCES request_log(id) ON DELETE CASCADE,
+    event_key TEXT NOT NULL UNIQUE,
     revision INTEGER NOT NULL,
     payload TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
@@ -164,6 +165,23 @@ CREATE TABLE IF NOT EXISTS discord_notifications (
     next_attempt_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS discord_notifications_due ON discord_notifications(status, next_attempt_at);
+
+CREATE TABLE IF NOT EXISTS discord_user_preferences (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    discord_ids TEXT NOT NULL DEFAULT '[]',
+    events TEXT NOT NULL DEFAULT '{}'
+);
+-- Observation receipts, not authoritative library availability. Each new
+-- activation establishes a baseline; a restart retains the existing baseline.
+-- observed_key fingerprints the provider state behind the last full read, so
+-- an unchanged TV library is not re-read on every sweep.
+CREATE TABLE IF NOT EXISTS discord_availability (
+    request_id INTEGER PRIMARY KEY REFERENCES request_log(id) ON DELETE CASCADE,
+    epoch INTEGER NOT NULL,
+    seen TEXT NOT NULL DEFAULT '[]',
+    observed_key TEXT NOT NULL DEFAULT ''
+);
 
 -- Durable delivery is separate from approval and from live library state.
 CREATE TABLE IF NOT EXISTS request_dispatch (
@@ -1252,6 +1270,7 @@ func Open(dbPath string) (*sql.DB, error) {
 		// A connection change reserves a revision before provider I/O. A stale
 		// verification/device flow cannot replace a newer connection or deletion.
 		{alter: "ALTER TABLE service_instances ADD COLUMN hardcover_revision INTEGER NOT NULL DEFAULT 0"},
+		{alter: "ALTER TABLE discord_availability ADD COLUMN observed_key TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {
@@ -1410,8 +1429,44 @@ func Open(dbPath string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := migrateDiscordEvents(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate Discord event receipts: %w", err)
+	}
 
 	return db, nil
+}
+
+func migrateDiscordEvents(db *sql.DB) error {
+	var exists int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('discord_notifications') WHERE name='event_key'`).Scan(&exists); err != nil || exists != 0 {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec(`
+	ALTER TABLE discord_notifications RENAME TO discord_notifications_legacy;
+	CREATE TABLE discord_notifications (
+	    id INTEGER PRIMARY KEY AUTOINCREMENT,
+	    request_id INTEGER REFERENCES request_log(id) ON DELETE CASCADE,
+	    event_key TEXT NOT NULL UNIQUE,
+	    revision INTEGER NOT NULL, payload TEXT NOT NULL,
+	    status TEXT NOT NULL DEFAULT 'pending', detail TEXT NOT NULL DEFAULT 'Waiting to send.',
+	    attempts INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+	    next_attempt_at INTEGER NOT NULL DEFAULT 0
+	);
+	INSERT INTO discord_notifications(id,request_id,event_key,revision,payload,status,detail,attempts,created_at,updated_at,next_attempt_at)
+	SELECT id,request_id,'created:' || request_id,revision,payload,status,detail,attempts,created_at,updated_at,next_attempt_at FROM discord_notifications_legacy;
+	DROP TABLE discord_notifications_legacy;
+	CREATE INDEX discord_notifications_due ON discord_notifications(status,next_attempt_at);
+	`)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // backfillLegacyPersonalCodex runs only when the shared-AI grant column is

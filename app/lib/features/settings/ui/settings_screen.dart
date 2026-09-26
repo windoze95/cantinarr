@@ -428,13 +428,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               subtitle: 'Choose which push notifications you receive',
               onTap: () => context.push('/settings/push-notifications'),
             ),
-            if (user?.isAdmin == true)
-              _SettingsTile(
-                icon: Icons.notifications_active_outlined,
-                title: 'Discord Notifications',
-                subtitle: 'Send new media requests to a Discord channel',
-                onTap: () => context.push('/settings/discord-notifications'),
-              ),
+            _SettingsTile(
+              icon: Icons.notifications_active_outlined,
+              title: 'Discord Notifications',
+              subtitle: 'Choose your Discord mentions and event updates',
+              onTap: () => context.push('/settings/discord-notifications'),
+            ),
 
             if (user?.isAdmin == true) ...[
               const SizedBox(height: 16),

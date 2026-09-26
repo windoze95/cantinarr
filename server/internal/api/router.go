@@ -203,6 +203,10 @@ func NewRouter(
 			r.Group(func(r chi.Router) {
 				r.Use(authService.AuthMiddleware)
 				r.Get("/me", authHandler.Me)
+				r.Get("/discord-notifications", discordNotifications.PreferencesHandler)
+				r.Put("/discord-notifications", discordNotifications.PreferencesHandler)
+				discordMentionLimiter := auth.NewRateLimiter(3, time.Minute)
+				r.With(discordMentionLimiter.Middleware).Post("/discord-notifications/test", discordNotifications.PreferencesHandler)
 				r.Get("/plex/identities", authHandler.PlexIdentities)
 				r.With(authLimiter.Middleware).Post("/plex/link", authHandler.PlexLinkBegin)
 				r.Delete("/plex/identities", authHandler.PlexUnlink)

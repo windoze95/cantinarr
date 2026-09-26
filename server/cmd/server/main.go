@@ -264,10 +264,11 @@ func main() {
 	// concrete *push.Composite satisfies both request.Notifier and
 	// remediation.Notifier, so the same fan-out drives both.
 	var notifier *push.Composite
+	discordNotifications := discordnotify.NewService(database, cipher, func() string { return serverSettings.Get().ExternalURL })
 	if pushNotifier != nil {
-		notifier = push.NewComposite(wsHub, pushNotifier)
+		notifier = push.NewComposite(wsHub, pushNotifier, discordNotifications)
 	} else {
-		notifier = push.NewComposite(wsHub)
+		notifier = push.NewComposite(wsHub, discordNotifications)
 	}
 	// Media-server invites (Plex): "user shared their Plex email" goes through
 	// the media-access service, which sends the invites their grants owe (or
@@ -277,9 +278,9 @@ func main() {
 	authHandler.SetAccessRequestHook(mediaAccessService.OnPlexEmailShared)
 	requestService := request.NewService(database, registry, bridge, notifier)
 	wsHub.SetTVImportResolver(requestService)
-	discordNotifications := discordnotify.NewService(database, cipher, func() string { return serverSettings.Get().ExternalURL })
 	requestService.SetCreationObserver(request.CreationObservers{discordNotifications, pushNotifier})
-	discordNotifications.Start(ctx)
+	discordNotifications.SetSource(requestService)
+	requestService.SetDiscordAvailabilityWake(discordNotifications.WakeAvailability)
 	requestHandler := request.NewHandler(requestService)
 	mediaAccessHandler.SetListeningBooks(requestService)
 
@@ -287,6 +288,7 @@ func main() {
 	// the read-only agent, and (Wave 5) accepts auto-dispatched issues from the
 	// poller. AutoDispatch ships OFF; the opener re-checks the live toggle per call.
 	remediationService := remediation.NewService(database, registry, bridge, notifier)
+	remediationService.SetReportObserver(discordNotifications)
 	remediationHandler := remediation.NewHandler(remediationService)
 
 	// Parked book requests (Chaptarr 0.9.879+ still importing the author) are
@@ -392,6 +394,7 @@ func main() {
 	discoverHandler.SetContentPolicy(contentPolicy)
 	toolServer.SetContentPolicy(contentPolicy)
 	requestService.SetContentPolicy(contentPolicy)
+	discordNotifications.Start(ctx)
 	aiHandler.SetContentPolicy(contentPolicy)
 	pushNotifier.SetContentPolicy(contentPolicy)
 	proxyHandler.SetContentPolicy(contentPolicy)

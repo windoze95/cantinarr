@@ -255,7 +255,7 @@ void main() {
       '/settings/change-history/1',
       '/settings/users',
       '/settings/request-settings',
-      '/settings/discord-notifications',
+      '/settings/discord-notifications/server',
       '/settings/seerr-api',
       '/settings/push-notifications/server',
       '/settings/agent-approval-rules',

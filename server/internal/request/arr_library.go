@@ -38,11 +38,13 @@ type seriesAvailability struct {
 	Seasons   map[int]seasonAvailability `json:"seasons,omitempty"`
 }
 
-// seasonAvailability is one season's slice of seriesAvailability.
+// seasonAvailability is one season's slice of seriesAvailability. Size lets a
+// changed file set be noticed even when the file count stays the same.
 type seasonAvailability struct {
-	Files     int  `json:"files"`
-	Total     int  `json:"total"`
-	Monitored bool `json:"monitored"`
+	Files     int   `json:"files"`
+	Total     int   `json:"total"`
+	Monitored bool  `json:"monitored"`
+	Size      int64 `json:"size,omitempty"`
 }
 
 // movieAvailabilityDigest returns tmdbID → availability for the user's Radarr
@@ -171,6 +173,7 @@ func (s *Service) seriesDigestFor(client *sonarr.Client, instanceID string) (map
 				Files:     season.Statistics.EpisodeFileCount,
 				Total:     seasonTotal,
 				Monitored: season.Monitored,
+				Size:      season.Statistics.SizeOnDisk,
 			}
 		}
 		digest[sr.TvdbID] = entry
@@ -217,11 +220,13 @@ func seriesAvailabilityStatus(a seriesAvailability, found bool) string {
 // Called by the arr webhook receiver when the library changes out-of-band
 // (imports, deletes, adds done directly in the arr).
 func (s *Service) InvalidateAvailabilityDigests(instanceID string) {
+	defer s.wakeDiscordAvailability()
 	if s.libraryCache == nil || instanceID == "" {
 		return
 	}
 	s.libraryCache.Delete("movie-availability:" + instanceID)
 	s.libraryCache.Delete("series-availability:" + instanceID)
+	s.libraryCache.DeletePrefix("discord-tv:" + instanceID + ":")
 }
 
 // InvalidateAllAvailabilityDigests drops every Radarr and Sonarr digest, so
@@ -254,6 +259,7 @@ func (s *Service) InvalidateAllAvailabilityDigests() {
 // instead of up to the cache TTL of stale "Requested" — and so a newly imported
 // book appears in the Recently Added row immediately.
 func (s *Service) InvalidateBookDigests(instanceID string) {
+	defer s.wakeDiscordAvailability()
 	if s.libraryCache == nil || instanceID == "" {
 		return
 	}

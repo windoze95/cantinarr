@@ -437,6 +437,15 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 		s.notifyAutoApprovalPaused(ruleID, issueID)
 	}
 	if !opts.silentNotifications {
+		if status == IssueResolved {
+			var occurrence int64
+			_ = s.db.QueryRow("SELECT COALESCE(MAX(id),0) FROM issue_messages WHERE issue_id=?", issueID).Scan(&occurrence)
+			actorID := opts.adminID
+			if opts.reporterID > 0 {
+				actorID = opts.reporterID
+			}
+			s.observeReport("issue_resolved", issueID, actorID, occurrence)
+		}
 		s.notifyIssueResolved(issueID, status)
 		if superseded > 0 {
 			s.notifyActionsChanged(issueID, "superseded")

@@ -84,6 +84,7 @@ import '../features/settings/ui/credentials_screen.dart';
 import '../features/settings/ui/devices_screen.dart';
 import '../features/settings/ui/discovery_settings_screen.dart';
 import '../features/settings/ui/discord_notifications_screen.dart';
+import '../features/settings/ui/discord_preferences_screen.dart';
 import '../features/settings/ui/seerr_api_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
 import '../features/settings/ui/pending_requests_screen.dart';
@@ -935,6 +936,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: '/settings/discord-notifications',
             onExit: confirmSettingsExit,
             builder: (_, __) =>
+                const AppAmbientBackground(child: DiscordPreferencesScreen()),
+          ),
+          GoRoute(
+            path: '/settings/discord-notifications/server',
+            onExit: confirmSettingsExit,
+            builder: (_, __) =>
                 const AppAmbientBackground(child: DiscordNotificationsScreen()),
           ),
           GoRoute(
@@ -1133,7 +1140,7 @@ bool _isAdminOnlyRoute(String path) {
     '/settings/agent-approval-rules',
     '/settings/request-settings',
     '/settings/tv-matches',
-    '/settings/discord-notifications',
+    '/settings/discord-notifications/server',
     '/settings/seerr-api',
     '/settings/push-notifications/server',
     '/settings/devices',

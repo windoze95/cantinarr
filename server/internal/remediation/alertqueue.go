@@ -207,6 +207,9 @@ func (s *Service) flushIssueAlerts(now time.Time) {
 			continue
 		}
 		s.notifyIssueBatch(source, len(batch))
+		for _, alert := range batch {
+			s.observeReport("issue_created", alert.id, 0, 0)
+		}
 	}
 }
 

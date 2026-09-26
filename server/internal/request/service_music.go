@@ -587,6 +587,7 @@ type musicLiveProjection struct {
 type musicLiveRecord struct {
 	Status    string `json:"status"`
 	ForeignID string `json:"foreignId,omitempty"`
+	Complete  bool   `json:"complete"` // positive track count verified on disk
 }
 
 func (p *musicLiveProjection) recordByID(id int) (musicLiveRecord, bool) {
@@ -664,7 +665,8 @@ func buildMusicLiveProjection(client *lidarr.Client) (*musicLiveProjection, erro
 		case album.Monitored:
 			status = StatusRequested
 		}
-		projection.Records[album.ID] = musicLiveRecord{Status: status, ForeignID: album.ForeignAlbumID}
+		projection.Records[album.ID] = musicLiveRecord{Status: status, ForeignID: album.ForeignAlbumID,
+			Complete: album.Statistics.TrackCount > 0 && album.Statistics.TrackFileCount >= album.Statistics.TrackCount}
 		if album.ForeignAlbumID == "" {
 			continue
 		}
@@ -740,6 +742,7 @@ func musicQueueItemDownloading(item lidarr.QueueItem) bool {
 // the arr webhook receiver when a Lidarr library changes out-of-band, and by
 // the add path after Cantinarr itself mutates the library.
 func (s *Service) InvalidateMusicDigests(instanceID string) {
+	defer s.wakeDiscordAvailability()
 	if s.libraryCache == nil || instanceID == "" {
 		return
 	}

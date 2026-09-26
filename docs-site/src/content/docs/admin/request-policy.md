@@ -57,6 +57,6 @@ Cancelling a saved request does not mean an imported file was removed. Deleting 
 
 ## Review notifications and navigation
 
-Phone categories can notify administrators about requests needing review. Discord can post those requests to one configured channel. Automatically approved request alerts are a separate option.
+Phone categories can notify administrators about requests needing review. Discord can post selected request events to a channel or thread, including decisions and availability. Automatically approved request alerts are a separate option. Users can opt in to personal mentions.
 
 The **Needs attention** navigation group can hide an empty queue. Open it from Settings when needed, or change its device-local visibility choice. A hidden navigation entry does not disable approvals.

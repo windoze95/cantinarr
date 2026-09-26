@@ -48,7 +48,7 @@ The [complete searchable-settings catalog](/reference/generated/settings/) is bu
 | Review a profile edit | Configuration History / Profile approvals | [Configuration changes](/admin/configuration-history/) |
 | Enable downloaded-file access | Instance path mappings and deployment media roots | [File downloads](/admin/file-downloads/) |
 | Connect a television | Apple TVs | [Apple TV setup](/integrations/guides/apple-tv/) |
-| Send requests to Discord | Discord Notifications | [Discord](/integrations/discord/) |
+| Choose Discord mentions and server events | Discord Notifications > Server Discord Notifications (admins) | [Discord](/integrations/discord/) |
 | Route metadata and AI traffic | Outbound Proxy | [Proxy setup](/integrations/outbound-proxy/) |
 
 ## Deployment-only choices
