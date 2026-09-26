@@ -89,9 +89,9 @@ func (s *Service) prepareMessage(ctx context.Context, a requestAlert, c configur
 			if err != nil {
 				return nil, err
 			}
-			live, err := s.source.DiscordAvailability(ctx, part.RequestID)
+			live, err := s.source.DiscordAvailability(ctx, part.RequestID, false)
 			if errors.Is(err, ErrUnverifiable) {
-				// Retrying cannot prove it (for example, a paused TV match): drop the part.
+				// A permanently unverifiable selection cannot recover on retry.
 				continue
 			}
 			if err != nil {

@@ -36,13 +36,13 @@ func TestDiscordMovieAvailabilityRequiresOwningLibraryAndCurrentGrant(t *testing
 	sibling := newFakeRadarrServer(t, &fakeRadarr{libraryJSON: `[{"id":8,"tmdbId":550,"hasFile":true}]`})
 	s, uid, store, primaryID, siblingID := newTwoRadarrTestService(t, primary.URL, sibling.URL)
 	id := seedDiscordRequest(t, s, uid, primaryID, "movie", "", "", 0)
-	view, err := s.DiscordAvailability(context.Background(), id)
+	view, err := s.DiscordAvailability(context.Background(), id, false)
 	if err != nil || len(view.Units) != 0 {
 		t.Fatalf("sibling satisfied primary: %+v %v", view, err)
 	}
 	available.Store(true)
 	s.InvalidateAvailabilityDigests(primaryID)
-	view, err = s.DiscordAvailability(context.Background(), id)
+	view, err = s.DiscordAvailability(context.Background(), id, false)
 	if err != nil || len(view.Units) != 1 || view.Subject.InstanceID != primaryID {
 		t.Fatalf("import: %+v %v", view, err)
 	}
@@ -60,7 +60,7 @@ func TestDiscordMovieAvailabilityRequiresOwningLibraryAndCurrentGrant(t *testing
 	}
 	offline.Store(true)
 	s.InvalidateAvailabilityDigests(primaryID)
-	if _, err = s.DiscordAvailability(context.Background(), id); err == nil {
+	if _, err = s.DiscordAvailability(context.Background(), id, false); err == nil {
 		t.Fatal("outage was read as absence")
 	}
 }
@@ -93,20 +93,20 @@ func TestDiscordBookFormatsFollowBoundRecordAfterRekey(t *testing.T) {
 	if _, err := s.db.Exec(`INSERT INTO request_dispatch(request_id,format,state,book_record_id) VALUES(?,'ebook','complete',7),(?,'audiobook','complete',8)`, id, id); err != nil {
 		t.Fatal(err)
 	}
-	view, err := s.DiscordAvailability(context.Background(), id)
+	view, err := s.DiscordAvailability(context.Background(), id, false)
 	if err != nil || len(view.Units) != 1 || view.Units[0].Format != "ebook" || view.Subject.ForeignID != "canonical" {
 		t.Fatalf("ebook: %+v %v", view, err)
 	}
 	audio.Store(true)
 	s.InvalidateBookDigests(instanceID)
-	view, err = s.DiscordAvailability(context.Background(), id)
+	view, err = s.DiscordAvailability(context.Background(), id, false)
 	if err != nil || len(view.Units) != 2 {
 		t.Fatalf("both: %+v %v", view, err)
 	}
 	if _, err = s.db.Exec(`UPDATE request_dispatch SET state='approval' WHERE request_id=? AND format='audiobook'`, id); err != nil {
 		t.Fatal(err)
 	}
-	view, err = s.DiscordAvailability(context.Background(), id)
+	view, err = s.DiscordAvailability(context.Background(), id, false)
 	if err != nil || len(view.Units) != 1 {
 		t.Fatalf("unapproved format leaked: %+v %v", view, err)
 	}
@@ -123,7 +123,7 @@ func TestDiscordAlbumRequiresVerifiedCompleteAlbum(t *testing.T) {
 			defer upstream.Close()
 			s, uid, instanceID := newLidarrMusicTestService(t, upstream.URL)
 			id := seedDiscordRequest(t, s, uid, instanceID, "music", "old-id", "", 7)
-			view, err := s.DiscordAvailability(context.Background(), id)
+			view, err := s.DiscordAvailability(context.Background(), id, false)
 			if err != nil || (len(view.Units) > 0) != tc.want {
 				t.Fatalf("album: %+v %v", view, err)
 			}
@@ -148,7 +148,7 @@ func TestDiscordTVUsesCorrectedStoryPilotAndCurrentContentPolicy(t *testing.T) {
 		}
 	}
 	l.mu.Unlock()
-	view, err := s.DiscordAvailability(context.Background(), response.RequestID)
+	view, err := s.DiscordAvailability(context.Background(), response.RequestID, false)
 	if err != nil || len(view.Units) != 0 {
 		t.Fatalf("another story leaked: %+v %v", view, err)
 	}
@@ -158,7 +158,7 @@ func TestDiscordTVUsesCorrectedStoryPilotAndCurrentContentPolicy(t *testing.T) {
 	}
 	l.mu.Unlock()
 	s.InvalidateAvailabilityDigests(response.InstanceID)
-	view, err = s.DiscordAvailability(context.Background(), response.RequestID)
+	view, err = s.DiscordAvailability(context.Background(), response.RequestID, false)
 	if err != nil || len(view.Units) != 1 || view.Units[0].Label != "S01E01" {
 		t.Fatalf("pilot: %+v %v", view, err)
 	}
@@ -178,8 +178,21 @@ func TestDiscordTVUsesCorrectedStoryPilotAndCurrentContentPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A pause is an administrator's decision, not a library outage.
-	if _, err = s.DiscordAvailability(context.Background(), response.RequestID); !errors.Is(err, discordnotify.ErrUnverifiable) {
+	if _, err = s.DiscordAvailability(context.Background(), response.RequestID, false); !errors.Is(err, discordnotify.ErrDeferred) {
 		t.Fatalf("paused mapping: %v", err)
+	}
+	if _, err = s.DiscordObservationKey(context.Background(), response.RequestID); !errors.Is(err, discordnotify.ErrDeferred) {
+		t.Fatalf("paused observation key: %v", err)
+	}
+	match, err = s.TVMatchDetail(admin, 286801, response.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.SaveTVMatch(admin, 286801, TVMatchEdit{Revision: match.Match.Revision, Mode: "default", InstanceID: response.InstanceID}); err != nil {
+		t.Fatal(err)
+	}
+	if view, err = s.DiscordAvailability(context.Background(), response.RequestID, true); err != nil || len(view.Units) != 1 {
+		t.Fatalf("resumed mapping: %+v %v", view, err)
 	}
 }
 
@@ -204,7 +217,7 @@ func TestDiscordTVAnnouncesOnlySelectedSeasonOfMultiSeasonShow(t *testing.T) {
 	}
 	l.mu.Unlock()
 	s.InvalidateAvailabilityDigests(response.InstanceID)
-	view, err := s.DiscordAvailability(context.Background(), response.RequestID)
+	view, err := s.DiscordAvailability(context.Background(), response.RequestID, false)
 	if err != nil || len(view.Units) != 2 {
 		t.Fatalf("selected season: %+v %v", view, err)
 	}
@@ -247,7 +260,7 @@ func TestDiscordTVSurvivesANewlyListedSeason(t *testing.T) {
 	l.mu.Lock()
 	l.extraSource = true // TMDB announces season 2 after the request
 	l.mu.Unlock()
-	view, err := s.DiscordAvailability(context.Background(), response.RequestID)
+	view, err := s.DiscordAvailability(context.Background(), response.RequestID, false)
 	if err != nil || len(view.Units) != 2 || view.Units[0].Label != "S01E01" {
 		t.Fatalf("new season stopped availability: %+v %v", view, err)
 	}
@@ -255,7 +268,7 @@ func TestDiscordTVSurvivesANewlyListedSeason(t *testing.T) {
 	if _, err = s.db.Exec(`UPDATE tmdb_tvdb_cache SET tvdb_id=888888 WHERE tmdb_id=12345`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.DiscordAvailability(context.Background(), response.RequestID); !errors.Is(err, ErrTVMatchStale) {
+	if _, err = s.DiscordAvailability(context.Background(), response.RequestID, false); !errors.Is(err, ErrTVMatchStale) {
 		t.Fatalf("changed series: %v", err)
 	}
 }
@@ -267,7 +280,7 @@ func TestDiscordTVOwnershipWithoutSonarrTMDBIDs(t *testing.T) {
 	l.parent["tmdbId"] = 0
 	l.mu.Unlock()
 	s.InvalidateAvailabilityDigests(response.InstanceID)
-	if view, err := s.DiscordAvailability(context.Background(), response.RequestID); err != nil || len(view.Units) != 2 {
+	if view, err := s.DiscordAvailability(context.Background(), response.RequestID, false); err != nil || len(view.Units) != 2 {
 		t.Fatalf("missing Sonarr TMDB id: %+v %v", view, err)
 	}
 	// A different id is a split show that needs a TV match.
@@ -275,7 +288,7 @@ func TestDiscordTVOwnershipWithoutSonarrTMDBIDs(t *testing.T) {
 	l.parent["tmdbId"] = 424242
 	l.mu.Unlock()
 	s.InvalidateAvailabilityDigests(response.InstanceID)
-	if _, err := s.DiscordAvailability(context.Background(), response.RequestID); !errors.Is(err, ErrTVMatchStale) {
+	if _, err := s.DiscordAvailability(context.Background(), response.RequestID, false); !errors.Is(err, ErrTVMatchStale) {
 		t.Fatalf("other title: %v", err)
 	}
 }
@@ -287,7 +300,7 @@ func TestDiscordLegacyTVSelectionsAreUnverifiable(t *testing.T) {
 		if _, err := s.db.Exec(`UPDATE request_log SET tmdb_id=12345,season_scope=? WHERE id=?`, scope, id); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.DiscordAvailability(context.Background(), id); !errors.Is(err, discordnotify.ErrUnverifiable) {
+		if _, err := s.DiscordAvailability(context.Background(), id, false); !errors.Is(err, discordnotify.ErrUnverifiable) {
 			t.Fatalf("%s: %v", scope, err)
 		}
 	}
@@ -296,7 +309,7 @@ func TestDiscordLegacyTVSelectionsAreUnverifiable(t *testing.T) {
 	if _, err := s.db.Exec(`UPDATE request_log SET tmdb_id=12345,season_scope='[1]' WHERE id=?`, id); err != nil {
 		t.Fatal(err)
 	}
-	if view, err := s.DiscordAvailability(context.Background(), id); err != nil || len(view.Units) != 2 {
+	if view, err := s.DiscordAvailability(context.Background(), id, false); err != nil || len(view.Units) != 2 {
 		t.Fatalf("legacy explicit: %+v %v", view, err)
 	}
 }
@@ -307,7 +320,7 @@ func TestDiscordTVRepairBaselinesAtDelivery(t *testing.T) {
 	if _, err := s.db.Exec(`UPDATE request_tv_targets SET repair_of=? WHERE request_id=?`, original, response.RequestID); err != nil {
 		t.Fatal(err)
 	}
-	view, err := s.DiscordAvailability(context.Background(), response.RequestID)
+	view, err := s.DiscordAvailability(context.Background(), response.RequestID, false)
 	if err != nil || !view.Baseline || len(view.Units) != 2 {
 		t.Fatalf("delivered repair: %+v %v", view, err)
 	}
@@ -315,7 +328,7 @@ func TestDiscordTVRepairBaselinesAtDelivery(t *testing.T) {
 	if _, err = s.db.Exec(`UPDATE request_dispatch SET state='approval' WHERE request_id=?`, response.RequestID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.DiscordAvailability(context.Background(), response.RequestID); !errors.Is(err, discordnotify.ErrUnverifiable) {
+	if _, err = s.DiscordAvailability(context.Background(), response.RequestID, false); !errors.Is(err, discordnotify.ErrDeferred) {
 		t.Fatalf("undelivered repair: %v", err)
 	}
 }
@@ -368,5 +381,61 @@ func TestDiscordObservationKeyFollowsSelectedSeasonFiles(t *testing.T) {
 	movie := seedDiscordRequest(t, s, uid, response.InstanceID, "movie", "", "", 0)
 	if k, err := s.DiscordObservationKey(ctx, movie); err != nil || k != "" {
 		t.Fatalf("movie key %q %v", k, err)
+	}
+}
+
+func TestDiscordFreshAvailabilityBypassesEpisodeCache(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		before, after int
+		sameKey       bool
+	}{
+		{"missed import webhook", 0, 1, false},
+		{"file reassigned to another episode", 1, 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, response, l := deliveredSeasonOne(t)
+			ctx := context.Background()
+			setEpisode := func(number int) {
+				l.mu.Lock()
+				defer l.mu.Unlock()
+				files, size := 0, 0
+				if number > 0 {
+					files, size = 1, 100
+				}
+				for _, v := range l.parent["seasons"].([]any) {
+					v.(map[string]any)["statistics"] = map[string]any{"episodeFileCount": files, "totalEpisodeCount": 2, "sizeOnDisk": size}
+				}
+				for _, ep := range l.episodes {
+					ep["hasFile"] = ep["seasonNumber"] == 1 && ep["episodeNumber"] == number
+				}
+			}
+			setEpisode(tc.before)
+			s.InvalidateAvailabilityDigests(response.InstanceID)
+			beforeKey, err := s.DiscordObservationKey(ctx, response.RequestID)
+			if err != nil || beforeKey == "" {
+				t.Fatalf("initial key: %q %v", beforeKey, err)
+			}
+			before, err := s.DiscordAvailability(ctx, response.RequestID, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			setEpisode(tc.after)
+			// Simulate a series-digest expiry while a delivery's 10-second
+			// episode snapshot is still cached. No webhook was received.
+			s.libraryCache.Delete("series-availability:" + response.InstanceID)
+			afterKey, err := s.DiscordObservationKey(ctx, response.RequestID)
+			if err != nil || (afterKey == beforeKey) != tc.sameKey {
+				t.Fatalf("changed library key: same=%v err=%v", afterKey == beforeKey, err)
+			}
+			cached, err := s.DiscordAvailability(ctx, response.RequestID, false)
+			if err != nil || len(cached.Units) != len(before.Units) || (len(cached.Units) > 0 && cached.Units[0] != before.Units[0]) {
+				t.Fatalf("fixture did not retain an older episode snapshot: %+v %v", cached, err)
+			}
+			fresh, err := s.DiscordAvailability(ctx, response.RequestID, true)
+			if err != nil || len(fresh.Units) != 1 || fresh.Units[0].Label != fmt.Sprintf("S01E%02d", tc.after) {
+				t.Fatalf("fresh observation missed the episode: %+v %v", fresh, err)
+			}
+		})
 	}
 }

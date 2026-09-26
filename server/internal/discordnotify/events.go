@@ -72,17 +72,22 @@ type Availability struct {
 	Baseline bool
 }
 
-// ErrUnverifiable marks a request whose saved selection can never be proven,
-// or whose TV match an admin paused. It is not a library outage: the scan
-// skips it without a warning or a receipt.
+// ErrUnverifiable marks a request whose saved selection can never be proven.
+// The scan skips it without a warning or a receipt; queued parts are dropped.
 var ErrUnverifiable = errors.New("the requested selection cannot be verified")
 
+// ErrDeferred is temporary, such as a paused TV match or an undelivered repair.
+// Observation stays quiet, but an already queued notification can retry.
+var ErrDeferred = errors.New("availability checks are temporarily deferred")
+
 type Source interface {
-	DiscordAvailability(context.Context, int64) (Availability, error)
+	// A fresh read bypasses the TV episode cache when observing availability.
+	// Delivery preflights can reuse the short-lived snapshot.
+	DiscordAvailability(ctx context.Context, id int64, fresh bool) (Availability, error)
 	DiscordAuthorize(context.Context, int64, Subject) (bool, error)
-	// DiscordObservationKey is a cheap fingerprint of the provider state a full
-	// availability read depends on. An unchanged key means nothing new can be
-	// available; "" means always read.
+	// DiscordObservationKey is a cheap change hint, not proof that no new
+	// episode is available. Matching keys still need periodic full reads;
+	// "" means always read.
 	DiscordObservationKey(context.Context, int64) (string, error)
 }
 

@@ -45,11 +45,11 @@ Under **Role mentions**, an administrator can enter a numeric Discord role ID an
 
 Availability follows the requested library: a movie with a file, each requested book format, a complete album, or imported episodes within the requested TV selection. A pilot request announces the pilot. TV corrections retain the selected story's numbering.
 
-Imports for the same title and library collect for 60 seconds before posting. Webhooks wake the checks; background polling covers missed webhooks and restarts. Library caching can add a short delay. File upgrades and repeated observations do not create another availability post.
+Imports for the same title and library collect for 60 seconds before posting. Webhooks wake the checks; background polling covers missed webhooks and restarts. TV checks refresh at least every five minutes even when the library reports unchanged file counts and sizes. Library caching can add a short delay. File upgrades and repeated observations do not create another availability post.
 
 When availability is enabled or its destination changes, existing files establish a baseline and are not announced. If a library is unavailable during that first check, the baseline waits for a successful read. Repairing a TV request does not announce episodes that are already in the library.
 
-The server settings show a warning when a library cannot be read or a TV match needs attention in **Request Defaults > TV matches**. Older TV requests that did not choose specific seasons (from before Cantinarr 0.12), selections that include Specials, and paused TV matches are not checked for availability.
+The server settings show a warning when a library cannot be read or a TV match needs attention in **Request Defaults > TV matches**. Older TV requests that did not choose specific seasons (from before Cantinarr 0.12), selections that include Specials, and paused TV matches are not checked for availability. Pausing a TV match keeps its queued notices waiting within the 24-hour delivery window. They retry after matching resumes and current availability and access can be verified.
 
 ## Understand sharing and delivery history
 

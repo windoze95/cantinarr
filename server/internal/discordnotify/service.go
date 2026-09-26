@@ -52,6 +52,7 @@ type Service struct {
 	source            Source
 	observeWake       chan struct{}
 	observationMu     sync.Mutex
+	availabilityReads map[int64]time.Time // successful full reads in this process, under observationMu
 	availabilityError string
 }
 

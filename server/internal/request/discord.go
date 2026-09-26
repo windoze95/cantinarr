@@ -64,7 +64,7 @@ func (s *Service) DiscordAuthorize(ctx context.Context, userID int64, subject di
 
 // DiscordAvailability reads the exact saved request. The cross-library Seerr
 // ledger and the aggregate user history are intentionally unsuitable here.
-func (s *Service) DiscordAvailability(ctx context.Context, id int64) (discordnotify.Availability, error) {
+func (s *Service) DiscordAvailability(ctx context.Context, id int64, fresh bool) (discordnotify.Availability, error) {
 	out := discordnotify.Availability{Units: []discordnotify.Unit{}}
 	if err := ctx.Err(); err != nil {
 		return out, err
@@ -115,12 +115,12 @@ func (s *Service) DiscordAvailability(ctx context.Context, id int64) (discordnot
 			if repairOf > 0 {
 				// A repair re-files existing work. Its baseline starts at
 				// delivery, so an empty pre-delivery read must not become one.
-				return out, fmt.Errorf("%w: the repair has not been delivered", discordnotify.ErrUnverifiable)
+				return out, fmt.Errorf("%w: the repair has not been delivered", discordnotify.ErrDeferred)
 			}
 			return out, nil
 		}
 		out.Baseline = repairOf > 0
-		return s.discordTVAvailability(ctx, id, r, out)
+		return s.discordTVAvailability(ctx, id, r, out, fresh)
 	case "book":
 		client, err := s.registry.GetChaptarrClient(r.instanceID)
 		if err != nil {
@@ -200,7 +200,7 @@ func (s *Service) DiscordAvailability(ctx context.Context, id int64) (discordnot
 	return out, nil
 }
 
-func (s *Service) discordTVAvailability(ctx context.Context, id int64, r *resolvedRequest, out discordnotify.Availability) (discordnotify.Availability, error) {
+func (s *Service) discordTVAvailability(ctx context.Context, id int64, r *resolvedRequest, out discordnotify.Availability, fresh bool) (discordnotify.Availability, error) {
 	s.tvMatchMu.Lock()
 	defer s.tvMatchMu.Unlock()
 	client, err := s.registry.GetSonarrClient(r.instanceID)
@@ -253,8 +253,8 @@ func (s *Service) discordTVAvailability(ctx context.Context, id int64, r *resolv
 		scopes[target.TargetSeasons[i]] = source
 		selectedMapping[source] = target.TargetSeasons[i]
 	}
-	// Cache provider data briefly and independently of recipients. The caller
-	// still rechecks every recipient after this shared read.
+	// Delivery can share a brief snapshot; observation must read fresh episode
+	// state after its digest check. Recipients are rechecked after either read.
 	type snapshot struct {
 		Series   *sonarr.Series   `json:"series"`
 		Episodes []sonarr.Episode `json:"episodes"`
@@ -262,7 +262,7 @@ func (s *Service) discordTVAvailability(ctx context.Context, id int64, r *resolv
 	var snap snapshot
 	key := "discord-tv:" + r.instanceID + ":" + strconv.Itoa(m.TVDBID)
 	cached := false
-	if s.libraryCache != nil {
+	if s.libraryCache != nil && !fresh {
 		if data, ok := s.libraryCache.Get(key); ok {
 			cached = json.Unmarshal(data, &snap) == nil
 		}
@@ -335,7 +335,7 @@ func (s *Service) discordTVAvailability(ctx context.Context, id int64, r *resolv
 func discordTVMatchError(err error) error {
 	var failure *tvMatchError
 	if errors.As(err, &failure) && failure.code == "tv_match_paused" {
-		return fmt.Errorf("%w: %w", discordnotify.ErrUnverifiable, err)
+		return fmt.Errorf("%w: %w", discordnotify.ErrDeferred, err)
 	}
 	return err
 }
@@ -344,8 +344,9 @@ func discordTVMatchError(err error) error {
 // without TMDB or per-series reads: delivery acceptance, the saved target, the
 // local match configuration, and the selected seasons' file statistics from
 // the shared series digest (arrLibraryCacheTTL, cleared by arr webhooks). An
-// unchanged key means no new file can have arrived. "" means read in full;
-// movies, books, and music already read cached library digests.
+// unchanged key is only a hint: episode identities can change without changing
+// counts or size, so the observer also performs bounded periodic full reads.
+// "" means read in full; other media already read cached library digests.
 func (s *Service) DiscordObservationKey(ctx context.Context, id int64) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -368,6 +369,9 @@ func (s *Service) DiscordObservationKey(ctx context.Context, id int64) (string, 
 	m, _, err := configuredTVMatch(s.db, r.tmdbID)
 	if err != nil {
 		return "", err
+	}
+	if m.State == "paused" {
+		return "", discordnotify.ErrDeferred
 	}
 	var tvdbID int
 	var seasons []int

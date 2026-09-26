@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// Aggregate file statistics can stay unchanged when episode identities change.
+// Limit the fast path even when the provider's observation key is unchanged.
+const availabilityRefreshInterval = 5 * time.Minute
+
 func (s *Service) observeAvailability(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -41,7 +45,7 @@ func (s *Service) scanAvailability(ctx context.Context) error {
 	}
 	// Movie/album and completed book receipts never owe another availability
 	// event. TV stays observed because requested seasons can gain new episodes;
-	// its stored observation key lets an unchanged library skip the full read.
+	// its observation key can skip a recently completed full read.
 	rows, err := s.db.Query(`SELECT r.id,COALESCE(a.observed_key,'') FROM request_log r
 	LEFT JOIN discord_availability a ON a.request_id=r.id AND a.epoch=?
 	WHERE r.status!='denied' AND r.instance_id IS NOT NULL AND NOT (a.request_id IS NOT NULL AND (
@@ -69,6 +73,13 @@ func (s *Service) scanAvailability(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Only retain active requests. A restart has no recent full reads, so a
+	// persisted key alone never prevents checking the library again.
+	reads := make(map[int64]time.Time, len(due))
+	for _, o := range due {
+		reads[o.id] = s.availabilityReads[o.id]
+	}
+	s.availabilityReads = reads
 	var lastErr error
 	for _, o := range due {
 		if err = ctx.Err(); err != nil {
@@ -76,16 +87,18 @@ func (s *Service) scanAvailability(ctx context.Context) error {
 		}
 		key, e := s.source.DiscordObservationKey(ctx, o.id)
 		if e != nil {
-			if !errors.Is(e, ErrUnverifiable) {
+			if !errors.Is(e, ErrUnverifiable) && !errors.Is(e, ErrDeferred) {
 				lastErr = e
 			}
 			continue
 		}
-		if key != "" && key == o.key {
+		age := s.now().Sub(reads[o.id])
+		if key != "" && key == o.key && !reads[o.id].IsZero() && age >= 0 && age < availabilityRefreshInterval {
 			continue
 		}
-		snapshot, e := s.source.DiscordAvailability(ctx, o.id)
-		if errors.Is(e, ErrUnverifiable) {
+		// Never pair a new digest key with an older cached episode snapshot.
+		snapshot, e := s.source.DiscordAvailability(ctx, o.id, true)
+		if errors.Is(e, ErrUnverifiable) || errors.Is(e, ErrDeferred) {
 			continue
 		}
 		if e != nil {
@@ -94,6 +107,8 @@ func (s *Service) scanAvailability(ctx context.Context) error {
 		}
 		if e = s.recordAvailability(c, o.id, snapshot, key); e != nil {
 			lastErr = e
+		} else {
+			reads[o.id] = s.now()
 		}
 	}
 	return lastErr

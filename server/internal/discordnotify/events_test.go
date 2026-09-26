@@ -25,12 +25,20 @@ type fakeSource struct {
 	blocked      map[int64]bool
 	keys         map[int64]string
 	unverifiable map[int64]bool
+	deferred     map[int64]bool
 	reads        int
+	freshReads   int
 	err          error
 }
 
-func (f *fakeSource) DiscordAvailability(_ context.Context, id int64) (Availability, error) {
+func (f *fakeSource) DiscordAvailability(_ context.Context, id int64, fresh bool) (Availability, error) {
 	f.reads++
+	if fresh {
+		f.freshReads++
+	}
+	if f.deferred[id] {
+		return Availability{}, fmt.Errorf("%w: paused TV match", ErrDeferred)
+	}
 	if f.unverifiable[id] {
 		return Availability{}, fmt.Errorf("%w: legacy selection", ErrUnverifiable)
 	}
@@ -40,6 +48,9 @@ func (f *fakeSource) DiscordAuthorize(_ context.Context, id int64, _ Subject) (b
 	return !f.blocked[id], f.err
 }
 func (f *fakeSource) DiscordObservationKey(_ context.Context, id int64) (string, error) {
+	if f.deferred[id] {
+		return "", ErrDeferred
+	}
 	return f.keys[id], nil
 }
 
@@ -481,6 +492,108 @@ func TestUnchangedObservationKeySkipsFullReadAndWrite(t *testing.T) {
 	var key string
 	if err := s.db.QueryRow(`SELECT observed_key FROM discord_availability WHERE request_id=?`, id).Scan(&key); err != nil || key != "k2" {
 		t.Fatalf("stored key %q %v", key, err)
+	}
+}
+
+func TestObservationKeyRefreshFindsEpisodesWithUnchangedStatistics(t *testing.T) {
+	s := fixture(t)
+	id := seed(t, s, "tv")
+	pin(t, s, id)
+	allEvents(t, s)
+	view := Availability{Subject: Subject{RequestID: id, Title: "A show", MediaType: "tv", TmdbID: 550, InstanceID: "sonarr-a"}, Units: []Unit{{Key: "e1", Label: "S01E01"}}}
+	f := &fakeSource{views: map[int64]Availability{id: view}, keys: map[int64]string{id: "unchanged-statistics"}}
+	s.SetSource(f)
+	scan := func() {
+		t.Helper()
+		if err := s.scanAvailability(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scan() // Existing E01 establishes the baseline.
+	start := s.now()
+	view.Units = []Unit{{Key: "e2", Label: "S01E02"}}
+	f.views[id] = view // The same file was reassigned from E01 to E02.
+	s.now = func() time.Time { return start.Add(availabilityRefreshInterval - time.Second) }
+	scan()
+	if f.reads != 1 {
+		t.Fatal("unchanged statistics did not use the short fast path")
+	}
+	s.now = func() time.Time { return start.Add(availabilityRefreshInterval) }
+	f.err = errors.New("temporary library outage")
+	if err := s.scanAvailability(context.Background()); err == nil {
+		t.Fatal("a failed full refresh was treated as a successful observation")
+	}
+	f.err = nil
+	scan() // A failed read must not renew the fast path.
+	if f.reads != 3 || f.freshReads != 3 {
+		t.Fatalf("full refreshes: reads=%d fresh=%d", f.reads, f.freshReads)
+	}
+	messages := capture(s)
+	s.now = func() time.Time { return start.Add(availabilityRefreshInterval + 61*time.Second) }
+	if err := s.deliverOne(context.Background()); err != nil || len(*messages) != 1 {
+		t.Fatalf("new episode delivery: sent=%d err=%v", len(*messages), err)
+	}
+	if raw, _ := json.Marshal((*messages)[0]); !strings.Contains(string(raw), "S01E02") || strings.Contains(string(raw), "S01E01") {
+		t.Fatalf("wrong episode announced: %s", raw)
+	}
+	// A persisted key cannot skip the first full read after a restart, and the
+	// durable episode receipts still prevent replay.
+	restarted := NewService(s.db, s.cipher, nil)
+	restarted.SetSource(f)
+	restarted.now = s.now
+	if err := restarted.scanAvailability(context.Background()); err != nil || f.freshReads != 4 {
+		t.Fatalf("restart refresh: fresh=%d err=%v", f.freshReads, err)
+	}
+	var queued int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM discord_notifications`).Scan(&queued); err != nil || queued != 1 {
+		t.Fatalf("refresh replayed a receipt: queued=%d err=%v", queued, err)
+	}
+}
+
+func TestPausedAvailabilityRetriesAndResumesWithoutReplay(t *testing.T) {
+	s := fixture(t)
+	allEvents(t, s)
+	id := seed(t, s, "tv")
+	pin(t, s, id)
+	view := Availability{Subject: Subject{RequestID: id, Title: "A show", MediaType: "tv", TmdbID: 550, InstanceID: "sonarr-a"}, Units: []Unit{{Key: "e1", Label: "S01E01"}}}
+	f := &fakeSource{views: map[int64]Availability{id: view}, keys: map[int64]string{id: "active-1"}, deferred: map[int64]bool{}}
+	s.SetSource(f)
+	if err := s.scanAvailability(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.deferred[id] = true
+	if err := s.scanAvailability(context.Background()); err != nil {
+		t.Fatalf("paused matching raised an outage warning: %v", err)
+	}
+	start := s.now()
+	s.now = func() time.Time { return start.Add(61 * time.Second) }
+	messages := capture(s)
+	if err := s.deliverOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	var attempts int
+	if err := s.db.QueryRow(`SELECT status,attempts FROM discord_notifications`).Scan(&state, &attempts); err != nil || state != "pending" || attempts != 0 || len(*messages) != 0 {
+		t.Fatalf("paused delivery: state=%q attempts=%d sent=%d err=%v", state, attempts, len(*messages), err)
+	}
+	// Resume after a restart: the unsent episode is still in the outbox even
+	// though its observation receipt already records it as seen.
+	f.deferred[id] = false
+	f.keys[id] = "active-3"
+	restarted := NewService(s.db, s.cipher, nil)
+	restarted.SetSource(f)
+	restarted.now = func() time.Time { return start.Add(122 * time.Second) }
+	messages = capture(restarted)
+	if err := restarted.scanAvailability(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := restarted.deliverOne(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.db.QueryRow(`SELECT status,attempts FROM discord_notifications`).Scan(&state, &attempts); err != nil || state != "sent" || attempts != 1 || len(*messages) != 1 {
+		t.Fatalf("resumed delivery: state=%q attempts=%d sent=%d err=%v", state, attempts, len(*messages), err)
 	}
 }
 
