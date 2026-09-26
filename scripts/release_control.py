@@ -121,6 +121,14 @@ def prepare():
         source = {"sha": sha, "ci_head": sha, "ref": ref,
                   "channel": channel_for(ref, sha, branch_state())}
     enabled = source["channel"] not in {"paused", "superseded"}
+    if source["channel"] == "candidate" and os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+        enabled = False
+        message = ("Candidate mobile builds and store listings require manual workflow dispatch. "
+                   "For a coordinated release, verify this commit's server candidate first.")
+        print(f"::notice::{message}")
+        if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(summary, "a") as stream:
+                stream.write(f"### Candidate publishing held\n\n{message}\n\n")
     print(f"Publishing channel: {source['channel']} ({source['sha']})")
     emit({**source, "enabled": str(enabled).lower(), "source": json.dumps(source)})
 

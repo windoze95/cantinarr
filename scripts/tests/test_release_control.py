@@ -64,6 +64,60 @@ class RoutingTests(unittest.TestCase):
                 rc.branch_state()
 
 
+class PreparationTests(unittest.TestCase):
+    def prepare(self, event, ref, branches):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            summary = Path(directory) / "summary"
+            with patch.dict(os.environ, {
+                "PREVIEW_PR": "", "GITHUB_EVENT_NAME": event,
+                "GITHUB_REF": ref, "GITHUB_SHA": COMMIT,
+                "GITHUB_OUTPUT": str(output), "GITHUB_STEP_SUMMARY": str(summary),
+            }), patch.object(rc, "branch_state", return_value=branches), redirect_stdout(io.StringIO()):
+                rc.prepare()
+            values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+            return values, summary.read_text() if summary.exists() else ""
+
+    def test_candidate_push_cannot_start_mobile_or_listing_publication(self):
+        for event in ("push", "workflow_run", ""):
+            with self.subTest(event=event):
+                values, summary = self.prepare(event, "refs/heads/release/1.0.0", {
+                    "main": OTHER, "release/1.0.0": COMMIT,
+                })
+                self.assertEqual(values["enabled"], "false")
+                self.assertEqual(values["channel"], "candidate")
+                self.assertIn("manual workflow dispatch", summary)
+
+    def test_explicit_dispatch_selects_the_current_frozen_candidate(self):
+        values, summary = self.prepare("workflow_dispatch", "refs/heads/release/1.0.0", {
+            "main": OTHER, "release/1.0.0": COMMIT,
+        })
+        self.assertEqual(values["enabled"], "true")
+        self.assertEqual(json.loads(values["source"]), {
+            "sha": COMMIT, "ci_head": COMMIT,
+            "ref": "refs/heads/release/1.0.0", "channel": "candidate",
+        })
+        self.assertEqual(summary, "")
+
+    def test_main_beta_push_and_dispatch_keep_the_existing_freeze_rules(self):
+        for event in ("push", "workflow_dispatch"):
+            for frozen in (False, True):
+                with self.subTest(event=event, frozen=frozen):
+                    branches = {"main": COMMIT}
+                    if frozen:
+                        branches["release/1.0.0"] = OTHER
+                    values, _ = self.prepare(event, "refs/heads/main", branches)
+                    self.assertEqual(values["enabled"], "false" if frozen else "true")
+                    self.assertEqual(values["channel"], "paused" if frozen else "beta")
+
+    def test_dispatch_cannot_publish_a_superseded_candidate(self):
+        values, _ = self.prepare("workflow_dispatch", "refs/heads/release/1.0.0", {
+            "main": COMMIT, "release/1.0.0": OTHER,
+        })
+        self.assertEqual(values["enabled"], "false")
+        self.assertEqual(values["channel"], "superseded")
+
+
 class PreviewTests(unittest.TestCase):
     def setUp(self):
         self.pr = {"number": 7, "state": "open", "draft": False, "head": {"sha": COMMIT},
