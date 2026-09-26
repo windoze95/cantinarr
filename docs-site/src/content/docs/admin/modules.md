@@ -29,7 +29,7 @@ If artwork cannot load, the item keeps its name and a placeholder icon. If the l
 
 ### Sort a library
 
-Select **Sort**, between the filter menu and the List / Grid control. Choose a field to sort ascending: A to Z, smallest first, or oldest first. Select the same field again to reverse the order. The active field is highlighted and shows an up or down arrow. Scroll the menu to reach all options.
+Select **Sort**, between the filter menu and the List / Grid control. Choose a field to sort ascending: A to Z, smallest first, or oldest first. Select the same field again to reverse the order. The active field is highlighted and shows an up or down arrow. Scroll the menu to reach all options. Opening, scrolling, or dismissing the menu keeps the page position and search bar visibility unchanged.
 
 Each module remembers its sort field and direction on this device, including after an app restart. The choice applies to all configured instances of that module. The initial order is **Alphabetical**, or **First Name** for Chaptarr, ascending. A new field always starts ascending.
 
