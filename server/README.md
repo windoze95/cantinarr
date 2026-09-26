@@ -643,7 +643,7 @@ Book availability remains instance-scoped and is computed from live Chaptarr sta
 ```
 POST   /api/ai/chat                         # SSE-streamed conversation with tool use
 GET    /api/ai/available                    # effective availability + personal|shared|none source
-GET    /api/ai/settings                     # provider catalog, write-only credential flags, effective source
+GET    /api/ai/settings                     # provider catalog, credential flags, effective source, per-user chat_capabilities
 PUT    /api/ai/settings                     # test + atomically save personal provider/model/key override
 DELETE /api/ai/settings                     # clear personal override and return to granted included access
 PUT    /api/ai/credentials/{provider}       # test + set/replace one personal API key (write-only)
@@ -661,6 +661,8 @@ DELETE /api/ai/grok/device/{flowID}         # cancel this user's pending xAI dev
 DELETE /api/ai/grok                         # unlink this user's xAI account
 ```
 All personal settings, credentials, OAuth accounts, and device flows derive ownership from the authenticated caller; no user ID is accepted from the client. Both providers' `device/begin` return a verification URL, one-time code, flow ID, expiry, and polling interval; the app opens the explicit ChatGPT or xAI browser sign-in while keeping access and refresh tokens off the device. Codex delegates its flow to the pinned app-server; the xAI flow is served directly against `auth.x.ai` with xAI's public Grok CLI client, and its rotating refresh tokens are persisted per use. API keys and completed OAuth authorization are AES-256-GCM encrypted at rest, and responses expose configured booleans rather than secret values. A provider, model, key, or completed OAuth selection is accepted only after the exact candidate completes a small tool-free response turn; a failure leaves the previous key and selection unchanged.
+
+`chat_capabilities` in the settings response summarizes discovery and request media types separately, plus availability, library browsing, download reads/management, troubleshooting, and supported service configuration. It reads the current device-bound role, library grants, instance inventory, and enabled tools without contacting upstream services. Books and music are advertised only with an accessible Chaptarr or Lidarr instance; TMDB movie/TV discovery can work without a library. Missing or unreadable capability data is `null`, so clients use a neutral introduction. This summary grants no authority; tools still check access when called.
 
 Resolution is deterministic: a personal selection row is the explicit override; otherwise a user with an included-access grant receives the admin's shared provider. If the personal key, OAuth link, runtime, or allowance is unavailable, that request fails as personal instead of silently switching accounts and spending shared quota. The source is resolved once per request and never changes during a provider turn. Chat admission is non-blocking and cost-aware: one active turn per user, 16 turns server-wide, and at most four included-provider turns; excess requests are rejected before any provider call.
 
