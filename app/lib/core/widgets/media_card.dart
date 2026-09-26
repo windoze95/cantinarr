@@ -82,9 +82,8 @@ class MediaCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final imageUrl = posterPath != null && posterPath!.startsWith('http')
-        ? posterPath!
-        : AppConfig.tmdbPoster(posterPath, width: 342);
+    final imageUrl = AppConfig.tmdbPosterForDisplay(posterPath,
+        width * MediaQuery.devicePixelRatioOf(context) * 1.025);
 
     final semantics = [
       title,
