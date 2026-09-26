@@ -9,6 +9,35 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
+  testWidgets('opening the assistant refreshes settings kept alive elsewhere',
+      (tester) async {
+    var reads = 0;
+    var capabilities = const AiChatCapabilities(discoverMediaTypes: ['book']);
+    final router = _chatRouter(initialLocation: '/dashboard/movies');
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        aiSettingsProvider.overrideWith((_) async {
+          reads++;
+          return _availableShared(capabilities: capabilities);
+        }),
+      ],
+      child: Consumer(builder: (context, ref, _) {
+        ref.watch(aiSettingsProvider);
+        return MaterialApp.router(routerConfig: router);
+      }),
+    ));
+    await tester.pumpAndSettle();
+    expect(reads, 1);
+
+    capabilities = const AiChatCapabilities(discoverMediaTypes: ['movie']);
+    await tester.tap(find.text('Open assistant'));
+    await tester.pumpAndSettle();
+    expect(reads, 2);
+    expect(find.textContaining('discover movies'), findsOneWidget);
+    expect(find.textContaining('discover books'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('new chats refresh welcome and suggestions from server access',
       (tester) async {
     var reads = 0;

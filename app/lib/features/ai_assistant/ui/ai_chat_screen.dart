@@ -31,6 +31,23 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
   final _focusNode = FocusNode();
+  bool _refreshingCachedSettings = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Settings can keep this shared provider alive beneath the assistant.
+    // An in-flight initial read is already fresh; completed data needs a new
+    // read before it can describe what this account can currently do.
+    _refreshingCachedSettings = !ref.read(aiSettingsProvider).isLoading;
+    if (_refreshingCachedSettings) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ref.invalidate(aiSettingsProvider);
+        setState(() => _refreshingCachedSettings = false);
+      });
+    }
+  }
 
   void _setNotifier(AiChatNotifier? notifier) {
     if (identical(_notifier, notifier)) return;
@@ -94,7 +111,9 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
             )) ==
         true;
     final aiSettings = ref.watch(aiSettingsProvider);
+    if (_refreshingCachedSettings) return _buildUnavailable(loading: true);
     return aiSettings.when(
+      skipLoadingOnRefresh: false,
       loading: () {
         _setNotifier(null);
         return _buildUnavailable(loading: true);
