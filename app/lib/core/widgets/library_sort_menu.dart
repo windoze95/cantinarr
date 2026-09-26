@@ -14,6 +14,9 @@ class LibrarySortMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => PopupMenuButton<LibrarySortField>(
+    // Keep the menu's automatic and user scrolling outside AppShell's page
+    // scroll listener, which controls the collapsing search bar.
+    useRootNavigator: true,
     tooltip: 'Sort: ${selection.field.label(module)}, '
         '${selection.ascending ? 'ascending' : 'descending'}',
     icon: const Icon(Icons.sort_rounded),
