@@ -80,7 +80,8 @@ Docs are part of the change, not a follow-up. A feature is not merged-complete u
 
 | Doc | Owns |
 |---|---|
-| `README.md` | Product pitch, feature list, quick start, configuration & env-var tables |
+| `README.md` | Brief product overview, badges, screenshots, and links to setup and detailed docs |
+| `docs/configuration.md` | Service configuration and environment variable reference |
 | `server/README.md` | API route reference, MCP tool table (incl. the tool count), DB tables, WebSocket events, env vars, server package tree |
 | `app/README.md` | App features/screens, navigation map, project structure, key dependencies |
 | `docs-site/` | Public task guides and troubleshooting at docs.cantinarr.com; generated references stay owned by their original source documents |
