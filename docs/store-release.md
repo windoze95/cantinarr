@@ -12,7 +12,7 @@ numbers guarantee compatibility.
 |---|---|---|---|
 | Green `main`, no release branch | `edge` | Public Beta + existing internal group | Open `beta` + closed `alpha` |
 | Green `main`, release branch active | `edge` | Public publishing paused | Public publishing paused |
-| Active `release/X.Y.Z` | `X.Y.Z-rc.<run>` | Public Beta + existing internal group | Same AAB to `alpha`, `beta`, and owner `internal` |
+| Active `release/X.Y.Z` | `X.Y.Z-rc.<run>` | Manual dispatch to Public Beta + existing internal group | Manual dispatch of one AAB to `alpha`, `beta`, and owner `internal` |
 | PR | Automatic `pr-N` image | On-demand Internal Only build | On-demand `internal` build |
 | Stable `vX.Y.Z` tag | Tested candidate digest → `X.Y.Z`, `X.Y`, `latest` | Separate explicit submission | Separate explicit production promotion |
 
@@ -22,7 +22,10 @@ and therefore follow stable releases too. Use `edge` to follow development.
 
 There can be **only one** active release branch. Its existence gives it ownership of public
 mobile betas and listing updates. Main keeps running CI and publishing `edge`; mobile/listing
-workflows exit without publishing while frozen. Before each upload, the workflow checks the
+workflows exit without publishing while frozen. Release-branch pushes run CI and build server
+candidates, but hold mobile builds and listing changes until a manual workflow dispatch. This
+lets a coordinated release verify its server candidate before the matching apps reach testers.
+Before each upload, the workflow checks the
 branch head and ownership again. TestFlight checks again after Apple processing, immediately
 before its external review submission and group assignment. An obsolete queued build cannot overwrite a newer source.
 If a freeze starts after a main mobile run begins, its remaining publishing steps are skipped
@@ -36,11 +39,9 @@ dispatch. Public TestFlight and Play opt-in links stay the same.
 
 ### 1. Prepare and freeze
 
-Merge a version/release-notes PR through normal CI. `app/pubspec.yaml` supplies the iOS and Android
-marketing version; build numbers are allocated by each store workflow. The release branch name
-supplies the server version. For the first coordinated 1.0 release, use `1.0.0` for both; routine
-server-only or app-only patches need not bump the other component. Compatibility floors change
-only with the breaking change that requires them and remain warn-only.
+For a coordinated launch, merge preparation changes through normal CI with the current app
+version and release notes. A native version bump on unfrozen main starts public beta builds,
+so put the launch's version/release-notes PR on the release branch instead.
 
 After fetching and verifying the selected main SHA and its green CI run, a maintainer creates
 `release/X.Y.Z` at that SHA and pushes it. Do not create a permanent `dev` branch. Candidate fixes
@@ -48,11 +49,26 @@ go through PRs targeting the release branch; merge those fixes back to main thro
 Every source change invalidates the previous candidate combination and requires new builds and
 verification. Keep unrelated features on main.
 
-Inspect the branch's workflow runs. Dispatch any missing component builds explicitly (path filters
-can skip a mobile build for a server-only change):
+Merge the version/release-notes PR into the release branch. `app/pubspec.yaml` supplies the iOS
+and Android marketing version; build numbers are allocated by each store workflow. The release
+branch name supplies the server version. For the first coordinated 1.0 release, use
+`release/1.0.0` and native version `1.0.0`. Routine server-only or app-only patches need not bump
+the other component. Compatibility floors change only with the breaking change that requires
+them and remain warn-only.
+
+For a coordinated release, wait for that final commit's green CI and successful multi-arch
+Docker candidate. Install its recorded digest in the test environment and verify server health
+and the applicable upgrade checks before starting the phone builds. A later candidate fix
+requires this step again; a server image from an older SHA does not prove the new candidate.
+If no server build ran, dispatch it explicitly:
 
 ```bash
 gh workflow run docker.yml --ref release/X.Y.Z
+```
+
+After server verification, manually dispatch the matching mobile builds and listings:
+
+```bash
 gh workflow run testflight.yml --ref release/X.Y.Z
 gh workflow run playstore.yml --ref release/X.Y.Z
 gh workflow run storelisting.yml --ref release/X.Y.Z -f platform=both
@@ -61,6 +77,9 @@ gh workflow run storelisting.yml --ref release/X.Y.Z -f platform=both
 Run only the components being released. Candidate Android builds always go to both public testing
 tracks and the owner-only internal track, even if a single-track dispatch option was selected.
 Candidates intended for production use `completed`, not `draft`.
+Candidate pushes never start these uploads automatically, including after a version bump.
+The explicit dispatch is the maintainer's checkpoint for coordinating the components; each
+workflow still verifies exact-source CI and current branch ownership before publishing.
 
 ### 2. Test and record the exact combination
 
@@ -87,6 +106,12 @@ rebuild of the same SHA cannot silently replace the digest that was tested. For 
 retain the combined record with the release issue or other permanent release evidence.
 
 ### 3. Promote the selected builds
+
+For a coordinated public launch, finish all candidate acceptance and store declarations first.
+Use the selected builds for store review, arrange the stores' available release controls, and
+keep the stable server tag unpublished until the apps are ready for the agreed launch window.
+Then release the selected apps and promote that same candidate's server digest. Store review
+and propagation can delay availability; verify actual installs before announcing completion.
 
 From main, dispatch **Submit App Store Release** (`appstore-release.yml`) with the successful iOS
 candidate `build_run` and `confirm=submit`. It syncs listing content from that candidate SHA and
@@ -213,6 +238,7 @@ SDK version and lockfile changes also trigger the Android build-only PR check.
 `app/**` paths (web/ios/desktop subdirs, tests, dev tooling, and markdown excluded), and on manual dispatch (inputs: track
 `both` (default, open + closed testing)/`beta` (open testing)/`alpha` (closed testing)/`internal`,
 release status `completed`/`draft`).
+Release-branch push runs stop at source selection; candidate builds require manual dispatch.
 
 0. A `gate` job waits for the `CI` run on that exact commit and fails the workflow if it isn't
    green, so nothing is built or uploaded from an unproven commit. The build-only PR check is
@@ -248,9 +274,11 @@ Android push needs two Google artifacts, deliberately kept apart:
   to the push gateway's deploy secrets (see the push-gateway repo's `docs/FCM-SETUP.md`, which
   also covers the Firebase-console walkthrough and the Play-key-vs-FCM-key trap).
 
-Store impact: the `firebase-messaging` SDK counts toward the **Data safety** form (device
-identifiers transmitted for push delivery) — fold it into the reassessment below before the next
-console submission.
+Store impact: include the `firebase-messaging` SDK, device and user identifiers, push tokens,
+notification content, and the configured gateway in the **Data safety** reassessment below.
+The community relay receives delivery data and keeps device registrations and delivery records,
+including notification titles. Check the privacy policy against the current relay behavior before
+the next console submission.
 
 ### Signing material
 
@@ -331,7 +359,8 @@ Listing copy, graphics, and screenshots are code, managed with fastlane's layout
   1320×2868 = iPhone 6.9", 2064×2752 = iPad 13").
 
 `.github/workflows/storelisting.yml` pushes the listings to both consoles whenever a merge to
-`main` or the active `release/X.Y.Z` touches those paths (and via manual dispatch with a platform picker).
+unfrozen `main` touches those paths, or via manual dispatch with a platform picker. Changes on
+the active `release/X.Y.Z` require manual dispatch.
 The same branch-ownership and exact CI gates apply, and writes share each store's publishing lock.
 Main listing changes wait during a candidate freeze. Play sync is skipped
 gracefully until `PLAY_SERVICE_ACCOUNT_JSON` exists; App Store sync uses the existing
@@ -446,12 +475,14 @@ must also accept any pending Apple developer agreement in the console.
    and a demo server URL + connect link are provided before each submission.
 2. App Privacy (App Store Connect → the app → App Privacy): **reassess this form before the next
    submission** against Apple's current [App privacy details](https://developer.apple.com/app-store/app-privacy-details/)
-   definitions. The developer still operates no backend and receives nothing, but optional AI
-   use sends prompts/context to a personal or admin-included provider and the user's self-hosted server
-   keeps short-lived conversation context in memory. This likely requires an optional
-   **Other User Content / App Functionality** disclosure; the account owner must confirm the exact
-   linked-to-user and optional-disclosure answers in App Store Connect. Do not reuse the previous
-   categorical "Data Not Collected" answer without that review.
+   definitions. Account for optional AI prompts/context, the self-hosted server's retained data,
+   and the community push relay's stored identifiers, tokens, notification titles, and delivery
+   records. Review **User ID**, **Device ID**, and applicable **User Content** categories and their
+   **App Functionality** purpose against the actual data flow. An optional feature does not
+   automatically qualify for Apple's optional-disclosure exception; ongoing collection after
+   permission is granted still needs review. Confirm linked-to-user answers and the live console
+   selections before submission. Do not reuse the previous categorical "Data Not Collected"
+   answer without that review. See [the privacy policy](privacy-policy.md).
 3. Age rating questionnaire: all descriptors None, gambling No, unrestricted web access No
    (the in-app web view is scoped to auth/help flows). Strictly accurate result is 4+; setting
    "Mature/Suggestive Themes: Infrequent/Mild" → **12+** is the conservative choice for an app
@@ -469,11 +500,14 @@ Prepared answers, in console order:
 - **Data safety**: **reassess before the next submission** against Google's current
   [Data safety definitions](https://support.google.com/googleplay/android-developer/answer/10787469).
   Google defines collection around off-device transmission, not only data received by the app
-  developer. Optional AI use sends prompts/context to a personal or admin-included provider and retains short-lived context on
-  the user's self-hosted server, so the previous categorical "No data collected" answer must not be
-  reused without review. The likely disclosure is optional user-generated/other user content for
-  app functionality; the account owner must confirm whether Google's user-initiated-transfer
-  sharing exception applies to the exact flow. Ads remain No.
+  developer. Review optional AI prompts/context, server-side retention, the native FCM SDK,
+  and push gateway registration and delivery. The community relay stores identifiers and tokens
+  plus delivery records containing notification titles. Assess **User IDs**, **Device or other
+  IDs**, applicable **Other user-generated content**, and the **App functionality** purpose.
+  Confirm whether collection is optional and whether a sharing exception applies to each actual
+  flow; an optional feature alone does not establish an exception. Do not reuse the previous
+  categorical "No data collected" answer without this review. Verify the live console selections
+  and [privacy policy](privacy-policy.md) agree before submission. Ads remain No.
 - **Content rating (IARC)**: category "Utility, Productivity, Communication, or Other"; no
   violence/sexuality/language/gambling in app content; users can exchange text only with members
   of their own private server (no public UGC, no location sharing). Expected result: Everyone.
