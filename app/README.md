@@ -164,6 +164,7 @@ Refreshes run only while the tab is visible and the app is foregrounded (10 seco
 - **Server-side tools** -- the assistant searches (movies, TV, books, and music), checks availability, and requests on your behalf; book and album results ride the same carousel and open the matching detail page with their catalog identity and selected instance. Admins can manage libraries and downloads, troubleshoot issues, and update supported connected-service settings conversationally.
 - **Configuration receipts** -- explicit admin requests can update supported connected-app settings in one turn, without copying a confirmation command back into chat. Supported profile and custom-format writes return a trusted review receipt; quality-profile update receipts also lead to a one-time guarded restore when the live state still matches. Assistant prose never creates controls.
 - **Persistent session** -- the focused `/assistant` workspace keeps one conversation alive across navigation (30-minute idle expiry).
+- **Capability-aware introduction** -- the welcome and suggested prompts use the server's current per-user capability summary, refreshed when opening the assistant or starting a new chat. Books and music require an accessible Chaptarr or Lidarr instance; requests and administrative actions also require their enabled tools. Older servers or unreadable capability data receive a neutral greeting without capability claims.
 
 ### Notifications (iOS & Android)
 

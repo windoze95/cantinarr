@@ -13,6 +13,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/grokoauth"
+	"github.com/windoze95/cantinarr-server/internal/mcp"
 )
 
 const (
@@ -291,12 +292,25 @@ func (h *Handler) writeAISettings(w http.ResponseWriter, r *http.Request, userID
 		}
 	}
 	resolved := h.resolveAI(r.Context(), userID)
+	var chatCapabilities *mcp.ChatCapabilities
+	if claims := auth.GetClaims(r.Context()); resolved.Available && claims != nil && h.toolServer != nil {
+		// Unknown inventory leaves a neutral introduction available while the
+		// user can still repair their AI settings. Never substitute empty data.
+		chatCapabilities, err = h.toolServer.ChatCapabilities(r.Context(), mcp.CallContext{
+			UserID: userID, Role: claims.Role, DeviceID: claims.DeviceID,
+			Origin: mcp.OriginInteractiveChat,
+		})
+		if err != nil {
+			chatCapabilities = nil
+		}
+	}
 	var personalConfigJSON any
 	if selected {
 		personalConfigJSON = personalConfig
 	}
 	response := map[string]any{
-		"providers": personalProviders,
+		"chat_capabilities": chatCapabilities,
+		"providers":         personalProviders,
 		// The zero-config pair the UI preselects when nothing is chosen yet.
 		"default_provider": credentials.DefaultAIProvider,
 		"default_model":    credentials.DefaultSharedAIModel,

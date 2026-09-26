@@ -8,6 +8,7 @@ import '../../../core/network/backend_client.dart';
 import '../../config_changes/data/config_change_models.dart';
 import '../data/ai_models.dart';
 import '../data/ai_chat_service.dart';
+import '../data/ai_chat_capabilities.dart';
 
 /// How long an assistant session can sit unused before it is refreshed.
 const aiChatSessionIdleTimeout = Duration(minutes: 30);
@@ -154,11 +155,7 @@ class AiChatNotifier extends ChangeNotifier {
     _addMessage(ChatMessage(
       id: _uuid.v4(),
       role: ChatRole.assistant,
-      content:
-          'Hey! I\'m your Cantinarr assistant. I can help you discover and '
-          'request movies, TV shows, books, and music, manage your libraries '
-          'and downloads, troubleshoot issues, and configure connected services, '
-          'depending on your access. What would you like to do?',
+      content: aiChatWelcomeFallback,
       timestamp: DateTime.now(),
       excludeFromHistory: true,
     ));
@@ -372,7 +369,7 @@ class AiChatNotifier extends ChangeNotifier {
     _addMessage(ChatMessage(
       id: _uuid.v4(),
       role: ChatRole.assistant,
-      content: 'Chat cleared! What would you like to do next?',
+      content: aiChatWelcomeFallback,
       timestamp: DateTime.now(),
       excludeFromHistory: true,
     ));

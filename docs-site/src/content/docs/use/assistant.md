@@ -7,6 +7,8 @@ sidebar:
 
 The assistant can discover and request movies, TV shows, books, and music, and check availability under your normal permissions and allowances. Administrators can also manage libraries and downloads, troubleshoot issues, and update supported settings in connected services. Available actions depend on your account's access and the tools enabled by your administrator.
 
+The welcome message and suggested prompts reflect those capabilities when you open the assistant or start a **New chat**. They omit books and music without an accessible Chaptarr or Lidarr instance, and omit actions whose tools are disabled. Movie and TV discovery can still be available through TMDB without a connected library; requesting those titles requires a library. Older servers, or a failed capability read, show a neutral greeting.
+
 ## Get access
 
 Open **Settings > AI Access**. You can use an administrator-granted included provider, configure a supported personal API key, or link a supported subscription account. The available providers and models are listed in the app.
