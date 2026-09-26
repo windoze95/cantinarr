@@ -73,8 +73,13 @@ class DiscordNotificationSettings {
   final String username;
   final String avatarUrl;
 
+  /// Servers before per-event settings reject unknown keys; they are only
+  /// sent the original fields.
+  final bool supportsEvents;
+
   DiscordNotificationSettings.fromJson(Map<String, dynamic> json)
       : enabled = json['enabled'] == true,
+        supportsEvents = json['events'] is Map,
         hasWebhook = json['has_webhook'] == true,
         includeAutoApproved = json['include_auto_approved'] == true,
         events = json['events'] == null

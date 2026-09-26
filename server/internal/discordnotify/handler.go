@@ -56,7 +56,7 @@ func (s *Service) Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.SaveUpdate(body, r.Method == http.MethodDelete); err != nil {
-		reply(w, 400, map[string]string{"error": "The Discord settings could not be saved. Check the webhook, numeric Discord IDs, HTTPS avatar URL, and server storage."})
+		reply(w, 400, map[string]string{"error": "The Discord settings could not be saved. Check the webhook, numeric Discord IDs, display name, HTTPS avatar URL, and server storage."})
 		return
 	}
 	out, err := s.Get()

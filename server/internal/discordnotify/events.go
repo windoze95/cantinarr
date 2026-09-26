@@ -2,6 +2,7 @@ package discordnotify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -64,14 +65,25 @@ type Subject struct {
 
 // Availability is read from the owning request service, under its canonical
 // identity and scope rules. Persisted Discord receipts are never library truth.
+// Baseline makes the first observation silent: a repair re-files existing work.
 type Availability struct {
-	Subject Subject
-	Units   []Unit
+	Subject  Subject
+	Units    []Unit
+	Baseline bool
 }
+
+// ErrUnverifiable marks a request whose saved selection can never be proven,
+// or whose TV match an admin paused. It is not a library outage: the scan
+// skips it without a warning or a receipt.
+var ErrUnverifiable = errors.New("the requested selection cannot be verified")
 
 type Source interface {
 	DiscordAvailability(context.Context, int64) (Availability, error)
 	DiscordAuthorize(context.Context, int64, Subject) (bool, error)
+	// DiscordObservationKey is a cheap fingerprint of the provider state a full
+	// availability read depends on. An unchanged key means nothing new can be
+	// available; "" means always read.
+	DiscordObservationKey(context.Context, int64) (string, error)
 }
 
 type availabilityPart struct {
@@ -156,6 +168,10 @@ func (c *configuration) apply(u Update) error {
 	}
 	if len([]rune(c.Username)) > 80 {
 		return fmt.Errorf("display name is too long")
+	}
+	// Discord rejects every message whose webhook name contains these words.
+	if name := strings.ToLower(c.Username); strings.Contains(name, "discord") || strings.Contains(name, "clyde") {
+		return fmt.Errorf("display names cannot contain Discord or Clyde")
 	}
 	if c.AvatarURL != "" && !publicImageURL(c.AvatarURL) {
 		return fmt.Errorf("use a public HTTPS avatar URL")

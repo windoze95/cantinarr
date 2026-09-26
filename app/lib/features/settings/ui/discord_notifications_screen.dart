@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -40,7 +41,11 @@ class _DiscordNotificationsScreenState
     'username': _username.text.trim(), 'avatar_url': _avatar.text.trim(),
     'role_events': _roleEvents,
   };
-  Object get _values => [_enabled, _webhook.text, _options];
+  // Older servers reject unknown settings, so only a server that reports
+  // events is sent (or shown) the newer options.
+  bool get _modern => _settings?.supportsEvents == true;
+  Object get _values =>
+      [_enabled, _webhook.text, _modern ? _options : _includeAutoApproved];
   DiscordNotificationsService get _service =>
       DiscordNotificationsService(ref.read(backendClientProvider));
 
@@ -63,8 +68,16 @@ class _DiscordNotificationsScreenState
     _enabled = settings.enabled;
     _includeAutoApproved = settings.includeAutoApproved;
     _webhook.clear();
-    _events = Map.of(settings.events);
-    _roleEvents = Map.of(settings.roleEvents);
+    // Every known key starts explicit, so toggling one back off leaves no
+    // draft. Keys from a newer server are kept and sent back unchanged.
+    _events = {
+      for (final key in {...discordEventLabels.keys, ...settings.events.keys})
+        key: settings.events[key] == true,
+    };
+    _roleEvents = {
+      for (final key in {...discordEventLabels.keys, ...settings.roleEvents.keys})
+        key: settings.roleEvents[key] == true,
+    };
     _mentions = settings.enableMentions;
     _poster = settings.embedPoster;
     _role.text = settings.roleId;
@@ -89,10 +102,12 @@ class _DiscordNotificationsScreenState
           _settings = settings;
         }
       });
-    } catch (_) {
+    } catch (e) {
       if (mounted) {
-        setState(() => _error =
-            'Could not read Discord settings and delivery status. Try again.');
+        setState(() => _error = e is DioException &&
+                e.response?.statusCode == 404
+            ? 'Discord notifications need a newer server. Update Cantinarr and try again.'
+            : 'Could not read Discord settings and delivery status. Try again.');
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -116,7 +131,8 @@ class _DiscordNotificationsScreenState
     try {
       final settings = remove
           ? await _service.remove()
-          : await _service.save(_enabled, _webhook.text, _includeAutoApproved, options: _options);
+          : await _service.save(_enabled, _webhook.text, _includeAutoApproved,
+              options: _modern ? _options : const {});
       if (!mounted) return;
       setState(() {
         _saved(settings);
@@ -142,7 +158,8 @@ class _DiscordNotificationsScreenState
       _testResult = null;
     });
     try {
-      final result = await _service.test(_webhook.text, options: _options);
+      final result = await _service.test(_webhook.text,
+          options: _modern ? _options : const {});
       if (mounted) setState(() => _testResult = result);
     } catch (_) {
       if (mounted) {
@@ -192,8 +209,9 @@ class _DiscordNotificationsScreenState
                           style: TextStyle(
                               color: Theme.of(context).colorScheme.error))),
                 if (_settings != null) ...[
-                  const Text(
-                      'Choose which request and problem-report updates appear in your Discord channel or thread. Users can opt in to personal mentions in Discord Notifications.'),
+                  Text(_modern
+                      ? 'Choose which request and problem-report updates appear in your Discord channel or thread. Users can opt in to personal mentions in Discord Notifications.'
+                      : 'Send new media requests needing approval to a Discord text channel. You can also include requests that need no review.'),
                   const SizedBox(height: 12),
                   const Text(
                       'Enabling this shares media titles, media types, requester usernames, library names, and request or report states with Discord and everyone who can read the channel. If External Address is configured, messages also include a link to Cantinarr.'),
@@ -228,6 +246,22 @@ class _DiscordNotificationsScreenState
                     ),
                   ),
                   const SizedBox(height: 16),
+                  if (!_modern) ...[
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title:
+                          const Text('Include automatically approved requests'),
+                      subtitle: const Text(
+                          'Also notify the channel when no review is needed.'),
+                      value: _includeAutoApproved,
+                      onChanged: _busy || !_enabled
+                          ? null
+                          : (value) =>
+                              setState(() => _includeAutoApproved = value),
+                    ),
+                    const Text(
+                        'Personal mentions, more events, threads, and appearance options need a newer server. Update Cantinarr to use them.'),
+                  ] else ...[
                   ExpansionTile(
                     key: const PageStorageKey('discord-events'),
                     tilePadding: EdgeInsets.zero,
@@ -292,6 +326,7 @@ class _DiscordNotificationsScreenState
                       ),
                     ],
                   ),
+                  ],
                   const SizedBox(height: 16),
                   if (_error != null)
                     Padding(
@@ -316,8 +351,9 @@ class _DiscordNotificationsScreenState
                           child: const Text('Remove webhook')),
                   ]),
                   const SizedBox(height: 12),
-                  const Text(
-                      'Test sends a sample message using the entered URL, or the saved webhook if blank. It uses the thread and appearance above without saving changes or mentioning anyone.'),
+                  Text(_modern
+                      ? 'Test sends a sample message using the entered URL, or the saved webhook if blank. It uses the thread and appearance above without saving changes or mentioning anyone.'
+                      : 'Test sends a sample message using the entered URL, or the saved webhook if blank. It does not save your changes or enable notifications.'),
                   if (_testResult != null)
                     ListTile(
                         contentPadding: EdgeInsets.zero,

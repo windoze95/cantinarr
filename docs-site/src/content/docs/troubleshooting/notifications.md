@@ -38,6 +38,6 @@ In **Discord Notifications > Server Discord Notifications**, use **Send test mes
 
 Check **Send notifications to Discord** and the relevant category under **Events**. For a personal ping, also enable **Allow Discord mentions**, then save **Mention me in Discord**, your numeric user IDs, and event choices on the personal page. Use **Test my mentions** and check Discord server/channel notification settings.
 
-Availability requires a successful library read and the requested content in the selected library. TV episodes are grouped over 60 seconds; albums must be complete. Existing files establish a baseline when availability is enabled and are not announced. Read recent deliveries and any library diagnostic. An **unconfirmed** send is not resent automatically because it may already have posted.
+Availability requires a successful library read and the requested content in the selected library. TV episodes are grouped over 60 seconds; albums must be complete. Existing files establish a baseline when availability is enabled and are not announced. Read recent deliveries and any warning about a library that cannot be read or a TV match that needs attention in **Request Defaults > TV matches**. An **unconfirmed** send is not resent automatically because it may already have posted.
 
 Remove webhook URLs and device tokens from any screenshots or support reports. See [Discord setup](/integrations/discord/) and [push setup](/integrations/push/).

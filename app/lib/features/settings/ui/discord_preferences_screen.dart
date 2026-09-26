@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -40,7 +41,11 @@ class _DiscordPreferencesScreenState extends ConsumerState<DiscordPreferencesScr
     _prefs = prefs;
     _enabled = prefs.enabled;
     _ids.text = prefs.discordIds.join(', ');
-    _events = Map.of(prefs.events);
+    // Explicit keys keep a toggle-and-restore from reading as a change.
+    _events = {
+      for (final key in {...discordEventLabels.keys, ...prefs.events.keys})
+        key: prefs.events[key] == true,
+    };
     _draft.markSaved(_values);
   }
 
@@ -53,8 +58,12 @@ class _DiscordPreferencesScreenState extends ConsumerState<DiscordPreferencesScr
           if (_prefs == null) { _saved(prefs); } else { _prefs = prefs; }
         });
       }
-    } catch (_) {
-      if (mounted) setState(() => _error = 'Could not read Discord preferences. Try again.');
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = e is DioException && e.response?.statusCode == 404
+            ? 'Personal Discord mentions need a newer server. Update Cantinarr and try again.'
+            : 'Could not read Discord preferences. Try again.');
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }

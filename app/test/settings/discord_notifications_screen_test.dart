@@ -11,21 +11,27 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _Adapter implements HttpClientAdapter {
+  // A current server always reports its event choices; [legacy] mimics the
+  // releases that only knew the original fields and rejected any others.
+  _Adapter({bool legacy = false})
+      : settings = legacy ? {} : {'events': {'request_pending': true}};
   bool enabled = false;
   bool includeAutoApproved = false;
   bool hasWebhook = true;
   bool fail = false;
+  bool notFound = false;
   String testStatus = 'sent';
   Map<String, dynamic>? saved;
   Map<String, dynamic>? tested;
   int removes = 0;
-  Map<String, dynamic> settings = {};
+  Map<String, dynamic> settings;
   final List<Map<String, dynamic>> recent = [];
 
   @override
   Future<ResponseBody> fetch(RequestOptions options,
       Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async {
     if (fail) return ResponseBody.fromString('secret_webhook_token', 503);
+    if (notFound) return ResponseBody.fromString('', 404);
     Map<String, dynamic> body = {};
     if (requestStream != null) {
       final bytes = await requestStream.expand((c) => c).toList();
@@ -255,5 +261,42 @@ void main() {
         scrollable: find.byType(Scrollable).first);
     expect(find.textContaining('Discord may have received'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('older servers get only the original fields and controls',
+      (tester) async {
+    final adapter = _Adapter(legacy: true)..enabled = true;
+    await _pump(tester, adapter);
+    expect(find.text('Events'), findsNothing);
+    expect(find.text('Role mentions'), findsNothing);
+    expect(find.textContaining('need a newer server'), findsOneWidget);
+    final auto = find.text('Include automatically approved requests');
+    await _show(tester, auto);
+    await tester.tap(auto);
+    await tester.pumpAndSettle();
+    await _tap(tester, 'Save');
+    expect(adapter.saved, {'enabled': true, 'include_auto_approved': true});
+    await _tap(tester, 'Send test message');
+    expect(adapter.tested, isEmpty);
+  });
+
+  testWidgets('a server without Discord settings is named', (tester) async {
+    final adapter = _Adapter()..notFound = true;
+    await _pump(tester, adapter);
+    expect(find.textContaining('need a newer server'), findsOneWidget);
+  });
+
+  testWidgets('toggling an event on and back off leaves no draft',
+      (tester) async {
+    final adapter = _Adapter()..enabled = true;
+    await _pump(tester, adapter);
+    bool changed() => tester
+        .widget<UnsavedChangesGuard>(find.byType(UnsavedChangesGuard))
+        .hasChanges();
+    await _tap(tester, 'Events');
+    await _tap(tester, 'Request denied');
+    expect(changed(), isTrue);
+    await _tap(tester, 'Request denied');
+    expect(changed(), isFalse);
   });
 }

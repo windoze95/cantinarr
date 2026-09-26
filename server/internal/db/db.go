@@ -174,10 +174,13 @@ CREATE TABLE IF NOT EXISTS discord_user_preferences (
 );
 -- Observation receipts, not authoritative library availability. Each new
 -- activation establishes a baseline; a restart retains the existing baseline.
+-- observed_key fingerprints the provider state behind the last full read, so
+-- an unchanged TV library is not re-read on every sweep.
 CREATE TABLE IF NOT EXISTS discord_availability (
     request_id INTEGER PRIMARY KEY REFERENCES request_log(id) ON DELETE CASCADE,
     epoch INTEGER NOT NULL,
-    seen TEXT NOT NULL DEFAULT '[]'
+    seen TEXT NOT NULL DEFAULT '[]',
+    observed_key TEXT NOT NULL DEFAULT ''
 );
 
 -- Durable delivery is separate from approval and from live library state.
@@ -1267,6 +1270,7 @@ func Open(dbPath string) (*sql.DB, error) {
 		// A connection change reserves a revision before provider I/O. A stale
 		// verification/device flow cannot replace a newer connection or deletion.
 		{alter: "ALTER TABLE service_instances ADD COLUMN hardcover_revision INTEGER NOT NULL DEFAULT 0"},
+		{alter: "ALTER TABLE discord_availability ADD COLUMN observed_key TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -18,7 +19,7 @@ func (s *Service) observeAvailability(ctx context.Context) {
 			s.errorMu.Lock()
 			s.availabilityError = ""
 			if err != nil && ctx.Err() == nil {
-				s.availabilityError = "Some requested content could not be verified. Availability notifications will resume when the library can be read."
+				s.availabilityError = "Some requested content could not be checked. A library could not be read, or a TV match needs attention in Request Defaults > TV matches. Missed availability is announced once it can be checked."
 			}
 			s.errorMu.Unlock()
 		}
@@ -39,21 +40,27 @@ func (s *Service) scanAvailability(ctx context.Context) error {
 		return err
 	}
 	// Movie/album and completed book receipts never owe another availability
-	// event. TV stays observed because requested seasons can gain new episodes.
-	rows, err := s.db.Query(`SELECT r.id FROM request_log r WHERE r.status!='denied' AND r.instance_id IS NOT NULL
-	AND NOT EXISTS (SELECT 1 FROM discord_availability a WHERE a.request_id=r.id AND a.epoch=? AND (
+	// event. TV stays observed because requested seasons can gain new episodes;
+	// its stored observation key lets an unchanged library skip the full read.
+	rows, err := s.db.Query(`SELECT r.id,COALESCE(a.observed_key,'') FROM request_log r
+	LEFT JOIN discord_availability a ON a.request_id=r.id AND a.epoch=?
+	WHERE r.status!='denied' AND r.instance_id IS NOT NULL AND NOT (a.request_id IS NOT NULL AND (
 	 (r.media_type IN ('movie','music') AND json_array_length(a.seen)>0) OR
 	 (r.media_type='book' AND json_array_length(a.seen)>=CASE WHEN r.book_format='both' OR COALESCE(r.book_format,'')='' THEN 2 ELSE 1 END))) ORDER BY r.id`, c.AvailabilityEpoch)
 	if err != nil {
 		return err
 	}
-	ids := []int64{}
+	type observed struct {
+		id  int64
+		key string
+	}
+	due := []observed{}
 	for rows.Next() {
-		var id int64
-		if err = rows.Scan(&id); err != nil {
+		var o observed
+		if err = rows.Scan(&o.id, &o.key); err != nil {
 			break
 		}
-		ids = append(ids, id)
+		due = append(due, o)
 	}
 	if err == nil {
 		err = rows.Err()
@@ -63,23 +70,36 @@ func (s *Service) scanAvailability(ctx context.Context) error {
 		return err
 	}
 	var lastErr error
-	for _, id := range ids {
+	for _, o := range due {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		snapshot, e := s.source.DiscordAvailability(ctx, id)
+		key, e := s.source.DiscordObservationKey(ctx, o.id)
+		if e != nil {
+			if !errors.Is(e, ErrUnverifiable) {
+				lastErr = e
+			}
+			continue
+		}
+		if key != "" && key == o.key {
+			continue
+		}
+		snapshot, e := s.source.DiscordAvailability(ctx, o.id)
+		if errors.Is(e, ErrUnverifiable) {
+			continue
+		}
 		if e != nil {
 			lastErr = e
 			continue
 		}
-		if e = s.recordAvailability(c, id, snapshot); e != nil {
+		if e = s.recordAvailability(c, o.id, snapshot, key); e != nil {
 			lastErr = e
 		}
 	}
 	return lastErr
 }
 
-func (s *Service) recordAvailability(observed configuration, id int64, snapshot Availability) error {
+func (s *Service) recordAvailability(observed configuration, id int64, snapshot Availability, key string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -90,8 +110,8 @@ func (s *Service) recordAvailability(observed configuration, id int64, snapshot 
 		return err
 	}
 	var epoch int64
-	var raw string
-	err = tx.QueryRow(`SELECT epoch,seen FROM discord_availability WHERE request_id=?`, id).Scan(&epoch, &raw)
+	var raw, stored string
+	err = tx.QueryRow(`SELECT epoch,seen,observed_key FROM discord_availability WHERE request_id=?`, id).Scan(&epoch, &raw, &stored)
 	if err != nil && err != sql.ErrNoRows {
 		return err
 	}
@@ -106,18 +126,26 @@ func (s *Service) recordAvailability(observed configuration, id int64, snapshot 
 	for _, unit := range seen {
 		keys[unit.Key] = true
 	}
+	added := false
 	novel := []Unit{}
 	for _, unit := range snapshot.Units {
 		if !keys[unit.Key] {
 			seen = append(seen, unit)
 			keys[unit.Key] = true
-			if !initial || id > c.AvailabilityFloor {
+			added = true
+			// A new activation's first read, or a repair re-filing existing
+			// work, only establishes the baseline.
+			if !initial || (id > c.AvailabilityFloor && !snapshot.Baseline) {
 				novel = append(novel, unit)
 			}
 		}
 	}
+	// An unchanged observation keeps its receipt: no write on every sweep.
+	if !initial && !added && stored == key {
+		return nil
+	}
 	data, _ := json.Marshal(seen)
-	if _, err = tx.Exec(`INSERT INTO discord_availability(request_id,epoch,seen) VALUES(?,?,?) ON CONFLICT(request_id) DO UPDATE SET epoch=excluded.epoch,seen=excluded.seen`, id, c.AvailabilityEpoch, string(data)); err != nil {
+	if _, err = tx.Exec(`INSERT INTO discord_availability(request_id,epoch,seen,observed_key) VALUES(?,?,?,?) ON CONFLICT(request_id) DO UPDATE SET epoch=excluded.epoch,seen=excluded.seen,observed_key=excluded.observed_key`, id, c.AvailabilityEpoch, string(data), key); err != nil {
 		return err
 	}
 	if len(novel) > 0 {

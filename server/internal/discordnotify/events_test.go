@@ -21,16 +21,26 @@ const adminDiscord = "234567890123456789"
 const roleDiscord = "345678901234567890"
 
 type fakeSource struct {
-	views   map[int64]Availability
-	blocked map[int64]bool
-	err     error
+	views        map[int64]Availability
+	blocked      map[int64]bool
+	keys         map[int64]string
+	unverifiable map[int64]bool
+	reads        int
+	err          error
 }
 
 func (f *fakeSource) DiscordAvailability(_ context.Context, id int64) (Availability, error) {
+	f.reads++
+	if f.unverifiable[id] {
+		return Availability{}, fmt.Errorf("%w: legacy selection", ErrUnverifiable)
+	}
 	return f.views[id], f.err
 }
 func (f *fakeSource) DiscordAuthorize(_ context.Context, id int64, _ Subject) (bool, error) {
 	return !f.blocked[id], f.err
+}
+func (f *fakeSource) DiscordObservationKey(_ context.Context, id int64) (string, error) {
+	return f.keys[id], nil
 }
 
 func execSQL(t *testing.T, s *Service, q string, args ...any) {
@@ -169,12 +179,12 @@ func TestAvailabilityBaselinesBatchingRestartAndNoUpgradeReplay(t *testing.T) {
 	s.SetSource(f)
 	c, _ := s.readConfig(s.db)
 	for _, id := range []int64{old, id, other} {
-		if err := s.recordAvailability(c, id, f.views[id]); err != nil {
+		if err := s.recordAvailability(c, id, f.views[id], ""); err != nil {
 			t.Fatal(err)
 		}
 	}
 	f.views[id] = makeView(id, "S01E01")
-	if err := s.recordAvailability(c, id, f.views[id]); err != nil {
+	if err := s.recordAvailability(c, id, f.views[id], ""); err != nil {
 		t.Fatal(err)
 	}
 	start := s.now()
@@ -182,7 +192,7 @@ func TestAvailabilityBaselinesBatchingRestartAndNoUpgradeReplay(t *testing.T) {
 	f.views[id] = makeView(id, "S01E01", "S01E02")
 	f.views[other] = makeView(other, "S01E02")
 	for _, id := range []int64{id, other} {
-		if err := s.recordAvailability(c, id, f.views[id]); err != nil {
+		if err := s.recordAvailability(c, id, f.views[id], ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -207,7 +217,7 @@ func TestAvailabilityBaselinesBatchingRestartAndNoUpgradeReplay(t *testing.T) {
 		t.Fatalf("restart deliveries %d", len(*messages))
 	}
 	for range 2 {
-		if err := restarted.recordAvailability(c, other, f.views[other]); err != nil {
+		if err := restarted.recordAvailability(c, other, f.views[other], ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -222,7 +232,7 @@ func TestAvailabilityBaselinesBatchingRestartAndNoUpgradeReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, _ = s.readConfig(s.db)
-	if err := s.recordAvailability(c, other, f.views[other]); err != nil {
+	if err := s.recordAvailability(c, other, f.views[other], ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM discord_notifications`).Scan(&count); err != nil || count != 1 {
@@ -419,5 +429,142 @@ func TestLargeMentionAudienceIsSplitWithIndependentReceipts(t *testing.T) {
 	}
 	if len(*messages) != 2 || len(seen) != 80 {
 		t.Fatalf("messages=%d recipients=%d", len(*messages), len(seen))
+	}
+}
+
+// pin gives a seeded request the owning library the availability scan requires.
+func pin(t *testing.T, s *Service, id int64) {
+	t.Helper()
+	execSQL(t, s, `INSERT OR IGNORE INTO service_instances(id,service_type,name,url,api_key) VALUES('sonarr-a','sonarr','Shows','http://sonarr:8989','')`)
+	execSQL(t, s, `UPDATE request_log SET instance_id='sonarr-a' WHERE id=?`, id)
+}
+
+func TestUnchangedObservationKeySkipsFullReadAndWrite(t *testing.T) {
+	s := fixture(t)
+	id := seed(t, s, "tv")
+	pin(t, s, id)
+	allEvents(t, s)
+	view := Availability{Subject: Subject{RequestID: id, Title: "A show", MediaType: "tv", TmdbID: 550, InstanceID: "sonarr-a"}, Units: []Unit{{Key: "e1", Label: "S01E01"}}}
+	f := &fakeSource{views: map[int64]Availability{id: view}, keys: map[int64]string{id: "k1"}}
+	s.SetSource(f)
+	changes := func() (n int64) {
+		t.Helper()
+		if err := s.db.QueryRow(`SELECT total_changes()`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	scan := func(wantReads int) {
+		t.Helper()
+		if err := s.scanAvailability(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if f.reads != wantReads {
+			t.Fatalf("reads=%d want %d", f.reads, wantReads)
+		}
+	}
+	scan(1)
+	before := changes()
+	scan(1) // unchanged library: no provider read and no receipt write
+	if changes() != before {
+		t.Fatal("unchanged sweep wrote a receipt")
+	}
+	f.keys[id] = ""
+	scan(2) // keyless reads always run; the new key is stored once
+	before = changes()
+	scan(3)
+	if changes() != before {
+		t.Fatal("unchanged keyless read rewrote its receipt")
+	}
+	f.keys[id] = "k2"
+	scan(4)
+	var key string
+	if err := s.db.QueryRow(`SELECT observed_key FROM discord_availability WHERE request_id=?`, id).Scan(&key); err != nil || key != "k2" {
+		t.Fatalf("stored key %q %v", key, err)
+	}
+}
+
+func TestUnverifiableRequestsStayQuietAndQueuedPartsDrop(t *testing.T) {
+	s := fixture(t)
+	allEvents(t, s)
+	legacy, queued := seed(t, s, "tv"), seed(t, s, "tv")
+	pin(t, s, legacy)
+	pin(t, s, queued)
+	view := Availability{Subject: Subject{RequestID: queued, Title: "A show", MediaType: "tv", TmdbID: 550, InstanceID: "sonarr-a"}, Units: []Unit{{Key: "e1", Label: "S01E01"}}}
+	f := &fakeSource{views: map[int64]Availability{queued: view}, unverifiable: map[int64]bool{legacy: true}}
+	s.SetSource(f)
+	if err := s.scanAvailability(context.Background()); err != nil {
+		t.Fatalf("an unverifiable request raised the library warning: %v", err)
+	}
+	var receipts int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM discord_availability WHERE request_id=?`, legacy).Scan(&receipts); err != nil || receipts != 0 {
+		t.Fatalf("unverifiable request recorded a baseline: %d %v", receipts, err)
+	}
+	// A queued part whose selection became unverifiable is dropped, not retried.
+	f.unverifiable[queued] = true
+	start := s.now()
+	s.now = func() time.Time { return start.Add(61 * time.Second) }
+	messages := capture(s)
+	if err := s.deliverOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	if err := s.db.QueryRow(`SELECT status FROM discord_notifications WHERE json_extract(payload,'$.kind')=?`, RequestAvailable).Scan(&state); err != nil || state != "cancelled" || len(*messages) != 0 {
+		t.Fatalf("queued part: %q %v sent=%d", state, err, len(*messages))
+	}
+}
+
+func TestRepairFirstObservationIsSilentBaseline(t *testing.T) {
+	s := fixture(t)
+	allEvents(t, s)
+	id := seed(t, s, "tv")
+	pin(t, s, id)
+	view := Availability{Subject: Subject{RequestID: id, Title: "A show", MediaType: "tv", TmdbID: 550, InstanceID: "sonarr-a"}, Units: []Unit{{Key: "e1", Label: "S01E01"}}, Baseline: true}
+	c, _ := s.readConfig(s.db)
+	count := func() (n int) {
+		t.Helper()
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM discord_notifications`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if err := s.recordAvailability(c, id, view, ""); err != nil || count() != 0 {
+		t.Fatalf("repair re-announced existing work: %v", err)
+	}
+	view.Units = append(view.Units, Unit{Key: "e2", Label: "S01E02"})
+	if err := s.recordAvailability(c, id, view, ""); err != nil || count() != 1 {
+		t.Fatalf("a new episode after the repair baseline: %v", err)
+	}
+}
+
+func TestDisplayNameRejectsWordsDiscordRefuses(t *testing.T) {
+	s := fixture(t)
+	for _, name := range []string{"Discord alerts", "clyde", "Media DISCORD"} {
+		if err := s.SaveUpdate(Update{Enabled: true, Webhook: testWebhook, Username: &name}, false); err == nil {
+			t.Fatalf("accepted %q", name)
+		}
+	}
+	name := "Home media"
+	if err := s.SaveUpdate(Update{Enabled: true, Webhook: testWebhook, Username: &name}, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLinksTargetHashRoutes(t *testing.T) {
+	for _, tc := range []struct {
+		a    requestAlert
+		want string
+	}{
+		{requestAlert{Kind: RequestPending, MediaType: "movie"}, "https://cantinarr.example/base/#/approvals"},
+		{requestAlert{Kind: IssueComment, IssueID: 7, MediaType: "tv"}, "https://cantinarr.example/base/#/issues/7"},
+		{requestAlert{Kind: RequestAvailable, MediaType: "movie", Subject: Subject{TmdbID: 550, InstanceID: "radarr-a"}}, "https://cantinarr.example/base/#/detail/movie/550?instance_id=radarr-a"},
+		{requestAlert{Kind: RequestApproved, MediaType: "book", Subject: Subject{ForeignID: "id/with space", InstanceID: "books"}}, "https://cantinarr.example/base/#/detail/book/id%2Fwith%20space?instance_id=books&source=chaptarr"},
+		{requestAlert{Kind: RequestAvailable, MediaType: "music", Subject: Subject{ForeignID: "album-1"}}, "https://cantinarr.example/base/#/detail/album/album-1"},
+	} {
+		for _, external := range []string{"https://cantinarr.example/base", "https://cantinarr.example/base/"} {
+			if got := eventLink(tc.a, external); got != tc.want {
+				t.Errorf("%s: got %s want %s", external, got, tc.want)
+			}
+		}
 	}
 }

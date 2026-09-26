@@ -13,7 +13,7 @@ You need a Cantinarr administrator account and permission to create a webhook in
 
 1. In Discord, open **Edit Channel > Integrations > Webhooks**, create a webhook, and copy its URL.
 2. In Cantinarr, open **Settings > Notifications > Discord Notifications > Server Discord Notifications**.
-3. Paste the webhook URL. Under **Thread and appearance**, optionally set an existing thread ID, display name, avatar URL, or posters.
+3. Paste the webhook URL. Under **Thread and appearance**, optionally set an existing thread ID, display name, avatar URL, or posters. Discord does not allow display names that contain "Discord" or "Clyde".
 4. Use **Send test message** and check the channel or thread. The test uses the entered settings without saving or mentioning anyone.
 5. Enable **Send notifications to Discord**, select categories under **Events**, and **Save**.
 
@@ -47,7 +47,9 @@ Availability follows the requested library: a movie with a file, each requested 
 
 Imports for the same title and library collect for 60 seconds before posting. Webhooks wake the checks; background polling covers missed webhooks and restarts. Library caching can add a short delay. File upgrades and repeated observations do not create another availability post.
 
-When availability is enabled or its destination changes, existing files establish a baseline and are not announced. If a library is unavailable during that first check, the baseline waits for a successful read. The server settings show when content cannot be verified.
+When availability is enabled or its destination changes, existing files establish a baseline and are not announced. If a library is unavailable during that first check, the baseline waits for a successful read. Repairing a TV request does not announce episodes that are already in the library.
+
+The server settings show a warning when a library cannot be read or a TV match needs attention in **Request Defaults > TV matches**. Older TV requests that did not choose specific seasons (from before Cantinarr 0.12), selections that include Specials, and paused TV matches are not checked for availability.
 
 ## Understand sharing and delivery history
 

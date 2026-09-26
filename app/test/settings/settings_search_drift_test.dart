@@ -201,7 +201,7 @@ void main() {
   testWidgets('Discord server settings search title matches its child page', (tester) async {
     await tester.pumpWidget(ProviderScope(overrides: [
       backendClientProvider.overrideWithValue(_dioFor(const {
-        '/api/admin/discord-notifications': {'enabled': false, 'has_webhook': false, 'recent': <dynamic>[]},
+        '/api/admin/discord-notifications': {'enabled': false, 'has_webhook': false, 'events': <String, dynamic>{}, 'recent': <dynamic>[]},
       })),
     ], child: const MaterialApp(home: DiscordNotificationsScreen())));
     await tester.pumpAndSettle();

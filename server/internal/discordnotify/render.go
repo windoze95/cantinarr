@@ -3,6 +3,7 @@ package discordnotify
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -89,6 +90,10 @@ func (s *Service) prepareMessage(ctx context.Context, a requestAlert, c configur
 				return nil, err
 			}
 			live, err := s.source.DiscordAvailability(ctx, part.RequestID)
+			if errors.Is(err, ErrUnverifiable) {
+				// Retrying cannot prove it (for example, a paused TV match): drop the part.
+				continue
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -296,9 +301,11 @@ func withAppearance(c configuration, payload map[string]any) map[string]any {
 	return payload
 }
 
+// eventLink targets the web app's hash routes (#/path?query): the server
+// answers every other path with the app shell, which then opens the dashboard.
 func eventLink(a requestAlert, external string) string {
 	u, err := url.Parse(external)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return ""
 	}
 	path := ""
@@ -317,17 +324,16 @@ func eventLink(a requestAlert, external string) string {
 	if path == "" {
 		return ""
 	}
-	u.RawPath = strings.TrimRight(u.EscapedPath(), "/") + path
-	u.Path, _ = url.PathUnescape(u.RawPath)
+	q := url.Values{}
 	if a.Subject.InstanceID != "" && a.IssueID == 0 && path != "/approvals" {
-		q := u.Query()
 		q.Set("instance_id", a.Subject.InstanceID)
-		u.RawQuery = q.Encode()
 	}
 	if a.MediaType == "book" && a.IssueID == 0 && path != "/approvals" {
-		q := u.Query()
 		q.Set("source", "chaptarr")
-		u.RawQuery = q.Encode()
 	}
-	return u.String()
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	// Built by hand: URL.String would escape the already-escaped ids again.
+	return strings.TrimRight(u.String(), "/") + "/#" + path
 }

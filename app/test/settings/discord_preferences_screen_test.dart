@@ -24,6 +24,7 @@ class _Adapter implements HttpClientAdapter {
   Map<String, dynamic> prefs = {'enabled': false, 'discord_ids': <String>[], 'events': <String, bool>{}};
   bool blocked = false;
   bool fail = false;
+  bool notFound = false;
   int tests = 0;
   int saves = 0;
 
@@ -31,6 +32,7 @@ class _Adapter implements HttpClientAdapter {
   Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? requestStream,
       Future<void>? cancelFuture) async {
     if (fail) return ResponseBody.fromString('private error text', 503);
+    if (notFound) return ResponseBody.fromString('', 404);
     Map<String, dynamic> data;
     if (options.method == 'POST') {
       tests++;
@@ -66,6 +68,7 @@ Future<void> _tap(WidgetTester tester, String text) async {
   final finder = find.text(text);
   await tester.scrollUntilVisible(finder, 180, scrollable: find.byType(Scrollable).first);
   await tester.ensureVisible(finder);
+  await tester.pumpAndSettle();
   await tester.tap(finder);
   await tester.pumpAndSettle();
 }
@@ -104,6 +107,23 @@ void main() {
         scrollable: find.byType(Scrollable).first);
     expect(tester.widget<OutlinedButton>(find.byType(OutlinedButton)).onPressed, isNull);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('an older server is named and admins keep the server link', (tester) async {
+    final adapter = _Adapter()..notFound = true;
+    await _pump(tester, adapter, admin: true);
+    expect(find.textContaining('need a newer server'), findsOneWidget);
+    expect(find.text('Server Discord Notifications'), findsOneWidget);
+  });
+
+  testWidgets('toggling an event on and back off leaves no draft', (tester) async {
+    final adapter = _Adapter();
+    await _pump(tester, adapter);
+    bool changed() => tester.widget<UnsavedChangesGuard>(find.byType(UnsavedChangesGuard)).hasChanges();
+    await _tap(tester, 'Request denied');
+    expect(changed(), isTrue);
+    await _tap(tester, 'Request denied');
+    expect(changed(), isFalse);
   });
 
   testWidgets('invalid IDs cannot save and admins can discover server controls', (tester) async {

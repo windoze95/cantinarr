@@ -2,6 +2,7 @@ package request
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -106,9 +107,19 @@ func (s *Service) DiscordAvailability(ctx context.Context, id int64) (discordnot
 			out.Units = append(out.Units, discordnotify.Unit{Key: "movie", Label: "Ready to watch"})
 		}
 	case "tv":
+		var repairOf int64
+		if err = s.db.QueryRow(`SELECT COALESCE(repair_of,0) FROM request_tv_targets WHERE request_id=?`, id).Scan(&repairOf); err != nil && err != sql.ErrNoRows {
+			return out, err
+		}
 		if !accepted[""] {
+			if repairOf > 0 {
+				// A repair re-files existing work. Its baseline starts at
+				// delivery, so an empty pre-delivery read must not become one.
+				return out, fmt.Errorf("%w: the repair has not been delivered", discordnotify.ErrUnverifiable)
+			}
 			return out, nil
 		}
+		out.Baseline = repairOf > 0
 		return s.discordTVAvailability(ctx, id, r, out)
 	case "book":
 		client, err := s.registry.GetChaptarrClient(r.instanceID)
@@ -197,29 +208,40 @@ func (s *Service) discordTVAvailability(ctx context.Context, id int64, r *resolv
 		return out, err
 	}
 	target, _, _, err := s.loadTVTarget(id)
-	if err != nil {
-		if err != sql.ErrNoRows {
-			return out, err
-		}
-		// Legacy explicit season selections can still be proved. A coarse old
-		// selection without a snapshot is not permission to guess its seasons.
+	if err != nil && err != sql.ErrNoRows {
+		return out, err
+	}
+	// Legacy explicit season selections can still be proved. A coarse old
+	// selection without a snapshot is not permission to guess its seasons, and
+	// neither is a selection naming Specials. Neither can ever gain a target.
+	legacy := err == sql.ErrNoRows
+	if legacy {
 		if len(r.seasonNumbers) == 0 {
-			return out, fmt.Errorf("saved TV season selection cannot be verified")
+			return out, fmt.Errorf("%w: the saved TV selection predates season tracking", discordnotify.ErrUnverifiable)
 		}
-		m, err := s.resolveTVMatch(client, r.tmdbID)
-		if err != nil {
-			return out, err
-		}
-		target = &TVRequestTarget{Match: *m, SourceSeasons: r.seasonNumbers}
 		for _, season := range r.seasonNumbers {
-			target.TargetSeasons = append(target.TargetSeasons, m.SeasonMap[season])
+			if season <= 0 {
+				return out, fmt.Errorf("%w: the saved TV selection includes Specials", discordnotify.ErrUnverifiable)
+			}
 		}
 	}
 	m, err := s.resolveTVMatch(client, r.tmdbID)
 	if err != nil {
-		return out, err
+		return out, discordTVMatchError(err)
 	}
-	if m.TVDBID != target.Match.TVDBID || m.Revision != target.Match.Revision {
+	if legacy {
+		target = &TVRequestTarget{Match: *m, SourceSeasons: r.seasonNumbers}
+		for _, season := range r.seasonNumbers {
+			if m.SeasonMap[season] <= 0 {
+				return out, fmt.Errorf("%w: the saved TV selection names a season the title no longer lists", discordnotify.ErrUnverifiable)
+			}
+			target.TargetSeasons = append(target.TargetSeasons, m.SeasonMap[season])
+		}
+	}
+	// The whole-match revision also hashes every season the title lists, so it
+	// changes whenever TMDB announces another season. Only the series identity
+	// and the selected seasons' mapping must still match what was saved.
+	if m.TVDBID != target.Match.TVDBID {
 		return out, ErrTVMatchStale
 	}
 	scopes := map[int]int{}
@@ -274,18 +296,28 @@ func (s *Service) discordTVAvailability(ctx context.Context, id int64, r *resolv
 		}
 	}
 	if len(imports) > 0 {
-		titles, err := s.resolveTVImports(client, snap.Series, imports)
+		corrected, _, err := s.importTVMatches(snap.Series)
 		if err != nil {
 			return out, err
 		}
-		matched := false
-		for _, title := range titles {
-			if title.TmdbID == r.tmdbID {
-				matched = true
+		// Sonarr reports a series' TMDB id only from v4.0.6. This series was
+		// found by the request's own TVDB id, so an uncorrected series without
+		// one has nothing to disambiguate, as in tvLiveStatus. A correction
+		// that splits one series between titles must still prove ownership.
+		if corrected || snap.Series.TmdbID != 0 {
+			titles, err := s.resolveTVImports(client, snap.Series, imports)
+			if err != nil {
+				return out, err
 			}
-		}
-		if !matched {
-			return out, ErrTVMatchStale
+			matched := false
+			for _, title := range titles {
+				if title.TmdbID == r.tmdbID {
+					matched = true
+				}
+			}
+			if !matched {
+				return out, ErrTVMatchStale
+			}
 		}
 	}
 	for _, ep := range snap.Episodes {
@@ -296,6 +328,80 @@ func (s *Service) discordTVAvailability(ctx context.Context, id int64, r *resolv
 		out.Units = append(out.Units, discordnotify.Unit{Key: fmt.Sprintf("episode:%d:%d", snap.Series.ID, ep.ID), Label: fmt.Sprintf("S%02dE%02d", source, ep.EpisodeNumber)})
 	}
 	return out, ctx.Err()
+}
+
+// discordTVMatchError treats a paused TV match as an administrator's decision,
+// not an outage. The request is announced again once the match is resumed.
+func discordTVMatchError(err error) error {
+	var failure *tvMatchError
+	if errors.As(err, &failure) && failure.code == "tv_match_paused" {
+		return fmt.Errorf("%w: %w", discordnotify.ErrUnverifiable, err)
+	}
+	return err
+}
+
+// DiscordObservationKey fingerprints what a TV availability read depends on,
+// without TMDB or per-series reads: delivery acceptance, the saved target, the
+// local match configuration, and the selected seasons' file statistics from
+// the shared series digest (arrLibraryCacheTTL, cleared by arr webhooks). An
+// unchanged key means no new file can have arrived. "" means read in full;
+// movies, books, and music already read cached library digests.
+func (s *Service) DiscordObservationKey(ctx context.Context, id int64) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	r, status, err := s.loadRequest(id)
+	if err != nil {
+		return "", err
+	}
+	if r.mediaType != "tv" || r.instanceID == "" || s.registry == nil {
+		return "", nil
+	}
+	states, err := s.deliveryStates(id)
+	if err != nil {
+		return "", err
+	}
+	delivery := []string{}
+	for _, d := range states {
+		delivery = append(delivery, d.Format+":"+d.State)
+	}
+	m, _, err := configuredTVMatch(s.db, r.tmdbID)
+	if err != nil {
+		return "", err
+	}
+	var tvdbID int
+	var seasons []int
+	target, _, _, err := s.loadTVTarget(id)
+	switch {
+	case err == nil:
+		tvdbID, seasons = target.Match.TVDBID, target.TargetSeasons
+	case err != sql.ErrNoRows:
+		return "", err
+	case m.Provenance == "default" && r.tvdbID > 0 && len(r.seasonNumbers) > 0:
+		// A legacy explicit selection of an uncorrected title maps each season
+		// to itself.
+		tvdbID, seasons = r.tvdbID, r.seasonNumbers
+	default:
+		return "", nil
+	}
+	digest, ok := s.seriesAvailabilityDigestForInstance(r.instanceID)
+	if !ok {
+		return "", nil
+	}
+	entry, found := digest[tvdbID]
+	stats := make([]seasonAvailability, 0, len(seasons))
+	for _, season := range seasons {
+		st, ok := entry.Seasons[season]
+		if found && !ok {
+			return "", nil // missing statistics are not a stable reading
+		}
+		stats = append(stats, st)
+	}
+	data, err := json.Marshal([]any{status, delivery, m.Revision, target, tvdbID, seasons, found, stats})
+	if err != nil {
+		return "", nil
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
 }
 
 func (s *Service) SetDiscordAvailabilityWake(wake func()) { s.discordAvailabilityWake = wake }
