@@ -1,4 +1,8 @@
 import 'package:flutter/foundation.dart';
+
+import '../../../core/logic/library_sort_controller.dart';
+import '../../../core/models/library_sort.dart';
+import 'lidarr_library_sort.dart';
 import '../data/lidarr_api_service.dart';
 import '../data/lidarr_models.dart';
 
@@ -53,37 +57,71 @@ class LidarrLibraryState {
 /// so a `ref.listen(activeLidarrInstanceId)` re-init swaps instances cleanly.
 class LidarrLibraryNotifier extends ChangeNotifier {
   final LidarrApiService _service;
+  late final LibrarySortController sorting;
+  bool _disposed = false;
+  int _loadGeneration = 0;
 
   LidarrLibraryState _state = const LidarrLibraryState();
   LidarrLibraryState get state => _state;
   set state(LidarrLibraryState value) {
+    if (_disposed) return;
     _state = value;
     notifyListeners();
   }
 
-  LidarrLibraryNotifier(this._service);
+  LidarrLibraryNotifier(this._service) {
+    sorting = LibrarySortController(module: 'lidarr',
+      loaders: {
+        LibrarySortLookup.qualityProfiles: () async => {
+          for (final profile in await _service.getQualityProfiles()) profile.id: profile.name,
+        },
+        LibrarySortLookup.metadataProfiles: () async => {
+          for (final profile in await _service.getMetadataProfiles()) profile.id: profile.name,
+        },
+        LibrarySortLookup.tags: () async => {
+          for (final tag in await _service.getTags()) tag.id: tag.label,
+        },
+      }, onChanged: _resort);
+  }
+
+  void _resort() {
+    state = state.copyWith(error: state.error,
+      filtered: _applyFilters(state.artists, state.searchQuery, state.filter));
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    sorting.dispose();
+    super.dispose();
+  }
 
   Future<void> loadArtists() async {
+    final generation = ++_loadGeneration;
+    final labels = sorting.refresh();
     state = state.copyWith(isLoading: true);
     try {
       final artists = await _service.getArtists();
-      artists.sort((a, b) =>
-          a.artistName.toLowerCase().compareTo(b.artistName.toLowerCase()));
+      if (_disposed || generation != _loadGeneration) return;
       state = state.copyWith(
         isLoading: false,
         artists: artists,
         filtered: _applyFilters(artists, state.searchQuery, state.filter),
       );
     } catch (e) {
+      if (_disposed || generation != _loadGeneration) return;
       state = state.copyWith(
         isLoading: false,
         error: 'Failed to load library: $e',
       );
+    } finally {
+      await labels;
     }
   }
 
   void search(String query) {
     state = state.copyWith(
+      error: state.error,
       searchQuery: query,
       filtered: _applyFilters(state.artists, query, state.filter),
     );
@@ -91,6 +129,7 @@ class LidarrLibraryNotifier extends ChangeNotifier {
 
   void setFilter(LidarrLibraryFilter filter) {
     state = state.copyWith(
+      error: state.error,
       filter: filter,
       filtered: _applyFilters(state.artists, state.searchQuery, filter),
     );
@@ -122,6 +161,6 @@ class LidarrLibraryNotifier extends ChangeNotifier {
           .toList(),
     };
 
-    return result;
+    return sortLidarrLibrary(result, sorting.effectiveSelection, sorting.labels);
   }
 }

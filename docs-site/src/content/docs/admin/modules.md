@@ -19,13 +19,34 @@ Releases hides only when Movies, TV Shows, and Music are all hidden. An empty re
 
 Open the **Library** tab in Radarr, Sonarr, Chaptarr, or Lidarr, then choose **List** or **Grid** beside the library filter controls. On narrow screens, one icon button switches to the other view; its label names the view it will open.
 
-On phones, scrolling down fades and collapses the library title and counts to make room for more items. The filter field, filter menu, and view switch stay visible. Scroll up to bring the title and counts back.
+On phones, scrolling down fades and collapses the library title and counts to make room for more items. The filter field, filter menu, sort button, and view switch stay visible. Scroll up to bring the title and counts back.
 
 Grid displays movie and series posters, author covers, or artist artwork. Phones show three columns; wider screens fit more. Titles use one line, and status badges and progress bars stay in List. Select an item to open its details. The visible item actions work with a pointer or keyboard in either view.
 
 Switching views keeps the same items in view along with your current search, status filter, and results. Each module remembers its own choice on this device, including after an app restart. The choice applies to all configured instances of that module. List is the initial default.
 
 If artwork cannot load, the item keeps its name and a placeholder icon. If the library cannot load, use **Retry** in the error message. An empty result after a successful load means no items matched; clear the search or change the status filter to broaden it.
+
+### Sort a library
+
+Select **Sort**, between the filter menu and the List / Grid control. Choose a field to sort ascending: A to Z, smallest first, or oldest first. Select the same field again to reverse the order. The active field is highlighted and shows an up or down arrow. Scroll the menu to reach all options.
+
+Each module remembers its sort field and direction on this device, including after an app restart. The choice applies to all configured instances of that module. The initial order is **Alphabetical**, or **First Name** for Chaptarr, ascending. A new field always starts ascending.
+
+| Library | Sort options |
+| --- | --- |
+| Radarr | Alphabetical, Certification, Date Added, Digital Release, IMDb Rating, In Cinemas, Minimum Availability, Monitored Status, Original Language, Original Title, Path, Physical Release, Popularity, Quality Profile, Release Date, Rotten Tomatoes Rating, Runtime, Size, Studio, Tags, TMDB Rating, Trakt Rating, Year |
+| Sonarr | Alphabetical, Date Added, Episode Completion, Episode Count, Latest Season, Monitored Status, Network, Next Airing, Original Language, Path, Previous Airing, Quality Profile, Rating, Seasons, Size, Tags, Type |
+| Chaptarr | First Name, Audiobook Metadata Profile, Audiobook Quality Profile, Book Completion, Books, Date Added, eBook Metadata Profile, eBook Quality Profile, Last Book, Last Name, Next Book, Path, Size, Status |
+| Lidarr | Alphabetical, Albums, Date Added, Last Album, Metadata Profile, Monitored Status, Next Album, Path, Quality Profile, Size, Tags, Track Completion, Track Count, Type |
+
+Sorting changes the order in both List and Grid and returns to the top of the results. It keeps the current search and status filter. Switching layouts retains the sort order.
+
+Profile and tag sorts use names. Chaptarr's audiobook and eBook profile options are separate. Completion compares the share of obtainable items already held; Episode Count and Track Count compare the total the service knows about. Book Completion counts available books, so an audiobook split into many files does not inflate it. Latest Season compares the highest season number, excluding Specials.
+
+Missing values stay last in both directions. Equal values sort by name, then by the service's record ID, so separate records remain visible. First Name uses the author's supplied name order; Last Name uses Chaptarr's supplied last-name-first value. Authors without that value stay last.
+
+If profile names or tags cannot load, the library remains available. Selecting a sort that needs those labels shows a message explaining the temporary alphabetical order. Select **Retry** to reload the labels, or choose another sort. Refresh the library to pick up profile or tag changes made in the service.
 
 ### Library actions
 

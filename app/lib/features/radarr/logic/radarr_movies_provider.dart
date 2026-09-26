@@ -1,4 +1,8 @@
 import 'package:flutter/foundation.dart';
+
+import '../../../core/logic/library_sort_controller.dart';
+import '../../../core/models/library_sort.dart';
+import 'radarr_library_sort.dart';
 import '../data/radarr_api_service.dart';
 import '../data/radarr_models.dart';
 
@@ -47,37 +51,68 @@ enum RadarrFilter { all, monitored, missing, downloaded }
 
 class RadarrMoviesNotifier extends ChangeNotifier {
   final RadarrApiService _service;
+  late final LibrarySortController sorting;
+  bool _disposed = false;
+  int _loadGeneration = 0;
 
   RadarrMoviesState _state = const RadarrMoviesState();
   RadarrMoviesState get state => _state;
   set state(RadarrMoviesState value) {
+    if (_disposed) return;
     _state = value;
     notifyListeners();
   }
 
-  RadarrMoviesNotifier(this._service);
+  RadarrMoviesNotifier(this._service) {
+    sorting = LibrarySortController(module: 'radarr',
+      loaders: {
+        LibrarySortLookup.qualityProfiles: () async => {
+          for (final profile in await _service.getQualityProfiles()) profile.id: profile.name,
+        },
+        LibrarySortLookup.tags: () async => {
+          for (final tag in await _service.getTags()) tag.id: tag.label,
+        },
+      }, onChanged: _resort);
+  }
+
+  void _resort() {
+    state = state.copyWith(error: state.error,
+      filtered: _applyFilters(state.movies, state.searchQuery, state.filter));
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    sorting.dispose();
+    super.dispose();
+  }
 
   Future<void> loadMovies() async {
+    final generation = ++_loadGeneration;
+    final labels = sorting.refresh();
     state = state.copyWith(isLoading: true);
     try {
       final movies = await _service.getMovies();
-      movies.sort(
-          (a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+      if (_disposed || generation != _loadGeneration) return;
       state = state.copyWith(
         isLoading: false,
         movies: movies,
         filtered: _applyFilters(movies, state.searchQuery, state.filter),
       );
     } catch (e) {
+      if (_disposed || generation != _loadGeneration) return;
       state = state.copyWith(
         isLoading: false,
         error: 'Failed to load movies: $e',
       );
+    } finally {
+      await labels;
     }
   }
 
   void search(String query) {
     state = state.copyWith(
+      error: state.error,
       searchQuery: query,
       filtered: _applyFilters(state.movies, query, state.filter),
     );
@@ -85,6 +120,7 @@ class RadarrMoviesNotifier extends ChangeNotifier {
 
   void setFilter(RadarrFilter filter) {
     state = state.copyWith(
+      error: state.error,
       filter: filter,
       filtered: _applyFilters(state.movies, state.searchQuery, filter),
     );
@@ -126,6 +162,6 @@ class RadarrMoviesNotifier extends ChangeNotifier {
         result.where((m) => m.hasFile).toList(),
     };
 
-    return result;
+    return sortRadarrLibrary(result, sorting.effectiveSelection, sorting.labels);
   }
 }

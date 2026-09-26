@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/storage/library_sort_preferences.dart';
+import '../../../core/widgets/library_sort_menu.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/network/library_settings_service.dart';
 import '../../../core/widgets/library_actions.dart';
@@ -33,6 +35,10 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
   @override
   void initState() {
     super.initState();
+    // Listen before the first frame so preference restoration cannot race the
+    // instance notifier's creation. Its initial selection is also read below.
+    ref.listenManual(librarySortProvider('lidarr'), (_, selection) =>
+        _notifier?.sorting.setSelection(selection));
     WidgetsBinding.instance.addPostFrameCallback((_) => _initNotifier());
   }
 
@@ -46,13 +52,16 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
       backendDio: backendDio,
       instanceId: activeInstance.id,
     );
+    _notifier?.dispose();
     _notifier = LidarrLibraryNotifier(service);
+    _notifier!.sorting.setSelection(ref.read(librarySortProvider('lidarr')));
     _notifier!.loadArtists();
     setState(() {});
   }
 
   @override
   void dispose() {
+    _notifier?.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -102,6 +111,7 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
           child: CircularProgressIndicator(color: AppTheme.accent));
     }
 
+    final sort = ref.watch(librarySortProvider('lidarr'));
     final viewMode = ref.watch(libraryViewModeProvider('lidarr'));
     final instanceId = ref.watch(instanceProvider).activeLidarrInstance?.id;
 
@@ -116,6 +126,8 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
           key: ValueKey('lidarr-$instanceId'),
           headerBuilder: (collapsed) => LibraryCommandHeader(
               collapsed: collapsed,
+              sort: LibrarySortMenu(module: 'lidarr', selection: sort,
+                onSelected: (field) => ref.read(librarySortProvider('lidarr').notifier).select(field)),
               viewMode: viewMode,
               onViewModeChanged: (value) => ref
                   .read(libraryViewModeProvider('lidarr').notifier).set(value),
@@ -168,6 +180,9 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
               ),
             ),
           children: [
+            if (_notifier!.sorting.notice != null)
+              ErrorBanner(message: _notifier!.sorting.notice!, maxLines: null,
+                onRetry: _notifier!.sorting.canRetry ? _notifier!.sorting.refresh : null),
             if (state.error != null)
               ErrorBanner(
                 message: state.error!,
@@ -184,7 +199,7 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
                           color: AppTheme.accent,
                           child: LidarrArtistList(
                             viewMode: viewMode,
-                            scrollKey: 'lidarr-$instanceId',
+                            scrollKey: 'lidarr-$instanceId-${_notifier!.sorting.effectiveSelection.key}',
                             imageSourceFor: (item) => instanceId == null
                                 ? null
                                 : lidarrImageSource(ref, item.portraitUrl, instanceId),

@@ -148,10 +148,18 @@ class LidarrArtist {
   final LidarrArtistStatistics? statistics;
   final List<LidarrImage> images;
   final List<String> genres;
+  final List<int> tags;
+
+  final String? sortName;
+  final DateTime? nextAlbumRelease;
+  final DateTime? lastAlbumRelease;
 
   const LidarrArtist({
     required this.id,
     required this.artistName,
+    this.sortName,
+    this.nextAlbumRelease,
+    this.lastAlbumRelease,
     this.foreignArtistId,
     this.overview,
     this.artistType,
@@ -165,10 +173,14 @@ class LidarrArtist {
     this.statistics,
     this.images = const [],
     this.genres = const [],
+    this.tags = const [],
   });
 
   factory LidarrArtist.fromJson(Map<String, dynamic> json) => LidarrArtist(
         id: json['id'] as int? ?? 0,
+        sortName: json['sortName'] as String?,
+        nextAlbumRelease: DateTime.tryParse((json['nextAlbum'] as Map<String, dynamic>?)?['releaseDate'] as String? ?? ''),
+        lastAlbumRelease: DateTime.tryParse((json['lastAlbum'] as Map<String, dynamic>?)?['releaseDate'] as String? ?? ''),
         artistName: json['artistName'] as String? ?? 'Unknown Artist',
         foreignArtistId: json['foreignArtistId'] as String?,
         overview: json['overview'] as String?,
@@ -186,6 +198,7 @@ class LidarrArtist {
             : null,
         images: _modelList(json['images'], LidarrImage.fromJson),
         genres: _stringList(json['genres']),
+        tags: (json['tags'] as List<dynamic>?)?.cast<int>() ?? const [],
       );
 
   /// The artist's own image URL as Lidarr reports it (library records carry a
@@ -777,4 +790,13 @@ class LidarrTrack {
         mediumNumber: (json['mediumNumber'] as num?)?.toInt() ?? 0,
         title: json['title'] as String? ?? '',
       );
+}
+
+/// An instance tag used to resolve artist sort labels.
+class LidarrTag {
+  const LidarrTag({required this.id, required this.label});
+  final int id;
+  final String label;
+  factory LidarrTag.fromJson(Map<String, dynamic> json) => LidarrTag(
+    id: json['id'] as int, label: json['label'] as String? ?? '');
 }

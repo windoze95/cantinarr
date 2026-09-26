@@ -19,9 +19,24 @@ class SonarrSeries {
   final List<int> tags;
   final List<SonarrSeason> seasons;
 
+  final String? sortTitle;
+  final String? network;
+  final String? originalLanguage;
+  final DateTime? added;
+  final DateTime? nextAiring;
+  final DateTime? previousAiring;
+  final double? rating;
+
   const SonarrSeries({
     required this.id,
     required this.title,
+    this.sortTitle,
+    this.network,
+    this.originalLanguage,
+    this.added,
+    this.nextAiring,
+    this.previousAiring,
+    this.rating,
     this.tvdbId,
     this.tmdbId,
     this.imdbId,
@@ -42,6 +57,13 @@ class SonarrSeries {
 
   factory SonarrSeries.fromJson(Map<String, dynamic> json) => SonarrSeries(
         id: json['id'] as int? ?? 0,
+        sortTitle: json['sortTitle'] as String?,
+        network: json['network'] as String?,
+        originalLanguage: (json['originalLanguage'] as Map<String, dynamic>?)?['name'] as String?,
+        added: DateTime.tryParse(json['added'] as String? ?? ''),
+        nextAiring: DateTime.tryParse(json['nextAiring'] as String? ?? ''),
+        previousAiring: DateTime.tryParse(json['previousAiring'] as String? ?? ''),
+        rating: ((json['ratings'] as Map<String, dynamic>?)?['value'] as num?)?.toDouble(),
         title: json['title'] as String? ?? 'Untitled',
         tvdbId: json['tvdbId'] as int?,
         tmdbId: json['tmdbId'] as int?,

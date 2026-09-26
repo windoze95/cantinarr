@@ -79,7 +79,8 @@ class LibraryFixtureAdapter implements HttpClientAdapter {
       body = {'records': []};
     }
     if (path.endsWith('/book') || path.endsWith('/album') ||
-        path.endsWith('/qualityprofile') || path.endsWith('/tag')) {
+        path.endsWith('/qualityprofile') || path.endsWith('/metadataprofile') ||
+        path.endsWith('/tag')) {
       body = [];
     }
     if (managementFixtures) {

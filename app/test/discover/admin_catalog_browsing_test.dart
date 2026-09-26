@@ -499,10 +499,14 @@ void main() {
         reason: h.backend.catalogReads.map((r) => r.uri).join(', '));
     expect(
         h.backend.libraryReads
-            .where((r) => r.path != '/api/instances/radarr/api/v3/movie'),
+            .where((r) => !const {
+              '/api/instances/radarr/api/v3/movie',
+              '/api/instances/radarr/api/v3/qualityprofile',
+              '/api/instances/radarr/api/v3/tag',
+            }.contains(r.path)),
         isEmpty,
         reason:
-            'the existing movie library may load; no book/music library may load');
+            'the existing movie library and its sort labels may load; no book/music library may load');
   });
 }
 

@@ -75,6 +75,7 @@ class LibraryCommandHeader extends StatelessWidget {
   final ValueChanged<String> onSearch;
   final String searchHint;
   final Widget filter;
+  final Widget sort;
   final LibraryViewMode viewMode;
   final ValueChanged<LibraryViewMode> onViewModeChanged;
   final bool collapsed;
@@ -88,6 +89,7 @@ class LibraryCommandHeader extends StatelessWidget {
     required this.onSearch,
     required this.searchHint,
     required this.filter,
+    required this.sort,
     required this.viewMode,
     required this.onViewModeChanged,
     this.collapsed = false,
@@ -237,6 +239,17 @@ class LibraryCommandHeader extends StatelessWidget {
                       border: Border.all(color: AppTheme.border),
                     ),
                     child: filter,
+                  ),
+                  SizedBox(width: wide ? 8 : 6),
+                  Container(
+                    width: wide ? 52 : 48,
+                    height: wide ? 52 : 48,
+                    decoration: BoxDecoration(
+                      color: AppTheme.surfaceRaised,
+                      borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
+                      border: Border.all(color: AppTheme.border),
+                    ),
+                    child: sort,
                   ),
                   SizedBox(width: wide ? 12 : 6),
                   wide ? wideViewControl : compactViewControl,
