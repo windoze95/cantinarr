@@ -35,10 +35,33 @@ class RadarrMovie {
   /// actively search for it). Drives the "Available"/"Not yet available" line.
   final bool isAvailable;
 
+  final String? sortTitle;
+  final String? studio;
+  final String? certification;
+  final String? originalTitle;
+  final String? originalLanguage;
+  final DateTime? releaseDate;
+  final double? tmdbRating;
+  final double? imdbRating;
+  final double? rottenTomatoesRating;
+  final double? traktRating;
+  final double? popularity;
+
   const RadarrMovie({
     required this.id,
     required this.title,
     required this.year,
+    this.sortTitle,
+    this.studio,
+    this.certification,
+    this.originalTitle,
+    this.originalLanguage,
+    this.releaseDate,
+    this.tmdbRating,
+    this.imdbRating,
+    this.rottenTomatoesRating,
+    this.traktRating,
+    this.popularity,
     this.tmdbId,
     this.imdbId,
     this.overview,
@@ -64,6 +87,17 @@ class RadarrMovie {
 
   factory RadarrMovie.fromJson(Map<String, dynamic> json) => RadarrMovie(
         id: json['id'] as int? ?? 0,
+        sortTitle: json['sortTitle'] as String?,
+        studio: json['studio'] as String?,
+        certification: json['certification'] as String?,
+        originalTitle: json['originalTitle'] as String?,
+        originalLanguage: (json['originalLanguage'] as Map<String, dynamic>?)?['name'] as String?,
+        releaseDate: DateTime.tryParse(json['releaseDate'] as String? ?? ''),
+        tmdbRating: ((json['ratings'] as Map<String, dynamic>?)?['tmdb']?['value'] as num?)?.toDouble(),
+        imdbRating: ((json['ratings'] as Map<String, dynamic>?)?['imdb']?['value'] as num?)?.toDouble(),
+        rottenTomatoesRating: ((json['ratings'] as Map<String, dynamic>?)?['rottenTomatoes']?['value'] as num?)?.toDouble(),
+        traktRating: ((json['ratings'] as Map<String, dynamic>?)?['trakt']?['value'] as num?)?.toDouble(),
+        popularity: (json['popularity'] as num?)?.toDouble(),
         title: json['title'] as String? ?? 'Untitled',
         year: json['year'] as int? ?? 0,
         tmdbId: json['tmdbId'] as int?,
@@ -89,14 +123,15 @@ class RadarrMovie {
             : null,
         status: json['status'] as String?,
         ratings:
-            (json['ratings'] as Map<String, dynamic>?)?['value'] as double?,
+            ((json['ratings'] as Map<String, dynamic>?)?['value'] as num?)?.toDouble(),
         qualityProfileId: json['qualityProfileId'] as int? ?? 0,
         inCinemas: DateTime.tryParse(json['inCinemas'] as String? ?? ''),
         physicalRelease:
             DateTime.tryParse(json['physicalRelease'] as String? ?? ''),
         digitalRelease:
             DateTime.tryParse(json['digitalRelease'] as String? ?? ''),
-        sizeOnDisk: (json['sizeOnDisk'] as num?)?.toInt() ?? 0,
+        sizeOnDisk: (json['sizeOnDisk'] as num?)?.toInt() ??
+            ((json['statistics'] as Map<String, dynamic>?)?['sizeOnDisk'] as num?)?.toInt() ?? 0,
         tags: (json['tags'] as List<dynamic>?)?.map((t) => t as int).toList() ??
             const [],
         isAvailable: json['isAvailable'] as bool? ?? false,

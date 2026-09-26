@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/storage/library_sort_preferences.dart';
+import '../../../core/widgets/library_sort_menu.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
@@ -31,6 +33,10 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
   @override
   void initState() {
     super.initState();
+    // Listen before the first frame so preference restoration cannot race the
+    // instance notifier's creation. Its initial selection is also read below.
+    ref.listenManual(librarySortProvider('sonarr'), (_, selection) =>
+        _notifier?.sorting.setSelection(selection));
     WidgetsBinding.instance.addPostFrameCallback((_) => _initNotifier());
   }
 
@@ -44,13 +50,16 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
       backendDio: backendDio,
       instanceId: activeInstance.id,
     );
+    _notifier?.dispose();
     _notifier = SonarrSeriesNotifier(service);
+    _notifier!.sorting.setSelection(ref.read(librarySortProvider('sonarr')));
     _notifier!.loadSeries();
     setState(() {});
   }
 
   @override
   void dispose() {
+    _notifier?.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -106,6 +115,7 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
           child: CircularProgressIndicator(color: AppTheme.accent));
     }
 
+    final sort = ref.watch(librarySortProvider('sonarr'));
     final viewMode = ref.watch(libraryViewModeProvider('sonarr'));
     final instanceId = ref.watch(instanceProvider).activeSonarrInstance?.id;
 
@@ -120,6 +130,8 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
           key: ValueKey('sonarr-$instanceId'),
           headerBuilder: (collapsed) => LibraryCommandHeader(
               collapsed: collapsed,
+              sort: LibrarySortMenu(module: 'sonarr', selection: sort,
+                onSelected: (field) => ref.read(librarySortProvider('sonarr').notifier).select(field)),
               viewMode: viewMode,
               onViewModeChanged: (value) => ref
                   .read(libraryViewModeProvider('sonarr').notifier).set(value),
@@ -172,6 +184,9 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
               ),
             ),
           children: [
+            if (_notifier!.sorting.notice != null)
+              ErrorBanner(message: _notifier!.sorting.notice!, maxLines: null,
+                onRetry: _notifier!.sorting.canRetry ? _notifier!.sorting.refresh : null),
             if (state.error != null)
               ErrorBanner(
                 message: state.error!,
@@ -188,7 +203,7 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
                           color: AppTheme.accent,
                           child: SonarrSeriesList(
                             viewMode: viewMode,
-                            scrollKey: 'sonarr-$instanceId',
+                            scrollKey: 'sonarr-$instanceId-${_notifier!.sorting.effectiveSelection.key}',
                             series: state.filtered,
                             onOpen: _openSeries,
                             onAction: _showSeriesActions,

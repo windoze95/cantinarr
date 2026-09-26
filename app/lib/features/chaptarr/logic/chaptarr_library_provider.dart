@@ -1,4 +1,8 @@
 import 'package:flutter/foundation.dart';
+
+import '../../../core/logic/library_sort_controller.dart';
+import '../../../core/models/library_sort.dart';
+import 'chaptarr_library_sort.dart';
 import '../data/chaptarr_api_service.dart';
 import '../data/chaptarr_models.dart';
 
@@ -53,37 +57,68 @@ class ChaptarrLibraryState {
 /// `ref.listen(activeChaptarrInstanceId)` re-init swaps instances cleanly.
 class ChaptarrLibraryNotifier extends ChangeNotifier {
   final ChaptarrApiService _service;
+  late final LibrarySortController sorting;
+  bool _disposed = false;
+  int _loadGeneration = 0;
 
   ChaptarrLibraryState _state = const ChaptarrLibraryState();
   ChaptarrLibraryState get state => _state;
   set state(ChaptarrLibraryState value) {
+    if (_disposed) return;
     _state = value;
     notifyListeners();
   }
 
-  ChaptarrLibraryNotifier(this._service);
+  ChaptarrLibraryNotifier(this._service) {
+    sorting = LibrarySortController(module: 'chaptarr',
+      loaders: {
+        LibrarySortLookup.qualityProfiles: () async => {
+          for (final profile in await _service.getQualityProfiles()) profile.id: profile.name,
+        },
+        LibrarySortLookup.metadataProfiles: () async => {
+          for (final profile in await _service.getMetadataProfiles()) profile.id: profile.name,
+        },
+      }, onChanged: _resort);
+  }
+
+  void _resort() {
+    state = state.copyWith(error: state.error,
+      filtered: _applyFilters(state.authors, state.searchQuery, state.filter));
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    sorting.dispose();
+    super.dispose();
+  }
 
   Future<void> loadAuthors() async {
+    final generation = ++_loadGeneration;
+    final labels = sorting.refresh();
     state = state.copyWith(isLoading: true);
     try {
       final authors = await _service.getAuthors();
-      authors.sort((a, b) =>
-          a.authorName.toLowerCase().compareTo(b.authorName.toLowerCase()));
+      if (_disposed || generation != _loadGeneration) return;
       state = state.copyWith(
         isLoading: false,
         authors: authors,
         filtered: _applyFilters(authors, state.searchQuery, state.filter),
       );
     } catch (e) {
+      if (_disposed || generation != _loadGeneration) return;
       state = state.copyWith(
         isLoading: false,
         error: 'Failed to load library: $e',
       );
+    } finally {
+      await labels;
     }
   }
 
   void search(String query) {
     state = state.copyWith(
+      error: state.error,
       searchQuery: query,
       filtered: _applyFilters(state.authors, query, state.filter),
     );
@@ -91,6 +126,7 @@ class ChaptarrLibraryNotifier extends ChangeNotifier {
 
   void setFilter(ChaptarrLibraryFilter filter) {
     state = state.copyWith(
+      error: state.error,
       filter: filter,
       filtered: _applyFilters(state.authors, state.searchQuery, filter),
     );
@@ -127,6 +163,6 @@ class ChaptarrLibraryNotifier extends ChangeNotifier {
           .toList(),
     };
 
-    return result;
+    return sortChaptarrLibrary(result, sorting.effectiveSelection, sorting.labels);
   }
 }

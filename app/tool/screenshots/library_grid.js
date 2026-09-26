@@ -10,6 +10,7 @@ const zlib = require('node:zlib');
 const build = path.resolve(process.argv[2]);
 const output = path.resolve(process.argv[3]);
 const actionsOnly = process.argv.includes('--actions');
+const sortOnly = process.argv.includes('--sort');
 fs.mkdirSync(output, { recursive: true });
 function crc32(bytes) {
   let crc = -1;
@@ -79,7 +80,7 @@ const server = http.createServer((req, res) => {
   const report = [];
   const artworkCache = new Map();
   try {
-    for (const width of (actionsOnly ? [390, 1440] : [340, 390, 1440])) {
+    for (const width of (actionsOnly ? [390, 1440] : sortOnly ? [320, 390, 1440] : [340, 390, 1440])) {
       const context = await browser.newContext({ viewport: { width, height: width < 600 ? 844 : 1000 } });
       // CDN photos are visual fixtures. Fetch outside browser CORS, preserving
       // actual image content; authenticated library artwork uses the server.
@@ -97,10 +98,55 @@ const server = http.createServer((req, res) => {
         const page = await context.newPage();
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
-        await page.goto(`${base}/?module=${module}`);
+        const scaleQuery = sortOnly && width === 390 ? '&scale=1.7' : '';
+        await page.goto(`${base}/?module=${module}${scaleQuery}`);
         const grid = page.getByRole('button', { name: /^Grid/ });
         await grid.waitFor({ timeout: 60000 });
         await page.waitForTimeout(1500);
+        if (sortOnly) {
+          const sort = page.getByRole('button', { name: /^Sort:/ });
+          const filter = page.getByRole('button', { name: /^Filter (movies|series|authors|artists)$/ });
+          const positions = await Promise.all([filter, sort, grid].map(locator => locator.boundingBox()));
+          assert(positions[0].x < positions[1].x && positions[1].x < positions[2].x,
+            `${module}: sort must sit between filter and layout`);
+          await page.screenshot({ path: path.join(output, `${module}-${width}-sort-toolbar.png`) });
+          await sort.click();
+          await page.getByRole('menuitem', { name: /Date Added/ }).waitFor();
+          await page.waitForTimeout(300);
+          await page.screenshot({ path: path.join(output, `${module}-${width}-sort-menu.png`) });
+          await page.getByRole('menuitem', { name: /Date Added/ }).click();
+          await page.getByRole('button', { name: 'Sort: Date Added, ascending', exact: true }).waitFor();
+          await sort.click();
+          await page.getByRole('menuitem', { name: /Date Added/ }).click();
+          await page.getByRole('button', { name: 'Sort: Date Added, descending', exact: true }).waitFor();
+          await sort.click();
+          await page.waitForTimeout(300);
+          await page.screenshot({ path: path.join(output, `${module}-${width}-sort-descending.png`) });
+          await page.keyboard.press('Escape');
+          await grid.click();
+          await page.waitForTimeout(400);
+          await page.screenshot({ path: path.join(output, `${module}-${width}-sorted-grid.png`) });
+          await page.reload();
+          await page.getByRole('button', { name: 'Sort: Date Added, descending', exact: true }).waitFor({ timeout: 60000 });
+          if (width < 600) {
+            await page.goto(`${base}/?module=${module}&scroll=1${scaleQuery}`);
+            await sort.waitFor({ timeout: 60000 });
+            await page.waitForTimeout(700);
+            const expanded = await sort.boundingBox();
+            await page.mouse.move(width / 2, 650);
+            await page.mouse.wheel(0, 500);
+            await page.waitForTimeout(600);
+            const collapsed = await sort.boundingBox();
+            assert(collapsed.y < expanded.y - 70, `${module}: sort toolbar did not stay visible after collapse`);
+            await page.screenshot({ path: path.join(output, `${module}-${width}-sort-collapsed.png`) });
+          }
+          assert.equal(errors.length, 0, `${module}: ${errors.join('; ')}`);
+          report.push({ module, width, textScale: width === 390 ? 1.7 : 1,
+            sortPlacement: true, reversal: true, savedSort: true, scrollCollapse: width < 600, errors });
+          console.log('PASS sorts', module, width);
+          await page.close();
+          continue;
+        }
         if (actionsOnly) {
           for (const mode of ['list', 'grid']) {
             if (mode === 'grid') {
@@ -177,7 +223,7 @@ const server = http.createServer((req, res) => {
       }
       await context.close();
     }
-    assert((actionsOnly || imageReads.length > 0) && imageReads.every(read => read.authorized), 'Instance artwork must retain authentication');
+    assert((actionsOnly || sortOnly || imageReads.length > 0) && imageReads.every(read => read.authorized), 'Instance artwork must retain authentication');
     fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ report, imageReads }, null, 2));
   } finally {
     await browser.close();

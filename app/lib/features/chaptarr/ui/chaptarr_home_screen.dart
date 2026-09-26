@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/storage/library_sort_preferences.dart';
+import '../../../core/widgets/library_sort_menu.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/network/library_settings_service.dart';
 import '../../../core/widgets/library_actions.dart';
@@ -33,6 +35,10 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
   @override
   void initState() {
     super.initState();
+    // Listen before the first frame so preference restoration cannot race the
+    // instance notifier's creation. Its initial selection is also read below.
+    ref.listenManual(librarySortProvider('chaptarr'), (_, selection) =>
+        _notifier?.sorting.setSelection(selection));
     WidgetsBinding.instance.addPostFrameCallback((_) => _initNotifier());
   }
 
@@ -46,13 +52,16 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
       backendDio: backendDio,
       instanceId: activeInstance.id,
     );
+    _notifier?.dispose();
     _notifier = ChaptarrLibraryNotifier(service);
+    _notifier!.sorting.setSelection(ref.read(librarySortProvider('chaptarr')));
     _notifier!.loadAuthors();
     setState(() {});
   }
 
   @override
   void dispose() {
+    _notifier?.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -102,6 +111,7 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
           child: CircularProgressIndicator(color: AppTheme.accent));
     }
 
+    final sort = ref.watch(librarySortProvider('chaptarr'));
     final viewMode = ref.watch(libraryViewModeProvider('chaptarr'));
     final instanceId = ref.watch(instanceProvider).activeChaptarrInstance?.id;
 
@@ -117,6 +127,8 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
           key: ValueKey('chaptarr-$instanceId'),
           headerBuilder: (collapsed) => LibraryCommandHeader(
               collapsed: collapsed,
+              sort: LibrarySortMenu(module: 'chaptarr', selection: sort,
+                onSelected: (field) => ref.read(librarySortProvider('chaptarr').notifier).select(field)),
               viewMode: viewMode,
               onViewModeChanged: (value) => ref
                   .read(libraryViewModeProvider('chaptarr').notifier).set(value),
@@ -169,6 +181,9 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
               ),
             ),
           children: [
+            if (_notifier!.sorting.notice != null)
+              ErrorBanner(message: _notifier!.sorting.notice!, maxLines: null,
+                onRetry: _notifier!.sorting.canRetry ? _notifier!.sorting.refresh : null),
             if (state.error != null)
               ErrorBanner(
                 message: state.error!,
@@ -185,7 +200,7 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
                           color: AppTheme.accent,
                           child: ChaptarrAuthorList(
                             viewMode: viewMode,
-                            scrollKey: 'chaptarr-$instanceId',
+                            scrollKey: 'chaptarr-$instanceId-${_notifier!.sorting.effectiveSelection.key}',
                             imageSourceFor: (item) => instanceId == null
                                 ? null
                                 : chaptarrImageSource(ref, item.portraitUrl, instanceId),

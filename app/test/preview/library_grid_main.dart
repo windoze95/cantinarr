@@ -20,6 +20,7 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   WidgetsBinding.instance.ensureSemantics();
   final module = Uri.base.queryParameters['module'] ?? 'radarr';
+  final textScale = double.tryParse(Uri.base.queryParameters['scale'] ?? '') ?? 1;
   final adapter = LibraryFixtureAdapter(managementFixtures: true);
   if (module == 'radarr' || module == 'sonarr') {
     adapter.records = (screenshotBodyFor(
@@ -56,7 +57,9 @@ void main() {
   ], child: MaterialApp(
     theme: AppTheme.dark,
     debugShowCheckedModeBanner: false,
-    builder: (context, child) => AppAmbientBackground(child: child!),
+    builder: (context, child) => MediaQuery(
+      data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(textScale)),
+      child: AppAmbientBackground(child: child!)),
     home: Scaffold(body: SafeArea(child: switch (module) {
       'radarr' => const RadarrHomeScreen(),
       'sonarr' => const SonarrHomeScreen(),

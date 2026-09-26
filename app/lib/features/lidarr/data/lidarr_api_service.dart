@@ -92,6 +92,12 @@ class LidarrApiService {
         .toList();
   }
 
+  Future<List<LidarrTag>> getTags() async {
+    final response = await _dio.get('$_basePath/tag');
+    return (response.data as List<dynamic>)
+        .map((tag) => LidarrTag.fromJson(tag as Map<String, dynamic>)).toList();
+  }
+
   Future<List<LidarrQualityProfile>> getQualityProfiles() async {
     final resp = await _dio.get('$_basePath/qualityprofile');
     return (resp.data as List<dynamic>)
