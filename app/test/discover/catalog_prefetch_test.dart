@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/widgets/cached_image.dart';
-import 'package:cantinarr/core/widgets/media_card.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/discover/data/music_discovery_service.dart';
 import 'package:cantinarr/features/discover/data/music_models.dart';
@@ -86,38 +85,6 @@ Future<void> flush() async {
 }
 
 void main() {
-  testWidgets('artwork prefetch follows the visible square card size on resize', (t) async {
-    final sizes = <Size>[];
-    final container = ProviderContainer(overrides: [
-      authProvider.overrideWith(() => Auth(auth(grant: true))),
-      catalogArtworkLoaderProvider.overrideWithValue((source, _, size) async => sizes.add(size)),
-    ]);
-    addTearDown(container.dispose);
-    await container.read(authProvider.future);
-    for (final sample in [
-      (viewport: 480.0, card: 108.0, explicit: false),
-      (viewport: 850.0, card: 116.0, explicit: false),
-      (viewport: 1100.0, card: 124.0, explicit: false),
-      (viewport: 1100.0, card: 200.0, explicit: true),
-    ]) {
-      await t.pumpWidget(UncontrolledProviderScope(
-        container: container,
-        child: MaterialApp(home: MediaQuery(
-          data: MediaQueryData(size: Size(sample.viewport, 800)),
-          child: CatalogArtworkPrefetch(
-            artworkWidth: sample.explicit ? sample.card : null,
-            sources: const [(url: 'https://example.com/cover.jpg', headers: null)],
-            child: Center(child: MediaCard(id: 1, title: 'Album', width: sample.card,
-                artworkAspectRatio: 1)),
-          ),
-        )),
-      ));
-      await t.pumpAndSettle();
-      expect(sizes.last, t.getSize(find.byType(CachedImage)));
-    }
-    expect(sizes.length, 4);
-  });
-
   test('music consumes a ready page without fetching it again', () async {
     final service = Music();
     final feed =
@@ -164,7 +131,7 @@ void main() {
     final container = ProviderContainer(overrides: [
       authProvider.overrideWith(() => Auth(auth(grant: true))),
       musicDiscoveryServiceProvider.overrideWithValue(music),
-      catalogArtworkLoaderProvider.overrideWithValue((source, _, size) {
+      catalogArtworkLoaderProvider.overrideWithValue((source, _) {
         images.add(source);
         final c = Completer<void>();
         pending.add(c);

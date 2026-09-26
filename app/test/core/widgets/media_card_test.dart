@@ -1,9 +1,23 @@
 import 'package:cantinarr/core/widgets/media_card.dart';
+import 'package:cantinarr/core/widgets/cached_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('library cards request thumbnails at the display density', (tester) async {
+    for (final sample in [(dpr: 1.0, width: 154), (dpr: 2.0, width: 342), (dpr: 3.0, width: 500)]) {
+      await tester.pumpWidget(MaterialApp(home: MediaQuery(
+        data: MediaQueryData(devicePixelRatio: sample.dpr),
+        child: const Center(child: MediaCard(id: 1, title: 'Movie', width: 124,
+            posterPath: 'https://image.tmdb.org/t/p/original/poster.jpg')),
+      )));
+      expect(tester.widget<CachedImage>(find.byType(CachedImage)).url,
+          'https://image.tmdb.org/t/p/w${sample.width}/poster.jpg');
+    }
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('media card exposes one label and activates from the keyboard',
       (tester) async {
     final semantics = tester.ensureSemantics();

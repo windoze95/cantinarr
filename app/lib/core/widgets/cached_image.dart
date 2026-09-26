@@ -10,15 +10,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../features/auth/logic/auth_provider.dart';
 import '../network/app_image_cache.dart';
 import '../theme/app_theme.dart';
-import 'artwork_resize_image.dart';
 
 /// A resolved image request: the URL to fetch plus any headers it needs.
 typedef ImageSource = ({String url, Map<String, String>? headers});
 
 /// Prefetch uses exactly the same cache and web transport as visible artwork.
-ImageProvider cachedImageProvider(ImageSource source, {bool isWeb = kIsWeb,
-    String? cacheScope, Size? displaySize, double devicePixelRatio = 1,
-    BoxFit fit = BoxFit.cover}) {
+ImageProvider cachedImageProvider(ImageSource source, {bool isWeb = kIsWeb, String? cacheScope}) {
   if (isWeb) {
     final provider = NetworkImage(
       source.url,
@@ -27,11 +24,9 @@ ImageProvider cachedImageProvider(ImageSource source, {bool isWeb = kIsWeb,
           ? WebHtmlElementStrategy.prefer
           : WebHtmlElementStrategy.never,
     );
-    final ImageProvider scoped = cacheScope != null && (source.headers?.isNotEmpty ?? false)
+    return cacheScope != null && (source.headers?.isNotEmpty ?? false)
         ? SessionNetworkImage(provider, cacheScope)
         : provider;
-    return displaySize == null ? scoped : ArtworkResizeImage.forDisplay(
-        scoped, displaySize, devicePixelRatio, fit);
   }
   return CachedNetworkImageProvider(
     source.url,
@@ -237,15 +232,11 @@ class CachedImage extends StatelessWidget {
       // Flutter owns the decoded image and listener lifecycle on web. The
       // plugin's multi-image completer decodes again when listeners reconnect,
       // which can dispose the browser image still used by a cached frame.
-      return LayoutBuilder(builder: (context, constraints) => Image(
-        image: cachedImageProvider(source, cacheScope: cacheScope,
-          displaySize: constraints.constrain(Size(
-              width ?? double.infinity, height ?? double.infinity)),
-          devicePixelRatio: MediaQuery.devicePixelRatioOf(context), fit: fit),
+      return Image(
+        image: cachedImageProvider(source, cacheScope: cacheScope),
         // CanvasKit can lose medium-quality mipmaps when a texture is recreated
         // under cache pressure. Unrelated hover repaints then change the artwork.
-        // Reduce to display resolution first: bicubic alone aliases originals
-        // that are much larger than their cards (issue #653).
+        // Bicubic sampling stays consistent across those texture cache states.
         filterQuality: FilterQuality.high,
         fit: fit,
         width: width,
@@ -253,7 +244,7 @@ class CachedImage extends StatelessWidget {
         frameBuilder: (_, child, frame, synchronouslyLoaded) =>
             synchronouslyLoaded || frame != null ? child : _fallback(),
         errorBuilder: (_, __, ___) => _fallback(),
-      ));
+      );
     }
     return CachedNetworkImage(
       imageUrl: source.url,
