@@ -113,7 +113,11 @@ class _MusicBrowseScreenState extends ConsumerState<MusicBrowseScreen>
       if (state.items.isNotEmpty) _nearEnd();
     });
     _restoreAfterSetup(state, notifier);
-    return CatalogArtworkPrefetch(
+    return LayoutBuilder(builder: (context, constraints) {
+      final extent = constraints.maxWidth - 32;
+      final columns = (extent / 156).floor().clamp(2, 8);
+      return CatalogArtworkPrefetch(
+        artworkWidth: (extent - (columns - 1) * 14) / columns,
         sources: [...state.items.take(6), ...state.upcoming.take(6)]
             .map((a) => musicArtworkSource(ref, a, id))
             .whereType<({String url, Map<String, String>? headers})>()
@@ -203,5 +207,6 @@ class _MusicBrowseScreenState extends ConsumerState<MusicBrowseScreen>
             ),
           ),
         ));
+    });
   }
 }

@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cached_network_image_platform_interface/cached_network_image_platform_interface.dart'
     show ImageRenderMethodForWeb;
 import 'package:cantinarr/core/widgets/cached_image.dart';
+import 'package:cantinarr/core/widgets/artwork_resize_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -32,9 +33,11 @@ void main() {
     expect(newKey, isNot(await provider('new', 'account-two').obtainKey(ImageConfiguration.empty)));
   });
 
-  testWidgets('token rotation reuses a decoded image and retries a failed old-token read', (tester) async {
+  for (final resized in [false, true]) {
+  testWidgets('token rotation reuses a decoded image and retries a failed old-token read (resized: $resized)', (tester) async {
     Widget frame(_NetworkFixture network, String scope) => MaterialApp(home: Image(
-      image: SessionNetworkImage(network, scope),
+      image: resized ? ArtworkResizeImage.forDisplay(SessionNetworkImage(network, scope),
+          const Size(124, 186), 2, BoxFit.cover) : SessionNetworkImage(network, scope),
       errorBuilder: (_, __, ___) => const Text('Unavailable'),
     ));
     final image = (await tester.runAsync(() => createTestImage(width: 4, height: 4)))!;
@@ -63,6 +66,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     PaintingBinding.instance.imageCache.clear();
   });
+  }
 
   group('Hardcover web artwork', () {
     const source = (
