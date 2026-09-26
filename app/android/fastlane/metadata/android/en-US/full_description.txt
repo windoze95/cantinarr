@@ -1,8 +1,10 @@
-Browse and request movies, shows, books, and music. Follow downloads and get notified when something is ready. Manage your media services and investigate stuck downloads from your phone or tablet.
+Media requests for your Plex, Jellyfin, or Emby household, plus Radarr and Sonarr management in one app. Discover movies and TV shows, request books and music, follow downloads, and get notified when something is ready.
+
+Cantinarr combines a self-hosted request portal with a mobile media manager. Give friends and family a simple place to request what they want while you approve requests, manage libraries, and troubleshoot downloads from your phone or tablet.
 
 Cantinarr connects to a server you run on your computer or NAS. The server is open source and runs in one Docker container. Set it up at cantinarr.com, then connect the app with a link from your administrator.
 
-FOR YOUR HOUSEHOLD
+DISCOVER AND REQUEST
 
 • Explore movies and shows from TMDB and Trakt, plus books and music from your connected services
 • Search across your catalogs and see whether a title is Available, Requested, or Downloading
@@ -12,14 +14,17 @@ FOR YOUR HOUSEHOLD
 
 Your administrator chooses which services and titles you can access, and which requests need approval. Connect links make sign-in simple; passwords and passkeys are available when enabled.
 
-FOR ADMINS
+MANAGE YOUR MEDIA SERVER
 
 • Review requests and set approval, quality, and access rules for your household
-• Manage Radarr, Sonarr, Chaptarr, Lidarr, and supported download clients from one app
+• Manage Radarr and Sonarr libraries, plus books with Chaptarr and music with Lidarr
+• Check Usenet and torrent queues in SABnzbd, NZBGet, and qBittorrent, with controls to pause and resume downloads
 • Open a series, season, or episode, search for releases, and check live queues
 • Use Import Doctor to understand stuck downloads and review proposed fixes
 • Share Plex, Jellyfin, Emby, and Audiobookshelf access; check activity through Tautulli or Tracearr
 • Set up push notifications, accounts, services, and devices from the app
+
+Cantinarr runs its own request system and offers a Seerr-compatible API for supported integrations, including Maintainerr and Homepage.
 
 An AI provider is optional. If you connect one, the assistant can look up your library, suggest titles, and make requests. The repair agent can investigate persistent download problems and bring actions to an administrator for review. Cantinarr also offers MCP tools for clients you authorize.
 

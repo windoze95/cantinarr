@@ -1,1 +1,1 @@
-Request media and manage your self-hosted server from one app.
+Request media for Plex or Jellyfin. Manage Radarr, Sonarr and downloads.
