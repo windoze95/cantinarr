@@ -30,14 +30,14 @@ void main() {
     await tester.tap(find.byTooltip('New chat'));
     await tester.pumpAndSettle();
     expect(
-        find.text('Chat cleared! What can I help you find?'), findsOneWidget);
+        find.text('Chat cleared! What would you like to do next?'), findsOneWidget);
 
     await tester.tap(find.byTooltip('Exit assistant'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Open assistant'));
     await tester.pumpAndSettle();
     expect(
-        find.text('Chat cleared! What can I help you find?'), findsOneWidget);
+        find.text('Chat cleared! What would you like to do next?'), findsOneWidget);
   });
 
   testWidgets('broken personal provider gets an AI Access action',

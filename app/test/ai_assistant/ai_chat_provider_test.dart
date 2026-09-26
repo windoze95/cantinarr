@@ -139,7 +139,7 @@ void main() {
     expect(notifier.state.messages, hasLength(1));
     expect(
       notifier.state.messages.single.content,
-      'Chat cleared! What can I help you find?',
+      'Chat cleared! What would you like to do next?',
     );
     expect(notifier.conversationId, isNull);
     expect(notifier.state.isLoading, isFalse);

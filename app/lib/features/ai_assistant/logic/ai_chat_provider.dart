@@ -155,7 +155,10 @@ class AiChatNotifier extends ChangeNotifier {
       id: _uuid.v4(),
       role: ChatRole.assistant,
       content:
-          'Hey! I\'m your Cantinarr assistant. I can help you discover movies and TV shows, check what\'s available on your server, or help you get set up. What are you looking for?',
+          'Hey! I\'m your Cantinarr assistant. I can help you discover and '
+          'request movies, TV shows, books, and music, manage your libraries '
+          'and downloads, troubleshoot issues, and configure connected services, '
+          'depending on your access. What would you like to do?',
       timestamp: DateTime.now(),
       excludeFromHistory: true,
     ));
@@ -369,7 +372,7 @@ class AiChatNotifier extends ChangeNotifier {
     _addMessage(ChatMessage(
       id: _uuid.v4(),
       role: ChatRole.assistant,
-      content: 'Chat cleared! What can I help you find?',
+      content: 'Chat cleared! What would you like to do next?',
       timestamp: DateTime.now(),
       excludeFromHistory: true,
     ));
