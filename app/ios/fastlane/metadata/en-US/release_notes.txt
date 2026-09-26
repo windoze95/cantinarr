@@ -1,1 +1,7 @@
-Browse and request movies, shows, books, and music from your Cantinarr server. Admins can review requests, manage connected services, and investigate stuck downloads.
+Discover and request movies, TV shows, books, and music from your self-hosted Cantinarr server.
+
+- Follow requests, approvals, and downloads in one place.
+- Receive optional notifications when content is ready.
+- Browse libraries in saved list or grid views.
+- Manage connected services and review request history.
+- Get help investigating stuck downloads with the optional assistant.

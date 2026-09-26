@@ -248,9 +248,11 @@ Android push needs two Google artifacts, deliberately kept apart:
   to the push gateway's deploy secrets (see the push-gateway repo's `docs/FCM-SETUP.md`, which
   also covers the Firebase-console walkthrough and the Play-key-vs-FCM-key trap).
 
-Store impact: the `firebase-messaging` SDK counts toward the **Data safety** form (device
-identifiers transmitted for push delivery) — fold it into the reassessment below before the next
-console submission.
+Store impact: include the `firebase-messaging` SDK, device and user identifiers, push tokens,
+notification content, and the configured gateway in the **Data safety** reassessment below.
+The community relay receives delivery data and keeps device registrations and delivery records,
+including notification titles. Check the privacy policy against the current relay behavior before
+the next console submission.
 
 ### Signing material
 
@@ -446,12 +448,14 @@ must also accept any pending Apple developer agreement in the console.
    and a demo server URL + connect link are provided before each submission.
 2. App Privacy (App Store Connect → the app → App Privacy): **reassess this form before the next
    submission** against Apple's current [App privacy details](https://developer.apple.com/app-store/app-privacy-details/)
-   definitions. The developer still operates no backend and receives nothing, but optional AI
-   use sends prompts/context to a personal or admin-included provider and the user's self-hosted server
-   keeps short-lived conversation context in memory. This likely requires an optional
-   **Other User Content / App Functionality** disclosure; the account owner must confirm the exact
-   linked-to-user and optional-disclosure answers in App Store Connect. Do not reuse the previous
-   categorical "Data Not Collected" answer without that review.
+   definitions. Account for optional AI prompts/context, the self-hosted server's retained data,
+   and the community push relay's stored identifiers, tokens, notification titles, and delivery
+   records. Review **User ID**, **Device ID**, and applicable **User Content** categories and their
+   **App Functionality** purpose against the actual data flow. An optional feature does not
+   automatically qualify for Apple's optional-disclosure exception; ongoing collection after
+   permission is granted still needs review. Confirm linked-to-user answers and the live console
+   selections before submission. Do not reuse the previous categorical "Data Not Collected"
+   answer without that review. See [the privacy policy](privacy-policy.md).
 3. Age rating questionnaire: all descriptors None, gambling No, unrestricted web access No
    (the in-app web view is scoped to auth/help flows). Strictly accurate result is 4+; setting
    "Mature/Suggestive Themes: Infrequent/Mild" → **12+** is the conservative choice for an app
@@ -469,11 +473,14 @@ Prepared answers, in console order:
 - **Data safety**: **reassess before the next submission** against Google's current
   [Data safety definitions](https://support.google.com/googleplay/android-developer/answer/10787469).
   Google defines collection around off-device transmission, not only data received by the app
-  developer. Optional AI use sends prompts/context to a personal or admin-included provider and retains short-lived context on
-  the user's self-hosted server, so the previous categorical "No data collected" answer must not be
-  reused without review. The likely disclosure is optional user-generated/other user content for
-  app functionality; the account owner must confirm whether Google's user-initiated-transfer
-  sharing exception applies to the exact flow. Ads remain No.
+  developer. Review optional AI prompts/context, server-side retention, the native FCM SDK,
+  and push gateway registration and delivery. The community relay stores identifiers and tokens
+  plus delivery records containing notification titles. Assess **User IDs**, **Device or other
+  IDs**, applicable **Other user-generated content**, and the **App functionality** purpose.
+  Confirm whether collection is optional and whether a sharing exception applies to each actual
+  flow; an optional feature alone does not establish an exception. Do not reuse the previous
+  categorical "No data collected" answer without this review. Verify the live console selections
+  and [privacy policy](privacy-policy.md) agree before submission. Ads remain No.
 - **Content rating (IARC)**: category "Utility, Productivity, Communication, or Other"; no
   violence/sexuality/language/gambling in app content; users can exchange text only with members
   of their own private server (no public UGC, no location sharing). Expected result: Everyone.
