@@ -192,7 +192,7 @@ func TestWebhookValidation(t *testing.T) {
 func TestMessageSafetyAndLinks(t *testing.T) {
 	for _, kind := range []string{"movie", "tv", "book", "music"} {
 		a := requestAlert{Title: strings.Repeat("[bad](https://evil.test) @everyone\n", 300), Username: "<@123> _name_", MediaType: kind, BookFormat: "both", RequiresApproval: true}
-		data := message(a, "https://cantinarr.example/base/")
+		data := renderEvent(a, "https://cantinarr.example/base/", configuration{})
 		embed := data["embeds"].([]any)[0].(map[string]any)
 		if embed["url"] != "https://cantinarr.example/base/approvals" {
 			t.Fatal(embed["url"])
@@ -204,12 +204,12 @@ func TestMessageSafetyAndLinks(t *testing.T) {
 			t.Fatal("mentions allowed")
 		}
 		for _, external := range []string{"", "http://u:p@internal", "https://server/?token=secret"} {
-			if _, ok := message(a, external)["embeds"].([]any)[0].(map[string]any)["url"]; ok {
+			if _, ok := renderEvent(a, external, configuration{})["embeds"].([]any)[0].(map[string]any)["url"]; ok {
 				t.Fatal("unexpected outward link")
 			}
 		}
 		a.RequiresApproval = false
-		if got := message(a, "https://cantinarr.example")["embeds"].([]any)[0].(map[string]any)["url"]; got != "https://cantinarr.example/" {
+		if got := renderEvent(a, "https://cantinarr.example", configuration{})["embeds"].([]any)[0].(map[string]any)["url"]; got != nil {
 			t.Fatal(got)
 		}
 	}

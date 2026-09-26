@@ -512,14 +512,25 @@ const List<SettingsSearchEntry> _rootEntries = [
     screenTitle: 'Settings',
     section: 'Notifications',
     route: '/settings/discord-notifications',
+    gate: gateEveryone,
     keywords: [
-      'webhook',
+      'mentions',
+      'user IDs',
       'discord',
       'notifications',
       'new requests',
       'delivery',
       'test'
     ],
+  ),
+  SettingsSearchEntry(
+    id: 'discord.server',
+    title: 'Server Discord Notifications',
+    icon: Icons.notifications_active_outlined,
+    screenTitle: 'Discord Notifications',
+    section: 'Notifications',
+    route: '/settings/discord-notifications/server',
+    keywords: ['webhook', 'role', 'thread', 'poster', 'discord', 'test', 'delivery'],
     gate: gateAdmin,
   ),
   SettingsSearchEntry(

@@ -32,10 +32,12 @@ Review **Connected Devices** and revoke the old device if it should no longer ha
 
 Gateway traffic uses the external transport even when the gateway is on the LAN. A saved in-app outbound proxy has no bypass list. Use the environment-variable proxy path with a suitable `NO_PROXY` entry for that deployment.
 
-## Discord tests or requests are missing
+## Discord posts or mentions are missing
 
-Use **Send test message**, then look at the target channel. A test does not save or enable the integration by itself.
+In **Discord Notifications > Server Discord Notifications**, use **Send test message**, then check the target channel or thread. This test does not save, enable, or mention anyone.
 
-For real requests, check whether they needed approval and whether **Include automatically approved requests** was enabled. Read recent delivery states. An **unconfirmed** send is not automatically resent because it may already have posted.
+Check **Send notifications to Discord** and the relevant category under **Events**. For a personal ping, also enable **Allow Discord mentions**, then save **Mention me in Discord**, your numeric user IDs, and event choices on the personal page. Use **Test my mentions** and check Discord server/channel notification settings.
+
+Availability requires a successful library read and the requested content in the selected library. TV episodes are grouped over 60 seconds; albums must be complete. Existing files establish a baseline when availability is enabled and are not announced. Read recent deliveries and any library diagnostic. An **unconfirmed** send is not resent automatically because it may already have posted.
 
 Remove webhook URLs and device tokens from any screenshots or support reports. See [Discord setup](/integrations/discord/) and [push setup](/integrations/push/).
