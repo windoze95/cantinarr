@@ -911,10 +911,6 @@ Movies skip bridging entirely -- Radarr natively supports `term=tmdb:{id}`. Book
 
 Adding a new native book requires a fresh lookup of the selected ID; editions are round-tripped into Chaptarr's add body. The worker tries the original successful search term first, then ID/title fallbacks, accepting only the exact native ID. A similarly titled summary or another author's book can never become the target. Open Library translation and match confirmation are retired. See [book setup](../docs/books-setup.md) for saved-state and recovery behavior.
 
-### Requests, approvals & live availability
-
-Allowances use `media_type` (`movie`, `tv`, `book`, `music`) plus `book_format` (`ebook` or `audiobook` for books). A rule has nullable `count` (null = unlimited; zero = no new units) and `window_days` (1, 7, or 30). Per-user rules replace a whole rule or use `inherit:true`. Settings live on separate endpoints so older clients cannot erase them. `/api/config` advertises `request_quotas`; compatibility floors are unchanged.
-
 ### Requester tags
 
 Radarr/Sonarr instance create/update accepts `tag_requests`, default false. Omitted updates preserve the saved value; other service types reject true. `/api/config` advertises `requester_tagging`. New movie/TV admissions capture an eligible `request_tag_jobs` row in the request transaction, including already-monitored/available no-op requests. Old and deduped historical requests are never backfilled. Tags wait for successful delivery and retain the original requester's identity, destination, and TV match snapshot.
@@ -922,6 +918,10 @@ Radarr/Sonarr instance create/update accepts `tag_requests`, default false. Omit
 The independent tag worker uses the native tag API and additive movie/series editor API. Labels start with `cantinarr-{userID}-` and a normalized username; an existing tag with that user-ID prefix is reused after renames. It preserves other tags, verifies the live native title identity, and rechecks current authority, content policy, destination configuration, TV match revision, and its durable lease before writes. Tag failures never change media delivery, approval or quota records. Transient failures use exponential backoff from one minute to six hours, honor longer `Retry-After` delays, and stop after 50 attempts. Retry resets that budget for the existing job only. Disabling the setting or changing the instance URL cancels unfinished jobs atomically; applied tags remain and re-enabling admits only future requests.
 
 Admin history includes optional `requester_tagging` with `status` (`waiting`, `pending`, `retrying`, `applied`, `failed`, `cancelled`), a safe `message`, `can_retry`, and an applied `tag_label`/`applied_at` receipt. It is not a live tag inventory. There is no automatic tag removal, custom mapping, historical backfill, or reconciliation of manual arr edits. Sonarr tags series, while request history retains source season scope.
+
+### Requests, approvals & live availability
+
+Allowances use `media_type` (`movie`, `tv`, `book`, `music`) plus `book_format` (`ebook` or `audiobook` for books). A rule has nullable `count` (null = unlimited; zero = no new units) and `window_days` (1, 7, or 30). Per-user rules replace a whole rule or use `inherit:true`. Settings live on separate endpoints so older clients cannot erase them. `/api/config` advertises `request_quotas`; compatibility floors are unchanged.
 
 Each durably accepted movie, source TV season (no specials), book format, or album spends one unit, including pending approvals. Limits span libraries; a separate acquisition in another library spends the same pool. Each subscriber to shared pending book work owns their charge. Both book formats and TV approval additions are atomic. Duplicate work and delivery retries add no charge; a pilot expands within its current window without charging that season again. Corrective TV-match repairs and unchanged approvals are free. Unknown book/music library state may reserve selected units, then a verified no-op refunds them. Denial/cancellation refunds only units whose delivery could not yet have begun: a permanent per-job and per-item marker is committed immediately before the first library mutation. Reads never set it, and retries never clear it. Ownership transfers preserve charge ownership.
 
