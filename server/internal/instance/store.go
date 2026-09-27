@@ -760,7 +760,7 @@ func (s *Store) SetUserDefault(userID int64, serviceType, instanceID string) err
 	}
 	defer tx.Rollback()
 	var allowed bool
-	if err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM user_instance_grants WHERE user_id=? AND instance_id=?) OR EXISTS(SELECT 1 FROM users WHERE id=? AND role='admin')`, userID, instanceID, userID).Scan(&allowed); err != nil {
+	if err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM user_instance_grants WHERE user_id=? AND instance_id=?) OR (? AND EXISTS(SELECT 1 FROM users WHERE id=? AND role='admin'))`, userID, instanceID, !IsAutomationType(serviceType), userID).Scan(&allowed); err != nil {
 		return err
 	}
 	if !allowed {
@@ -906,12 +906,21 @@ func (s *Store) GrantedInstanceIDs(userID int64, serviceType string) ([]string, 
 // preference, global default, then first assignment. Administrator routing
 // retains its all-instance scope; media-server eligibility remains explicit.
 func (s *Store) EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error) {
+	return s.defaultInstanceID(userID, serviceType, true)
+}
+
+// AssignedDefaultInstanceID resolves personal request routing without administrator visibility.
+func (s *Store) AssignedDefaultInstanceID(userID int64, serviceType string) (string, error) {
+	return s.defaultInstanceID(userID, serviceType, false)
+}
+
+func (s *Store) defaultInstanceID(userID int64, serviceType string, administratorAccess bool) (string, error) {
 	var id string
 	err := s.db.QueryRow(`SELECT si.id FROM service_instances si
  WHERE si.service_type=? AND (EXISTS(SELECT 1 FROM user_instance_grants g WHERE g.user_id=? AND g.instance_id=si.id)
  OR (? AND EXISTS(SELECT 1 FROM users u WHERE u.id=? AND u.role='admin')))
  ORDER BY EXISTS(SELECT 1 FROM user_default_instances d WHERE d.user_id=? AND d.instance_id=si.id AND d.service_type=si.service_type) DESC,
- si.is_default DESC,si.sort_order,si.name,si.id LIMIT 1`, serviceType, userID, IsAutomationType(serviceType), userID, userID).Scan(&id)
+ si.is_default DESC,si.sort_order,si.name,si.id LIMIT 1`, serviceType, userID, administratorAccess && IsAutomationType(serviceType), userID, userID).Scan(&id)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -1003,8 +1012,7 @@ func (s *Store) SetUserGrants(userID int64, grants map[string][]string) error {
 		}
 	}
 	if _, err := tx.Exec(`DELETE FROM user_default_instances WHERE user_id=? AND service_type IN ('radarr','sonarr','chaptarr','lidarr')
- AND NOT EXISTS(SELECT 1 FROM user_instance_grants g WHERE g.user_id=user_default_instances.user_id AND g.instance_id=user_default_instances.instance_id)
- AND NOT EXISTS(SELECT 1 FROM users WHERE id=? AND role='admin')`, userID, userID); err != nil {
+ AND NOT EXISTS(SELECT 1 FROM user_instance_grants g WHERE g.user_id=user_default_instances.user_id AND g.instance_id=user_default_instances.instance_id)`, userID); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

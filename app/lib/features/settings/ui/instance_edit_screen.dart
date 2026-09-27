@@ -3288,7 +3288,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               title: const Text('Manage users'),
               subtitle: Text(!widget.isEditing ? 'Save this instance to assign existing users.' :
                 _userSelectError != null ? 'Could not load assignment count. Open to retry.' :
-                _users == null ? 'Loading assignments…' : '${_users!.where((u) => !u.isAdmin && _assignedUserIds.contains(u.id)).length} assigned users'),
+                _users == null ? 'Loading assignments…' : '${_users!.where((u) => _assignedUserIds.contains(u.id)).length} assigned users'),
               trailing: const Icon(Icons.chevron_right),
               onTap: !widget.isEditing || _isSaving ? null : () async {
                 await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => InstanceUsersScreen(instanceId: widget.instanceId!, instanceName: _nameController.text.trim())));

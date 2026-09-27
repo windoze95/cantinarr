@@ -45,6 +45,7 @@ import '../../request/data/tv_match_service.dart';
 import '../../request/logic/request_provider.dart';
 import '../../request/ui/request_button.dart';
 import '../../request/ui/request_options_sheet.dart';
+import '../../request/ui/request_library_picker.dart';
 import '../../request/ui/request_status_sheet.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/data/sonarr_models.dart';
@@ -274,20 +275,29 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   bool get _canRequestLibrarySeasons => _librarySeries == null ||
       _requestNotifier.state.seasons.any((s) => s.isRequestable);
 
-  /// The libraries this user may aim requests at for this media type, from
-  /// the per-user filtered connection (granted set for requesters, every
-  /// instance for admins). Names are the admin-chosen instance names.
+  /// Libraries available for browsing, including all instances for admins.
   List<LibraryChoice> get _libraryChoices {
     final connection = ref.read(authProvider).valueOrNull?.connection;
     if (connection == null) return const [];
-    final instances = widget.mediaType == MediaType.movie
-        ? connection.radarrInstances
-        : connection.sonarrInstances;
-    return instances
-        .where((i) => _librarySeries == null || i.id == _librarySeries!.libraryId)
+    return connection.instances
+        .where((i) => i.serviceType == _serviceType &&
+            (_librarySeries == null || i.id == _librarySeries!.libraryId))
         .map((i) => LibraryChoice(id: i.id, name: i.name))
         .toList();
   }
+
+  List<LibraryChoice> get _requestLibraryChoices {
+    final connection = ref.read(authProvider).valueOrNull?.connection;
+    return requestLibraries(connection, _serviceType)
+        .where((i) => _librarySeries == null || i.id == _librarySeries!.libraryId)
+        .toList();
+  }
+
+  bool get _confirmBoundLibrary => _librarySeries != null &&
+      requestLibraries(ref.read(authProvider).valueOrNull?.connection, 'sonarr').length > 1;
+
+  String? get _boundLibraryNote => _librarySeries == null ? null :
+      'These seasons belong to this library. Open the show in Discover to request another library.';
 
   /// The connection's default library for this media type.
   String? get _defaultLibraryId {
@@ -302,7 +312,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   String? get _effectiveLibraryId => _selectedLibraryId ?? _defaultLibraryId;
 
   bool get _missingSelectedLibrary => _selectedLibraryId != null &&
-      !_libraryChoices.any((library) => library.id == _selectedLibraryId);
+      !(ref.read(authProvider).valueOrNull?.connection?.instances.any(
+          (library) => library.id == _selectedLibraryId && library.serviceType == _serviceType) ?? false);
 
   bool get _libraryUnavailable => _missingSelectedLibrary ||
       _requestNotifier.state.libraryUnavailable;
@@ -890,6 +901,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                               tvdbId: state.tvDetail?.externalIds?.tvdbId,
                               canRequest: _canChooseSeasons,
                               onRequested: _onRequestSucceeded,
+                              confirmDestination: _confirmSeasonDestination,
                               downloadInstanceId: _downloadInstanceId,
                               downloadChoicesBySeason:
                                   _episodeDownloadChoicesBySeason,
@@ -961,10 +973,19 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     }
     final s = _detailNotifier.state;
 
-    final options = await _requestNotifier.fetchOptions();
-    if (options != null && mounted) {
+    final libraries = _requestLibraryChoices;
+    if (libraries.isEmpty) {
+      await confirmRequestLibrary(context, libraries: libraries);
+      return;
+    }
+    final preferredLibrary = _librarySeries?.libraryId ?? defaultRequestLibrary(
+        ref.read(authProvider).valueOrNull?.connection, _serviceType);
+    final options = await _requestNotifier.fetchOptions(libraryId: preferredLibrary);
+    if (!mounted) return;
+    if (options != null && preferredLibrary == _effectiveLibraryId) {
       setState(() => _requestOptions = options);
     }
+    final optionsByLibrary = {preferredLibrary: options};
 
     // A partially-available show: "Request More" drops the user into the
     // per-season picker below rather than the coarse season-scope sheet, so
@@ -974,7 +995,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     if (widget.mediaType == MediaType.tv &&
         (_requestNotifier.state.status == RequestStatus.partial || _librarySeries != null) &&
         s.seasons.isNotEmpty &&
-        (options?.canChooseSeason ?? true)) {
+        _canChooseSeasons) {
       _scrollToSeasons();
       return;
     }
@@ -984,9 +1005,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
 
     // A multi-library user gets the sheet even with season/quality choice
     // off: the library IS a choice.
-    final libraries = _libraryChoices;
     final hasChoices =
-        (options != null && options.hasChoices) || libraries.length > 1;
+        (options != null && options.hasChoices) || libraries.length > 1 || _confirmBoundLibrary;
 
     String? seasonScope;
     int? qualityProfileId;
@@ -995,7 +1015,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       final result = await showAppSheet<RequestOptionsResult>(
         context,
         builder: (_) => RequestOptionsSheet(
-          initialSelection: (_lastRequestOptions?.instanceId == null || _lastRequestOptions?.instanceId == _effectiveLibraryId) ? _lastRequestOptions : null,
+          initialSelection: (_lastRequestOptions?.instanceId == null || _lastRequestOptions?.instanceId == preferredLibrary) ? _lastRequestOptions : null,
           options: options ??
               const RequestOptions(
                 canChooseSeason: false,
@@ -1004,31 +1024,50 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                 qualityProfiles: [],
               ),
           libraries: libraries,
-          selectedLibraryId: _effectiveLibraryId,
-          onLibraryOptions: (libraryId) =>
-              _requestNotifier.fetchOptions(libraryId: libraryId),
+          selectedLibraryId: preferredLibrary,
+          showLibrary: _confirmBoundLibrary,
+          libraryNote: _boundLibraryNote,
+          onLibraryOptions: (libraryId) async {
+            final selected = await _requestNotifier.fetchOptions(libraryId: libraryId);
+            optionsByLibrary[libraryId] = selected;
+            return selected;
+          },
         ),
       );
-      if (result == null) return; // cancelled
+      if (!mounted || result == null) return; // cancelled
       _lastRequestOptions = result;
       seasonScope = result.seasonScope;
       qualityProfileId = result.qualityProfileId;
-      if (result.instanceId != null &&
-          result.instanceId != _selectedLibraryId) {
+      final target = result.instanceId ?? libraries.singleOrNull?.id;
+      setState(() => _requestOptions = optionsByLibrary[target]);
+      if (target != null && target != _selectedLibraryId) {
         // Adopt the selection without an immediate status refetch — the
         // submit below produces the authoritative status, and a racing
         // pre-request read could land after it and overwrite it.
-        setState(() => _selectedLibraryId = result.instanceId);
-        _requestNotifier.instanceId = result.instanceId;
+        setState(() => _selectedLibraryId = target);
+        _requestNotifier.instanceId = target;
         _loadMyOpenReport();
         if (widget.mediaType == MediaType.tv) {
           await _requestNotifier.checkStatus();
-          if (!_requestNotifier.state.hasStatus) return;
+          if (!mounted || !_requestNotifier.state.hasStatus) return;
         }
         _resolveArrLink();
       }
     }
 
+    if (!hasChoices && libraries.single.id != _selectedLibraryId) {
+      setState(() {
+        _selectedLibraryId = libraries.single.id;
+        _requestOptions = options;
+      });
+      _requestNotifier.instanceId = _selectedLibraryId;
+      _resolveArrLink();
+      _loadMyOpenReport();
+      if (widget.mediaType == MediaType.tv) {
+        await _requestNotifier.checkStatus();
+        if (!mounted || !_requestNotifier.state.hasStatus) return;
+      }
+    }
     final accepted = await _requestNotifier.request(
       title: title,
       tvdbId: tvdbId,
@@ -1044,6 +1083,35 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
         SnackBar(content: Text(quotaMessage)),
       );
     }
+  }
+
+  Future<bool> _confirmSeasonDestination() async {
+    final connection = ref.read(authProvider).valueOrNull?.connection;
+    final target = await confirmRequestLibrary(context,
+        libraries: _requestLibraryChoices,
+        defaultLibraryId: _librarySeries?.libraryId ?? defaultRequestLibrary(connection, 'sonarr'),
+        // Native season numbers cannot be carried to another instance. Still
+        // confirm their bound destination when the user has multiple libraries.
+        confirmSingle: _confirmBoundLibrary,
+        libraryNote: _boundLibraryNote);
+    if (!mounted || target == null) return false;
+    final options = await _requestNotifier.fetchOptions(libraryId: target);
+    if (!mounted) return false;
+    setState(() => _requestOptions = options);
+    if (_requestNotifier.instanceId != target) {
+      setState(() => _selectedLibraryId = target);
+      _requestNotifier.instanceId = target;
+      await _requestNotifier.checkStatus();
+      if (!mounted || !_requestNotifier.state.hasStatus) return false;
+      _resolveArrLink();
+      _loadMyOpenReport();
+    }
+    if (options?.canChooseSeason != true) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text(
+          'Season selection is unavailable for this library. Use the main Request button.')));
+      return false;
+    }
+    return true;
   }
 
   Future<void> _correctTVMatch() async {

@@ -23,6 +23,17 @@ func TestOnboardingAssignmentsAreTransactionalAndOnlyForNewAccounts(t *testing.T
 	for _, service := range []string{"radarr", "sonarr", "chaptarr", "lidarr"} {
 		exec("INSERT INTO service_instances(id,service_type,name,url,api_key,auto_add_users) VALUES(?,?,?,'http://example','key',1)", service, service, service)
 	}
+	tx, err := database.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := autoAssignUser(tx, 1)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("admin auto-assigned: %v,%v", ids, err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
 	s := NewService(database, "secret", WebAuthnConfig{})
 	calls := 0
 	s.SetGrantAddedObserver(func(uid int64, id string) {

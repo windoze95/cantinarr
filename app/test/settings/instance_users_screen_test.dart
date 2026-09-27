@@ -138,7 +138,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Select all matching'));
     await tester.pumpAndSettle();
-    expect(find.text('4 matching · 3 selected'), findsOneWidget);
+    expect(find.text('4 matching · 4 selected'), findsOneWidget);
     await tester.enterText(find.byType(TextField), 'Bob');
     await tester.pumpAndSettle();
     expect(find.text('1 matching · 0 selected'), findsOneWidget);
@@ -177,7 +177,7 @@ void main() {
         find.descendant(of: bob, matching: find.byType(Checkbox));
     expect(
         find.text(
-            '1 assigned · 2 unassigned · 1 administrator in these results'),
+            '1 assigned · 3 unassigned · 1 administrator in these results'),
         findsOneWidget);
     expect(find.descendant(of: bob, matching: find.text('Assigned')),
         findsOneWidget);
@@ -196,10 +196,9 @@ void main() {
         findsOneWidget);
     expect(adapter.changes, isEmpty);
     final admin = find.byKey(const ValueKey('assignment-4'));
-    expect(find.descendant(of: admin, matching: find.byType(Checkbox)),
-        findsNothing);
+    expect(find.descendant(of: admin, matching: find.byType(Checkbox)), findsOneWidget);
     expect(
-        find.descendant(of: admin, matching: find.text('Administrator access')),
+        find.descendant(of: admin, matching: find.text('Unassigned')),
         findsOneWidget);
     expect(tester.widget<ListTile>(admin).enabled, isTrue);
   });
@@ -208,13 +207,26 @@ void main() {
       (tester) async {
     await pump(tester, otherInstance: true);
     final bob = find.byKey(const ValueKey('assignment-3'));
-    expect(find.text('Current access to Other Books'), findsOneWidget);
+    expect(find.text('Personal assignments to Other Books'), findsOneWidget);
     expect(find.descendant(of: bob, matching: find.text('Unassigned')),
         findsOneWidget);
     expect(
         find.descendant(
             of: bob, matching: find.text('Request destination: Books')),
         findsOneWidget);
+  });
+  testWidgets('administrators can be assigned without enrolling them everywhere', (tester) async {
+    final adapter = await pump(tester);
+    await tester.enterText(find.byType(TextField), 'Administrator');
+    await tester.pumpAndSettle();
+    expect(find.text('Unassigned'), findsOneWidget);
+    await tester.tap(find.text('Select all matching'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add selected (1)'));
+    await tester.pumpAndSettle();
+    expect(adapter.changes.single, {'action': 'add', 'user_ids': [4]});
+    expect(find.text('Assigned'), findsOneWidget);
+    expect(find.textContaining('Can browse all instances'), findsOneWidget);
   });
   testWidgets('filters fit a phone viewport', (tester) async {
     await pump(tester, size: const Size(390, 844));

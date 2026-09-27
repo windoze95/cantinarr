@@ -67,7 +67,7 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
   }
 
   List<UserSummary> get _matching => _users.where((u) {
-        final assigned = u.isAdmin || (_assignments[u.id]?.assigned ?? false);
+        final assigned = (_assignments[u.id]?.assigned ?? false);
         return u.username
                 .toLowerCase()
                 .contains(_search.trim().toLowerCase()) &&
@@ -104,7 +104,7 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
           builder: (context) => AlertDialog(
                 title: Text('Remove ${ids.length} users?'),
                 content: Text(
-                    'Remove access to ${widget.instanceName} for the selected users? Other instance assignments stay in place.'
+                    'Remove ${widget.instanceName} from the selected users’ assignments? Administrators retain their management access. Other instance assignments stay in place.'
                     '${preferences > 0 ? '\n\n$preferences saved preferences will be cleared. Their default will use a remaining assigned instance, if any.' : ''}'),
                 actions: [
                   TextButton(
@@ -166,16 +166,8 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
   Widget _userRow(UserSummary user) {
     final assigned = _assignments[user.id]?.assigned == true;
     final colors = Theme.of(context).colorScheme;
-    final status = user.isAdmin
-        ? 'Administrator access'
-        : assigned
-            ? 'Assigned'
-            : 'Unassigned';
-    final color = user.isAdmin
-        ? colors.primary
-        : assigned
-            ? colors.tertiary
-            : colors.onSurfaceVariant;
+    final status = assigned ? 'Assigned' : 'Unassigned';
+    final color = assigned ? colors.tertiary : colors.onSurfaceVariant;
     void toggleSelection() => setState(() {
           if (!_selected.add(user.id)) _selected.remove(user.id);
         });
@@ -183,19 +175,14 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
     return ListTile(
       key: ValueKey('assignment-${user.id}'),
       contentPadding: const EdgeInsets.symmetric(vertical: 8),
-      leading: user.isAdmin
-          ? const SizedBox(
-              width: 48,
-              height: 48,
-              child: Icon(Icons.admin_panel_settings_outlined))
-          : Tooltip(
-              message: 'Select ${user.username} for bulk changes',
-              child: Checkbox(
-                semanticLabel: 'Select ${user.username} for bulk changes',
-                value: _selected.contains(user.id),
-                onChanged: _saving ? null : (_) => toggleSelection(),
-              ),
-            ),
+      leading: Tooltip(
+        message: 'Select ${user.username} for bulk changes',
+        child: Checkbox(
+          semanticLabel: 'Select ${user.username} for bulk changes',
+          value: _selected.contains(user.id),
+          onChanged: _saving ? null : (_) => toggleSelection(),
+        ),
+      ),
       title: Wrap(
           spacing: 12,
           runSpacing: 8,
@@ -210,11 +197,9 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
                   borderRadius: BorderRadius.circular(8)),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
                 Icon(
-                    user.isAdmin
-                        ? Icons.admin_panel_settings_outlined
-                        : assigned
-                            ? Icons.check_circle_outline
-                            : Icons.remove_circle_outline,
+                    assigned
+                        ? Icons.check_circle_outline
+                        : Icons.remove_circle_outline,
                     size: 16,
                     color: color),
                 const SizedBox(width: 6),
@@ -228,11 +213,10 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
           ]),
       subtitle: Padding(
         padding: const EdgeInsets.only(top: 6),
-        child: Text(user.isAdmin
-            ? 'Access to all instances. Administrator access cannot be removed here.'
-            : 'Request destination: ${_instanceName(_assignments[user.id]?.effectiveDefaultId ?? '')}'),
+        child: Text(
+            '${user.isAdmin ? 'Administrator · Can browse all instances.\n' : ''}Request destination: ${_instanceName(_assignments[user.id]?.effectiveDefaultId ?? '')}'),
       ),
-      onTap: _saving || user.isAdmin ? null : toggleSelection,
+      onTap: _saving ? null : toggleSelection,
     );
   }
 
@@ -242,11 +226,10 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
     final addCount =
         _selected.where((id) => !(_assignments[id]?.assigned ?? false)).length;
     final removeCount = _selected.length - addCount;
-    final assignedCount = matching
-        .where((u) => !u.isAdmin && _assignments[u.id]?.assigned == true)
-        .length;
+    final assignedCount =
+        matching.where((u) => _assignments[u.id]?.assigned == true).length;
     final adminCount = matching.where((u) => u.isAdmin).length;
-    final unassignedCount = matching.length - assignedCount - adminCount;
+    final unassignedCount = matching.length - assignedCount;
     return Scaffold(
       appBar: AppBar(title: Text('Manage users · ${widget.instanceName}')),
       body: CenteredContent(
@@ -317,7 +300,7 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
                             (v) => _invitation = v),
                       ]),
                       const SizedBox(height: 16),
-                      Text('Current access to ${widget.instanceName}',
+                      Text('Personal assignments to ${widget.instanceName}',
                           style: Theme.of(context).textTheme.titleMedium),
                       const SizedBox(height: 4),
                       Text(
@@ -333,9 +316,8 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
                             onPressed: _saving
                                 ? null
                                 : () => setState(() {
-                                      _selected.addAll(matching
-                                          .where((u) => !u.isAdmin)
-                                          .map((u) => u.id));
+                                      _selected
+                                          .addAll(matching.map((u) => u.id));
                                     }),
                             child: const Text('Select all matching')),
                         TextButton(

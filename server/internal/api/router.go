@@ -832,7 +832,7 @@ type configInstanceStore interface {
 	ListAll() ([]instance.Instance, error)
 	ListUserDefaults(userID int64) (map[string]string, error)
 	VisibleInstanceIDs(userID int64, serviceType string) ([]string, error)
-	EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error)
+	AssignedDefaultInstanceID(userID int64, serviceType string) (string, error)
 }
 
 func configHandler(cfg *config.Config, store configInstanceStore, creds *credentials.Registry, aiHandler *ai.Handler, remediationService *remediation.Service, settings *serversettings.Service, appleTVCapability ...func() bool) http.HandlerFunc {
@@ -844,6 +844,8 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			ServiceType    string `json:"service_type"`
 			Name           string `json:"name"`
 			IsDefault      bool   `json:"is_default"`
+			Assigned       bool   `json:"assigned"`
+			RequestDefault bool   `json:"request_default"`
 			MediaDownloads bool   `json:"media_downloads"`
 		}
 
@@ -867,28 +869,26 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 		}
 		visible := map[string]map[string]bool{}
 		visibleDefault := map[string]string{}
-		if !isAdmin {
-			// Media servers are listed too so a granted user's app can offer
-			// the account guide; their grant-only rules make the visible set
-			// exactly the grants (see EffectiveDefaultInstanceID).
-			for _, serviceType := range append([]string{"radarr", "sonarr", "chaptarr", "lidarr"}, instance.MediaServerTypes()...) {
-				visibleIDs, err := store.VisibleInstanceIDs(userID, serviceType)
-				if err != nil {
-					http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
-					return
-				}
-				defaultID, err := store.EffectiveDefaultInstanceID(userID, serviceType)
-				if err != nil {
-					http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
-					return
-				}
-				ids := map[string]bool{}
-				for _, id := range visibleIDs {
-					ids[id] = true
-				}
-				visible[serviceType] = ids
-				visibleDefault[serviceType] = defaultID
+		// Media servers are listed too so a granted user's app can offer
+		// the account guide; their grant-only rules make the visible set
+		// exactly the grants. Admin navigation is independent of these assignments.
+		for _, serviceType := range append([]string{"radarr", "sonarr", "chaptarr", "lidarr"}, instance.MediaServerTypes()...) {
+			visibleIDs, err := store.VisibleInstanceIDs(userID, serviceType)
+			if err != nil {
+				http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+				return
 			}
+			defaultID, err := store.AssignedDefaultInstanceID(userID, serviceType)
+			if err != nil {
+				http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+				return
+			}
+			ids := map[string]bool{}
+			for _, id := range visibleIDs {
+				ids[id] = true
+			}
+			visible[serviceType] = ids
+			visibleDefault[serviceType] = defaultID
 		}
 
 		instances := []instanceInfo{}
@@ -945,6 +945,8 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 				ServiceType:    inst.ServiceType,
 				Name:           inst.Name,
 				IsDefault:      isDefault,
+				Assigned:       visible[inst.ServiceType][inst.ID],
+				RequestDefault: visibleDefault[inst.ServiceType] == inst.ID,
 				MediaDownloads: inst.MediaDownloadsConfigured(cfg.MediaDownloadRoots),
 			})
 		}

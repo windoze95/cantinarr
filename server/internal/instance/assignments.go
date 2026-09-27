@@ -9,7 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-var ErrAssignmentSelection = errors.New("select existing regular users and an automation instance")
+var ErrAssignmentSelection = errors.New("select existing users and an automation instance")
 
 type Assignment struct {
 	UserID              int64  `json:"user_id"`
@@ -46,7 +46,7 @@ func (s *Store) Assignments(instanceID string) ([]Assignment, error) {
 		return nil, err
 	}
 	for i := range out {
-		out[i].EffectiveDefaultID, err = s.EffectiveDefaultInstanceID(out[i].UserID, service)
+		out[i].EffectiveDefaultID, err = s.AssignedDefaultInstanceID(out[i].UserID, service)
 		if err != nil {
 			return nil, err
 		}
@@ -81,7 +81,7 @@ func (s *Store) ChangeAssignments(instanceID string, userIDs []int64, add bool) 
 			}
 			return err
 		}
-		if role != "user" {
+		if role != "user" && role != "admin" {
 			return ErrAssignmentSelection
 		}
 		seen[id] = true
@@ -143,7 +143,7 @@ func (h *Handler) ChangeAssignments(w http.ResponseWriter, r *http.Request) {
 }
 func assignmentError(w http.ResponseWriter, err error) {
 	if errors.Is(err, ErrAssignmentSelection) {
-		http.Error(w, `{"error":"select existing regular users and an automation instance"}`, http.StatusBadRequest)
+		http.Error(w, `{"error":"select existing users and an automation instance"}`, http.StatusBadRequest)
 		return
 	}
 	http.Error(w, `{"error":"assignments temporarily unavailable"}`, http.StatusServiceUnavailable)

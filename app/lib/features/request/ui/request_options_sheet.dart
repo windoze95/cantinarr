@@ -38,6 +38,8 @@ class RequestOptionsSheet extends StatefulWidget {
 
   /// The library preselected when the sheet opens (defaults to the first).
   final String? selectedLibraryId;
+  final bool showLibrary;
+  final String? libraryNote;
 
   /// Refetches the option set for a newly selected library, since quality
   /// profiles live inside an instance and a sibling's ids are meaningless.
@@ -50,6 +52,8 @@ class RequestOptionsSheet extends StatefulWidget {
     this.initialSelection,
     this.libraries = const [],
     this.selectedLibraryId,
+    this.showLibrary = false,
+    this.libraryNote,
     this.onLibraryOptions,
   });
 
@@ -62,30 +66,48 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
   int? _qualityProfileId;
   late RequestOptions _options;
   String? _libraryId;
+  bool _loadingOptions = false;
+  int _optionsVersion = 0;
 
   @override
   void initState() {
     super.initState();
     _options = widget.options;
-    _seasonScope = widget.initialSelection?.seasonScope ?? widget.options.defaultSeasonScope;
+    _seasonScope = widget.initialSelection?.seasonScope ??
+        widget.options.defaultSeasonScope;
     _qualityProfileId = widget.initialSelection?.qualityProfileId;
-    _libraryId = widget.selectedLibraryId ??
-        (widget.libraries.isNotEmpty ? widget.libraries.first.id : null);
+    _libraryId = widget.libraries
+            .any((library) => library.id == widget.selectedLibraryId)
+        ? widget.selectedLibraryId
+        : (widget.libraries.isNotEmpty ? widget.libraries.first.id : null);
   }
 
   Future<void> _selectLibrary(String libraryId) async {
     if (_libraryId == libraryId) return;
+    final version = ++_optionsVersion;
+    final refetch = widget.onLibraryOptions;
     setState(() {
       _libraryId = libraryId;
       // Profile ids are per-library; a kept selection would silently name a
       // different profile (or nothing) on the new library.
       _qualityProfileId = null;
+      _loadingOptions = refetch != null;
     });
-    final refetch = widget.onLibraryOptions;
     if (refetch == null) return;
     final refreshed = await refetch(libraryId);
-    if (!mounted || refreshed == null || _libraryId != libraryId) return;
-    setState(() => _options = refreshed);
+    if (!mounted || version != _optionsVersion) return;
+    setState(() {
+      // If options cannot be read, leave policy choices to the server rather
+      // than offering profiles or season settings from the previous library.
+      _options = refreshed ??
+          const RequestOptions(
+              canChooseSeason: false,
+              canChooseQuality: false,
+              defaultSeasonScope: SeasonScope.all,
+              qualityProfiles: []);
+      _seasonScope = _options.defaultSeasonScope;
+      _loadingOptions = false;
+    });
   }
 
   @override
@@ -111,7 +133,7 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
             ),
           ),
           const SizedBox(height: 16),
-          if (widget.libraries.length > 1) ...[
+          if (widget.libraries.length > 1 || widget.showLibrary) ...[
             const _SectionLabel('Library'),
             const SizedBox(height: 8),
             Wrap(
@@ -135,9 +157,18 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
                       ))
                   .toList(),
             ),
+            if (widget.libraryNote != null) ...[
+              const SizedBox(height: 8),
+              Text(widget.libraryNote!,
+                  style: Theme.of(context).textTheme.bodySmall),
+            ],
             const SizedBox(height: 16),
           ],
-          if (o.canChooseSeason) ...[
+          if (_loadingOptions) ...[
+            const LinearProgressIndicator(),
+            const SizedBox(height: 16),
+          ],
+          if (!_loadingOptions && o.canChooseSeason) ...[
             const _SectionLabel('Seasons'),
             const SizedBox(height: 8),
             Wrap(
@@ -164,7 +195,9 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
             ),
             const SizedBox(height: 16),
           ],
-          if (o.canChooseQuality && o.qualityProfiles.isNotEmpty) ...[
+          if (!_loadingOptions &&
+              o.canChooseQuality &&
+              o.qualityProfiles.isNotEmpty) ...[
             const _SectionLabel('Quality'),
             const SizedBox(height: 8),
             DropdownButtonFormField<int?>(
@@ -217,14 +250,19 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
               const SizedBox(width: 12),
               Expanded(
                 child: ElevatedButton(
-                  onPressed: () => Navigator.of(context).pop(
-                    RequestOptionsResult(
-                      seasonScope: o.canChooseSeason ? _seasonScope : null,
-                      qualityProfileId: _qualityProfileId,
-                      instanceId:
-                          widget.libraries.length > 1 ? _libraryId : null,
-                    ),
-                  ),
+                  onPressed: _loadingOptions
+                      ? null
+                      : () => Navigator.of(context).pop(
+                            RequestOptionsResult(
+                              seasonScope:
+                                  o.canChooseSeason ? _seasonScope : null,
+                              qualityProfileId: _qualityProfileId,
+                              instanceId: widget.libraries.length > 1 ||
+                                      widget.showLibrary
+                                  ? _libraryId
+                                  : null,
+                            ),
+                          ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.accent,
                     foregroundColor: AppTheme.onAccent,

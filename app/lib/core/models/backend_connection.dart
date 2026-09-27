@@ -17,6 +17,11 @@ class ServiceInstance {
   final String name;
   final bool isDefault;
 
+  /// Personal request assignment, separate from administrator navigation.
+  /// Null preserves compatibility with servers predating assignment metadata.
+  final bool? assigned;
+  final bool? requestDefault;
+
   /// Whether this exact instance has completed-media path mappings. Null means
   /// the server predates per-instance download capabilities.
   final bool? mediaDownloads;
@@ -26,6 +31,8 @@ class ServiceInstance {
     required this.serviceType,
     required this.name,
     this.isDefault = false,
+    this.assigned,
+    this.requestDefault,
     this.mediaDownloads,
   });
 
@@ -35,6 +42,8 @@ class ServiceInstance {
         serviceType: json['service_type'] as String,
         name: json['name'] as String,
         isDefault: json['is_default'] as bool? ?? false,
+        assigned: json['assigned'] as bool?,
+        requestDefault: json['request_default'] as bool?,
         mediaDownloads: json['media_downloads'] as bool?,
       );
 
@@ -43,6 +52,8 @@ class ServiceInstance {
         'service_type': serviceType,
         'name': name,
         'is_default': isDefault,
+        if (assigned != null) 'assigned': assigned,
+        if (requestDefault != null) 'request_default': requestDefault,
         if (mediaDownloads != null) 'media_downloads': mediaDownloads,
       };
 }

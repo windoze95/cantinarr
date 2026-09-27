@@ -478,6 +478,10 @@ void main() {
       expect(find.text('Artist A'), findsOneWidget);
       await tester.tap(find.text('Request'));
       await tester.pumpAndSettle();
+      expect(backend.submissions, isEmpty);
+      expect(tester.widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Music')).selected, isTrue);
+      await tester.tap(find.text('Request').last);
+      await tester.pumpAndSettle();
       expect(backend.submissions.single, containsPair('foreign_id', 'mb-a'));
       expect(backend.submissions.single, containsPair('media_type', 'music'));
       expect(

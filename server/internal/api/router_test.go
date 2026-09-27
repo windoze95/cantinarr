@@ -249,6 +249,35 @@ func TestConfigHandlerListsGrantedInstancesForNonAdmin(t *testing.T) {
 	}
 }
 
+func TestAdminPersonalRequestsAreSeparateFromNavigation(t *testing.T) {
+	store, creds, remediationSvc, userID := newConfigHandlerTestState(t)
+	createConfigInstance(t, store, "chaptarr", "Global Books", true)
+	personal := createConfigInstance(t, store, "chaptarr", "My Books", false)
+	claims := &auth.Claims{UserID: userID, Username: "admin", Role: auth.RoleAdmin}
+	check := func(assigned bool) {
+		t.Helper()
+		response := requestConfig(t, store, creds, remediationSvc, claims)
+		if len(response.Instances) != 2 {
+			t.Fatalf("admin navigation=%v", response.Instances)
+		}
+		for _, row := range response.Instances {
+			want := assigned && row.ID == personal.ID
+			if row.Assigned != want || row.RequestDefault != want {
+				t.Fatalf("personal request routing=%+v, assigned=%v", row, assigned)
+			}
+		}
+	}
+	check(false)
+	if err := store.ChangeAssignments(personal.ID, []int64{userID}, true); err != nil {
+		t.Fatal(err)
+	}
+	check(true)
+	if err := store.ChangeAssignments(personal.ID, []int64{userID}, false); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+}
+
 func TestConfigHandlerShowsAllInstancesForAdmin(t *testing.T) {
 	store, creds, remediationSvc, userID := newConfigHandlerTestState(t)
 	createConfigInstance(t, store, "radarr", "Main Radarr", true)
@@ -620,7 +649,7 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			}
 			seen := make(map[string]bool, len(gotInstances))
 			for _, got := range gotInstances {
-				assertExactMapKeys(t, got, "id", "service_type", "name", "is_default", "media_downloads")
+				assertExactMapKeys(t, got, "id", "service_type", "name", "is_default", "media_downloads", "assigned", "request_default")
 				var id, serviceType string
 				if err := json.Unmarshal(got["id"], &id); err != nil {
 					t.Fatalf("decode instance id: %v", err)
@@ -662,6 +691,8 @@ type configHandlerResponse struct {
 		ServiceType    string `json:"service_type"`
 		Name           string `json:"name"`
 		IsDefault      bool   `json:"is_default"`
+		Assigned       bool   `json:"assigned"`
+		RequestDefault bool   `json:"request_default"`
 		MediaDownloads bool   `json:"media_downloads"`
 	} `json:"instances"`
 }
@@ -677,6 +708,10 @@ func (s *failingConfigInstanceStore) ListUserDefaults(int64) (map[string]string,
 
 func (s *failingConfigInstanceStore) VisibleInstanceIDs(int64, string) ([]string, error) {
 	return nil, s.defaultsErr
+}
+
+func (s *failingConfigInstanceStore) AssignedDefaultInstanceID(userID int64, serviceType string) (string, error) {
+	return s.EffectiveDefaultInstanceID(userID, serviceType)
 }
 
 func (s *failingConfigInstanceStore) EffectiveDefaultInstanceID(int64, string) (string, error) {

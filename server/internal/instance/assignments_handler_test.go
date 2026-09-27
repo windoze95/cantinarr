@@ -50,7 +50,6 @@ func TestAssignmentEndpointSelectionAndAuthorization(t *testing.T) {
 		`{"action":"replace","user_ids":[` + jsonInt(alice) + `]}`,
 		`{"action":"add","user_ids":[]}`,
 		`{"action":"add","user_ids":[` + jsonInt(alice) + `,99999]}`,
-		`{"action":"add","user_ids":[` + jsonInt(alice) + `,` + jsonInt(admin) + `]}`,
 	} {
 		if out := call(auth.RoleAdmin, "PATCH", body); out.Code != 400 {
 			t.Fatalf("invalid selection %d %s", out.Code, out.Body)
@@ -87,10 +86,19 @@ func TestAssignmentEndpointSelectionAndAuthorization(t *testing.T) {
 	if !byID[bob].Assigned || byID[bob].EffectiveDefaultID != id {
 		t.Fatal("removal affected unselected user", byID[bob])
 	}
-	if byID[admin].EffectiveDefaultID != id {
-		t.Fatal("administrator routing lost")
+	if byID[admin].Assigned || byID[admin].EffectiveDefaultID != "" {
+		t.Fatal("administrator visibility became an assignment")
 	}
 	if changed != 3 {
 		t.Fatalf("config changes %d", changed)
+	}
+	for _, action := range []string{"add", "remove"} {
+		if out := call(auth.RoleAdmin, "PATCH", `{"action":"`+action+`","user_ids":[`+jsonInt(admin)+`]}`); out.Code != 200 {
+			t.Fatalf("admin personal assignment %s: %d %s", action, out.Code, out.Body)
+		}
+		assigned, err := s.UserHasInstanceAccess(admin, id)
+		if err != nil || assigned != (action == "add") {
+			t.Fatalf("admin assignment=%v,%v", assigned, err)
+		}
 	}
 }

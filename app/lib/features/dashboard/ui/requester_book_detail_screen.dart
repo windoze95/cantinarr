@@ -30,6 +30,7 @@ import '../../media_download/data/media_download_models.dart';
 import '../../media_download/ui/media_download_button.dart';
 import '../../request/data/book_ownership.dart';
 import '../../request/data/request_service.dart';
+import '../../request/ui/request_library_picker.dart';
 import '../../request/ui/book_format_panel.dart';
 import '../data/book_library_service.dart';
 
@@ -647,6 +648,9 @@ class _RequesterBookDetailScreenState
               foreignId: widget.foreignId,
               title: title,
               instanceId: instanceId,
+              requestLibraries: requestLibraries(auth?.connection, 'chaptarr'),
+              defaultRequestLibraryId: defaultRequestLibrary(auth?.connection, 'chaptarr'),
+              chooseRequestLibrary: true,
               searchTerm: widget.searchTerm,
               service: _requestService,
               ownership: ownership,

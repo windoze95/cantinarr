@@ -7,6 +7,8 @@ import '../../../core/widgets/phone_apps_sheet.dart';
 import '../../../core/widgets/status_pill.dart';
 import '../data/book_ownership.dart';
 import '../data/request_service.dart';
+import 'request_library_picker.dart';
+import 'request_options_sheet.dart';
 
 /// The requester's per-format surface for one book: an eBook row and an
 /// Audiobook row that each carry that format's live state *and* are the request
@@ -17,6 +19,9 @@ class BookFormatPanel extends StatefulWidget {
   final String foreignId;
   final String title;
   final String? instanceId;
+  final List<LibraryChoice> requestLibraries;
+  final String? defaultRequestLibraryId;
+  final bool chooseRequestLibrary;
 
   /// The search text that surfaced this book, when it came from a search. The
   /// server needs it to re-find the exact metadata record at add time; a
@@ -47,6 +52,9 @@ class BookFormatPanel extends StatefulWidget {
     required this.foreignId,
     required this.title,
     this.instanceId,
+    this.requestLibraries = const [],
+    this.defaultRequestLibraryId,
+    this.chooseRequestLibrary = false,
     this.searchTerm,
     required this.service,
     this.ownership,
@@ -65,6 +73,11 @@ class BookFormatPanel extends StatefulWidget {
 }
 
 class _BookFormatPanelState extends State<BookFormatPanel> {
+  String? _requestLibraryId;
+  bool _choosingLibrary = false;
+  String? get _instanceId => _requestLibraryId ?? widget.instanceId;
+  bool get _sameLibrary => _instanceId == widget.instanceId;
+
   // The async-loaded request state (no ownership). Ownership is layered on in
   // [_detail] on every read, so the rows reflect the owned-books digest even
   // when it loads AFTER this panel was first built — otherwise an owned-but-
@@ -108,9 +121,9 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
   /// an admin's denial and every live state (downloading, available) still win.
   BookRequestStatusDetail get _detail {
     final detail = _serverDetail.withOwnership(
-      widget.ownership,
-      ownershipStatusKnown: widget.ownershipStatusKnown,
-      identityAmbiguous: widget.identityAmbiguous,
+      _sameLibrary ? widget.ownership : null,
+      ownershipStatusKnown: !_sameLibrary || widget.ownershipStatusKnown,
+      identityAmbiguous: _sameLibrary && widget.identityAmbiguous,
     );
     final formats = {...detail.formats};
     final waits = {...detail.formatWaits};
@@ -166,6 +179,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     // If this panel got reused for a different book, re-fetch its request state.
     if (oldWidget.foreignId != widget.foreignId ||
         oldWidget.instanceId != widget.instanceId) {
+      _requestLibraryId = null;
       _loading = true;
       _hasLiveDetail = false;
       _reportedCanonicalId = null;
@@ -197,7 +211,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     try {
       final detail = await widget.service.checkBookStatusDetail(
         foreignId,
-        instanceId: widget.instanceId,
+        instanceId: _instanceId,
         title: widget.title,
         searchTerm: widget.searchTerm,
       );
@@ -226,7 +240,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
             !detail.isKnown || canonical.isEmpty ? widget.foreignId : canonical;
         if (nextId != (_reportedCanonicalId ?? widget.foreignId)) {
           _reportedCanonicalId = nextId;
-          widget.onCanonicalForeignId?.call(nextId);
+          if (_sameLibrary) widget.onCanonicalForeignId?.call(nextId);
         }
       }
     } finally {
@@ -242,7 +256,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
   Future<void> _checkSaved() async {
     final generation = ++_savedGeneration;
     final data = await widget.service
-        .bookDeliveryStatus(widget.foreignId, instanceId: widget.instanceId);
+        .bookDeliveryStatus(widget.foreignId, instanceId: _instanceId);
     if (!mounted || generation != _savedGeneration || data == null) return;
     setState(() {
       _delivery = ((data['delivery'] as List?) ?? [])
@@ -320,13 +334,49 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     final selected = format == BookRequestFormat.both
         ? [BookRequestFormat.ebook, BookRequestFormat.audiobook]
         : [format];
-    if (selected.any(_inFlight.contains) || !_canRequest(_detail, format)) {
+    if (_choosingLibrary || selected.any(_inFlight.contains) ||
+        !_canRequest(_detail, format) ||
+        (widget.chooseRequestLibrary &&
+            widget.requestLibraries.length > 1 &&
+            _inFlight.isNotEmpty)) {
       return;
+    }
+    final requestKey = (widget.foreignId, widget.instanceId);
+    String? target;
+    if (widget.chooseRequestLibrary) {
+      setState(() => _choosingLibrary = true);
+      try {
+        target = await confirmRequestLibrary(context,
+            libraries: widget.requestLibraries, defaultLibraryId: widget.defaultRequestLibraryId);
+      } finally {
+        if (mounted) setState(() => _choosingLibrary = false);
+      }
+      if (!mounted || requestKey != (widget.foreignId, widget.instanceId) || target == null) return;
     }
     _savedGeneration++; // ignore reads started before this submission
     _checkGeneration++;
     setState(() => _inFlight.addAll(selected));
     try {
+      if (target != null) {
+        if (target != _instanceId) {
+          _checkGeneration++;
+          _savedGeneration++;
+          setState(() {
+            _requestLibraryId = target;
+            _reportedCanonicalId = null;
+            _serverDetail = const BookRequestStatusDetail(isKnown: false);
+            _hasLiveDetail = false;
+            _submitted.clear();
+            _delivery = const [];
+          });
+          await _check();
+          if (!mounted || requestKey != (widget.foreignId, widget.instanceId)) return;
+          if (!_canRequest(_detail, format)) {
+            _announce(_formatOutcome(format, _detail.statusFor(format)));
+            return;
+          }
+        }
+      }
       BookRequestSubmission? submission;
       String? failureMessage;
       var definitiveFailure = false;
@@ -335,7 +385,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
           foreignId: widget.foreignId,
           title: widget.title,
           format: format,
-          instanceId: widget.instanceId,
+          instanceId: _instanceId,
           searchTerm: widget.searchTerm,
         );
       } on RequestSubmissionException catch (e) {
@@ -346,7 +396,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
         failureMessage = e.message;
         definitiveFailure = e.definitive;
       }
-      if (!mounted) return;
+      if (!mounted || requestKey != (widget.foreignId, widget.instanceId)) return;
       if (submission == null) {
         await _refreshAfterSubmission();
         if (!mounted) return;
@@ -498,6 +548,12 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (widget.chooseRequestLibrary && _requestLibraryId != null)
+          Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                  'Request library: ${requestLibraryName(widget.requestLibraries, _instanceId)}')),
+
         // A Material (not a decorated box) so a row tap paints its ripple on
         // top of the card instead of behind its opaque surface colour.
         Material(
@@ -520,16 +576,17 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
                 detail,
                 format: BookRequestFormat.ebook,
                 icon: Icons.menu_book,
-                download: widget.ebookDownload,
+                download: _sameLibrary ? widget.ebookDownload : null,
               ),
               const Divider(height: 1, indent: 52, color: AppTheme.border),
               _row(
                 detail,
                 format: BookRequestFormat.audiobook,
                 icon: Icons.headphones,
-                download: widget.audiobookDownload,
+                download: _sameLibrary ? widget.audiobookDownload : null,
               ),
-              if (widget.audiobookListen != null &&
+              if (_sameLibrary &&
+                  widget.audiobookListen != null &&
                   detail.isKnown &&
                   !widget.identityAmbiguous &&
                   !_refreshFailed &&
@@ -693,7 +750,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
               ? _RequestAction(denied ? 'Request again' : 'Request')
               : null,
       download: download,
-      onTap: requestable && !_inFlight.contains(format)
+      onTap: requestable && !_choosingLibrary && !_inFlight.contains(format)
           ? () => _request(format)
           : null,
     );

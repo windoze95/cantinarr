@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cantinarr/features/request/data/request_service.dart';
 import 'package:cantinarr/features/request/ui/request_options_sheet.dart';
 import 'package:flutter/material.dart';
@@ -121,5 +123,33 @@ void main() {
 
     expect(find.text('Library'), findsNothing);
     expect(find.text('Movies'), findsNothing);
+  });
+
+  testWidgets('switching libraries waits for options and discards late reads',
+      (tester) async {
+    final pending = <Completer<RequestOptions?>>[];
+    final result = await openSheet(tester, onLibraryOptions: (_) {
+      final completer = Completer<RequestOptions?>();
+      pending.add(completer);
+      return completer.future;
+    });
+    await tester.tap(find.text('4K Movies'));
+    await tester.pump();
+    expect(tester.widget<ElevatedButton>(find.widgetWithText(ElevatedButton, 'Request')).onPressed, isNull);
+    expect(find.byType(DropdownButtonFormField<int?>), findsNothing);
+    await tester.tap(find.text('Movies'));
+    await tester.pump();
+    pending.last.complete(options);
+    await tester.pumpAndSettle();
+    // The earlier read finishing later must not install another library's policy.
+    pending.first.complete(const RequestOptions(canChooseSeason: true,
+        canChooseQuality: false, defaultSeasonScope: SeasonScope.all, qualityProfiles: []));
+    await tester.pumpAndSettle();
+    expect(find.text('Seasons'), findsNothing);
+    expect(find.byType(DropdownButtonFormField<int?>), findsOneWidget);
+    await tester.tap(find.text('Request'));
+    await tester.pumpAndSettle();
+    expect(result()?.instanceId, 'radarr-main');
+    expect(result()?.qualityProfileId, isNull);
   });
 }

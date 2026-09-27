@@ -797,7 +797,7 @@ class _UserRequestSettingsScreenState
       ),
       for (final entry in grouped.entries) ...[
         _defaultInstanceField(serviceType: entry.key, instances: entry.value),
-        if ((_assignmentModel && !widget.targetIsAdmin) || entry.value.length > 1)
+        if (_assignmentModel || entry.value.length > 1)
           _instanceGrantsField(serviceType: entry.key, instances: entry.value),
       ],
     ];
@@ -856,7 +856,7 @@ class _UserRequestSettingsScreenState
     // Chaptarr and Lidarr grants are per-user for regular users. Admins can
     // also use this setting to pin their own request target.
     final isGrantOnly = serviceType == 'chaptarr' || serviceType == 'lidarr';
-    if (_assignmentModel && !widget.targetIsAdmin) {
+    if (_assignmentModel) {
       instances = instances.where((i) => _instanceGrants[serviceType]?.contains(i.id) == true).toList();
     }
     final value = _defaultInstances[serviceType];

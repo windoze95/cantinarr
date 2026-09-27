@@ -82,6 +82,57 @@ func TestAssignmentsControlAllAutomationAccess(t *testing.T) {
 	}
 }
 
+func TestAdministratorPersonalDefaultsRequireAssignments(t *testing.T) {
+	for _, service := range []string{"radarr", "sonarr", "chaptarr", "lidarr"} {
+		t.Run(service, func(t *testing.T) {
+			s := newTestStore(t)
+			admin := createUser(t, s, "admin")
+			if _, err := s.db.Exec("UPDATE users SET role='admin' WHERE id=?", admin); err != nil {
+				t.Fatal(err)
+			}
+			global := mkDefaultInstance(t, s, service, "Global")
+			personal := mkInstance(t, s, service, "Personal")
+			check := func(want string) {
+				t.Helper()
+				id, err := s.AssignedDefaultInstanceID(admin, service)
+				if err != nil || id != want {
+					t.Fatalf("personal default=%q,%v want %q", id, err, want)
+				}
+			}
+			check("")
+			if id, err := s.EffectiveDefaultInstanceID(admin, service); err != nil || id != global {
+				t.Fatal("admin management routing lost", id, err)
+			}
+			if err := s.SetUserDefault(admin, service, global); err == nil {
+				t.Fatal("unassigned personal preference accepted")
+			}
+			if err := s.ChangeAssignments(personal, []int64{admin}, true); err != nil {
+				t.Fatal(err)
+			}
+			check(personal)
+			if err := s.ChangeAssignments(global, []int64{admin}, true); err != nil {
+				t.Fatal(err)
+			}
+			check(global)
+			if err := s.SetUserDefault(admin, service, personal); err != nil {
+				t.Fatal(err)
+			}
+			check(personal)
+			if err := s.SetUserGrants(admin, map[string][]string{service: {global}}); err != nil {
+				t.Fatal(err)
+			}
+			check(global)
+			if _, pinned, err := s.GetUserDefault(admin, service); err != nil || pinned {
+				t.Fatal("revoked admin preference survived", err)
+			}
+			if err := s.ChangeAssignments(global, []int64{admin}, false); err != nil {
+				t.Fatal(err)
+			}
+			check("")
+		})
+	}
+}
+
 func TestAutoAddSettingPreservesOmissionAndScope(t *testing.T) {
 	for _, service := range []string{"radarr", "sonarr", "chaptarr", "lidarr"} {
 		s := newTestStore(t)
