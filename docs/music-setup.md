@@ -12,7 +12,7 @@ This page is the whole path, in order.
 
 Cantinarr manages an existing Lidarr instance — it doesn't deploy one. What it needs from you:
 
-- A URL the **Cantinarr server** can reach. Clients never dial instance URLs, so cluster-internal names are fine and preferred; see the [instance URL guidance](../README.md#configuration).
+- A URL the **Cantinarr server** can reach. Clients never dial instance URLs, so cluster-internal names are fine and preferred; see the [instance URL guidance](configuration.md#instance-addresses).
 - A Lidarr API key.
 - Lidarr itself already working: a root folder, an indexer, a download client, and grabs that actually complete.
 
