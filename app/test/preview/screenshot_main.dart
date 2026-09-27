@@ -27,12 +27,33 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'screenshot_data.dart';
+import 'screenshot_music.dart';
 
 void main() {
+  // Earlier store shots intentionally have no Music navigation. Enable the
+  // service only for this shot to demonstrate that navigation follows setup.
+  final musicShot = Uri.base.queryParameters['shot'] == 'music';
+  final state = musicShot
+      ? _adminState.copyWith(
+          connection: _adminState.connection!.copyWith(
+            serverUrl: Uri.base.origin,
+            services: const AvailableServices(
+              radarr: true, sonarr: true, chaptarr: true, lidarr: true,
+              ai: true, tmdb: true,
+            ),
+            instances: [
+              ..._adminState.connection!.instances,
+              const ServiceInstance(
+                id: 'lidarr-main', serviceType: 'lidarr', name: 'Lidarr',
+              ),
+            ],
+          ),
+        )
+      : _adminState;
   runApp(
     ProviderScope(
       overrides: [
-        authProvider.overrideWith(() => _FakeAuthNotifier(_adminState)),
+        authProvider.overrideWith(() => _FakeAuthNotifier(state)),
         backendClientProvider.overrideWithValue(_stubDio()),
         realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
       ],
@@ -57,7 +78,7 @@ class _ScreenshotApp extends ConsumerWidget {
   }
 }
 
-/// Admin with every module lit up. Mirrors preview_main's instance set, plus a
+/// Original screenshot profile without Music. Mirrors preview_main's set, plus a
 /// second (qBittorrent) download client so the download-queue screen can be
 /// screenshotted for both SABnzbd (usenet) and qBittorrent (torrent) via the
 /// drawer's instance selector.
@@ -182,7 +203,8 @@ class _ScreenshotAdapter implements HttpClientAdapter {
           ? {'status': 'sent', 'detail': 'Fixture test confirmed. No Discord request was sent.'}
           : state;
     }
-    final body = discord ?? screenshotBodyFor(path, options.queryParameters) ??
+    final body = discord ?? screenshotMusicBody(path) ??
+        screenshotBodyFor(path, options.queryParameters) ??
         _fallback(path);
     return ResponseBody.fromString(
       jsonEncode(body),

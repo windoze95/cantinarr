@@ -22,7 +22,7 @@ const devices = [
   { tag: 'tablet10', vw: 800, vh: 1280, dpr: 2 },
 ];
 
-// Filled in once the harness lands; `actions` gets (page, device) after load.
+// `setup` installs local fixtures before load; `actions` runs after load.
 const shots = require('./routes.js');
 
 (async () => {
@@ -46,6 +46,7 @@ const shots = require('./routes.js');
       // not reliably re-route the SPA, and leftover overlay/scroll state must
       // not bleed between shots.
       const page = await ctx.newPage();
+      if (s.setup) await s.setup(page, d);
       const url = `${baseUrl}/?shot=${s.name}#${s.route}`;
       await page.goto(url, { waitUntil: 'networkidle' }).catch(() => {});
       // The standalone screenshot entrypoint does not run the production app's

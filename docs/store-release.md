@@ -371,14 +371,22 @@ gracefully until `PLAY_SERVICE_ACCOUNT_JSON` exists; App Store sync uses the exi
 
 Store screenshots are generated, not hand-taken:
 
+The original screenshots intentionally have no Music tab or Music module in their navigation.
+Keep those images unchanged when adding the separate Music screenshot: the different navigation
+demonstrates that Cantinarr adapts to the configured services. The harness enables Lidarr only
+when `shot=music`; do not add it to the shared screenshot profile.
+
 1. `app/test/preview/screenshot_main.dart` boots the real app with a stubbed backend that returns
    rich demo data (same pattern as `preview_main.dart`, never shipped).
-2. `cd app && flutter build web --release -t test/preview/screenshot_main.dart -o build/web_screens`
+2. With the pinned Flutter SDK, run `cd app && flutter pub get --enforce-lockfile`, then
+   `flutter build web --release --no-pub -t test/preview/screenshot_main.dart -o build/web_screens`.
 3. Serve `build/web_screens` (e.g. `python3 -m http.server 8787 -d build/web_screens`) and run
    `cd app/tool/screenshots && npm install && node shoot.js http://localhost:8787 out`.
    `shoot.js` drives system Chrome via Playwright at exact store pixel sizes (viewport ×
    deviceScaleFactor): iPhone 6.9" 1320×2868, iPad 13" 2064×2752, Play phone 1080×2400,
    Play 10" tablet 1600×2560. Routes and per-shot interactions live in `routes.js`.
+   To capture only Music, append an empty device filter and `music`:
+   `node shoot.js http://localhost:8787 out '' music`.
 4. Copy the outputs into the two fastlane screenshot directories above and commit; the merge
    syncs them to the consoles.
 
@@ -388,6 +396,15 @@ assigned per device after skips, so each store gets a contiguous run. Demo dates
 import times) are anchored to the run date rather than written down, because the Releases and
 Recently Added screens filter by recency: a hard-coded date eventually shoots an empty screen
 that looks like a real answer.
+
+Music occupies App Store slot 9, replacing TV home. On Play, the original TV library image
+moves from slot 8 to slot 5, replacing Movie detail; Music takes slot 8. Apply this order to
+both phone and tablet sets. The other images retain their original bytes and navigation.
+
+Music uses the real album selection from the README, captured from ListenBrainz on 2026-09-26.
+`app/tool/screenshots/music.js` records each Cover Art Archive URL and caches the image in the
+system temporary directory before capture. A failed cover fetch stops the capture. These catalog
+covers are separate from the public demo's CC0 fixtures; they are not claimed as public domain.
 
 The Play 512 icon and the 1024×500 feature graphic derive from the committed 1024px icon art
 (`app/ios/.../appicon.png`, `app/assets/splash_icon.png`).
