@@ -43,7 +43,7 @@ Full parity with the current Cantinarr API surface:
 - **Books browsing** — the Chaptarr library by author and by series, with per-format ownership on every title, and book pages that link out to Goodreads and Open Library (the classics carry their real Goodreads and Open Library work ids; the invented titles carry none and show no Links line)
 - **Trending Books** — a Hardcover-connected trending row on the seeded Chaptarr instance, with typed identity keys so an owned book carries its availability badge; the retired Open Library discovery routes answer `catalog_retired` instead of an empty shelf. Admins connect Hardcover per instance by API token or device sign-in, and can share one connection across instances
 - **Music browsing** — the Lidarr library by artist, Recently Added, owned-aware search, requestable albums that walk pending → requested → downloading → available, and the admin Music module (library, queue with the Import Doctor, wanted, calendar, history, release search)
-- **Music discovery** — public catalog browsing independent of the library: Popular and New Releases feeds, twelve genres, album and artist search, artist pages with their albums, and same-origin cover artwork. Grant-only for requesters; admins may browse before a library exists
+- **Music discovery** — four real CC0 albums with bundled cover art ([sources](assets/music/README.md)), plus the historical compilation fixtures. Public catalog browsing independent of the library: Popular and New Releases feeds, twelve genres, album and artist search, artist pages with their albums, and same-origin cover artwork. Grant-only for requesters; admins may browse before a library exists
 - **Request allowances** — per-category rolling limits (movies, TV seasons, eBooks, audiobooks, albums) with live counters and replenishment times, server defaults plus per-user overrides and resets, and a preview that answers "would this fit?" without charging. Admins are exempt; a spent allowance refuses with the app's `request_quota_exceeded` envelope
 - **Downloads by content** — requester-safe All / My Requests views and current-job badges assembled from the same mutable SABnzbd and qBittorrent fixtures as the admin queues, with the server-wide requester scope setting
 - **TV matching and native library navigation** — one bundled correction where a Sonarr series numbers its seasons differently from TMDB, native-season title navigation, the editor that maps them, a Sonarr series search, and the repair that re-sends an already-delivered request to the corrected target
@@ -89,7 +89,7 @@ Full parity with the current Cantinarr API surface:
 | `arr_radarr.go` | Fake Radarr v3 behind `/api/instances/{id}/api/v3` + non-admin allowlist |
 | `arr_sonarr.go` | Fake Sonarr v3 |
 | `arr_chaptarr.go` | Fake Chaptarr v1 + generated MediaCover image bytes (book and author covers) |
-| `arr_lidarr.go` | Fake Lidarr v1 behind `/api/instances/{id}/api/v1` (artists, albums, tracks, queue, history, wanted, calendar, releases, manual import, commands) + generated album and artist covers + the non-admin allowlist |
+| `arr_lidarr.go` | Fake Lidarr v1 behind `/api/instances/{id}/api/v1` (artists, albums, tracks, queue, history, wanted, calendar, releases, manual import, commands) + bundled CC0 album covers and generated fallback artwork + the non-admin allowlist |
 | `downloads.go` | `/api/downloads/{instanceID}/*` — client queue, history, and actions for SABnzbd and qBittorrent |
 | `download_activity.go` | Content-first `/api/downloads/activity`, summary badges, and requester-scope settings |
 | `watchhistory.go` | `/api/watch-history/{instanceID}/*` and the `/api/tautulli/{instanceID}/*` alias — activity, history, stats for Tautulli and Tracearr |
@@ -116,8 +116,9 @@ Full parity with the current Cantinarr API surface:
 | `data_requests.go` | Request-log rows, request policy, availability states, quality-profile fixtures |
 | `data_ai.go` | Canned AI chat scripts + seeded external-settings-changes history |
 | `data_music.go` | Public-domain artists/albums/tracks/track files, Lidarr queue and history fixtures, the music cross-domain hooks |
+| `data_music_public_domain.go` | Four real CC0 releases with original covers, track titles, and durations; provenance in `assets/music/` |
 | `data_misc.go` | Genres and Trakt list fixtures |
-| `assets/` | `go:embed` — sample download file, landing HTML, and the Cantinarr logo and favicon (covers are generated PNGs, not files) |
+| `assets/` | `go:embed` — sample download file, landing HTML, Cantinarr branding, and the CC0 music catalog and covers |
 | `tools/smoke.sh` | Read-mostly parity smoke test (about 325 checks; `--mutate` adds the state-changing flows). Run it against a local or the live demo |
 
 ## Branch Workflow

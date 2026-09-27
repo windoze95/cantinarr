@@ -206,11 +206,11 @@ chk "GET" "/api/requests/book-series" user 200 '(.series|type=="array")'
 chk "GET" "/api/requests/book-status?foreign_id=13023" user 200 '.status|type=="string"'
 chk "GET" "/api/requests/book-library" kid 200 '(.titles|length)==0'
 # ── music (Cantinarr-native) ─────────────────────────────
-chk "GET" "/api/requests/music-library" user 200 '(.titles|type=="array") and (.titles|length)==11 and ([.titles[]|select(.foreign_album_id=="b0000000-d3a0-4000-8000-000000000008")][0].downloaded==true) and (all(.titles[]; (.year|type=="number") and has("cover") and has("monitored") and has("downloaded") and has("artist") and has("title")))'
+chk "GET" "/api/requests/music-library" user 200 '(.titles|type=="array") and (.titles|length)==13 and ([.titles[]|select(.foreign_album_id=="b0000000-d3a0-4000-8000-000000000008")][0].downloaded==true) and (all(.titles[]; (.year|type=="number") and has("cover") and has("monitored") and has("downloaded") and has("artist") and has("title")))'
 chk "GET" "/api/requests/music-library" kid 200 '(.titles|length)==0'
 chk "GET" "/api/requests/music-recent?limit=3" user 200 '(.items|length)==3 and .items[0].foreign_album_id=="b0000000-d3a0-4000-8000-000000000008" and (.items[0].cover|test("mediacover/album/8/")) and (all(.items[]; has("album_id") and has("imported_at")))'
-chk "GET" "/api/requests/music-artists" user 200 '(.artists|type=="array") and .total==6 and (all(.artists[]; has("foreign_artist_id") and has("name") and has("image") and has("album_count") and has("available_count")))'
-chk "GET" "/api/requests/music-artists?sort=added" user 200 '.artists[0].name=="Bessie Smith" and .artists[-1].name=="Fisk Jubilee Singers"'
+chk "GET" "/api/requests/music-artists" user 200 '(.artists|type=="array") and .total==7 and (all(.artists[]; has("foreign_artist_id") and has("name") and has("image") and has("album_count") and has("available_count")))'
+chk "GET" "/api/requests/music-artists?sort=added" user 200 '.artists[0].name=="John Oestmann" and .artists[-1].name=="Fisk Jubilee Singers"'
 chk "GET" "/api/requests/music-artist?foreign_id=a0000000-d3a0-4000-8000-000000000002" user 200 '.artist.name=="Scott Joplin" and (.titles|length)==2'
 chk "GET" "/api/requests/music-artist?foreign_id=a0000000-d3a0-4000-8000-000000000009" user 404 '.error=="artist is not in this music library"'
 chk "GET" "/api/requests/music-artist?foreign_id=a0000000-d3a0-4000-8000-000000000002" kid 403 '.error=="lidarr instance is not available to you"'
@@ -266,11 +266,11 @@ chk GET /api/instances/chaptarr-9c0d1e2f/api/v1/book user 200 'type=="array" and
 # ── lidarr fake ──────────────────────────────────────────
 L=/api/instances/lidarr-4d5e6f7a/api/v1
 chk GET $L/system/status admin 200 '.appName=="Lidarr" and (.version|type=="string")'
-chk GET $L/artist user 200 'type=="array" and length==6 and (all(.[]; has("artistName") and has("foreignArtistId") and has("statistics") and has("images") and has("monitored")))'
+chk GET $L/artist user 200 'type=="array" and length==7 and (all(.[]; has("artistName") and has("foreignArtistId") and has("statistics") and has("images") and has("monitored")))'
 chk GET $L/artist/2 user 200 '.artistName=="Scott Joplin"'
 chk GET $L/artist/99 user 404 ''
 chk "GET" "$L/artist/lookup?term=caruso" user 200 'type=="array" and length==1'
-chk GET $L/album user 200 'type=="array" and length==11 and (all(.[]; has("foreignAlbumId") and has("statistics") and has("artist") and has("releaseDate") and has("images") and (has("ratings")|not)))'
+chk GET $L/album user 200 'type=="array" and length==13 and (all(.[]; has("foreignAlbumId") and has("statistics") and has("artist") and has("releaseDate") and has("images") and (has("ratings")|not)))'
 chk "GET" "$L/album?artistId=1" user 200 'type=="array" and length==2'
 chk GET $L/album/9 user 200 '.title|test("St. Louis")'
 chk "GET" "$L/album/lookup?term=caruso" user 200 'type=="array" and length==3 and ([.[]|select(.id==0)]|length)==1'
@@ -510,7 +510,7 @@ if [ $MUTATE = 1 ]; then
   # monitor in place (album 12, admin auto-approves)
   chk POST /api/requests admin 200 '.status=="requested"' '{"media_type":"music","foreign_id":"b0000000-d3a0-4000-8000-000000000012","title":"Stars and Stripes Forever: Rare Sides","instance_id":"lidarr-4d5e6f7a"}'
   chk GET $L/album/12 admin 200 '.monitored==true'
-  chk GET $L/album admin 200 'length==12'  # album 3 joined the library through the request loop above
+  chk GET $L/album admin 200 'length==14'  # two CC0 albums were already owned; album 3 joined the library through the request loop above
   # music validation strings
   chk POST /api/requests user 400 '.error=="foreign_id required for music requests"' '{"media_type":"music","title":"x"}'
   chk POST /api/requests user 400 '.error=="music requests carry no book_format"' '{"media_type":"music","foreign_id":"b0000000-d3a0-4000-8000-000000000003","title":"x","book_format":"ebook"}'

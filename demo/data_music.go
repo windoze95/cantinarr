@@ -3,7 +3,8 @@
 // albumByForeignID, allAlbums, lidCanonicalForeignID, lidarrAlbumLiveStatus,
 // lidarrOnAlbumRequested, lidarrOnAlbumDownloading, lidarrOnAlbumAvailable.
 //
-// Content rule: real historical acts whose recordings are public domain in
+// Content rule: real CC0 albums (assets/music/catalog.json), plus historical acts
+// whose recordings are public domain in
 // the US (everything fixed before 1926), collected on compilation albums
 // written for the demo; release-group dates are reissue dates so the calendar
 // and album years read sanely. Ids are deterministic synthetic UUIDs — the app
@@ -471,6 +472,8 @@ func init() {
 		"2022-08-19", "Album", compilation, []string{"March", "Brass Band"},
 		lidAlbumSeed{InLibrary: true, Monitored: false},
 		"The Fairest of the Fair", "The Invincible Eagle", "Jack Tar", "The Bride Elect", "The Diplomat", "Powhatan's Daughter")
+
+	lidSeedPublicDomainAlbums()
 
 	// The merged release-group id: MusicBrainz folded it into album 8, and
 	// the provider answers the old id with the surviving record.

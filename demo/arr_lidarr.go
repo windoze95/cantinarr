@@ -5,8 +5,8 @@
 // and lidarr_models.dart read: camelCase fields, integer counters as JSON
 // ints, arrays never null, bare arrays for every list except queue/history/
 // wanted (a {page,pageSize,totalRecords,records} envelope), and no ratings
-// key anywhere (a bare-int ratings.value blanks screens). Album covers and
-// artist portraits are generated at runtime as deterministic 400×400 PNGs and
+// key anywhere (a bare-int ratings.value blanks screens). Real CC0 album covers
+// are embedded; other albums and artists use deterministic 400×400 PNGs,
 // served under the API-prefixed mediacover/{album|artist}/{id}/... route —
 // the exact shape the requester allowlist admits and the Cantinarr digests
 // emit, so the app path is identical to production.
@@ -1130,6 +1130,9 @@ var (
 // vinyl-flavoured motif chosen by the id: concentric grooves, a centre label,
 // quadrant blocks, or diagonal bands. Colours come from chapHSVColor.
 func lidCoverPNG(seedID int) []byte {
+	if data, ok := lidAlbumArtwork[seedID]; ok {
+		return data
+	}
 	lidCoverMu.Lock()
 	if data, ok := lidCoverCache[seedID]; ok {
 		lidCoverMu.Unlock()
