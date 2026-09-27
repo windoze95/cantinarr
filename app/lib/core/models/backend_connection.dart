@@ -85,6 +85,7 @@ class BackendConnection {
   final bool tvMatchCorrections;
   final bool tvLibraryNavigation;
   final bool requestQuotas;
+  final bool requesterTagging;
   final bool downloadsActivity;
   final String downloadsUserScope;
 
@@ -117,6 +118,7 @@ class BackendConnection {
     this.tvMatchCorrections = false,
     this.tvLibraryNavigation = false,
     this.requestQuotas = false,
+    this.requesterTagging = false,
     this.downloadsActivity = false,
     this.downloadsUserScope = 'all',
     this.cover4KBadges = false,
@@ -142,6 +144,7 @@ class BackendConnection {
     bool? tvMatchCorrections,
     bool? tvLibraryNavigation,
     bool? requestQuotas,
+    bool? requesterTagging,
     bool? downloadsActivity,
     String? downloadsUserScope,
     bool? cover4KBadges,
@@ -161,6 +164,7 @@ class BackendConnection {
         tvMatchCorrections: tvMatchCorrections ?? this.tvMatchCorrections,
         tvLibraryNavigation: tvLibraryNavigation ?? this.tvLibraryNavigation,
         requestQuotas: requestQuotas ?? this.requestQuotas,
+        requesterTagging: requesterTagging ?? this.requesterTagging,
         downloadsActivity: downloadsActivity ?? this.downloadsActivity,
         downloadsUserScope: downloadsUserScope ?? this.downloadsUserScope,
         cover4KBadges: cover4KBadges ?? this.cover4KBadges,

@@ -23,6 +23,16 @@ Choose the global default for each service, then review per-user settings and ad
 
 Under **Request Settings**, set approval rules, season choice, quality choice, and default profiles. Profiles are read from the connected service. A name such as “HD” can mean different things on different instances.
 
+## Tag titles with their requesters
+
+Open the Radarr or Sonarr instance in **Settings**, enable **Tag requests with requester**, and save. Each instance starts with this off. It applies only to new requests accepted while the setting is on, after approval and successful delivery to that library.
+
+Cantinarr adds a native tag such as `cantinarr-42-alex` using the original requester, including when someone else approves the request. The user ID keeps the tag stable after a username change. Existing tags remain, and a title can carry several requesters' tags. Sonarr tags the whole series; **Approvals > History** keeps the requested season scope.
+
+Open a request in **Approvals > History** to check tagging or use **Retry tag** after fixing a failure. Temporary failures retry automatically and never undo a successful media request. Refresh History to read the latest result. An applied receipt records what Cantinarr did; later manual changes in Radarr or Sonarr are not tracked or restored.
+
+Turning the setting off cancels unfinished tagging without removing existing tags. Changing the instance URL also cancels unfinished tagging. Re-enabling applies to future requests only. Existing history is not backfilled, and this option is unavailable for books and music.
+
 ## Check instant updates
 
 Cantinarr attempts to install its authenticated webhook when the instance is created. Inspect **Instant updates** in the saved instance and repair the callback connection if necessary.

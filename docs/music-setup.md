@@ -90,3 +90,9 @@ The opening Popular Albums and New Releases pages start loading when you enter D
 External metadata is cached for one hour for feeds, six hours for genre searches, and 24 hours for album details and covers. A failed row offers Retry; a failed refresh keeps the previous results with a notice. Library availability still comes from the existing live music-status reads and instant updates. Requesting a discovered album follows the same direct-request or approval path as search, including durable delivery retries and saved requests that need attention.
 
 Cantinarr must be able to reach ListenBrainz, MusicBrainz, Cover Art Archive, and its Internet Archive artwork hosts. These calls honor the server's outbound proxy. The TMDB/Trakt source and English-only settings apply to movies and TV. Older callers retain the album/EP search default unless they send `include_singles=true`; existing native and catalog-reference request payloads remain accepted.
+
+## Requester tags
+
+Enable **Tag requests with requester** in the Lidarr instance editor to tag new requests after successful delivery. It is off by default. Lidarr stores these tags on the artist, so they also apply to that artist's other albums. Existing tags remain. **Approvals > History** shows the result and offers **Retry tag** for failures without requesting the media again. Disabling tagging cancels unfinished jobs and leaves applied tags. Enabling it does not tag old history.
+
+Several requesters can tag the same artist, whether they request the same album or different albums. Each gets a separate tag; **Approvals > History** keeps the album-specific attribution. Tagging waits for Lidarr's artist refresh to finish so that its background update does not overwrite the new tags.

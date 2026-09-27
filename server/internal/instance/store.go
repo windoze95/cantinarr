@@ -46,6 +46,7 @@ type Instance struct {
 	Username    string `json:"username"`
 	Password    string `json:"password"`
 	IsDefault   bool   `json:"is_default"`
+	TagRequests bool   `json:"tag_requests"`
 	SortOrder   int    `json:"sort_order"`
 	// MediaDownloadMode is disabled until an admin saves explicit per-instance
 	// path mappings (mapped). Downloads have no implicit configuration.
@@ -60,7 +61,7 @@ type Instance struct {
 	CreatedAt                time.Time         `json:"created_at"`
 }
 
-const instanceColumns = "id, service_type, name, url, api_key, username, password, is_default, sort_order, media_download_mode, media_path_mappings, media_server_config, created_at"
+const instanceColumns = "id, service_type, name, url, api_key, username, password, is_default, sort_order, media_download_mode, media_path_mappings, media_server_config, created_at, tag_requests"
 
 // EffectiveMediaPathMappings returns the instance's current routing rules:
 // exactly the mappings an admin saved, or nothing.
@@ -185,6 +186,7 @@ func scanInstance(scanner rowScanner) (Instance, error) {
 		&mappingsJSON,
 		&mediaServerJSON,
 		&inst.CreatedAt,
+		&inst.TagRequests,
 	); err != nil {
 		return Instance{}, err
 	}
@@ -326,6 +328,9 @@ func clearSiblingDefaults(tx *sql.Tx, inst *Instance) error {
 
 // Create inserts a new instance and returns it with a generated ID.
 func (s *Store) Create(inst *Instance) error {
+	if inst.TagRequests && inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" && inst.ServiceType != "chaptarr" && inst.ServiceType != "lidarr" {
+		return errors.New("requester tagging requires Radarr, Sonarr, Chaptarr or Lidarr")
+	}
 	if inst.ID == "" {
 		inst.ID = inst.ServiceType + "-" + uuid.New().String()[:8]
 	}
@@ -353,8 +358,8 @@ func (s *Store) Create(inst *Instance) error {
 		return err
 	}
 	if _, err := tx.Exec(
-		"INSERT INTO service_instances (id, service_type, name, url, api_key, username, password, is_default, sort_order, media_download_mode, media_path_mappings, media_server_config, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		inst.ID, inst.ServiceType, inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.MediaDownloadMode, mappingsJSON, mediaServerJSON, inst.CreatedAt,
+		"INSERT INTO service_instances ("+instanceColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		inst.ID, inst.ServiceType, inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.MediaDownloadMode, mappingsJSON, mediaServerJSON, inst.CreatedAt, inst.TagRequests,
 	); err != nil {
 		return fmt.Errorf("create instance: %w", err)
 	}
@@ -387,6 +392,9 @@ func (s *Store) Update(inst *Instance) error {
 	if err != nil {
 		return fmt.Errorf("update instance: %w", err)
 	}
+	if inst.TagRequests && inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" && inst.ServiceType != "chaptarr" && inst.ServiceType != "lidarr" {
+		return errors.New("requester tagging requires Radarr, Sonarr, Chaptarr or Lidarr")
+	}
 	mappingsJSON, err := encodeMediaPathMappings(inst)
 	if err != nil {
 		return err
@@ -400,8 +408,8 @@ func (s *Store) Update(inst *Instance) error {
 		return err
 	}
 	if _, err := tx.Exec(
-		"UPDATE service_instances SET name = ?, url = ?, api_key = ?, username = ?, password = ?, is_default = ?, sort_order = ?, media_download_mode = ?, media_path_mappings = ?, media_server_config = ? WHERE id = ?",
-		inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.MediaDownloadMode, mappingsJSON, mediaServerJSON, inst.ID,
+		"UPDATE service_instances SET name = ?, url = ?, api_key = ?, username = ?, password = ?, is_default = ?, sort_order = ?, media_download_mode = ?, media_path_mappings = ?, media_server_config = ?, tag_requests = ? WHERE id = ?",
+		inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.MediaDownloadMode, mappingsJSON, mediaServerJSON, inst.TagRequests, inst.ID,
 	); err != nil {
 		return fmt.Errorf("update instance: %w", err)
 	}
@@ -411,6 +419,13 @@ func (s *Store) Update(inst *Instance) error {
 	if oldURL != inst.URL {
 		if _, err := tx.Exec("DELETE FROM arr_queue_witness WHERE instance_id = ?", inst.ID); err != nil {
 			return fmt.Errorf("clear instance queue witness: %w", err)
+		}
+	}
+	// Disabling or repointing cancels unfinished intent atomically. Re-enabling
+	// cannot revive an old job, including one with an outstanding worker lease.
+	if !inst.TagRequests || oldURL != inst.URL {
+		if _, err := tx.Exec(`UPDATE request_tag_jobs SET state='cancelled', message='Requester tagging was disabled or the library destination changed.', lease_token='', lease_until=0, updated_at=CURRENT_TIMESTAMP WHERE state NOT IN ('applied','cancelled') AND request_id IN (SELECT id FROM request_log WHERE instance_id=?)`, inst.ID); err != nil {
+			return fmt.Errorf("cancel requester tags: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

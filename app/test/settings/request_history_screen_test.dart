@@ -3,6 +3,9 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cantinarr/core/network/backend_client.dart';
+import 'package:cantinarr/core/models/backend_connection.dart';
+import 'package:cantinarr/core/models/user_profile.dart';
+import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/features/settings/data/request_history_service.dart';
 import 'package:cantinarr/features/settings/ui/request_history_screen.dart';
@@ -15,11 +18,92 @@ import 'package:go_router/go_router.dart';
 import 'request_history_fixture.dart';
 
 void main() {
+  testWidgets('shared book tags show each requester and format at narrow width', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await _pump(tester, _HistoryAdapter(), requesterTagging: true);
+    await tester.scrollUntilVisible(find.text('Project Hail Mary'), 150,
+      scrollable: find.descendant(of: find.byType(ListView), matching: find.byType(Scrollable)));
+    await tester.tap(find.text('Project Hail Mary'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Alex • eBook'));
+    expect(find.text('cantinarr-2-alex'), findsOneWidget);
+    expect(find.text('Sam • Audiobook'), findsOneWidget);
+    expect(find.textContaining('Chaptarr tags the author'), findsOneWidget);
+    await tester.ensureVisible(find.text('Retry tag'));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('tag retry keeps loaded pages and recorded decisions', (tester) async {
+    final adapter = _HistoryAdapter()..tagging = {
+      'status': 'failed', 'message': 'The library returned HTTP 401.', 'can_retry': true,
+    };
+    await _pump(tester, adapter, requesterTagging: true);
+    await tester.ensureVisible(find.text('Load older requests'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Load older requests'));
+    await tester.pumpAndSettle();
+    final listReads = adapter.calls.length;
+    await tester.ensureVisible(find.descendant(of: find.byType(ListView), matching: find.text('Dune')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.descendant(of: find.byType(ListView), matching: find.text('Dune')));
+    await tester.pumpAndSettle();
+    expect(find.text('The library returned HTTP 401.'), findsOneWidget);
+    await tester.ensureVisible(find.text('Retry tag'));
+    await tester.tap(find.text('Retry tag'));
+    await tester.pumpAndSettle();
+    expect(adapter.calls.last.method, 'POST');
+    expect(adapter.calls.last.path, '/api/admin/requests/9/tags/retry');
+    expect(adapter.calls.length, listReads + 1);
+    expect(find.text('Retry tag'), findsNothing);
+    expect(find.text('Tag pending'), findsWidgets);
+    Navigator.of(tester.element(find.text('View title'))).pop();
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('Kind of Blue'), 150,
+      scrollable: find.descendant(of: find.byType(ListView), matching: find.byType(Scrollable)));
+    expect(find.text('Kind of Blue'), findsOneWidget);
+    expect(find.text('Load older requests'), findsNothing);
+  });
+
+  testWidgets('failed tag retry stays actionable and old servers hide tags', (tester) async {
+    final adapter = _HistoryAdapter()
+      ..tagging = {'status': 'retrying', 'can_retry': true}
+      ..tagRetryStatus = 500;
+    await _pump(tester, adapter, requesterTagging: true);
+    await tester.enterText(find.byType(TextField), 'Dune');
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.descendant(of: find.byType(ListView), matching: find.text('Dune')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.descendant(of: find.byType(ListView), matching: find.text('Dune')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Retry tag'));
+    await tester.tap(find.text('Retry tag'));
+    await tester.pumpAndSettle();
+    expect(find.text('Couldn’t retry the requester tag. Try again.'), findsOneWidget);
+    expect(find.text('Retry tag'), findsOneWidget);
+    Navigator.of(tester.element(find.text('Retry tag'))).pop();
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(find.byType(TextField)).controller!.text, 'Dune');
+    await tester.pumpWidget(const SizedBox.shrink());
+    await _pump(tester, adapter);
+    expect(find.text('Tag retry scheduled'), findsNothing);
+    await tester.ensureVisible(find.descendant(of: find.byType(ListView), matching: find.text('Dune')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.descendant(of: find.byType(ListView), matching: find.text('Dune')));
+    await tester.pumpAndSettle();
+    expect(find.text('Retry tag'), findsNothing);
+  });
+
   testWidgets('pages through requests and keeps recorded decisions in details', (tester) async {
     final adapter = _HistoryAdapter();
     await _pump(tester, adapter);
     expect(find.text('Dune'), findsOneWidget);
     expect(find.text('Kind of Blue'), findsNothing);
+    await tester.ensureVisible(find.text('Load older requests'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Load older requests'));
     await tester.pumpAndSettle();
     expect(adapter.calls.last.queryParameters['before'], 7);
@@ -127,7 +211,7 @@ void main() {
   });
 }
 
-Future<void> _pump(WidgetTester tester, _HistoryAdapter adapter, {Size size = const Size(390, 844)}) async {
+Future<void> _pump(WidgetTester tester, _HistoryAdapter adapter, {Size size = const Size(390, 844), bool requesterTagging = false}) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
@@ -138,6 +222,7 @@ Future<void> _pump(WidgetTester tester, _HistoryAdapter adapter, {Size size = co
   ]);
   addTearDown(router.dispose);
   await tester.pumpWidget(ProviderScope(overrides: [
+    authProvider.overrideWith(() => _HistoryAuth(requesterTagging)),
     backendClientProvider.overrideWithValue(Dio(BaseOptions(baseUrl: 'http://localhost'))..httpClientAdapter = adapter),
   ], child: MaterialApp.router(theme: AppTheme.dark, routerConfig: router)));
   await tester.pumpAndSettle();
@@ -147,15 +232,40 @@ class _HistoryAdapter implements HttpClientAdapter {
   final calls = <RequestOptions>[];
   int status = 200;
   Completer<ResponseBody>? delayed;
+  Map<String, dynamic>? tagging;
+  int tagRetryStatus = 202;
 
   @override
   Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async {
     calls.add(options);
     if (delayed != null) return delayed!.future;
-    return ResponseBody.fromString(jsonEncode(historyFixturePage(options.queryParameters)), status,
+    if (options.method == 'POST') {
+      return ResponseBody.fromString(jsonEncode({'status': 'pending', 'can_retry': false}), tagRetryStatus,
+        headers: {Headers.contentTypeHeader: [Headers.jsonContentType]});
+    }
+    final page = historyFixturePage(options.queryParameters);
+    if (tagging != null) {
+      page['requests'] = (page['requests'] as List).map((row) => {
+        ...row as Map<String, dynamic>,
+        if (row['id'] == 9) 'requester_tagging': tagging,
+      }).toList();
+    }
+    return ResponseBody.fromString(jsonEncode(page), status,
       headers: {Headers.contentTypeHeader: [Headers.jsonContentType]});
   }
 
   @override
   void close({bool force = false}) {}
+}
+
+class _HistoryAuth extends AuthNotifier {
+  final bool tagging;
+  _HistoryAuth(this.tagging);
+
+  @override
+  Future<AuthState> build() async => AuthState(
+    connection: BackendConnection(serverUrl: 'http://localhost', accessToken: 'access',
+      refreshToken: 'refresh', requesterTagging: tagging),
+    user: const UserProfile(id: 1, username: 'admin', role: 'admin'),
+  );
 }

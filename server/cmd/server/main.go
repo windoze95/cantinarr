@@ -298,6 +298,7 @@ func main() {
 	requestService.SetBookImportStallSink(remediationService)
 	requestService.StartBookParkMaintenance(ctx)
 	requestService.StartDispatchMaintenance(ctx)
+	requestService.StartRequesterTagMaintenance(ctx)
 
 	// A grant write never fails because a media server is down, so a
 	// switch-off decided during an outage can be owed to the server. This

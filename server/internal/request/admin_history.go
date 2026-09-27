@@ -36,23 +36,24 @@ type HistoryRequester struct {
 }
 
 type AdminHistoryItem struct {
-	ID              int64              `json:"id"`
-	TmdbID          int                `json:"tmdb_id"`
-	ForeignID       string             `json:"foreign_id,omitempty"`
-	CatalogProvider string             `json:"catalog_provider,omitempty"`
-	MediaType       string             `json:"media_type"`
-	Title           string             `json:"title"`
-	PosterPath      string             `json:"poster_path,omitempty"`
-	InstanceID      string             `json:"instance_id,omitempty"`
-	InstanceName    string             `json:"instance_name,omitempty"`
-	SeasonScope     string             `json:"season_scope,omitempty"`
-	BookFormat      string             `json:"book_format,omitempty"`
-	Decision        string             `json:"decision"`
-	DecidedBy       string             `json:"decided_by,omitempty"`
-	DecidedAt       *time.Time         `json:"decided_at,omitempty"`
-	DenyReason      string             `json:"deny_reason,omitempty"`
-	RequestedAt     time.Time          `json:"requested_at"`
-	Requesters      []HistoryRequester `json:"requesters"`
+	ID               int64               `json:"id"`
+	TmdbID           int                 `json:"tmdb_id"`
+	ForeignID        string              `json:"foreign_id,omitempty"`
+	CatalogProvider  string              `json:"catalog_provider,omitempty"`
+	MediaType        string              `json:"media_type"`
+	Title            string              `json:"title"`
+	PosterPath       string              `json:"poster_path,omitempty"`
+	InstanceID       string              `json:"instance_id,omitempty"`
+	InstanceName     string              `json:"instance_name,omitempty"`
+	SeasonScope      string              `json:"season_scope,omitempty"`
+	BookFormat       string              `json:"book_format,omitempty"`
+	Decision         string              `json:"decision"`
+	DecidedBy        string              `json:"decided_by,omitempty"`
+	DecidedAt        *time.Time          `json:"decided_at,omitempty"`
+	DenyReason       string              `json:"deny_reason,omitempty"`
+	RequestedAt      time.Time           `json:"requested_at"`
+	Requesters       []HistoryRequester  `json:"requesters"`
+	RequesterTagging *RequesterTagStatus `json:"requester_tagging,omitempty"`
 }
 
 type AdminHistoryPage struct {
@@ -190,6 +191,10 @@ func (s *Service) adminHistory(ctx context.Context, f adminHistoryFilter) (*Admi
 	}
 	for i := range page.Requests {
 		item := &page.Requests[i]
+		item.RequesterTagging, err = loadRequesterTagStatus(ctx, tx, item.ID)
+		if err != nil {
+			return nil, err
+		}
 		if item.MediaType != "book" {
 			continue
 		}

@@ -12,6 +12,7 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/cached_image.dart';
+import '../../auth/logic/auth_provider.dart';
 import '../../request/data/request_service.dart' show BookRequestFormat;
 import '../data/request_history_service.dart';
 
@@ -127,12 +128,23 @@ class _RequestHistoryScreenState extends ConsumerState<RequestHistoryScreen> {
 
   Future<void> _open(RequestHistoryItem item) async {
     final route = await showAppSheet<String>(context,
-      builder: (_) => _HistoryDetail(item: item));
+      builder: (_) => _HistoryDetail(
+        item: item,
+        showTagging: ref.read(authProvider).valueOrNull?.connection?.requesterTagging ?? false,
+        onTaggingChanged: (tagging) {
+          if (!mounted) return;
+          setState(() {
+            _items = _items?.map((row) => row.id == item.id
+                ? RequestHistoryItem.withTagging(row, tagging) : row).toList();
+          });
+        },
+      ));
     if (mounted && route != null) context.push(route);
   }
 
   @override
   Widget build(BuildContext context) {
+    final showTagging = ref.watch(authProvider).valueOrNull?.connection?.requesterTagging ?? false;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Request history'),
@@ -258,7 +270,7 @@ class _RequestHistoryScreenState extends ConsumerState<RequestHistoryScreen> {
                         );
                       }
                       final item = _items![index];
-                      return _HistoryTile(item: item, onTap: () => _open(item));
+                      return _HistoryTile(item: item, showTagging: showTagging, onTap: () => _open(item));
                     },
                   ),
                 )),
@@ -301,8 +313,9 @@ String _date(DateTime? date) => date == null ? 'Date not recorded' : DateFormat.
 
 class _HistoryTile extends StatelessWidget {
   final RequestHistoryItem item;
+  final bool showTagging;
   final VoidCallback onTap;
-  const _HistoryTile({required this.item, required this.onTap});
+  const _HistoryTile({required this.item, required this.showTagging, required this.onTap});
 
   @override
   Widget build(BuildContext context) => InkWell(
@@ -338,6 +351,11 @@ class _HistoryTile extends StatelessWidget {
           Text('Requested by ${item.requesterLabel}', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
           Text(_date(item.requestedAt), style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
           Text(item.libraryLabel, style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
+          if (showTagging && item.requesterTagging != null)
+            Text(item.requesterTagging!.label, style: TextStyle(
+              color: item.requesterTagging!.status == 'failed' ? AppTheme.warning : AppTheme.textMuted,
+              fontSize: 12,
+            )),
         ])),
         const Padding(padding: EdgeInsets.only(top: 4, left: 8),
           child: Icon(Icons.chevron_right, size: 18, color: AppTheme.textMuted)),
@@ -346,12 +364,45 @@ class _HistoryTile extends StatelessWidget {
   );
 }
 
-class _HistoryDetail extends StatelessWidget {
+class _HistoryDetail extends ConsumerStatefulWidget {
   final RequestHistoryItem item;
-  const _HistoryDetail({required this.item});
+  final bool showTagging;
+  final ValueChanged<RequesterTagStatus> onTaggingChanged;
+  const _HistoryDetail({required this.item, required this.showTagging, required this.onTaggingChanged});
+
+  @override
+  ConsumerState<_HistoryDetail> createState() => _HistoryDetailState();
+}
+
+class _HistoryDetailState extends ConsumerState<_HistoryDetail> {
+  late RequesterTagStatus? _tagging = widget.showTagging ? widget.item.requesterTagging : null;
+  bool _retrying = false;
+  String? _tagError;
+
+  Future<void> _retryTag() async {
+    setState(() { _retrying = true; _tagError = null; });
+    final onTaggingChanged = widget.onTaggingChanged;
+    try {
+      final tagging = await RequestHistoryService(ref.read(backendClientProvider)).retryTag(widget.item.id);
+      // The sheet may have closed while the request was in flight. The parent
+      // still updates its existing pages, filters and scroll position.
+      onTaggingChanged(tagging);
+      if (!mounted) return;
+      setState(() { _tagging = tagging; _retrying = false; });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _retrying = false;
+        _tagError = e is DioException && e.response?.statusCode == 409
+            ? 'This tag can no longer be retried. Close this detail and refresh History.'
+            : 'Couldn’t retry the requester tag. Try again.';
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final item = widget.item;
     final route = item.detailRoute;
     return AppSheet(child: Column(
       mainAxisSize: MainAxisSize.min,
@@ -374,6 +425,44 @@ class _HistoryDetail extends StatelessWidget {
           _field(context, 'Decision date', _date(item.decidedAt)),
         ],
         if (item.denyReason.isNotEmpty) _field(context, item.decision == 'cancelled' ? 'Reason' : 'Denial reason', item.denyReason),
+        if (_tagging case final tagging?) ...[
+          _field(context, 'Requester tag', tagging.label),
+          if (item.mediaType == 'book' || item.mediaType == 'music')
+            Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(
+              item.mediaType == 'book'
+                  ? 'Chaptarr tags the author for the requested format. The tag also applies to their other books in that format.'
+                  : 'Lidarr tags the artist. The tag also applies to their other albums.',
+            )),
+          for (final receipt in tagging.recipients) ...[
+            _field(context, receipt.label, receipt.tagging.label),
+            if (receipt.tagging.tagLabel.isNotEmpty)
+              _field(context, 'Tag', receipt.tagging.tagLabel),
+            if (receipt.tagging.appliedAt != null)
+              _field(context, 'Applied', _date(receipt.tagging.appliedAt)),
+            if (receipt.tagging.message.isNotEmpty)
+              Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(receipt.tagging.message)),
+          ],
+          if (tagging.tagLabel.isNotEmpty) _field(context, 'Tag', tagging.tagLabel),
+          if (tagging.appliedAt != null) _field(context, 'Applied', _date(tagging.appliedAt)),
+          if (tagging.message.isNotEmpty)
+            Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(tagging.message)),
+          if (tagging.status == 'applied')
+            const Padding(padding: EdgeInsets.only(bottom: 12), child: Text(
+              'Records when Cantinarr applied the tag. Later changes in the library are not tracked.',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            )),
+          if (_tagError != null)
+            Padding(padding: const EdgeInsets.only(bottom: 8),
+              child: Text(_tagError!, style: const TextStyle(color: AppTheme.error))),
+          if (tagging.canRetry)
+            Padding(padding: const EdgeInsets.only(bottom: 16), child: OutlinedButton.icon(
+              onPressed: _retrying ? null : _retryTag,
+              icon: _retrying
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.refresh),
+              label: const Text('Retry tag'),
+            )),
+        ],
         if (route != null) ...[
           const SizedBox(height: 4),
           const Text('Open the title to check current availability.',

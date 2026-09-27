@@ -72,6 +72,13 @@ func TestOpenUpgradesOldestShippedSchema(t *testing.T) {
 		t.Fatalf("re-Open upgraded database: %v", err)
 	}
 	defer database.Close()
+	var taggedInstances, tagJobs int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM service_instances WHERE tag_requests!=0`).Scan(&taggedInstances); err != nil || taggedInstances != 0 {
+		t.Fatalf("legacy instances enabled requester tags: count=%d error=%v", taggedInstances, err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM request_tag_jobs`).Scan(&tagJobs); err != nil || tagJobs != 0 {
+		t.Fatalf("upgrade backfilled requester tag jobs: count=%d error=%v", tagJobs, err)
+	}
 
 	// Users survive with their values, and the one-time backfills applied:
 	// password/passkey stay enabled for admins, shared AI access is

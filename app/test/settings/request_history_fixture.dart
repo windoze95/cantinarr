@@ -7,6 +7,10 @@ const historyFixtureRows = <Map<String, dynamic>>[
     'decision': 'approved', 'decided_by': 'Morgan',
     'requested_at': '2026-09-25T14:20:00Z', 'decided_at': '2026-09-25T14:32:00Z',
     'requesters': [{'user_id': 2, 'username': 'Alex'}],
+    'requester_tagging': {
+      'status': 'failed', 'message': 'The library returned HTTP 401 while updating requester tags.',
+      'can_retry': true,
+    },
   },
   {
     'id': 8, 'tmdb_id': 66732, 'media_type': 'tv', 'title': 'Stranger Things',
@@ -19,6 +23,15 @@ const historyFixtureRows = <Map<String, dynamic>>[
     'id': 7, 'media_type': 'book', 'title': 'Project Hail Mary',
     'foreign_id': 'book-1', 'instance_id': 'books-1', 'instance_name': 'Books',
     'book_format': 'both', 'decision': 'approved',
+    'requester_tagging': {
+      'status': 'partial', 'can_retry': true,
+      'recipients': [
+        {'user_id': 2, 'username': 'Alex', 'format': 'ebook', 'status': 'applied',
+          'tag_label': 'cantinarr-2-alex', 'applied_at': '2026-09-24T16:01:00Z', 'can_retry': false},
+        {'user_id': 3, 'username': 'Sam', 'format': 'audiobook', 'status': 'retrying',
+          'message': 'The library returned HTTP 503 while updating requester tags.', 'can_retry': true},
+      ],
+    },
     'requested_at': '2026-09-24T16:00:00Z',
     'requesters': [
       {'user_id': 2, 'username': 'Alex', 'book_format': 'ebook'},

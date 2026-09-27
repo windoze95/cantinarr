@@ -186,8 +186,8 @@ type AddArtistRequest struct {
 
 // AddAlbumRequest adds a single album. Lidarr nests the artist inside the
 // album-add payload and finds-or-adds it inline, fetching all metadata
-// synchronously from its metadata server during the call — there is no
-// queued/pending import state to track afterwards.
+// synchronously from its metadata server during the call. The artist also
+// receives a background refresh, which must settle before requester tagging.
 type AddAlbumRequest struct {
 	ForeignAlbumID string           `json:"foreignAlbumId"`
 	Title          string           `json:"title,omitempty"`
@@ -541,7 +541,8 @@ func addClient() *http.Client {
 // The call is synchronous: Lidarr finds-or-adds the artist inline and fetches
 // metadata during the request, so a failure here is final — there is no
 // queued-import state to wait on afterwards (unlike Chaptarr's author
-// imports).
+// imports). A separate background artist refresh can still be running after
+// this returns; requester tag writes wait for that command to finish.
 func (c *Client) AddAlbum(req AddAlbumRequest) (*Album, error) {
 	var album Album
 	if err := c.doWith(addClient(), "POST", "/api/v1/album", req, &album); err != nil {

@@ -91,6 +91,9 @@ func (s *Service) createMovieRequest(r *resolvedRequest, approval bool) (*Create
 		if _, err = tx.Exec(`INSERT INTO request_dispatch(request_id,format,state,code) VALUES (?,'',?,?)`, id, state, code); err != nil {
 			return nil, err
 		}
+		if err = captureRequesterTag(tx, id); err != nil {
+			return nil, err
+		}
 	} else {
 		// Revisited legacy approvals retain their gate and pinned destination.
 		if _, err = tx.Exec(`UPDATE request_log SET instance_id=COALESCE(instance_id,?) WHERE id=?`, sqlNullStr(r.instanceID), id); err != nil {

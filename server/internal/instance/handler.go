@@ -75,6 +75,7 @@ type instanceResponse struct {
 	// removal without ever revealing the stored write-only credential.
 	HasAPIKey         bool                `json:"has_api_key,omitempty"`
 	IsDefault         bool                `json:"is_default"`
+	TagRequests       bool                `json:"tag_requests"`
 	SortOrder         int                 `json:"sort_order"`
 	MediaDownloads    bool                `json:"media_downloads"`
 	MediaPathMappings []mediapath.Mapping `json:"media_path_mappings"`
@@ -84,6 +85,7 @@ type instanceResponse struct {
 
 type instanceRequest struct {
 	Instance
+	TagRequests *bool `json:"tag_requests"`
 	// Pointer distinguishes an old client that omitted this new field from an
 	// admin explicitly sending [] to disable downloads on an existing instance.
 	MediaPathMappings *[]mediapath.Mapping `json:"media_path_mappings"`
@@ -98,6 +100,19 @@ type instanceRequest struct {
 	ClearAPIKey bool `json:"clear_api_key"`
 }
 
+func applyTagRequests(inst *Instance, value *bool, existing *Instance) error {
+	if existing != nil {
+		inst.TagRequests = existing.TagRequests
+	}
+	if value != nil {
+		inst.TagRequests = *value
+	}
+	if inst.TagRequests && inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" && inst.ServiceType != "chaptarr" && inst.ServiceType != "lidarr" {
+		return fmt.Errorf("requester tagging requires Radarr, Sonarr, Chaptarr or Lidarr")
+	}
+	return nil
+}
+
 func (h *Handler) toResponse(inst *Instance) instanceResponse {
 	mappings := inst.EffectiveMediaPathMappings()
 	if mappings == nil {
@@ -110,6 +125,7 @@ func (h *Handler) toResponse(inst *Instance) instanceResponse {
 		URL:               inst.URL,
 		Username:          inst.Username,
 		IsDefault:         inst.IsDefault,
+		TagRequests:       inst.TagRequests,
 		SortOrder:         inst.SortOrder,
 		MediaDownloads:    inst.MediaDownloadsConfigured(h.mediaRoots),
 		MediaPathMappings: mappings,
@@ -273,6 +289,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	inst := request.Instance
+	if err := applyTagRequests(&inst, request.TagRequests, nil); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	if !allowedServiceTypes[inst.ServiceType] {
 		http.Error(w, serviceTypeListError, http.StatusBadRequest)
@@ -348,6 +368,10 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	inst.ID = instanceID
 	// Service type is immutable; validate against the stored type.
 	inst.ServiceType = existing.ServiceType
+	if err := applyTagRequests(&inst, request.TagRequests, existing); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	// Credentials are write-only: a blank value keeps the stored one.
 	if inst.APIKey == "" {

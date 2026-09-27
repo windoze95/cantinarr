@@ -2,6 +2,50 @@ import 'package:dio/dio.dart';
 
 import '../../request/data/request_service.dart';
 
+class RequesterTagReceipt {
+  final String username;
+  final String format;
+  final RequesterTagStatus tagging;
+
+  RequesterTagReceipt.fromJson(Map<String, dynamic> json)
+      : username = (json['username'] as String? ?? '').trim(),
+        format = json['format'] as String? ?? '',
+        tagging = RequesterTagStatus.fromJson(json);
+
+  String get label => '${username.isEmpty ? 'Unknown requester' : username} • '
+      '${format == 'ebook' ? 'eBook' : format == 'audiobook' ? 'Audiobook' : 'Request'}';
+}
+
+class RequesterTagStatus {
+  final String status;
+  final String message;
+  final bool canRetry;
+  final String tagLabel;
+  final DateTime? appliedAt;
+  final List<RequesterTagReceipt> recipients;
+
+  RequesterTagStatus.fromJson(Map<String, dynamic> json)
+      : status = json['status'] as String? ?? '',
+        message = json['message'] as String? ?? '',
+        canRetry = json['can_retry'] as bool? ?? false,
+        tagLabel = json['tag_label'] as String? ?? '',
+        appliedAt = DateTime.tryParse(json['applied_at'] as String? ?? '')?.toLocal(),
+        recipients = (json['recipients'] as List? ?? [])
+            .map((r) => RequesterTagReceipt.fromJson(r as Map<String, dynamic>))
+            .toList();
+
+  String get label => switch (status) {
+    'partial' => 'Tag results differ by requester or format',
+    'waiting' => 'Tag waiting for request',
+    'pending' => 'Tag pending',
+    'retrying' => 'Tag retry scheduled',
+    'applied' => 'Tag applied',
+    'failed' => 'Tag failed',
+    'cancelled' => 'Tag cancelled',
+    _ => 'Tag status unavailable',
+  };
+}
+
 class HistoryRequester {
   final int id;
   final String name;
@@ -33,6 +77,7 @@ class RequestHistoryItem {
   final DateTime? requestedAt;
   final DateTime? decidedAt;
   final List<HistoryRequester> requesters;
+  final RequesterTagStatus? requesterTagging;
 
   RequestHistoryItem.fromJson(Map<String, dynamic> json)
       : id = json['id'] as int,
@@ -53,7 +98,30 @@ class RequestHistoryItem {
         decidedAt = DateTime.tryParse(json['decided_at'] as String? ?? '')?.toLocal(),
         requesters = (json['requesters'] as List? ?? [])
             .map((u) => HistoryRequester.fromJson(u as Map<String, dynamic>))
-            .toList();
+            .toList(),
+        requesterTagging = json['requester_tagging'] is Map<String, dynamic>
+            ? RequesterTagStatus.fromJson(json['requester_tagging'] as Map<String, dynamic>)
+            : null;
+
+  RequestHistoryItem.withTagging(RequestHistoryItem item, RequesterTagStatus tagging)
+      : id = item.id,
+        tmdbId = item.tmdbId,
+        foreignId = item.foreignId,
+        catalogProvider = item.catalogProvider,
+        mediaType = item.mediaType,
+        title = item.title,
+        posterPath = item.posterPath,
+        instanceId = item.instanceId,
+        instanceName = item.instanceName,
+        seasonScope = item.seasonScope,
+        bookFormat = item.bookFormat,
+        decision = item.decision,
+        decidedBy = item.decidedBy,
+        denyReason = item.denyReason,
+        requestedAt = item.requestedAt,
+        decidedAt = item.decidedAt,
+        requesters = item.requesters,
+        requesterTagging = tagging;
 
   String get decisionLabel => historyDecisions[decision] ?? 'Unknown decision';
   String get mediaLabel => historyMediaTypes[mediaType] ?? 'Media';
@@ -127,6 +195,12 @@ class RequestHistoryPage {
 class RequestHistoryService {
   final Dio _dio;
   RequestHistoryService(this._dio);
+
+  Future<RequesterTagStatus> retryTag(int requestId) async {
+    final response = await _dio.post<Map<String, dynamic>>(
+      '/api/admin/requests/$requestId/tags/retry');
+    return RequesterTagStatus.fromJson(response.data!);
+  }
 
   Future<RequestHistoryPage> list({
     String query = '',
