@@ -1,9 +1,80 @@
 package db
 
 import (
+	"fmt"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
+
+func TestAssignmentUpgradePreservesSeparateBookAndMusicLibraries(t *testing.T) {
+	for _, service := range []string{"chaptarr", "lidarr"} {
+		t.Run(service, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "upgrade.db")
+			database, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { database.Close() })
+			exec := func(query string, args ...any) {
+				t.Helper()
+				if _, err := database.Exec(query, args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Older settings saved either explicit grants, personal default pins,
+			// or both. None may be lost or expanded to an unassigned sibling.
+			exec("INSERT INTO users(id,username,password_hash,role) VALUES (1,'assigned','','user'),(2,'legacy-pin','','user'),(3,'both-libraries','','user'),(4,'admin','','admin')")
+			exec("INSERT INTO service_instances(id,service_type,name,url,api_key) VALUES ('mine',?,'My library','http://mine','k'),('theirs',?,'Their library','http://theirs','k')", service, service)
+			exec("INSERT INTO user_instance_grants(user_id,instance_id) VALUES (1,'theirs'),(3,'mine'),(3,'theirs')")
+			exec("INSERT INTO user_default_instances(user_id,service_type,instance_id) VALUES (2,?,'mine'),(3,?,'theirs'),(4,?,'mine')", service, service, service)
+			exec("DELETE FROM settings WHERE key='instance_assignments_v1'")
+			reopen := func() {
+				t.Helper()
+				if err := database.Close(); err != nil {
+					t.Fatal(err)
+				}
+				database, err = Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			assignments := func() []string {
+				t.Helper()
+				rows, err := database.Query("SELECT user_id,instance_id FROM user_instance_grants ORDER BY user_id,instance_id")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer rows.Close()
+				var pairs []string
+				for rows.Next() {
+					var uid int
+					var id string
+					if err := rows.Scan(&uid, &id); err != nil {
+						t.Fatal(err)
+					}
+					pairs = append(pairs, fmt.Sprintf("%d:%s", uid, id))
+				}
+				if err := rows.Err(); err != nil {
+					t.Fatal(err)
+				}
+				return pairs
+			}
+			want := []string{"1:theirs", "2:mine", "3:mine", "3:theirs", "4:mine"}
+			for restart := 0; restart < 2; restart++ {
+				reopen()
+				if got := assignments(); !reflect.DeepEqual(got, want) {
+					t.Fatalf("restart %d assignments=%v, want %v", restart, got, want)
+				}
+			}
+			exec("DELETE FROM user_instance_grants WHERE user_id=1")
+			reopen()
+			if got := assignments(); !reflect.DeepEqual(got, want[1:]) {
+				t.Fatalf("restart restored revoked assignment: %v", got)
+			}
+		})
+	}
+}
 
 func TestInstanceAssignmentUpgradePreservesAccessOnce(t *testing.T) {
 	database, err := Open(":memory:")

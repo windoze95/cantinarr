@@ -29,6 +29,8 @@ Use recognizable names such as “Movies” and “Movies 4K.” Pending request
 
 Open a saved instance and choose **Manage users**. Search usernames and filter by assignment, role, child account, SSO link, or pending invitation. **Select all matching** selects every matching regular account; administrators are shown as having access to all instances and cannot be selected.
 
+Each row shows **Assigned**, **Unassigned**, or **Administrator access** for the instance being edited. The checkboxes select users for bulk changes; a checked box does not mean the user has access. **Request destination** shows where that user's requests go by default for this service and can name a different assigned instance.
+
 Review the matching and selected counts, then choose **Add selected** or **Remove selected**. Removal shows how many preferences will be cleared. Changing a filter clears the selection. Only selected users change, so a filtered list cannot remove people outside the selection.
 
 Automatic assignment runs once when an account is created through an invitation, media-server import, OIDC, or Plex sign-in. Replacement invitations, identity linking, and later sign-ins do not reapply it. To update existing users, use **Manage users**.
