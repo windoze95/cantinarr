@@ -209,11 +209,16 @@ func mdiscFeedHandler(w http.ResponseWriter, r *http.Request) {
 		albums = filtered
 	}
 
-	// Newest first for new-releases; the popular feed leads with the
-	// best-represented artists, which is the demo's stand-in for listens.
+	// Newest first for new-releases. Other feeds lead with the real CC0
+	// releases, then the historical compilations used by the request examples.
 	sort.SliceStable(albums, func(i, j int) bool {
 		if feed == "new-releases" {
 			return albums[i].ReleaseDate > albums[j].ReleaseDate
+		}
+		_, realI := lidAlbumArtwork[albums[i].ID]
+		_, realJ := lidAlbumArtwork[albums[j].ID]
+		if realI != realJ {
+			return realI
 		}
 		return albums[i].ID < albums[j].ID
 	})

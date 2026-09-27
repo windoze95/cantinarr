@@ -1,0 +1,218 @@
+[
+  {
+    "id": 13,
+    "slug": "minimal-worlds-ii",
+    "title": "minimal_worlds_ii",
+    "artist": "John Oestmann Music R+D",
+    "release_date": "2025-03-20",
+    "genres": [
+      "Electronic",
+      "Chiptune"
+    ],
+    "source_url": "https://opengameart.org/content/minimalworldsii-game-boy-style-album",
+    "album_url": "https://johnoestmannmusic.bandcamp.com/album/minimal-worlds-ii",
+    "cover_url": "https://opengameart.org/sites/default/files/cover_146.png",
+    "cover_sha256": "35a80b5d93f452e9248313f0305472c4bc176f8aa24f5c3b20e28e31501ac532",
+    "license": "CC0-1.0",
+    "tracks": [
+      {
+        "title": "00-ursurpers_fortress_of_bones",
+        "duration_ms": 139000
+      },
+      {
+        "title": "01-misty_grave_mountain",
+        "duration_ms": 124951
+      },
+      {
+        "title": "02-eban_troupe_caravan",
+        "duration_ms": 140324
+      },
+      {
+        "title": "03-station_hidden_market",
+        "duration_ms": 150636
+      },
+      {
+        "title": "04-thunderking_arena",
+        "duration_ms": 172571
+      },
+      {
+        "title": "xx-starfall_island",
+        "duration_ms": 139000
+      },
+      {
+        "title": "05-flight_school",
+        "duration_ms": 153116
+      },
+      {
+        "title": "06-thankyou",
+        "duration_ms": 108800
+      }
+    ]
+  },
+  {
+    "id": 14,
+    "slug": "workshop",
+    "title": "a_new_day_in_the_workshop",
+    "artist": "John Oestmann Music R+D",
+    "release_date": "2024-10-24",
+    "genres": [
+      "Electronic",
+      "Ambient"
+    ],
+    "source_url": "https://opengameart.org/content/anewdayintheworkshop-electronic-idm-album",
+    "album_url": "https://johnoestmannmusic.bandcamp.com/album/a-new-day-in-the-workshop",
+    "cover_url": "https://opengameart.org/sites/default/files/cover_144.png",
+    "cover_sha256": "3512fa0d7636310b15bc6a5871b909b1b4f63a0b2b21adb80bfef6c345145836",
+    "license": "CC0-1.0",
+    "tracks": [
+      {
+        "title": "sea_of_symbols",
+        "duration_ms": 197190
+      },
+      {
+        "title": "snowfield_of_angelmechs",
+        "duration_ms": 226772
+      },
+      {
+        "title": "feylon_reactor",
+        "duration_ms": 352000
+      },
+      {
+        "title": "subtoxic_sands",
+        "duration_ms": 195254
+      },
+      {
+        "title": "hymn",
+        "duration_ms": 146121
+      },
+      {
+        "title": "airstream_crater",
+        "duration_ms": 150000
+      },
+      {
+        "title": "rune_a",
+        "duration_ms": 134997
+      },
+      {
+        "title": "rune_b",
+        "duration_ms": 272234
+      },
+      {
+        "title": "rune_c",
+        "duration_ms": 105663
+      },
+      {
+        "title": "proto_spokehul",
+        "duration_ms": 140504
+      },
+      {
+        "title": "proto_desertmn",
+        "duration_ms": 205714
+      },
+      {
+        "title": "proto_dustbeam",
+        "duration_ms": 272879
+      }
+    ]
+  },
+  {
+    "id": 15,
+    "slug": "leviathan",
+    "title": "Soundworlds Histories: Chasing the Leviathan",
+    "artist": "John Oestmann Music R+D",
+    "release_date": "2021-12-31",
+    "genres": [
+      "Classical",
+      "Soundtrack"
+    ],
+    "source_url": "https://opengameart.org/content/chasing-the-leviathan-adventure-world-music-album",
+    "album_url": "https://johnoestmannmusic.bandcamp.com/album/soundworlds-histories-chasing-the-leviathan",
+    "cover_url": "https://opengameart.org/sites/default/files/cover_143.png",
+    "cover_sha256": "29cd7dc864f3997d934d1c5842f5ca4c0b2d6019dbe70bb60ca0819da91bc394",
+    "license": "CC0-1.0",
+    "tracks": [
+      {
+        "title": "0x2A721 | Lake Aria",
+        "duration_ms": 149571
+      },
+      {
+        "title": "0x2A722 | Rachel's Weave",
+        "duration_ms": 203143
+      },
+      {
+        "title": "0x2A723 | Sun Cave Village",
+        "duration_ms": 198429
+      },
+      {
+        "title": "0x2A724 | Skypole Gorge",
+        "duration_ms": 187071
+      },
+      {
+        "title": "0x2A725 | Moon Cave",
+        "duration_ms": 337714
+      },
+      {
+        "title": "0x2A726 | Orion's Geology Workshop",
+        "duration_ms": 272571
+      },
+      {
+        "title": "0x2A727 | Forgotten Shrine in the Forest",
+        "duration_ms": 261000
+      },
+      {
+        "title": "0x2A728 | City of the Leviathan",
+        "duration_ms": 417755
+      }
+    ]
+  },
+  {
+    "id": 16,
+    "slug": "minimal-worlds",
+    "title": "minimal_worlds",
+    "artist": "John Oestmann Music R+D",
+    "release_date": "2023-11-25",
+    "genres": [
+      "Electronic",
+      "Chiptune"
+    ],
+    "source_url": "https://opengameart.org/content/minimalworlds-game-boy-style-album",
+    "album_url": "https://johnoestmannmusic.bandcamp.com/album/minimal-worlds",
+    "cover_url": "https://opengameart.org/sites/default/files/minimal_worlds-cover.png",
+    "cover_sha256": "e2afcf228444ff8dcb5185026bfaf5afe87e56955894a879ce6a480c27d1b578",
+    "license": "CC0-1.0",
+    "tracks": [
+      {
+        "title": "00-alabaster_shore",
+        "duration_ms": 192086
+      },
+      {
+        "title": "01-house_of_the_shoguns_son",
+        "duration_ms": 160000
+      },
+      {
+        "title": "02-tower_of_vera",
+        "duration_ms": 197189
+      },
+      {
+        "title": "03-pneumasprite_pond",
+        "duration_ms": 140800
+      },
+      {
+        "title": "04-mt_solace",
+        "duration_ms": 120000
+      },
+      {
+        "title": "05-selenas_field",
+        "duration_ms": 164308
+      },
+      {
+        "title": "06-golden_battletrain",
+        "duration_ms": 195240
+      },
+      {
+        "title": "07-broken_window",
+        "duration_ms": 246000
+      }
+    ]
+  }
+]
