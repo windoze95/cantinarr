@@ -201,6 +201,32 @@ func (c *RequesterTags) ApplyParent(ctx context.Context, id int, foreignID, form
 	if id <= 0 || foreignID == "" || (c.collection != "artist" && c.collection != "author") || (c.collection == "author" && format != "ebook" && format != "audiobook") {
 		return "", ErrTagIdentity
 	}
+	if beforeWrite == nil {
+		return "", errors.New("Requester tag authorization is missing.")
+	}
+	if c.collection == "artist" {
+		// Lidarr refreshes a newly added artist asynchronously and can save
+		// its pre-tag snapshot after an otherwise successful editor response.
+		// Wait for that refresh, and retry if another starts during this attempt.
+		refreshes, err := c.artistTagRefreshes(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		authorize := beforeWrite
+		beforeWrite = func() error {
+			if err := authorize(); err != nil {
+				return err
+			}
+			current, err := c.artistTagRefreshes(ctx, id)
+			if err != nil {
+				return err
+			}
+			if !slices.Equal(refreshes, current) {
+				return errArtistTagRefresh
+			}
+			return nil
+		}
+	}
 	path := fmt.Sprintf("%s/%s/%d", c.apiPath, c.collection, id)
 	read := func() (map[string]json.RawMessage, *taggedTitle, error) {
 		var raw map[string]json.RawMessage

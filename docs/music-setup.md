@@ -94,3 +94,5 @@ Cantinarr must be able to reach ListenBrainz, MusicBrainz, Cover Art Archive, an
 ## Requester tags
 
 Enable **Tag requests with requester** in the Lidarr instance editor to tag new requests after successful delivery. It is off by default. Lidarr stores these tags on the artist, so they also apply to that artist's other albums. Existing tags remain. **Approvals > History** shows the result and offers **Retry tag** for failures without requesting the media again. Disabling tagging cancels unfinished jobs and leaves applied tags. Enabling it does not tag old history.
+
+Several requesters can tag the same artist, whether they request the same album or different albums. Each gets a separate tag; **Approvals > History** keeps the album-specific attribution. Tagging waits for Lidarr's artist refresh to finish so that its background update does not overwrite the new tags.

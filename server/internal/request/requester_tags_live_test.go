@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/httpx"
@@ -197,6 +198,34 @@ func TestLiveDisposableRequesterTags(t *testing.T) {
 			outage.Store(false)
 			database.Exec(`UPDATE request_tag_jobs SET next_attempt_at=0`)
 			s.SweepRequesterTags(context.Background())
+			if kind == "lidarr" {
+				// A new album triggers asynchronous RefreshArtist. An immediate
+				// successful tag read can be overwritten by its older snapshot.
+				// Wait for native completion, then retry only unfinished jobs.
+				deadline := time.Now().Add(2 * time.Minute)
+				for {
+					var commands []struct {
+						Name   string `json:"name"`
+						Status string `json:"status"`
+					}
+					read("/api/v1/command", &commands)
+					busy := false
+					for _, command := range commands {
+						if (command.Name == "RefreshArtist" || command.Name == "BulkRefreshArtist") && command.Status != "completed" && command.Status != "failed" && command.Status != "aborted" && command.Status != "cancelled" {
+							busy = true
+						}
+					}
+					if !busy {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("native artist refresh did not settle")
+					}
+					time.Sleep(time.Second)
+				}
+				database.Exec(`UPDATE request_tag_jobs SET next_attempt_at=0 WHERE state='retrying'`)
+				s.SweepRequesterTags(context.Background())
+			}
 			var applied int
 			database.QueryRow(`SELECT COUNT(*) FROM request_tag_jobs WHERE state='applied'`).Scan(&applied)
 			if applied != want {
@@ -214,6 +243,22 @@ func TestLiveDisposableRequesterTags(t *testing.T) {
 			}
 			var after map[string]any
 			read(parentPath, &after)
+			var allParents []map[string]any
+			read("/api/v1/"+parent, &allParents)
+			listed := false
+			for _, item := range allParents {
+				if item["id"] == float64(parentID) {
+					listed = true
+					for _, key := range []string{"tags", "ebookTags", "audiobookTags"} {
+						if !reflect.DeepEqual(item[key], after[key]) {
+							t.Fatalf("native list and detail disagree on %s: %v / %v", key, item[key], after[key])
+						}
+					}
+				}
+			}
+			if !listed {
+				t.Fatal("native parent missing from library list")
+			}
 			for _, key := range []string{"monitored", "path", "rootFolderPath", "qualityProfileId", "metadataProfileId", "monitorNewItems", "ebookMonitored", "audiobookMonitored", "ebookMonitorNewItems", "audiobookMonitorNewItems", "ebookQualityProfileId", "audiobookQualityProfileId", "ebookMetadataProfileId", "audiobookMetadataProfileId", "ebookRootFolderPath", "audiobookRootFolderPath", "syncMonitoredAcrossFormats", "ebookSettingsManuallyOverridden", "audiobookSettingsManuallyOverridden"} {
 				if !reflect.DeepEqual(before[key], after[key]) {
 					t.Fatalf("native setting changed: %s: %v -> %v", key, before[key], after[key])
@@ -259,7 +304,7 @@ func TestLiveDisposableRequesterTags(t *testing.T) {
 				}
 			}
 			s.SweepRequesterTags(context.Background())
-			t.Logf("PASS: %d requester/format receipts, native tags visible, settings preserved, restart recovered, no media replay", applied)
+			t.Logf("PASS: %d requester/format receipts, native list/detail tags agree after refresh, settings preserved, database restart recovered, no media replay", applied)
 		})
 	}
 }

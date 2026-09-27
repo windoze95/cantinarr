@@ -23,6 +23,9 @@ type parentTagLab struct {
 	fail        bool
 	wrongParent bool
 	onTagRead   func()
+	commands    []map[string]any
+	onArtistTag func()
+	commandFail bool
 }
 
 func newParentTagLab(t *testing.T, kind string) (*parentTagLab, string) {
@@ -35,6 +38,14 @@ func newParentTagLab(t *testing.T, kind string) (*parentTagLab, string) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		write := func(v any) { json.NewEncoder(w).Encode(v) }
 		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/command":
+			if l.commandFail {
+				w.WriteHeader(503)
+			} else if l.commands == nil {
+				write([]any{})
+			} else {
+				write(l.commands)
+			}
 		case "GET /api/v1/album", "GET /api/v1/book":
 			if kind == "music" {
 				write([]any{map[string]any{"id": 1, "foreignAlbumId": "album-id", "artistId": 10}})
@@ -87,6 +98,9 @@ func newParentTagLab(t *testing.T, kind string) (*parentTagLab, string) {
 			}
 			l.parent["tags"] = append(l.parent["tags"].([]int), body.Tags...)
 			l.writes++
+			if l.onArtistTag != nil {
+				l.onArtistTag()
+			}
 			w.WriteHeader(202)
 		case "PUT /api/v1/author/10":
 			var body map[string]json.RawMessage
@@ -297,6 +311,68 @@ func TestRequesterTagBookAdmissionNeverBackfillsAndOwnerTransfer(t *testing.T) {
 			s.db.QueryRow(`SELECT COUNT(*) FROM request_tag_jobs WHERE state='applied'`).Scan(&count)
 			if count != 1 {
 				t.Fatal("unexpected applied audience")
+			}
+		})
+	}
+}
+
+func TestRequesterTagMusicWaitsForNativeRefresh(t *testing.T) {
+	for _, scenario := range []string{"queued", "started", "global", "bulk", "other-artist", "completed", "unreadable", "before-create", "during-write"} {
+		t.Run(scenario, func(t *testing.T) {
+			l, url := newParentTagLab(t, "music")
+			s, uid, id, store := parentTagService(t, "music", url)
+			rid := parentRequest(t, s, uid, "music", id, "")
+			completeParentFormat(t, s, rid, "")
+			command := map[string]any{"id": 1, "name": "RefreshArtist", "status": "started", "body": map[string]any{"artistIds": []int{10}}}
+			l.commands = []map[string]any{command}
+			switch scenario {
+			case "queued", "completed":
+				command["status"] = scenario
+			case "global":
+				command["body"] = map[string]any{}
+			case "bulk":
+				command["name"] = "BulkRefreshArtist"
+			case "other-artist":
+				command["body"] = map[string]any{"artistIds": []int{99}}
+			case "unreadable":
+				l.commandFail = true
+			case "before-create":
+				l.commands = nil
+				l.onTagRead = func() { l.commands = []map[string]any{command} }
+			case "during-write":
+				l.commands = nil
+				command["status"] = "completed"
+				l.onArtistTag = func() { l.commands = []map[string]any{command} }
+			}
+			s.SweepRequesterTags(context.Background())
+			if scenario == "other-artist" || scenario == "completed" {
+				assertTagState(t, s, rid, "applied")
+				return
+			}
+			assertTagState(t, s, rid, "retrying")
+			if scenario != "during-write" && l.writes != 0 {
+				t.Fatal("wrote tags while native refresh was pending or unverified")
+			}
+			// The native refresh can finish with the artist's original tags.
+			// Recover after a Cantinarr service restart, with a second requester.
+			l.parent["tags"] = []int{7}
+			command["status"] = "completed"
+			l.commandFail, l.onArtistTag, l.onTagRead = false, nil, nil
+			result, err := s.db.Exec(`INSERT INTO users(username,password_hash,role) VALUES('second','','user')`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, _ := result.LastInsertId()
+			store.SetUserDefault(second, "lidarr", id)
+			secondID := parentRequest(t, s, second, "music", id, "")
+			completeParentFormat(t, s, secondID, "")
+			s.db.Exec(`UPDATE request_tag_jobs SET next_attempt_at=0`)
+			s = NewService(s.db, s.registry, nil, nil)
+			s.SweepRequesterTags(context.Background())
+			assertTagState(t, s, rid, "applied")
+			assertTagState(t, s, secondID, "applied")
+			if !reflect.DeepEqual(l.parent["tags"], []int{7, 100, 101}) || len(l.tags) != 2 {
+				t.Fatalf("lost existing or multiple requester tags: %+v", l.parent["tags"])
 			}
 		})
 	}
