@@ -1850,7 +1850,7 @@ func migrateInstanceAssignments(db *sql.DB) error {
    WHERE u.role!='admin' AND NOT EXISTS(SELECT 1 FROM user_default_instances d WHERE d.user_id=u.id AND d.service_type=si.service_type)`,
 		`INSERT OR IGNORE INTO user_instance_grants(user_id,instance_id)
    SELECT d.user_id,d.instance_id FROM user_default_instances d JOIN service_instances si ON si.id=d.instance_id AND si.service_type=d.service_type
-   WHERE si.service_type IN ('radarr','sonarr','chaptarr','lidarr')`,
+   WHERE si.service_type IN ('radarr','sonarr','chaptarr','lidarr','jellyfin','emby','plex','audiobookshelf')`,
 		// Bind legacy pending rows before a later default or assignment can move them.
 		`WITH targets AS MATERIALIZED (
  SELECT r.id AS request_id,si.id AS instance_id,ROW_NUMBER() OVER(PARTITION BY r.id ORDER BY

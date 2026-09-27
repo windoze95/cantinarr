@@ -18,8 +18,8 @@ func TestInstanceAssignmentUpgradePreservesAccessOnce(t *testing.T) {
 		}
 	}
 	exec("INSERT INTO users(id,username,password_hash,role) VALUES(1,'inherited','','user'),(2,'pinned','','user'),(3,'admin','','admin'),(4,'broken-preference','','user')")
-	exec("INSERT INTO service_instances(id,service_type,name,url,api_key) VALUES('a','radarr','A','http://a','k'),('b','radarr','B','http://b','k'),('books','chaptarr','Books','http://books','k')")
-	exec("INSERT INTO user_default_instances(user_id,service_type,instance_id) VALUES(2,'radarr','b'),(2,'chaptarr','books'),(4,'radarr','deleted')")
+	exec("INSERT INTO service_instances(id,service_type,name,url,api_key) VALUES('a','radarr','A','http://a','k'),('b','radarr','B','http://b','k'),('books','chaptarr','Books','http://books','k'),('playback','plex','Playback','http://plex','k')")
+	exec("INSERT INTO user_default_instances(user_id,service_type,instance_id) VALUES(2,'radarr','b'),(2,'chaptarr','books'),(2,'plex','playback'),(4,'radarr','deleted')")
 	exec("INSERT INTO user_instance_grants(user_id,instance_id) VALUES (4,'a')")
 	exec("INSERT INTO request_log(user_id,tmdb_id,media_type,title,status) VALUES(1,10,'movie','First','pending'),(2,11,'movie','Second','pending'),(4,12,'movie','Unknown target','pending')")
 	exec("DELETE FROM settings WHERE key='instance_assignments_v1'")
@@ -38,7 +38,7 @@ func TestInstanceAssignmentUpgradePreservesAccessOnce(t *testing.T) {
 		got[uid] = append(got[uid], id)
 	}
 	rows.Close()
-	if !reflect.DeepEqual(got, map[int64][]string{1: {"a"}, 2: {"b", "books"}, 4: {"a"}}) {
+	if !reflect.DeepEqual(got, map[int64][]string{1: {"a"}, 2: {"b", "books", "playback"}, 4: {"a"}}) {
 		t.Fatalf("upgraded access=%v", got)
 	}
 	var dest string
