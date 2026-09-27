@@ -214,9 +214,6 @@ func (c *RequesterTags) ApplyParent(ctx context.Context, id int, foreignID, form
 		}
 		authorize := beforeWrite
 		beforeWrite = func() error {
-			if err := authorize(); err != nil {
-				return err
-			}
 			current, err := c.artistTagRefreshes(ctx, id)
 			if err != nil {
 				return err
@@ -224,7 +221,9 @@ func (c *RequesterTags) ApplyParent(ctx context.Context, id int, foreignID, form
 			if !slices.Equal(refreshes, current) {
 				return errArtistTagRefresh
 			}
-			return nil
+			// Provider reads can outlast a grant change. Keep the caller's
+			// current authorization/lease check last before the native write.
+			return authorize()
 		}
 	}
 	path := fmt.Sprintf("%s/%s/%d", c.apiPath, c.collection, id)

@@ -26,6 +26,7 @@ type parentTagLab struct {
 	commands    []map[string]any
 	onArtistTag func()
 	commandFail bool
+	onCommands  func()
 }
 
 func newParentTagLab(t *testing.T, kind string) (*parentTagLab, string) {
@@ -39,6 +40,9 @@ func newParentTagLab(t *testing.T, kind string) (*parentTagLab, string) {
 		write := func(v any) { json.NewEncoder(w).Encode(v) }
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/v1/command":
+			if l.onCommands != nil {
+				l.onCommands()
+			}
 			if l.commandFail {
 				w.WriteHeader(503)
 			} else if l.commands == nil {
@@ -375,5 +379,24 @@ func TestRequesterTagMusicWaitsForNativeRefresh(t *testing.T) {
 				t.Fatalf("lost existing or multiple requester tags: %+v", l.parent["tags"])
 			}
 		})
+	}
+}
+
+func TestRequesterTagMusicRechecksGrantAfterRefreshRead(t *testing.T) {
+	l, url := newParentTagLab(t, "music")
+	s, uid, id, _ := parentTagService(t, "music", url)
+	rid := parentRequest(t, s, uid, "music", id, "")
+	completeParentFormat(t, s, rid, "")
+	reads := 0
+	l.onCommands = func() {
+		reads++
+		if reads == 2 {
+			s.db.Exec(`DELETE FROM user_default_instances WHERE user_id=?`, uid)
+		}
+	}
+	s.SweepRequesterTags(context.Background())
+	assertTagState(t, s, rid, "failed")
+	if l.writes != 0 {
+		t.Fatal("tag write outlived requester's library grant")
 	}
 }
