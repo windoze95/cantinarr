@@ -490,7 +490,7 @@ func TestTVLibraryDetailKeepsExplicitLibraryAndRechecksGrant(t *testing.T) {
 	if _, err := s.TVLibraryDetail(uid, "tv-other", 42); !errors.Is(err, ErrArrInstanceForbidden) {
 		t.Fatalf("ungranted: %v", err)
 	}
-	if _, err := s.db.Exec(`INSERT INTO user_instance_grants(user_id,instance_id) VALUES(?,?),(?,'tv-other')`, uid, primary, uid); err != nil {
+	if _, err := s.db.Exec(`INSERT OR IGNORE INTO user_instance_grants(user_id,instance_id) VALUES(?,?),(?,'tv-other')`, uid, primary, uid); err != nil {
 		t.Fatal(err)
 	}
 	out, err := s.TVLibraryDetail(uid, "tv-other", 42)

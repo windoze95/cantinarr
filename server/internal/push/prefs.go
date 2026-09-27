@@ -260,144 +260,38 @@ func (s *PrefsStore) queryOptedInto(category string) ([]int64, error) {
 	return s.queryUserIDs(query)
 }
 
-// usersOptedIntoNewVideo returns the ids of every user opted into
-// new_movie/new_episode who can SEE the importing library — the same visible
-// set the request routing and status chips use (instance/store
-// VisibleInstanceIDs): an explicit pin or grant row on the instance; the
-// global-default chain winner for users with no pin (a pin keeps its historic
-// exclusive meaning); and, mirroring the books rule, an admin with no
-// explicit rows for the service type hears every instance. An empty
-// instanceID fails open to the unscoped audience — over-notifying beats
-// silencing a library whose caller could not name it.
+// New-content audiences use explicit assignments. Administrator notification
+// scoping retains preferences/grants, with all libraries when neither is set.
 func (s *PrefsStore) usersOptedIntoNewVideo(category, serviceType, instanceID string) ([]int64, error) {
 	if category != CategoryNewMovie && category != CategoryNewEpisode {
-		return nil, fmt.Errorf("category %q is not a video content category", category)
+		return nil, fmt.Errorf("invalid video category %q", category)
 	}
+	return s.usersOptedIntoInstance(category, serviceType, instanceID)
+}
+func (s *PrefsStore) usersOptedIntoNewBook(instanceID string) ([]int64, error) {
+	return s.usersOptedIntoInstance(CategoryNewBook, "chaptarr", instanceID)
+}
+func (s *PrefsStore) usersOptedIntoNewMusic(instanceID string) ([]int64, error) {
+	return s.usersOptedIntoInstance(CategoryNewMusic, "lidarr", instanceID)
+}
+func (s *PrefsStore) usersOptedIntoInstance(category, serviceType, instanceID string) ([]int64, error) {
 	if instanceID == "" {
-		return s.queryOptedInto(category)
+		return []int64{}, nil
 	}
 	col := categoryColumn[category]
 	def := 0
 	if col.defaultVal {
 		def = 1
 	}
-	// Column name comes from the trusted categoryColumn table, never user
-	// input. The COALESCE pair is Store.defaultInstanceID's chain (explicit
-	// global default, else first by sort) — the two surfaces must agree or a
-	// user's chips and their alerts would disagree about the same library.
-	query := fmt.Sprintf(
-		`SELECT u.id FROM users u
-		 LEFT JOIN notification_prefs p ON p.user_id = u.id
-		 WHERE COALESCE(p.%s, %d) = 1
-		   AND (EXISTS (
-		     SELECT 1 FROM user_default_instances d
-		     WHERE d.user_id = u.id AND d.instance_id = ?)
-		   OR EXISTS (
-		     SELECT 1 FROM user_instance_grants g
-		     WHERE g.user_id = u.id AND g.instance_id = ?)
-		   OR (NOT EXISTS (
-		     SELECT 1 FROM user_default_instances d
-		     WHERE d.user_id = u.id AND d.service_type = ?)
-		     AND ? = COALESCE(
-		       (SELECT id FROM service_instances WHERE service_type = ? AND is_default = 1 ORDER BY sort_order, name, id LIMIT 1),
-		       (SELECT id FROM service_instances WHERE service_type = ? ORDER BY sort_order, name, id LIMIT 1)))
-		   OR (u.role = 'admin' AND NOT EXISTS (
-		     SELECT 1 FROM user_default_instances d
-		     WHERE d.user_id = u.id AND d.service_type = ?)
-		     AND NOT EXISTS (
-		     SELECT 1 FROM user_instance_grants g
-		     JOIN service_instances si ON si.id = g.instance_id
-		     WHERE g.user_id = u.id AND si.service_type = ?)))`,
-		col.column, def,
-	)
-	return s.queryUserIDs(query,
-		instanceID, instanceID,
-		serviceType, instanceID, serviceType, serviceType,
-		serviceType, serviceType,
-	)
+	query := fmt.Sprintf(`SELECT u.id FROM users u LEFT JOIN notification_prefs p ON p.user_id=u.id
+ WHERE COALESCE(p.%s,%d)=1 AND (
+ EXISTS(SELECT 1 FROM user_instance_grants g WHERE g.user_id=u.id AND g.instance_id=?)
+ OR (u.role='admin' AND (EXISTS(SELECT 1 FROM user_default_instances d WHERE d.user_id=u.id AND d.instance_id=?)
+ OR (NOT EXISTS(SELECT 1 FROM user_default_instances d WHERE d.user_id=u.id AND d.service_type=?)
+ AND NOT EXISTS(SELECT 1 FROM user_instance_grants g JOIN service_instances si ON si.id=g.instance_id WHERE g.user_id=u.id AND si.service_type=?)))))`, col.column, def)
+	return s.queryUserIDs(query, instanceID, instanceID, serviceType, serviceType)
 }
 
-// usersOptedIntoNewBook returns the ids of every user opted into new_book
-// whose book library is the given Chaptarr instance. Book availability is
-// per-instance truth, and Chaptarr instances are per-person libraries, so
-// unlike the other new-content categories the audience follows the assignment
-// row — for admins too: "ready to read" is a call to action for the person
-// who will read it, and an admin running a sibling library must not be paged
-// for every import in someone else's (their oversight lives in the
-// request/issue categories). One deliberate exception keeps the pre-existing
-// behavior: an admin with no books assignment at all browses Books through
-// the default-instance fallback, so they keep hearing every instance rather
-// than being silently muted by a screen they never visited.
-func (s *PrefsStore) usersOptedIntoNewBook(instanceID string) ([]int64, error) {
-	col := categoryColumn[CategoryNewBook]
-	def := 0
-	if col.defaultVal {
-		def = 1
-	}
-	// Column name comes from the trusted categoryColumn table, never user
-	// input. An assignment is a per-user default pin OR an access grant — a
-	// granted sibling library is still this person's library.
-	query := fmt.Sprintf(
-		`SELECT u.id FROM users u
-		 LEFT JOIN notification_prefs p ON p.user_id = u.id
-		 WHERE COALESCE(p.%s, %d) = 1
-		   AND (EXISTS (
-		     SELECT 1 FROM user_default_instances d
-		     WHERE d.user_id = u.id AND d.instance_id = ?)
-		   OR EXISTS (
-		     SELECT 1 FROM user_instance_grants g
-		     WHERE g.user_id = u.id AND g.instance_id = ?)
-		   OR (u.role = 'admin' AND NOT EXISTS (
-		     SELECT 1 FROM user_default_instances d
-		     WHERE d.user_id = u.id AND d.service_type = 'chaptarr')
-		     AND NOT EXISTS (
-		     SELECT 1 FROM user_instance_grants g
-		     JOIN service_instances si ON si.id = g.instance_id
-		     WHERE g.user_id = u.id AND si.service_type = 'chaptarr')))`,
-		col.column, def,
-	)
-	return s.queryUserIDs(query, instanceID, instanceID)
-}
-
-// usersOptedIntoNewMusic returns the ids of every user opted into new_music
-// whose music library is the given Lidarr instance. Lidarr shares Chaptarr's
-// access model — the per-user assignment IS the grant — so the audience rule
-// is usersOptedIntoNewBook's exactly: a default pin or an access grant on the
-// importing instance, plus the one deliberate exception of an admin with no
-// music assignment at all, who browses Music through the default-instance
-// fallback and so keeps hearing every instance.
-func (s *PrefsStore) usersOptedIntoNewMusic(instanceID string) ([]int64, error) {
-	col := categoryColumn[CategoryNewMusic]
-	def := 0
-	if col.defaultVal {
-		def = 1
-	}
-	// Column name comes from the trusted categoryColumn table, never user
-	// input.
-	query := fmt.Sprintf(
-		`SELECT u.id FROM users u
-		 LEFT JOIN notification_prefs p ON p.user_id = u.id
-		 WHERE COALESCE(p.%s, %d) = 1
-		   AND (EXISTS (
-		     SELECT 1 FROM user_default_instances d
-		     WHERE d.user_id = u.id AND d.instance_id = ?)
-		   OR EXISTS (
-		     SELECT 1 FROM user_instance_grants g
-		     WHERE g.user_id = u.id AND g.instance_id = ?)
-		   OR (u.role = 'admin' AND NOT EXISTS (
-		     SELECT 1 FROM user_default_instances d
-		     WHERE d.user_id = u.id AND d.service_type = 'lidarr')
-		     AND NOT EXISTS (
-		     SELECT 1 FROM user_instance_grants g
-		     JOIN service_instances si ON si.id = g.instance_id
-		     WHERE g.user_id = u.id AND si.service_type = 'lidarr')))`,
-		col.column, def,
-	)
-	return s.queryUserIDs(query, instanceID, instanceID)
-}
-
-// queryUserIDs runs a query whose result set is a single user-id column and
-// returns the ids.
 func (s *PrefsStore) queryUserIDs(query string, args ...any) ([]int64, error) {
 	rows, err := s.db.Query(query, args...)
 	if err != nil {

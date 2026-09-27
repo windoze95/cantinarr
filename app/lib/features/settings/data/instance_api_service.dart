@@ -295,6 +295,7 @@ class InstanceApiService {
     String password = '',
     bool isDefault = false,
     bool? tagRequests,
+    bool? autoAddUsers,
     List<MediaPathMapping>? mediaPathMappings,
     MediaServerConfig? mediaServerConfig,
     int? plexLinkPin,
@@ -308,6 +309,7 @@ class InstanceApiService {
       'password': password,
       'is_default': isDefault,
       if (tagRequests != null) 'tag_requests': tagRequests,
+      if (autoAddUsers != null) 'auto_add_users': autoAddUsers,
       if (mediaPathMappings != null)
         'media_path_mappings':
             mediaPathMappings.map((mapping) => mapping.toJson()).toList(),
@@ -328,6 +330,7 @@ class InstanceApiService {
     String password = '',
     bool isDefault = false,
     bool? tagRequests,
+    bool? autoAddUsers,
     List<MediaPathMapping>? mediaPathMappings,
     MediaServerConfig? mediaServerConfig,
     int? plexLinkPin,
@@ -341,6 +344,7 @@ class InstanceApiService {
       'password': password,
       'is_default': isDefault,
       if (tagRequests != null) 'tag_requests': tagRequests,
+      if (autoAddUsers != null) 'auto_add_users': autoAddUsers,
       if (mediaPathMappings != null)
         'media_path_mappings':
             mediaPathMappings.map((mapping) => mapping.toJson()).toList(),
@@ -351,6 +355,17 @@ class InstanceApiService {
       if (plexLinkPin != null) 'plex_link_pin': plexLinkPin,
     });
     return ServiceInstance.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  Future<List<InstanceAssignment>> getAssignments(String instanceId) async {
+    final response = await _dio.get('/api/instances/$instanceId/assignments');
+    return (response.data as List).map((e) => InstanceAssignment.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+  }
+
+  Future<void> changeAssignments(String instanceId, Iterable<int> userIds, {required bool add}) async {
+    await _dio.patch('/api/instances/$instanceId/assignments', data: {
+      'action': add ? 'add' : 'remove', 'user_ids': userIds.toList()..sort(),
+    });
   }
 
   Future<void> deleteInstance(String id) async {
@@ -604,4 +619,18 @@ class InstanceApiService {
       data is Map ? Map<String, dynamic>.from(data) : const {},
     );
   }
+}
+
+class InstanceAssignment {
+  final int userId;
+  final bool assigned;
+  final String preferredInstanceId;
+  final String effectiveDefaultId;
+  const InstanceAssignment({required this.userId, required this.assigned, this.preferredInstanceId = '', this.effectiveDefaultId = ''});
+  factory InstanceAssignment.fromJson(Map<String, dynamic> json) => InstanceAssignment(
+    userId: json['user_id'] as int,
+    assigned: json['assigned'] as bool,
+    preferredInstanceId: json['preferred_instance_id'] as String? ?? '',
+    effectiveDefaultId: json['effective_default_id'] as String? ?? '',
+  );
 }

@@ -658,7 +658,7 @@ func TestTVCorrectionLibrariesAndKidsPolicy(t *testing.T) {
 	if _, err = s.GetUserStatus(uid, 299939, "tv", "tv-sibling"); !errors.Is(err, ErrArrInstanceForbidden) {
 		t.Fatal("ungranted status leaked")
 	}
-	_, err = s.db.Exec(`INSERT INTO user_instance_grants(user_id,instance_id) VALUES(?,?),(?,'tv-sibling')`, uid, primary, uid)
+	_, err = s.db.Exec(`INSERT OR IGNORE INTO user_instance_grants(user_id,instance_id) VALUES(?,?),(?,'tv-sibling')`, uid, primary, uid)
 	if err != nil {
 		t.Fatal(err)
 	}

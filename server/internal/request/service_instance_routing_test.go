@@ -237,12 +237,21 @@ func TestApproveRequestReplaysStoredInstance(t *testing.T) {
 		t.Fatalf("queue row library = (%q, %q), want (%q, 4K Movies)", pending[0].InstanceID, pending[0].InstanceName, siblingID)
 	}
 
-	// The requester loses the sibling grant before the decision; the stored
-	// routing must still hold under the admin's authority.
+	// Revocation refuses approval without rerouting. Reassigning permits the
+	// original stored destination to be used.
 	if err := store.SetUserGrants(uid, map[string][]string{"radarr": {primaryID}}); err != nil {
 		t.Fatalf("revoke sibling grant: %v", err)
 	}
 
+	if _, err := s.ApproveRequest(adminID, pending[0].ID, nil); err == nil {
+		t.Fatal("revoked assignment was approved")
+	}
+	if siblingFake.addBody != nil || primaryFake.addBody != nil {
+		t.Fatal("revoked request mutated a library")
+	}
+	if err := store.SetUserGrants(uid, map[string][]string{"radarr": {primaryID, siblingID}}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.ApproveRequest(adminID, pending[0].ID, nil); err != nil {
 		t.Fatalf("ApproveRequest: %v", err)
 	}

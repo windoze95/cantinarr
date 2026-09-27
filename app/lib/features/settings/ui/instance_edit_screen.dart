@@ -27,6 +27,7 @@ import '../data/hardcover_connection.dart';
 import 'hardcover_connection_dialog.dart';
 import '../logic/arr_path_match.dart';
 import '../logic/plex_invites_provider.dart';
+import 'instance_users_screen.dart';
 
 /// Form for creating or editing a service instance.
 /// qBittorrent's two credential shapes: the WebUI sign-in, which every
@@ -101,6 +102,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         'qbitAuth': _qbitAuth.name,
         'clearTdarrKey': _isTdarr && _clearTdarrKey,
         'tagRequests': _tagRequests,
+        'autoAddUsers': _autoAddUsers,
       };
   Object get _mediaValues => [
         _publicAddressController.text,
@@ -150,6 +152,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   VideoApps? _videoApps;
   String _serviceType = 'radarr';
   bool _isDefault = false;
+  bool _autoAddUsers = true;
+  bool _assignmentDetailsLoaded = false;
+  bool get _assignmentModel => ref.read(authProvider).valueOrNull?.connection?.instanceAssignments ?? false;
+  bool get _newAssignments => _assignmentModel && _supportsMediaDownloads;
   bool _tagRequests = false;
   bool _tagRequestsLoaded = false;
   bool get _supportsRequesterTags =>
@@ -341,7 +347,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   /// Types with no global default: their instances reach users only through
   /// access grants, so the default toggle is hidden and never sent.
-  bool get _grantOnly => _isChaptarr || _isLidarr || _isMediaServer;
+  bool get _grantOnly => _isMediaServer || (!_assignmentModel && (_isChaptarr || _isLidarr));
 
   bool get _supportsMediaDownloads =>
       _serviceType == 'radarr' ||
@@ -371,7 +377,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   /// user-select. The other source types show it when this instance is NOT
   /// the global default, as a per-user override of that default.
   bool get _showUserSelect =>
-      _supportsUserAssignment && (_grantOnly || !_isDefault);
+      _supportsUserAssignment && !_newAssignments && (_grantOnly || !_isDefault);
 
   /// The type selector is still on its disabled placeholder (see
   /// [InstanceEditScreen.serviceTypePrompt]): the form asked for a choice
@@ -575,13 +581,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     }
   }
 
-  /// The default toggle starts ON when creating the first instance of a type —
-  /// there is nothing else the type could default to — and OFF once siblings
-  /// exist (the admin opts in explicitly, confirming the takeover on save).
+  /// New automation instances start as default when the service has none.
+  /// Older servers retain their first-instance-only behavior.
   /// Mutates state; call from within setState.
   void _applyAutoDefault() {
     if (widget.isEditing || !_instancesLoaded || _grantOnly) return;
-    _isDefault = !_instances.any((i) => i.serviceType == _serviceType);
+    _isDefault = !_instances.any((i) => i.serviceType == _serviceType && (!_assignmentModel || i.isDefault));
     _defaultDraft.markSaved(_isDefault);
   }
 
@@ -638,7 +643,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           InstanceApiService(backendDio: ref.read(backendClientProvider));
       // Media servers have no per-user default pins (access is the grant
       // alone), so only the grant rows are read for them.
-      final pins = _isMediaServer
+      final pins = _isMediaServer || _newAssignments
           ? const <int, String>{}
           : await service.getInstanceUsers(anchorId);
       final grants = await service.getInstanceGrantUsers(anchorId);
@@ -689,6 +694,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           _usernameController.text = details['username'] as String? ?? '';
         }
         _isDefault = details['is_default'] as bool? ?? _isDefault;
+        _autoAddUsers = details['auto_add_users'] as bool? ?? false;
+        _assignmentDetailsLoaded = true;
         _tagRequests = details['tag_requests'] as bool? ?? false;
         _tagRequestsLoaded = true;
         _defaultDraft.markSaved(_isDefault);
@@ -1199,7 +1206,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       builder: (context) => AlertDialog(
         title: Text('Change default $label instance?'),
         content: Text(
-          '"${sibling.name}" is currently the default $label instance. '
+          _newAssignments
+              ? 'Set "$newName" as the preferred request destination for users assigned to it who have no personal preference. Existing access and pending requests stay unchanged.'
+              : '"${sibling.name}" is currently the default $label instance. '
           'Saving will move the default from "${sibling.name}" to "$newName": '
           'requests and dashboard statuses for users without a per-user '
           'instance will switch to "$newName".',
@@ -1217,6 +1226,19 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       ),
     );
     return confirmed == true;
+  }
+
+  Future<bool> _confirmDefaultRemoval() async {
+    if (!_newAssignments || !widget.isEditing || _isDefault ||
+        !_instances.any((i) => i.id == widget.instanceId && i.isDefault)) {
+      return true;
+    }
+    return await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Remove the global default?'),
+      content: const Text('Users without a personal preference will use their first assigned instance. Existing access and pending requests stay unchanged.'),
+      actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Remove default'))],
+    )) == true;
   }
 
   bool _sameSelection(Set<int> a, Set<int> b) =>
@@ -1417,12 +1439,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       );
       return;
     }
-    if (!await _confirmDefaultTakeover()) return;
+    if (!await _confirmDefaultRemoval()) return;
+    if (!mounted || !await _confirmDefaultTakeover()) return;
     if (!mounted) return;
 
-    // Chaptarr and media servers never carry the global default flag (the
-    // server enforces this too); their instances are only assigned per user
-    // below.
+    // Media servers and legacy grant-only services have no global default.
     final isDefault = !_grantOnly && _isDefault;
     // Apply assignments only when the section is visible and the selection
     // actually changed — a hidden section must never silently rewrite pins.
@@ -1476,6 +1497,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             password: _passwordController.text,
             isDefault: isDefault,
             tagRequests: _supportsRequesterTags && _tagRequestsLoaded ? _tagRequests : null,
+            autoAddUsers: _newAssignments && _assignmentDetailsLoaded ? _autoAddUsers : null,
             mediaPathMappings: mediaPathMappings,
             mediaServerConfig: mediaServerConfig,
             plexLinkPin: plexLinkPin,
@@ -1528,6 +1550,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         password: _passwordController.text,
         isDefault: isDefault,
         tagRequests: _supportsRequesterTags ? _tagRequests : null,
+        autoAddUsers: _newAssignments ? _autoAddUsers : null,
         mediaPathMappings: mediaPathMappings,
         mediaServerConfig: mediaServerConfig,
         plexLinkPin: plexLinkPin,
@@ -1656,7 +1679,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete Instance'),
-        content: const Text('Are you sure you want to delete this instance?'),
+        content: Text(_newAssignments
+            ? 'Delete this instance and its user assignments? Affected users will use a remaining assigned instance for new requests, if any. Pending requests will not move to another instance.'
+            : 'Are you sure you want to delete this instance?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -2121,6 +2146,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   }
 
   String get _defaultSubtitle {
+    if (_newAssignments) return 'Preferred request destination for users assigned to this instance. Choosing a default does not grant access.';
     if (_isDownloadClient) return 'Use this as the default download client';
     if (_isWatchHistory) {
       return 'Use this as the default $_serviceLabel instance';
@@ -3236,7 +3262,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           ],
           const SizedBox(height: 16),
 
-          // Chaptarr and media servers have no global default: their
+          // Media servers and legacy Chaptarr/Lidarr have no global default:
           // instances are assigned directly to users below instead. The
           // prompted form hides the toggle entirely until a type is chosen.
           if (!_serviceTypeUnchosen && !_grantOnly)
@@ -3251,6 +3277,25 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               activeTrackColor: AppTheme.accent,
             ),
 
+          if (_newAssignments) ...[
+            SwitchListTile(
+              title: const Text('Automatically add new users'),
+              subtitle: const Text('Assign accounts created after this setting is saved, including invitations, imports, and SSO accounts. Existing users stay unchanged.'),
+              value: _autoAddUsers,
+              onChanged: _isSaving || (widget.isEditing && !_assignmentDetailsLoaded) ? null : (value) => setState(() => _autoAddUsers = value),
+            ),
+            ListTile(
+              title: const Text('Manage users'),
+              subtitle: Text(!widget.isEditing ? 'Save this instance to assign existing users.' :
+                _userSelectError != null ? 'Could not load assignment count. Open to retry.' :
+                _users == null ? 'Loading assignments…' : '${_users!.where((u) => !u.isAdmin && _assignedUserIds.contains(u.id)).length} assigned users'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: !widget.isEditing || _isSaving ? null : () async {
+                await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => InstanceUsersScreen(instanceId: widget.instanceId!, instanceName: _nameController.text.trim())));
+                if (mounted) await _loadPins();
+              },
+            ),
+          ],
           if (_showUserSelect) ..._buildUserSelect(),
 
           if (_supportsRequesterTags)

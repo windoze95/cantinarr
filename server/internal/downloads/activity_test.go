@@ -55,6 +55,11 @@ func (e *activityEnv) add(t *testing.T, kind, rawURL string) instance.Instance {
 	if err := e.h.store.Create(&i); err != nil {
 		t.Fatal(err)
 	}
+	if kind == "radarr" || kind == "sonarr" {
+		if _, err := e.db.Exec("INSERT INTO user_instance_grants(user_id,instance_id) SELECT id,? FROM users WHERE role='user'", i.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return i
 }
 

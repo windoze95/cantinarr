@@ -597,6 +597,7 @@ class ServerConfig {
   final bool tvLibraryNavigation;
   final bool requestQuotas;
   final bool requesterTagging;
+  final bool instanceAssignments;
   final bool downloadsActivity;
   final String downloadsUserScope;
 
@@ -623,6 +624,7 @@ class ServerConfig {
     this.tvLibraryNavigation = false,
     this.requestQuotas = false,
     this.requesterTagging = false,
+    this.instanceAssignments = false,
     this.downloadsActivity = false,
     this.downloadsUserScope = 'all',
     this.cover4KBadges = false,
@@ -653,6 +655,7 @@ class ServerConfig {
       tvLibraryNavigation: json['tv_library_navigation'] as bool? ?? false,
       requestQuotas: json['request_quotas'] as bool? ?? false,
       requesterTagging: json['requester_tagging'] as bool? ?? false,
+      instanceAssignments: json['instance_assignments'] as bool? ?? false,
       downloadsActivity: json['downloads_activity'] as bool? ?? false,
       downloadsUserScope: json['downloads_user_scope'] as String? ?? 'all',
       cover4KBadges: json['cover_4k_badges'] as bool? ?? false,

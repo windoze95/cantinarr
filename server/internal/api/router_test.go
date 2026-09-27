@@ -100,6 +100,9 @@ func TestConfigHandlerFiltersInstancesForNonAdmin(t *testing.T) {
 	mainRadarr := createConfigInstance(t, store, "radarr", "Main Radarr", true)
 	fourKRadarr := createConfigInstance(t, store, "radarr", "4K Radarr", false)
 	mainSonarr := createConfigInstance(t, store, "sonarr", "Main Sonarr", true)
+	if err := store.SetUserGrants(userID, map[string][]string{"sonarr": {mainSonarr.ID}}); err != nil {
+		t.Fatal(err)
+	}
 	createConfigInstance(t, store, "sonarr", "Anime Sonarr", false)
 	books := createConfigInstance(t, store, "chaptarr", "Books", false)
 	createConfigInstance(t, store, "chaptarr", "Private Books", false)
@@ -113,8 +116,24 @@ func TestConfigHandlerFiltersInstancesForNonAdmin(t *testing.T) {
 	cantinaPlex := createConfigInstance(t, store, "plex", "Cantina Plex", false)
 	createConfigInstance(t, store, "plex", "Other Plex", false)
 
+	if grants, e := store.ListUserGrants(userID); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["radarr"] = append(grants["radarr"], fourKRadarr.ID)
+		if e = store.SetUserGrants(userID, grants); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if err := store.SetUserDefault(userID, "radarr", fourKRadarr.ID); err != nil {
 		t.Fatalf("pin radarr: %v", err)
+	}
+	if grants, e := store.ListUserGrants(userID); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["chaptarr"] = append(grants["chaptarr"], books.ID)
+		if e = store.SetUserGrants(userID, grants); e != nil {
+			t.Fatal(e)
+		}
 	}
 	if err := store.SetUserDefault(userID, "chaptarr", books.ID); err != nil {
 		t.Fatalf("grant chaptarr: %v", err)
@@ -170,6 +189,9 @@ func TestConfigHandlerListsGrantedInstancesForNonAdmin(t *testing.T) {
 	fourKRadarr := createConfigInstance(t, store, "radarr", "4K Movies", false)
 	createConfigInstance(t, store, "radarr", "Kids Movies", false)
 	mainSonarr := createConfigInstance(t, store, "sonarr", "Main Sonarr", true)
+	if err := store.SetUserGrants(userID, map[string][]string{"sonarr": {mainSonarr.ID}}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := store.SetUserGrants(userID, map[string][]string{
 		"radarr": {mainRadarr.ID, fourKRadarr.ID},
@@ -202,6 +224,14 @@ func TestConfigHandlerListsGrantedInstancesForNonAdmin(t *testing.T) {
 
 	// Pinning the sibling flips which visible instance carries is_default
 	// without changing the visible set.
+	if grants, e := store.ListUserGrants(userID); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["radarr"] = append(grants["radarr"], fourKRadarr.ID)
+		if e = store.SetUserGrants(userID, grants); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if err := store.SetUserDefault(userID, "radarr", fourKRadarr.ID); err != nil {
 		t.Fatalf("pin 4K: %v", err)
 	}
@@ -249,6 +279,9 @@ func TestConfigHandlerMarksDeterministicFallbackAsEffectiveDefault(t *testing.T)
 	alphaRadarr := createConfigInstance(t, store, "radarr", "Alpha Radarr", false)
 	createConfigInstance(t, store, "sonarr", "Zulu Sonarr", false)
 	alphaSonarr := createConfigInstance(t, store, "sonarr", "Alpha Sonarr", false)
+	if err := store.SetUserGrants(userID, map[string][]string{"radarr": {alphaRadarr.ID}, "sonarr": {alphaSonarr.ID}}); err != nil {
+		t.Fatal(err)
+	}
 
 	resp := requestConfig(t, store, creds, remediationSvc, &auth.Claims{
 		UserID: userID,
@@ -312,6 +345,9 @@ func TestConfigHandlerReportsMediaDownloadCapabilityWithoutExposingRoots(t *test
 		t.Fatalf("enable media downloads: %v", err)
 	}
 	disabled := createConfigInstance(t, store, "sonarr", "Unmapped TV", true)
+	if err := store.SetUserGrants(userID, map[string][]string{"radarr": {enabled.ID}, "sonarr": {disabled.ID}}); err != nil {
+		t.Fatal(err)
+	}
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	req = req.WithContext(context.WithValue(req.Context(), auth.ClaimsKey, &auth.Claims{
 		UserID: userID,
@@ -419,8 +455,27 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			instances[i].Password,
 		)
 	}
+	if grants, e := store.ListUserGrants(userID); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["radarr"] = append(grants["radarr"], instances[1].ID)
+		if e = store.SetUserGrants(userID, grants); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if err := store.SetUserGrants(userID, map[string][]string{"sonarr": {instances[2].ID}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.SetUserDefault(userID, "radarr", instances[1].ID); err != nil {
 		t.Fatalf("pin requester Radarr: %v", err)
+	}
+	if grants, e := store.ListUserGrants(userID); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["chaptarr"] = append(grants["chaptarr"], instances[3].ID)
+		if e = store.SetUserGrants(userID, grants); e != nil {
+			t.Fatal(e)
+		}
 	}
 	if err := store.SetUserDefault(userID, "chaptarr", instances[3].ID); err != nil {
 		t.Fatalf("grant requester Chaptarr: %v", err)
@@ -527,7 +582,7 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			}
 			assertExactMapKeys(t, payload,
 				"server_name", "version", "min_app_version", "services", "instances", "issues_enabled", "allow_reporting",
-				"plex_access_requestable", "media_account_management", "admin_catalog_browsing", "hidden_discover_tabs", "apple_tv_remote", "tv_match_corrections", "tv_library_navigation", "request_quotas", "requester_tagging", "downloads_activity", "downloads_user_scope", "cover_4k_badges",
+				"plex_access_requestable", "media_account_management", "admin_catalog_browsing", "hidden_discover_tabs", "apple_tv_remote", "tv_match_corrections", "tv_library_navigation", "request_quotas", "requester_tagging", "instance_assignments", "downloads_activity", "downloads_user_scope", "cover_4k_badges",
 			)
 
 			if string(payload["apple_tv_remote"]) != "false" {

@@ -680,7 +680,7 @@ func NewRouter(
 				// Instance-centric view of user_default_instances (the static
 				// "users" segment wins over the proxy wildcard below): which
 				// users are pinned to which instance of this instance's service
-				// type, and (PUT) assign this instance to an exact set of users.
+				// type, and (PUT) choose this preference for an already assigned set.
 				r.Get("/instances/{instanceID}/users", instanceHandler.GetInstanceUsers)
 				r.Put("/instances/{instanceID}/users", instanceHandler.UpdateInstanceUsers)
 				// Instance-centric view of user_instance_grants: which users
@@ -689,6 +689,8 @@ func NewRouter(
 				// without moving anyone's default.
 				r.Get("/instances/{instanceID}/grant-users", instanceHandler.GetInstanceGrantUsers)
 				r.Put("/instances/{instanceID}/grant-users", instanceHandler.UpdateInstanceGrantUsers)
+				r.Get("/instances/{instanceID}/assignments", instanceHandler.GetAssignments)
+				r.Patch("/instances/{instanceID}/assignments", instanceHandler.ChangeAssignments)
 				// Configure the server-managed Radarr/Sonarr Connect webhook
 				// without ever returning its callback credential to the app.
 				r.Post("/instances/{instanceID}/webhook", instanceHandler.ConfigureWebhook)
@@ -845,13 +847,8 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			MediaDownloads bool   `json:"media_downloads"`
 		}
 
-		// The config payload is per-user: admins see every instance, while
-		// regular users see their granted Radarr/Sonarr/Chaptarr set — every
-		// access-granted instance plus their effective default (the global
-		// default when nothing was granted; for chaptarr only explicit rows,
-		// never a fallback). is_default is rewritten per user to mark THEIR
-		// effective default, which is how older clients that expect a single
-		// instance keep picking the right one.
+		// Administrators see all instances; regular users see explicit assignments.
+		// Mark their effective routing default so existing clients choose correctly.
 		claims := auth.GetClaims(r.Context())
 		var userID int64
 		isAdmin := false
@@ -1004,6 +1001,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"admin_catalog_browsing":   true,
 			"request_quotas":           true,
 			"requester_tagging":        true,
+			"instance_assignments":     true,
 			"tv_match_corrections":     true,
 			"tv_library_navigation":    true,
 			"downloads_activity":       true,

@@ -93,8 +93,19 @@ func TestInstanceUsersEndpoints(t *testing.T) {
 
 	// Assign alice; the response reports the whole service type, so bob's
 	// separate pin to a sibling instance shows up too.
+	if grants, e := s.ListUserGrants(bob); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["radarr"] = append(grants["radarr"], r2)
+		if e = s.SetUserGrants(bob, grants); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if err := s.SetUserDefault(bob, "radarr", r2); err != nil {
 		t.Fatalf("SetUserDefault: %v", err)
+	}
+	if err := s.ChangeAssignments(r1, []int64{alice}, true); err != nil {
+		t.Fatal(err)
 	}
 	rec = do("PUT", "/instances/"+r1+"/users", `{"user_ids":[`+jsonInt(alice)+`]}`)
 	if rec.Code != http.StatusOK {
@@ -146,6 +157,13 @@ func TestUserDefaultInstancesEndpoints(t *testing.T) {
 		t.Fatalf("GET empty = %d %q, want 200 {}", rec.Code, rec.Body.String())
 	}
 
+	// An unassigned preference is refused; assign before selecting it.
+	if rec := do("PUT", userPath, `{"radarr":"`+r1+`"}`); rec.Code != http.StatusBadRequest {
+		t.Fatal("unassigned preference accepted")
+	}
+	if err := s.ChangeAssignments(r1, []int64{alice}, true); err != nil {
+		t.Fatal(err)
+	}
 	// Pin, read back from the PUT response, clear with null.
 	rec := do("PUT", userPath, `{"radarr":"`+r1+`"}`)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), r1) {

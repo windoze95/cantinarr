@@ -535,8 +535,8 @@ func (r *Registry) GetDefaultRutorrentClient() (*rutorrent.Client, string, error
 }
 
 // GetUserDefaultRadarrClient returns the Radarr client for a user's effective
-// default instance: their pin, else the global default when it is granted (or
-// nothing is), else their first granted instance. The second return is the
+// default instance: their authorized preference, an assigned global default,
+// or their first assignment. The second return is the
 // resolved instance ID.
 func (r *Registry) GetUserDefaultRadarrClient(userID int64) (*radarr.Client, string, error) {
 	id, err := r.store.EffectiveDefaultInstanceID(userID, "radarr")
@@ -551,8 +551,8 @@ func (r *Registry) GetUserDefaultRadarrClient(userID int64) (*radarr.Client, str
 }
 
 // GetUserDefaultSonarrClient returns the Sonarr client for a user's effective
-// default instance: their pin, else the global default when it is granted (or
-// nothing is), else their first granted instance. The second return is the
+// default instance: their authorized preference, an assigned global default,
+// or their first assignment. The second return is the
 // resolved instance ID.
 func (r *Registry) GetUserDefaultSonarrClient(userID int64) (*sonarr.Client, string, error) {
 	id, err := r.store.EffectiveDefaultInstanceID(userID, "sonarr")
@@ -567,9 +567,8 @@ func (r *Registry) GetUserDefaultSonarrClient(userID int64) (*sonarr.Client, str
 }
 
 // GetUserChaptarrClient returns the Chaptarr client for a user's effective
-// granted instance (their pin, else their first grant). Chaptarr has NO
-// global default: a user with no explicit rows gets a nil client and an empty
-// ID, which callers surface as "no access / not configured".
+// assigned instance (preference, assigned global default, first assignment).
+// A regular user with no assignments gets a nil client and an empty ID.
 func (r *Registry) GetUserChaptarrClient(userID int64) (*chaptarr.Client, string, error) {
 	id, err := r.store.EffectiveDefaultInstanceID(userID, "chaptarr")
 	if err != nil {
@@ -583,9 +582,8 @@ func (r *Registry) GetUserChaptarrClient(userID int64) (*chaptarr.Client, string
 }
 
 // GetUserLidarrClient returns the Lidarr client for a user's effective
-// granted instance (their pin, else their first grant). Lidarr has NO global
-// default: a user with no explicit rows gets a nil client and an empty ID,
-// which callers surface as "no access / not configured".
+// assigned instance (preference, assigned global default, first assignment).
+// A regular user with no assignments gets a nil client and an empty ID.
 func (r *Registry) GetUserLidarrClient(userID int64) (*lidarr.Client, string, error) {
 	id, err := r.store.EffectiveDefaultInstanceID(userID, "lidarr")
 	if err != nil {
@@ -598,10 +596,8 @@ func (r *Registry) GetUserLidarrClient(userID int64) (*lidarr.Client, string, er
 	return client, id, err
 }
 
-// GetDefaultChaptarrClient returns a client for an arbitrary configured Chaptarr
-// instance (lowest sort_order). Chaptarr has no global default flag; this exists
-// for admin/AI contexts that operate without a specific user identity. Returns a
-// nil client when no Chaptarr instance is configured.
+// GetDefaultChaptarrClient chooses the global default or first configured
+// instance for administrator/system contexts without a user identity.
 func (r *Registry) GetDefaultChaptarrClient() (*chaptarr.Client, string, error) {
 	inst, err := r.store.GetDefault("chaptarr")
 	if err != nil {
@@ -614,10 +610,8 @@ func (r *Registry) GetDefaultChaptarrClient() (*chaptarr.Client, string, error) 
 	return client, inst.ID, err
 }
 
-// GetDefaultLidarrClient returns a client for an arbitrary configured Lidarr
-// instance (lowest sort_order). Lidarr has no global default flag; this exists
-// for admin contexts that operate without a specific user identity. Returns a
-// nil client when no Lidarr instance is configured.
+// GetDefaultLidarrClient chooses the global default or first configured
+// instance for administrator/system contexts without a user identity.
 func (r *Registry) GetDefaultLidarrClient() (*lidarr.Client, string, error) {
 	inst, err := r.store.GetDefault("lidarr")
 	if err != nil {
@@ -631,15 +625,14 @@ func (r *Registry) GetDefaultLidarrClient() (*lidarr.Client, string, error) {
 }
 
 // EffectiveDefaultInstanceID exposes the store's per-user effective-default
-// resolution (pin → granted global default → first granted → global chain) to
+// resolution (authorized preference, accessible global default, first assignment) to
 // services that need the id without constructing a client.
 func (r *Registry) EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error) {
 	return r.store.EffectiveDefaultInstanceID(userID, serviceType)
 }
 
-// VisibleInstanceIDs exposes the store's per-user visible set (explicit rows
-// plus the effective default, deterministic order) for callers that fan a
-// read across every library the user may see.
+// VisibleInstanceIDs exposes explicit assignments in configured order for
+// callers that read across every library a regular user may see.
 func (r *Registry) VisibleInstanceIDs(userID int64, serviceType string) ([]string, error) {
 	return r.store.VisibleInstanceIDs(userID, serviceType)
 }

@@ -748,8 +748,9 @@ func TestApproveAddsToTheLibraryAsTheIssuingAdministrator(t *testing.T) {
 	if err := h.db.QueryRow("SELECT id FROM service_instances WHERE service_type = 'radarr'").Scan(&radarrID); err != nil {
 		t.Fatal(err)
 	}
-	h.exec("INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (?, 'radarr', ?)", h.local, radarrID)
+	h.exec("INSERT INTO user_instance_grants (user_id, instance_id) VALUES (?, ?)", h.local, radarrID)
 	pending := h.request(h.local, "movie", 27205, "Inception", "pending", "2026-01-12 08:00:00")
+	h.exec("UPDATE request_log SET instance_id=? WHERE id=?", radarrID, pending)
 
 	resp, body := h.do(http.MethodPost, fmt.Sprintf("/api/v1/request/%d/approve", pending), h.key)
 	if resp.StatusCode != http.StatusOK {

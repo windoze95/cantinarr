@@ -85,7 +85,7 @@ func setupMusicReportService(t *testing.T, state *musicFileState) (*Service, int
 	svc, _ := setupMusicObservationService(t, state)
 	reporterID := seedUser(t, svc.db, "music-reporter")
 	if _, err := svc.db.Exec(
-		"INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (?, 'lidarr', 'lidarr-observe')",
+		"INSERT INTO user_instance_grants (user_id, instance_id) VALUES (?, 'lidarr-observe')",
 		reporterID,
 	); err != nil {
 		t.Fatalf("assign lidarr instance: %v", err)

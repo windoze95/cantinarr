@@ -7,7 +7,7 @@ sidebar:
 
 ## Books or Music is missing
 
-For a requester, check access to the intended Chaptarr or Lidarr instance. These services have no global default that automatically grants everyone access. The person needs a pin or explicit library grant.
+For a requester, check access to the intended Chaptarr or Lidarr instance. The person needs an explicit library assignment. Global defaults and personal preferences do not grant access. Open the instance and choose **Manage users** to review assignments.
 
 For an administrator, check whether the unconfigured tab was hidden under **Settings > Modules > Discover > Discover tabs**. Connecting the service restores it even if the service is later offline.
 

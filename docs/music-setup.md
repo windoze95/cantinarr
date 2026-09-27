@@ -2,7 +2,7 @@
 
 Music works like books, minus the part that makes books complicated:
 
-- **Lidarr has no global default instance.** A per-user pin or an explicit access grant authorizes the instance, so a requester without either doesn't see the Music tab at all — exactly the Chaptarr rule.
+- **Lidarr uses explicit library assignments.** Requesters need an assignment to see Music. A default chooses where requests go; it never grants access.
 - **One album is one record.** There is no eBook/Audiobook-style format split, so a request is a single tap and a single status.
 - **A single can finish downloading between two polls.** Instant updates aren't a nicety here; they're what makes the "ready to play" notification reliable.
 
@@ -26,11 +26,13 @@ Lidarr speaks the Servarr `/api/v1` API. Enter just the base URL; Cantinarr appe
 
 ## 3. Grant access per user
 
-This is the step people miss, and it works exactly like books. Unlike Radarr and Sonarr, Lidarr has no global default — pinning a user or granting an instance gives that user access to music.
+Open the saved instance and choose **Manage users**, filter the directory, select the people to assign, and choose **Add selected**. **Select all matching** includes every regular user matching the current filters. **Remove selected** revokes only those assignments and clears any preference pointing to this instance. Administrators already have access to all automation instances.
 
-Pin from either side: the instance editor, or **Settings → Users** for one person. Remove both the pin and any explicit grants to revoke access. Admins see Lidarr without a grant; everyone else needs one, and until they have it `services.lidarr` stays `false` and the Music tab stays hidden.
+**Automatically add new users** starts on for new instances. It assigns this instance when Cantinarr creates an account through an invitation, import, OIDC, or Plex sign-in. It does not assign existing users or restore removed access on later sign-ins. You can enable it on several instances. Existing instances retain their access on upgrade and start with automatic assignment off.
 
-Running more than one Lidarr instance is fine — pin different households or different libraries to different instances.
+**Default Instance** starts on when this service has no global default. A user can request into any assigned instance. Without an explicit selection, Cantinarr uses their assigned personal preference, then an assigned global default, then their first assigned instance in configured order. No assignment means no Music library access. Defaults never grant access, and pending requests keep their saved destination.
+
+For one person, edit their assigned libraries and preferred destination under **Settings > Users**. This applies to kids accounts too.
 
 ## 4. Check instant updates
 

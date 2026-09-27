@@ -210,6 +210,7 @@ func main() {
 	})
 	instanceHandler.SetGrantObserver(mediaAccessService.OnGrantsChanged)
 	instanceStore.SetGrantAddedObserver(mediaAccessService.OnGrantAdded)
+	authService.SetGrantAddedObserver(mediaAccessService.OnGrantAdded)
 	instanceHandler.SetSharedLibrariesObserver(mediaAccessService.OnSharedLibrariesChanged)
 	authHandler.SetUserDeleteHook(mediaAccessService.BeforeUserDelete)
 

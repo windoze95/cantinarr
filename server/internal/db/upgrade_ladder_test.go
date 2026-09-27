@@ -188,7 +188,7 @@ func TestOpenUpgradesOldestShippedSchema(t *testing.T) {
 	}
 
 	// Nothing was invented or dropped by the two upgrade passes.
-	for table, want := range map[string]int{"users": 2, "service_instances": 4, "request_log": 1, "settings": 1, "devices": 1} {
+	for table, want := range map[string]int{"users": 2, "service_instances": 4, "request_log": 1, "settings": 2, "devices": 1} {
 		var count int
 		if err := database.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
 			t.Fatalf("count %s: %v", table, err)

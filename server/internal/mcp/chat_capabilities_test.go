@@ -67,7 +67,7 @@ func TestChatCapabilitiesRequireConfiguredAccessibleLibraries(t *testing.T) {
 	}{
 		{"no instances", auth.RoleAdmin, nil, []string{}, false},
 		{"movies only", auth.RoleAdmin, []string{"radarr"}, []string{"movie"}, true},
-		{"ungranted books and music", auth.RoleUser, []string{"radarr", "sonarr", "chaptarr", "lidarr"}, []string{"movie", "tv"}, false},
+		{"unassigned libraries", auth.RoleUser, []string{"radarr", "sonarr", "chaptarr", "lidarr"}, []string{}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server, _, _, _ := capabilityServer(t, tc.role, tc.services...)

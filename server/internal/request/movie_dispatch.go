@@ -127,11 +127,7 @@ func (s *Service) createMovieRequest(r *resolvedRequest, approval bool) (*Create
 
 func (s *Service) dispatchMovie(ctx context.Context, id int64, token string, r *resolvedRequest) {
 	r.beforeMutation = func() error {
-		actor := r.userID
-		if r.actorID != 0 && s.userIsAdmin(r.actorID) {
-			actor = r.actorID
-		}
-		if _, _, err := s.resolveRadarr(actor, r.instanceID); err != nil {
+		if _, _, err := s.resolveRadarr(r.userID, r.instanceID); err != nil {
 			return err
 		}
 		if err := s.checkContentPolicy(r.userID, s.userIsAdmin(r.userID), "movie", r.tmdbID); err != nil {

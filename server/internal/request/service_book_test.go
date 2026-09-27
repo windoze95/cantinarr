@@ -376,7 +376,7 @@ func TestApproveLegacyUnpinnedBookFailsClosed(t *testing.T) {
 	if err := svc.db.QueryRow("SELECT id FROM request_log WHERE foreign_id = 'legacy'").Scan(&requestID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.approveAndDispatchForTest(adminID, requestID, nil); err == nil || !strings.Contains(err.Error(), "no pinned Chaptarr instance") {
+	if _, err := svc.approveAndDispatchForTest(adminID, requestID, nil); err == nil || !strings.Contains(err.Error(), "no verified destination") {
 		t.Fatalf("ApproveRequest error = %v, want pinned-instance failure", err)
 	}
 	var status string
@@ -393,6 +393,11 @@ func TestBookAudienceReadFailureAbortsDecision(t *testing.T) {
 	if _, err := svc.db.Exec(
 		"INSERT INTO service_instances (id, service_type, name, url, api_key) VALUES ('books', 'chaptarr', 'Books', 'http://unused', 'secret')",
 	); err != nil {
+		t.Fatal(err)
+	}
+	cipher, _ := secrets.NewCipher(bytes.Repeat([]byte{0x42}, 32))
+	svc.registry = instance.NewRegistry(instance.NewStore(svc.db, cipher))
+	if _, err := svc.db.Exec("INSERT INTO user_instance_grants(user_id,instance_id) VALUES (?,'books')", uid); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.createPending(&resolvedRequest{
@@ -467,7 +472,7 @@ func TestBookPendingPreflightUsesLiveAndSharedPendingState(t *testing.T) {
 	if err := svc.db.QueryRow("SELECT id FROM service_instances WHERE service_type='chaptarr'").Scan(&instanceID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.Exec("INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (?, 'chaptarr', ?)", secondUID, instanceID); err != nil {
+	if _, err := svc.db.Exec("INSERT INTO user_instance_grants (user_id, instance_id) VALUES (?, ?)", secondUID, instanceID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "book", ForeignID: "shared", Title: "Shared", BookFormat: BookFormatEbook}); err != nil {
@@ -1740,6 +1745,14 @@ func newChaptarrBookTestService(t *testing.T, chaptarrURL string) (*Service, int
 	}
 	if err := store.Create(inst); err != nil {
 		t.Fatalf("create chaptarr instance: %v", err)
+	}
+	if grants, e := store.ListUserGrants(uid); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["chaptarr"] = append(grants["chaptarr"], inst.ID)
+		if e = store.SetUserGrants(uid, grants); e != nil {
+			t.Fatal(e)
+		}
 	}
 	if err := store.SetUserDefault(uid, "chaptarr", inst.ID); err != nil {
 		t.Fatalf("grant chaptarr: %v", err)

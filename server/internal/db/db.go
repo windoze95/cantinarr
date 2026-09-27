@@ -305,6 +305,7 @@ CREATE TABLE IF NOT EXISTS service_instances (
     password TEXT NOT NULL DEFAULT '',
     is_default BOOLEAN DEFAULT 0,
     tag_requests BOOLEAN NOT NULL DEFAULT 0,
+    auto_add_users BOOLEAN NOT NULL DEFAULT 0,
     sort_order INTEGER DEFAULT 0,
     media_download_mode TEXT NOT NULL DEFAULT 'disabled',
     media_path_mappings TEXT NOT NULL DEFAULT '[]',
@@ -312,13 +313,8 @@ CREATE TABLE IF NOT EXISTS service_instances (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Per-user default *arr instance override (admin-managed). A row pins which
--- instance is THIS user's default source for a service type, overriding the
--- global service_instances.is_default. For service types that have NO global
--- default (chaptarr/lidarr), a row is ALSO the per-user access grant: without
--- one the user can neither see nor proxy to that instance. Absent row =
--- inherit the global default (or, for chaptarr/lidarr, no access). At most one row per
--- (user, service_type). Mirrors user_request_settings (admin-managed per-user).
+-- Per-user automation routing preferences. A preference must name an assigned
+-- instance (administrators can choose any). It never grants or restricts access.
 CREATE TABLE IF NOT EXISTS user_default_instances (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     service_type TEXT NOT NULL,
@@ -326,12 +322,8 @@ CREATE TABLE IF NOT EXISTS user_default_instances (
     PRIMARY KEY (user_id, service_type)
 );
 
--- Additional per-user instance access grants (admin-managed). A row lets the
--- user see and use this instance ALONGSIDE their effective default, so one
--- person can hold e.g. an HD and a 4K Radarr at once and choose per request.
--- The user_default_instances pin stays the user's default among their granted
--- set. With no grant rows the old model applies unchanged: the pin alone, or
--- the global default (chaptarr/lidarr stay grant-only, never falling back).
+-- Explicit instance assignments are the only library access source for regular
+-- users. A person can hold several instances of the same service type.
 CREATE TABLE IF NOT EXISTS user_instance_grants (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     instance_id TEXT NOT NULL REFERENCES service_instances(id) ON DELETE CASCADE,
@@ -1063,6 +1055,7 @@ func Open(dbPath string) (*sql.DB, error) {
 	// are ignored). Backfill statements run only when the column is first added
 	// so they execute exactly once per database.
 	migrations := []schemaMigration{
+		{alter: "ALTER TABLE service_instances ADD COLUMN auto_add_users BOOLEAN NOT NULL DEFAULT 0"},
 		{alter: "ALTER TABLE service_instances ADD COLUMN tag_requests BOOLEAN NOT NULL DEFAULT 0"},
 		{alter: "ALTER TABLE request_dispatch ADD COLUMN delivery_started_at INTEGER NOT NULL DEFAULT 0"},
 		{
@@ -1320,16 +1313,14 @@ func Open(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("clear legacy agent-run cost estimates: %w", err)
 	}
 
-	// Chaptarr, Lidarr, and the media servers (Jellyfin, Emby, Plex) have no
-	// global default — instances are granted per user — but older versions let
-	// the flag be set. Zero any legacy rows so the admin/AI fallback
-	// (GetDefault) resolves purely by sort order. Runs every boot; idempotent
-	// and the table is tiny.
-	if _, err := db.Exec(
-		"UPDATE service_instances SET is_default = 0 WHERE service_type IN ('chaptarr', 'lidarr', 'jellyfin', 'emby', 'plex', 'audiobookshelf') AND is_default = 1",
-	); err != nil {
+	if err := migrateInstanceAssignments(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("clear grant-only default flags: %w", err)
+		return nil, fmt.Errorf("migrate instance assignments: %w", err)
+	}
+	// Media servers retain their explicit eligibility model.
+	if _, err := db.Exec("UPDATE service_instances SET is_default=0 WHERE service_type IN ('jellyfin','emby','plex','audiobookshelf')"); err != nil {
+		db.Close()
+		return nil, err
 	}
 
 	// Retire unresolved Open Library deliveries without approving, deleting,
@@ -1829,6 +1820,59 @@ func migrateRequesterTagRecipients(db *sql.DB) error {
  FROM request_tag_jobs_legacy j JOIN request_log r ON r.id=j.request_id;
  DROP TABLE request_tag_jobs_legacy;`); err != nil {
 		return err
+	}
+	return tx.Commit()
+}
+
+// migrateInstanceAssignments snapshots only access users already held. The marker
+// and all changes commit together; later restarts never restore revoked grants.
+func migrateInstanceAssignments(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var done bool
+	if err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM settings WHERE key='instance_assignments_v1')").Scan(&done); err != nil {
+		return err
+	}
+	if done {
+		return nil
+	}
+	statements := []string{
+		// These flags were ignored and cleared by every previous startup.
+		`UPDATE service_instances SET is_default=0 WHERE service_type IN ('chaptarr','lidarr')`,
+		// Record the old explicit-default/first-instance winner for each video type.
+		`WITH winners AS MATERIALIZED (SELECT id,service_type,ROW_NUMBER() OVER(PARTITION BY service_type ORDER BY is_default DESC,sort_order,name,id) AS priority FROM service_instances WHERE service_type IN ('radarr','sonarr'))
+ UPDATE service_instances SET is_default=EXISTS(SELECT 1 FROM winners w WHERE w.id=service_instances.id AND w.priority=1) WHERE service_type IN ('radarr','sonarr')`,
+		`INSERT OR IGNORE INTO user_instance_grants(user_id,instance_id)
+   SELECT u.id,si.id FROM users u JOIN service_instances si ON si.service_type IN ('radarr','sonarr') AND si.is_default=1
+   WHERE u.role!='admin' AND NOT EXISTS(SELECT 1 FROM user_default_instances d WHERE d.user_id=u.id AND d.service_type=si.service_type)`,
+		`INSERT OR IGNORE INTO user_instance_grants(user_id,instance_id)
+   SELECT d.user_id,d.instance_id FROM user_default_instances d JOIN service_instances si ON si.id=d.instance_id AND si.service_type=d.service_type
+   WHERE si.service_type IN ('radarr','sonarr','chaptarr','lidarr')`,
+		// Bind legacy pending rows before a later default or assignment can move them.
+		`WITH targets AS MATERIALIZED (
+ SELECT r.id AS request_id,si.id AS instance_id,ROW_NUMBER() OVER(PARTITION BY r.id ORDER BY
+ EXISTS(SELECT 1 FROM user_default_instances d WHERE d.user_id=r.user_id AND d.instance_id=si.id) DESC,
+ si.is_default DESC,si.sort_order,si.name,si.id) AS priority
+ FROM request_log r JOIN service_instances si ON si.service_type=CASE r.media_type WHEN 'movie' THEN 'radarr' WHEN 'tv' THEN 'sonarr' WHEN 'book' THEN 'chaptarr' WHEN 'music' THEN 'lidarr' END
+ WHERE r.status='pending' AND COALESCE(r.instance_id,'')=''
+ AND NOT EXISTS(SELECT 1 FROM user_default_instances d WHERE d.user_id=r.user_id AND d.service_type=si.service_type
+ AND NOT EXISTS(SELECT 1 FROM service_instances target WHERE target.id=d.instance_id AND target.service_type=d.service_type))
+ AND (
+ EXISTS(SELECT 1 FROM user_instance_grants g WHERE g.user_id=r.user_id AND g.instance_id=si.id)
+ OR EXISTS(SELECT 1 FROM users u WHERE u.id=r.user_id AND u.role='admin')))
+ UPDATE request_log SET instance_id=(SELECT t.instance_id FROM targets t WHERE t.request_id=request_log.id AND t.priority=1)
+ WHERE status='pending' AND COALESCE(instance_id,'')=''`,
+		`UPDATE request_dispatch SET state='attention',code='access_unavailable',message='This request has no verified destination. Close it and submit a new request to an assigned instance.'
+   WHERE state NOT IN ('complete','cancelled') AND request_id IN (SELECT id FROM request_log WHERE status='pending' AND COALESCE(instance_id,'')='')`,
+		`INSERT INTO settings(key,value) VALUES('instance_assignments_v1','true')`,
+	}
+	for _, stmt := range statements {
+		if _, err = tx.Exec(stmt); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

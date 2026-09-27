@@ -65,6 +65,7 @@ func TestMediaAccessPreferenceMigrationPreservesOptOutOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	grantPinnedPushFixtures(t, database)
 	store := NewPrefsStore(database)
 	for userID, want := range map[int64]bool{1: false, 2: true} {
 		prefs, err := store.Get(userID)
@@ -123,6 +124,7 @@ func TestMediaAccessPolicyPreservesLegacyServerOptOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustExec(t, database, `INSERT INTO settings(key,value) VALUES(?,?)`, policyKey, `{"enabled":true,"categories":{"plex_invite_sent":false}}`)
+	grantPinnedPushFixtures(t, database)
 	store := NewPrefsStore(database)
 	policy, err := store.Policy()
 	if err != nil || policy.Categories[CategoryMediaServerAccess] || !policy.Categories[CategoryNewMovie] {

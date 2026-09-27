@@ -183,6 +183,9 @@ func TestRequesterTagBookSharedFormatsAndRetry(t *testing.T) {
 	admin := createTestAdmin(t, s)
 	result, _ := s.db.Exec(`INSERT INTO users(username,password_hash,role) VALUES('second','','user')`)
 	second, _ := result.LastInsertId()
+	if err := store.SetUserGrants(second, map[string][]string{"chaptarr": {id}}); err != nil {
+		t.Fatal(err)
+	}
 	store.SetUserDefault(second, "chaptarr", id)
 	rid := parentRequest(t, s, uid, "book", id, "both")
 	if parentRequest(t, s, second, "book", id, "ebook") != rid {
@@ -247,7 +250,7 @@ func TestRequesterTagParentGuardsAndIdentity(t *testing.T) {
 				l.onTagRead = func() {
 					switch failure {
 					case "revoked":
-						s.db.Exec(`DELETE FROM user_default_instances WHERE user_id=?`, uid)
+						s.db.Exec(`DELETE FROM user_instance_grants WHERE user_id=?`, uid)
 					case "rebound":
 						l.wrongParent = true
 					case "disabled":
@@ -288,6 +291,9 @@ func TestRequesterTagBookAdmissionNeverBackfillsAndOwnerTransfer(t *testing.T) {
 			parentRequest(t, s, uid, "book", id, "ebook")
 			result, _ := s.db.Exec(`INSERT INTO users(username,password_hash,role) VALUES('second','','user')`)
 			second, _ := result.LastInsertId()
+			if err := store.SetUserGrants(second, map[string][]string{"chaptarr": {id}}); err != nil {
+				t.Fatal(err)
+			}
 			store.SetUserDefault(second, "chaptarr", id)
 			parentRequest(t, s, second, "book", id, "ebook")
 			if mode == "cancel" || mode == "rejoin" {
@@ -367,6 +373,9 @@ func TestRequesterTagMusicWaitsForNativeRefresh(t *testing.T) {
 				t.Fatal(err)
 			}
 			second, _ := result.LastInsertId()
+			if err := store.SetUserGrants(second, map[string][]string{"lidarr": {id}}); err != nil {
+				t.Fatal(err)
+			}
 			store.SetUserDefault(second, "lidarr", id)
 			secondID := parentRequest(t, s, second, "music", id, "")
 			completeParentFormat(t, s, secondID, "")
@@ -391,7 +400,7 @@ func TestRequesterTagMusicRechecksGrantAfterRefreshRead(t *testing.T) {
 	l.onCommands = func() {
 		reads++
 		if reads == 2 {
-			s.db.Exec(`DELETE FROM user_default_instances WHERE user_id=?`, uid)
+			s.db.Exec(`DELETE FROM user_instance_grants WHERE user_id=?`, uid)
 		}
 	}
 	s.SweepRequesterTags(context.Background())

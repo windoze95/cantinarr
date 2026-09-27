@@ -46,6 +46,14 @@ func newHistoryTestService(t *testing.T, radarrURL, sonarrURL, chaptarrURL strin
 		if err := store.Create(inst); err != nil {
 			t.Fatalf("create %s instance: %v", serviceType, err)
 		}
+		if grants, x := store.ListUserGrants(uid); x != nil {
+			t.Fatal(x)
+		} else {
+			grants[serviceType] = append(grants[serviceType], inst.ID)
+			if x = store.SetUserGrants(uid, grants); x != nil {
+				t.Fatal(x)
+			}
+		}
 		if err := store.SetUserDefault(uid, serviceType, inst.ID); err != nil {
 			t.Fatalf("grant %s: %v", serviceType, err)
 		}

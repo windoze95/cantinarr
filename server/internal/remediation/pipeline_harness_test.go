@@ -339,6 +339,9 @@ func TestPipelineUserComplaintReporterCloseFullLoop(t *testing.T) {
 	if _, err := h.svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (2, 'viewer', '', 'user')"); err != nil {
 		t.Fatalf("seed reporter: %v", err)
 	}
+	if _, err := h.svc.db.Exec("INSERT INTO user_instance_grants(user_id,instance_id) VALUES (2,?)", preAirSonarrID); err != nil {
+		t.Fatal(err)
+	}
 
 	// S02E03 aired three weeks ago and holds file 50203, imported post-air —
 	// a perfectly healthy-looking library entry that happens to be the wrong
@@ -634,6 +637,9 @@ func TestPipelineRepairReviewLoop(t *testing.T) {
 	if _, err := h.svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (2, 'viewer', '', 'user')"); err != nil {
 		t.Fatalf("seed reporter: %v", err)
 	}
+	if _, err := h.svc.db.Exec("INSERT INTO user_instance_grants(user_id,instance_id) VALUES (2,?)", preAirSonarrID); err != nil {
+		t.Fatal(err)
+	}
 	episodes, files := buildPreAirSeason(28, 2, []preAirEpisode{
 		{number: 3, airsIn: -21 * 24 * time.Hour, hasFile: true},
 	})
@@ -746,6 +752,9 @@ func TestPipelineUserReportSelfServiceLoop(t *testing.T) {
 	h := newPipelineHarness(t)
 	if _, err := h.svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (2, 'viewer', '', 'user')"); err != nil {
 		t.Fatalf("seed reporter: %v", err)
+	}
+	if _, err := h.svc.db.Exec("INSERT INTO user_instance_grants(user_id,instance_id) VALUES (2,?)", preAirSonarrID); err != nil {
+		t.Fatal(err)
 	}
 	episodes, files := buildPreAirSeason(28, 2, []preAirEpisode{
 		{number: 3, airsIn: -21 * 24 * time.Hour, hasFile: true},
