@@ -1596,6 +1596,7 @@ Object? screenshotBodyFor(String rawPath, Map<String, dynamic> query) {
 
   // ── Admin approvals + boot badges ──
   if (path.endsWith('/api/admin/requests/history')) return historyFixturePage(query);
+  if (path.endsWith('/tags/retry')) return {'status': 'pending', 'can_retry': false};
   if (path.endsWith('/api/admin/request-settings')) {
     return _adminRequestSettings();
   }

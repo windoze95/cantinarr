@@ -202,6 +202,22 @@ CREATE TABLE IF NOT EXISTS request_dispatch (
 );
 CREATE INDEX IF NOT EXISTS request_dispatch_due ON request_dispatch(state, next_attempt_at);
 
+-- Captured only when a new request is admitted with requester tagging enabled.
+-- A tagging receipt is independent of approval, delivery and live library state.
+CREATE TABLE IF NOT EXISTS request_tag_jobs (
+    request_id INTEGER PRIMARY KEY REFERENCES request_log(id) ON DELETE CASCADE,
+    state TEXT NOT NULL DEFAULT 'waiting',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+    lease_until INTEGER NOT NULL DEFAULT 0,
+    lease_token TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    tag_label TEXT NOT NULL DEFAULT '',
+    applied_at DATETIME,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS request_tag_jobs_due ON request_tag_jobs(state, next_attempt_at);
+
 -- Local TV corrections are independent of the reviewed defaults bundled with
 -- the server. Reset retains a revision tombstone so stale edits stay stale.
 CREATE TABLE IF NOT EXISTS tv_match_overrides (
@@ -282,6 +298,7 @@ CREATE TABLE IF NOT EXISTS service_instances (
     username TEXT NOT NULL DEFAULT '',
     password TEXT NOT NULL DEFAULT '',
     is_default BOOLEAN DEFAULT 0,
+    tag_requests BOOLEAN NOT NULL DEFAULT 0,
     sort_order INTEGER DEFAULT 0,
     media_download_mode TEXT NOT NULL DEFAULT 'disabled',
     media_path_mappings TEXT NOT NULL DEFAULT '[]',
@@ -1040,6 +1057,7 @@ func Open(dbPath string) (*sql.DB, error) {
 	// are ignored). Backfill statements run only when the column is first added
 	// so they execute exactly once per database.
 	migrations := []schemaMigration{
+		{alter: "ALTER TABLE service_instances ADD COLUMN tag_requests BOOLEAN NOT NULL DEFAULT 0"},
 		{alter: "ALTER TABLE request_dispatch ADD COLUMN delivery_started_at INTEGER NOT NULL DEFAULT 0"},
 		{
 			// Old request intake cached client hints without verification. Clear

@@ -90,6 +90,7 @@ const _adminState = AuthState(
     refreshToken: 'screenshot-refresh',
     hiddenDiscoverTabs: ['music'],
     downloadsActivity: true,
+    requesterTagging: true,
     services: AvailableServices(
       radarr: true,
       sonarr: true,

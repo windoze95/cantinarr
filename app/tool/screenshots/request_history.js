@@ -1,4 +1,4 @@
-// Visual QA for #656 using the real router, shell, and request screens.
+// Visual QA for request history and requester tagging using the real router and shell.
 // flutter build web --release --no-pub -t test/preview/screenshot_main.dart --output=/tmp/cantinarr-656-preview
 // node tool/screenshots/request_history.js /tmp/cantinarr-656-preview /tmp/cantinarr-656-evidence
 const { chromium } = require('playwright');
@@ -62,11 +62,22 @@ const server = http.createServer((req, res) => {
       await sharedBook.waitFor();
       await page.waitForTimeout(1500);
       await page.screenshot({ path: path.join(output, `history-${width}.png`) });
+      await page.getByRole('button', { name: /^Dune/ }).click();
+      await page.getByText('Requester tag', { exact: true }).waitFor();
+      await page.waitForTimeout(500);
+      await page.screenshot({ path: path.join(output, `tag-failed-${width}.png`) });
+      await page.getByRole('button', { name: 'Retry tag', exact: true }).click();
+      await page.getByRole('button', { name: 'Retry tag', exact: true }).waitFor({ state: 'hidden' });
+      await page.getByRole('button', { name: 'View title', exact: true }).scrollIntoViewIfNeeded();
+      await page.waitForTimeout(500);
+      await page.screenshot({ path: path.join(output, `tag-pending-${width}.png`) });
+      await page.mouse.click(width / 2, 100);
+      await page.waitForTimeout(500);
       await sharedBook.click();
       await page.getByText('No reviewer recorded', { exact: true }).waitFor();
       await page.waitForTimeout(600);
       await page.screenshot({ path: path.join(output, `detail-${width}.png`) });
-      await page.keyboard.press('Escape');
+      await page.mouse.click(width / 2, 100);
       await page.waitForTimeout(600);
       await page.getByRole('button', { name: 'Load older requests' }).click();
       await page.getByRole('button', { name: /Kind of Blue/ }).waitFor();
@@ -79,7 +90,7 @@ const server = http.createServer((req, res) => {
       await sharedBook.waitFor({ state: 'hidden' });
       await page.getByRole('button', { name: /^Dune/ }).waitFor();
       assert.deepEqual(errors, [], `browser errors at ${width}`);
-      report.push({ width, headerNavigation: true, details: true, pagination: true, search: true, errors });
+      report.push({ width, headerNavigation: true, details: true, tagRetry: true, pagination: true, search: true, errors });
       await context.close();
       console.log('PASS', width);
     }

@@ -25,6 +25,8 @@ An approval records a decision, not proof that a file is available now. Choose *
 
 If history cannot load, use **Retry**. A refresh failure keeps the last successful results visible with a warning. An older server without this endpoint prompts you to update it.
 
+For libraries with [requester tagging](/integrations/radarr-sonarr/#tag-titles-with-their-requesters) enabled when a request was submitted, each row also shows tagging status. Open the row to inspect a failure or use **Retry tag**. This retries only the tag and preserves the request's decision and delivery. Refresh History to check completion. **Tag applied** is a saved receipt, not a live check of tags in the library.
+
 ## Season and quality choices
 
 Choose whether users may select TV seasons and quality profiles. If choice is disabled, the configured defaults apply. Quality profiles come from the relevant library manager; their names and behavior are not universal between instances.

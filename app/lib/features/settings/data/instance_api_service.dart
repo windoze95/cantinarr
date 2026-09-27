@@ -294,6 +294,7 @@ class InstanceApiService {
     String username = '',
     String password = '',
     bool isDefault = false,
+    bool? tagRequests,
     List<MediaPathMapping>? mediaPathMappings,
     MediaServerConfig? mediaServerConfig,
     int? plexLinkPin,
@@ -306,6 +307,7 @@ class InstanceApiService {
       'username': username,
       'password': password,
       'is_default': isDefault,
+      if (tagRequests != null) 'tag_requests': tagRequests,
       if (mediaPathMappings != null)
         'media_path_mappings':
             mediaPathMappings.map((mapping) => mapping.toJson()).toList(),
@@ -325,6 +327,7 @@ class InstanceApiService {
     String username = '',
     String password = '',
     bool isDefault = false,
+    bool? tagRequests,
     List<MediaPathMapping>? mediaPathMappings,
     MediaServerConfig? mediaServerConfig,
     int? plexLinkPin,
@@ -337,6 +340,7 @@ class InstanceApiService {
       'username': username,
       'password': password,
       'is_default': isDefault,
+      if (tagRequests != null) 'tag_requests': tagRequests,
       if (mediaPathMappings != null)
         'media_path_mappings':
             mediaPathMappings.map((mapping) => mapping.toJson()).toList(),

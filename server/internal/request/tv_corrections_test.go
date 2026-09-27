@@ -33,6 +33,8 @@ type correctionLab struct {
 	missingTarget  bool
 	mutations      int
 	lookupTVDB     int
+	requesterTags  []map[string]any
+	tagEdits       int
 }
 
 func (l *correctionLab) seasonMetadata() []map[string]any {
@@ -83,6 +85,34 @@ func newCorrectionLab(t *testing.T) (*Service, int64, int64, *correctionLab) {
 			l.mutations++
 		}
 		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v3/tag":
+			if l.requesterTags == nil {
+				write([]any{})
+			} else {
+				write(l.requesterTags)
+			}
+		case r.Method == "POST" && r.URL.Path == "/api/v3/tag":
+			var tag map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&tag)
+			tag["id"] = 100 + len(l.requesterTags)
+			l.requesterTags = append(l.requesterTags, tag)
+			write(tag)
+		case r.Method == "PUT" && r.URL.Path == "/api/v3/series/editor":
+			var body struct {
+				IDs   []int  `json:"seriesIds"`
+				Tags  []int  `json:"tags"`
+				Apply string `json:"applyTags"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body.Apply != "add" || !reflect.DeepEqual(body.IDs, []int{42}) {
+				t.Errorf("unexpected series editor: %+v", body)
+				w.WriteHeader(400)
+				return
+			}
+			tags, _ := l.parent["tags"].([]int)
+			l.parent["tags"] = append(tags, body.Tags...)
+			l.tagEdits++
+			write([]any{l.parent})
 		case strings.HasPrefix(r.URL.Path, "/tv/"):
 			parts := strings.Split(r.URL.Path, "/")
 			id, _ := strconv.Atoi(parts[2])

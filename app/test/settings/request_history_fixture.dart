@@ -7,6 +7,10 @@ const historyFixtureRows = <Map<String, dynamic>>[
     'decision': 'approved', 'decided_by': 'Morgan',
     'requested_at': '2026-09-25T14:20:00Z', 'decided_at': '2026-09-25T14:32:00Z',
     'requesters': [{'user_id': 2, 'username': 'Alex'}],
+    'requester_tagging': {
+      'status': 'failed', 'message': 'The library returned HTTP 401 while updating requester tags.',
+      'can_retry': true,
+    },
   },
   {
     'id': 8, 'tmdb_id': 66732, 'media_type': 'tv', 'title': 'Stranger Things',

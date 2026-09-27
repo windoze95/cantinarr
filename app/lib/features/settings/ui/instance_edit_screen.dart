@@ -100,6 +100,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         'password': _passwordController.text,
         'qbitAuth': _qbitAuth.name,
         'clearTdarrKey': _isTdarr && _clearTdarrKey,
+        'tagRequests': _tagRequests,
       };
   Object get _mediaValues => [
         _publicAddressController.text,
@@ -149,6 +150,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   VideoApps? _videoApps;
   String _serviceType = 'radarr';
   bool _isDefault = false;
+  bool _tagRequests = false;
+  bool _tagRequestsLoaded = false;
+  bool get _supportsRequesterTags =>
+      (_serviceType == 'radarr' || _serviceType == 'sonarr') &&
+      (ref.read(authProvider).valueOrNull?.connection?.requesterTagging ?? false);
   bool _isSaving = false;
   bool _isTesting = false;
   String? _testResult;
@@ -683,6 +689,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           _usernameController.text = details['username'] as String? ?? '';
         }
         _isDefault = details['is_default'] as bool? ?? _isDefault;
+        _tagRequests = details['tag_requests'] as bool? ?? false;
+        _tagRequestsLoaded = true;
         _defaultDraft.markSaved(_isDefault);
         _storedQbitAuth = details['has_api_key'] == true
             ? _QbitAuth.apiKey
@@ -1467,6 +1475,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             username: _usernameController.text.trim(),
             password: _passwordController.text,
             isDefault: isDefault,
+            tagRequests: _supportsRequesterTags && _tagRequestsLoaded ? _tagRequests : null,
             mediaPathMappings: mediaPathMappings,
             mediaServerConfig: mediaServerConfig,
             plexLinkPin: plexLinkPin,
@@ -1518,6 +1527,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         username: _usernameController.text.trim(),
         password: _passwordController.text,
         isDefault: isDefault,
+        tagRequests: _supportsRequesterTags ? _tagRequests : null,
         mediaPathMappings: mediaPathMappings,
         mediaServerConfig: mediaServerConfig,
         plexLinkPin: plexLinkPin,
@@ -3242,6 +3252,21 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             ),
 
           if (_showUserSelect) ..._buildUserSelect(),
+
+          if (_supportsRequesterTags)
+            SwitchListTile(
+              title: const Text('Tag requests with requester'),
+              subtitle: Text(
+                'Add a requester tag in ${_serviceType == 'radarr' ? 'Radarr' : 'Sonarr'} for new requests. '
+                'Existing tags stay. Turning this off cancels unfinished tagging. '
+                'Check Approvals > History for status and retry.',
+                style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+              ),
+              value: _tagRequests,
+              onChanged: _isSaving || (widget.isEditing && !_tagRequestsLoaded)
+                  ? null : (value) => setState(() => _tagRequests = value),
+              activeTrackColor: AppTheme.accent,
+            ),
 
           const SizedBox(height: 24),
 

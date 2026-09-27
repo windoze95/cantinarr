@@ -218,6 +218,7 @@ type Service struct {
 	tvMatchMu               sync.Mutex
 	MusicCatalog            musicdiscovery.Catalog
 	dispatchMu              sync.Mutex
+	requesterTagsMu         sync.Mutex
 	dispatchWake            chan struct{}
 	db                      *sql.DB
 	registry                *instance.Registry

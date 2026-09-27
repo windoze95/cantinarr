@@ -378,6 +378,7 @@ func NewRouter(
 			// Static segment, so it wins over /requests/{id}/… in chi's router.
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/requests/waiting", requestHandler.ListWaiting)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/requests/history", requestHandler.ListHistory)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{requestID}/tags/retry", requestHandler.RetryRequesterTag)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{id}/approve", requestHandler.Approve)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{id}/deny", requestHandler.Deny)
 			// "Try again" on a demoted author-import book request: resume the
@@ -1002,6 +1003,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"plex_access_requestable":  plexRequestable,
 			"admin_catalog_browsing":   true,
 			"request_quotas":           true,
+			"requester_tagging":        true,
 			"tv_match_corrections":     true,
 			"tv_library_navigation":    true,
 			"downloads_activity":       true,
