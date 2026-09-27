@@ -37,6 +37,7 @@ void main() {
       ? _adminState.copyWith(
           connection: _adminState.connection!.copyWith(
             serverUrl: Uri.base.origin,
+            hiddenDiscoverTabs: const [],
             services: const AvailableServices(
               radarr: true, sonarr: true, chaptarr: true, lidarr: true,
               ai: true, tmdb: true,
@@ -87,6 +88,7 @@ const _adminState = AuthState(
     serverUrl: 'http://localhost:8585',
     accessToken: 'screenshot-access',
     refreshToken: 'screenshot-refresh',
+    hiddenDiscoverTabs: ['music'],
     services: AvailableServices(
       radarr: true,
       sonarr: true,

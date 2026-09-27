@@ -373,8 +373,9 @@ Store screenshots are generated, not hand-taken:
 
 The original screenshots intentionally have no Music tab or Music module in their navigation.
 Keep those images unchanged when adding the separate Music screenshot: the different navigation
-demonstrates that Cantinarr adapts to the configured services. The harness enables Lidarr only
-when `shot=music`; do not add it to the shared screenshot profile.
+demonstrates that Cantinarr adapts to service access and Discover visibility settings. The shared
+profile hides Music explicitly, since admins can browse its catalog without Lidarr. Only
+`shot=music` clears that setting and enables Lidarr; keep it out of the shared profile.
 
 1. `app/test/preview/screenshot_main.dart` boots the real app with a stubbed backend that returns
    rich demo data (same pattern as `preview_main.dart`, never shipped).
