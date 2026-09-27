@@ -38,7 +38,7 @@ Operating manual for AI agents and human contributors. `CLAUDE.md` imports this 
 - Android signing uses the `ANDROID_KEYSTORE_*` secrets (the upload keystore lives outside the repo). Store pipelines, secrets, and the one-time console setup are documented in `docs/store-release.md`.
 - Green merges publish `ghcr.io/windoze95/cantinarr:edge`. `latest` moves only on a stable release. Release branches publish multi-arch `X.Y.Z-rc.<run>` candidates; `vX.Y.Z` tags promote the recorded tested digest to `X.Y.Z`, `X.Y`, and `latest`, then create the GitHub Release and attach its receipt. Linux release bundles are extracted from that image, not rebuilt. The app-wide update banner remains off.
 - Mention any tests or checks that could not be run.
-- Store screenshots intentionally show different service configurations. Keep the original screenshots without Music in their navigation; enable Music only for its separate screenshot. See `docs/store-release.md` before replacing a store slot.
+- Store screenshots intentionally show different service configurations. Keep Music hidden in the original screenshot profiles when refreshing them for UI changes; enable Music only for its separate screenshot. See `docs/store-release.md` before replacing a store slot.
 
 ## Releases & versioning
 

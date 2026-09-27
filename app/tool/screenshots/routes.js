@@ -11,7 +11,8 @@ module.exports = [
     // the fold; scroll it into frame so the shot shows its subject.
     actions: async (page, d) => {
       await page.mouse.move(d.vw / 2, d.vh / 2);
-      await page.mouse.wheel(0, Math.round(d.vh * 0.85));
+      const scroll = d.tag === 'iphone69' ? 1.8 : d.tag === 'android' ? 2.1 : 0.85;
+      await page.mouse.wheel(0, Math.round(d.vh * scroll));
     },
   },
   {
@@ -43,12 +44,19 @@ module.exports = [
     skip: ['android', 'tablet10'],
   },
   {
-    // Play slot 5 keeps the original TV library image, formerly slot 8.
+    // Play slot 5 shows the TV library, formerly slot 8.
     name: 'tv_library', route: '/sonarr/library', settle: 5500,
     skip: ['iphone69', 'ipad13'],
   },
   { name: 'releases', route: '/dashboard/releases', settle: 5500 },
-  { name: 'downloads', route: '/downloads/queue', settle: 5500 },
+  {
+    name: 'downloads', route: '/downloads/queue', settle: 5500,
+    // Select the current grouped Content view through the real control.
+    actions: async (page) => {
+      await page.locator('flt-semantics-placeholder').evaluate(el => el.click());
+      await page.getByRole('button', { name: 'Content', exact: true }).click();
+    },
+  },
   {
     name: 'tv_library', route: '/sonarr/library', settle: 5500,
     skip: ['android', 'tablet10'],

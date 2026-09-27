@@ -371,8 +371,8 @@ gracefully until `PLAY_SERVICE_ACCOUNT_JSON` exists; App Store sync uses the exi
 
 Store screenshots are generated, not hand-taken:
 
-The original screenshots intentionally have no Music tab or Music module in their navigation.
-Keep those images unchanged when adding the separate Music screenshot: the different navigation
+The original screenshot profiles intentionally have no Music tab or Music module in their navigation.
+Preserve that configuration when refreshing their UI or adding the separate Music screenshot: the different navigation
 demonstrates that Cantinarr adapts to service access and Discover visibility settings. The shared
 profile hides Music explicitly, since admins can browse its catalog without Lidarr. Only
 `shot=music` clears that setting and enables Lidarr; keep it out of the shared profile.
@@ -398,9 +398,11 @@ import times) are anchored to the run date rather than written down, because the
 Recently Added screens filter by recency: a hard-coded date eventually shoots an empty screen
 that looks like a real answer.
 
-Music occupies App Store slot 9, replacing TV home. On Play, the original TV library image
+Music occupies App Store slot 9, replacing TV home. On Play, the TV library screenshot
 moves from slot 8 to slot 5, replacing Movie detail; Music takes slot 8. Apply this order to
-both phone and tablet sets. The other images retain their original bytes and navigation.
+both phone and tablet sets. Refresh stale UI from the current app while keeping the original
+views and their navigation without Music.
+The Downloads screenshot uses the Content view, with artwork and progress grouped by title.
 
 Music uses the real album selection from the README, captured from ListenBrainz on 2026-09-26.
 `app/tool/screenshots/music.js` records each Cover Art Archive URL and caches the image in the
