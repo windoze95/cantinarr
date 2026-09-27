@@ -153,7 +153,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   bool _tagRequests = false;
   bool _tagRequestsLoaded = false;
   bool get _supportsRequesterTags =>
-      (_serviceType == 'radarr' || _serviceType == 'sonarr') &&
+      const ['radarr', 'sonarr', 'chaptarr', 'lidarr'].contains(_serviceType) &&
       (ref.read(authProvider).valueOrNull?.connection?.requesterTagging ?? false);
   bool _isSaving = false;
   bool _isTesting = false;
@@ -3257,8 +3257,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             SwitchListTile(
               title: const Text('Tag requests with requester'),
               subtitle: Text(
-                'Add a requester tag in ${_serviceType == 'radarr' ? 'Radarr' : 'Sonarr'} for new requests. '
-                'Existing tags stay. Turning this off cancels unfinished tagging. '
+                'Tag new requests on ${switch (_serviceType) {
+                  'chaptarr' => 'the Chaptarr author, separately for eBooks and audiobooks',
+                  'lidarr' => 'the Lidarr artist, shared by all their albums',
+                  'sonarr' => 'the Sonarr series',
+                  _ => 'the Radarr movie',
+                }}. Existing tags stay. Turning this off cancels unfinished tagging. '
                 'Check Approvals > History for status and retry.',
                 style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
               ),

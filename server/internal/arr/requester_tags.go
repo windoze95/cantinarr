@@ -14,16 +14,20 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/transporterr"
 )
 
-// RequesterTags uses the native tag and additive editor APIs. It never sends a
-// whole movie/series record back, which would overwrite concurrent admin edits.
+// RequesterTags shares native tag creation and verified delivery across arrs.
 type RequesterTags struct {
 	client                  *http.Client
 	baseURL, apiKey         string
 	collection, identityKey string
+	apiPath                 string
 }
 
 func NewRequesterTags(client *http.Client, baseURL, apiKey, collection, identityKey string) *RequesterTags {
-	return &RequesterTags{client: client, baseURL: baseURL, apiKey: apiKey, collection: collection, identityKey: identityKey}
+	apiPath := "/api/v3"
+	if collection == "artist" || collection == "author" {
+		apiPath = "/api/v1"
+	}
+	return &RequesterTags{client: client, baseURL: baseURL, apiKey: apiKey, collection: collection, identityKey: identityKey, apiPath: apiPath}
 }
 
 type nativeTag struct {
@@ -90,7 +94,7 @@ func (c *RequesterTags) do(ctx context.Context, method, path string, body, out a
 
 func (c *RequesterTags) findTag(ctx context.Context, prefix string) (*nativeTag, error) {
 	var tags []nativeTag
-	if err := c.do(ctx, http.MethodGet, "/api/v3/tag", nil, &tags, nil); err != nil {
+	if err := c.do(ctx, http.MethodGet, c.apiPath+"/tag", nil, &tags, nil); err != nil {
 		return nil, err
 	}
 	// If an admin made multiple labels in this namespace, use the oldest
@@ -120,13 +124,37 @@ func (c *RequesterTags) Apply(ctx context.Context, externalID int, prefix, label
 	if externalID <= 0 || len(titles) != 1 || !c.matches(titles[0], externalID) {
 		return "", ErrTagIdentity
 	}
+	readTitle := func() (*taggedTitle, error) {
+		var title taggedTitle
+		if err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/%d", path, titles[0].ID), nil, &title, nil); err != nil {
+			return nil, err
+		}
+		if title.ID != titles[0].ID || !c.matches(title, externalID) {
+			return nil, ErrTagIdentity
+		}
+		return &title, nil
+	}
+	add := func(tagID int) error {
+		body := map[string]any{c.collection + "Ids": []int{titles[0].ID}, "tags": []int{tagID}, "applyTags": "add"}
+		return c.do(ctx, http.MethodPut, path+"/editor", body, nil, beforeWrite)
+	}
+	return c.apply(ctx, prefix, label, readTitle, add, beforeWrite)
+}
+
+func (c *RequesterTags) apply(ctx context.Context, prefix, label string, readTitle func() (*taggedTitle, error), add func(int) error, beforeWrite func() error) (string, error) {
+	if beforeWrite == nil {
+		return "", errors.New("Requester tag authorization is missing.")
+	}
+	if _, err := readTitle(); err != nil {
+		return "", err
+	}
 	tag, err := c.findTag(ctx, prefix)
 	if err != nil {
 		return "", err
 	}
 	if tag == nil {
 		var created nativeTag
-		err = c.do(ctx, http.MethodPost, "/api/v3/tag", map[string]string{"label": label}, &created, beforeWrite)
+		err = c.do(ctx, http.MethodPost, c.apiPath+"/tag", map[string]string{"label": label}, &created, beforeWrite)
 		if err == nil && created.ID > 0 && strings.EqualFold(created.Label, label) {
 			tag = &created
 		} else {
@@ -145,23 +173,12 @@ func (c *RequesterTags) Apply(ctx context.Context, externalID int, prefix, label
 			}
 		}
 	}
-	readTitle := func() (*taggedTitle, error) {
-		var title taggedTitle
-		if err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/%d", path, titles[0].ID), nil, &title, nil); err != nil {
-			return nil, err
-		}
-		if title.ID != titles[0].ID || !c.matches(title, externalID) {
-			return nil, ErrTagIdentity
-		}
-		return &title, nil
-	}
 	title, err := readTitle()
 	if err != nil {
 		return "", err
 	}
 	if !slices.Contains(title.Tags, tag.ID) {
-		body := map[string]any{c.collection + "Ids": []int{title.ID}, "tags": []int{tag.ID}, "applyTags": "add"}
-		if err := c.do(ctx, http.MethodPut, path+"/editor", body, nil, beforeWrite); err != nil {
+		if err := add(tag.ID); err != nil {
 			return "", err
 		}
 		title, err = readTitle()
@@ -176,4 +193,70 @@ func (c *RequesterTags) Apply(ctx context.Context, externalID int, prefix, label
 		return "", err
 	}
 	return tag.Label, nil
+}
+
+// ApplyParent tags the verified artist/author behind a delivered album/book.
+// Chaptarr stores tags per author format; Lidarr stores them on the artist.
+func (c *RequesterTags) ApplyParent(ctx context.Context, id int, foreignID, format, prefix, label string, beforeWrite func() error) (string, error) {
+	if id <= 0 || foreignID == "" || (c.collection != "artist" && c.collection != "author") || (c.collection == "author" && format != "ebook" && format != "audiobook") {
+		return "", ErrTagIdentity
+	}
+	path := fmt.Sprintf("%s/%s/%d", c.apiPath, c.collection, id)
+	read := func() (map[string]json.RawMessage, *taggedTitle, error) {
+		var raw map[string]json.RawMessage
+		if err := c.do(ctx, http.MethodGet, path, nil, &raw, nil); err != nil {
+			return nil, nil, err
+		}
+		var gotID int
+		var gotForeign string
+		if json.Unmarshal(raw["id"], &gotID) != nil || json.Unmarshal(raw[c.identityKey], &gotForeign) != nil || gotID != id || gotForeign != foreignID {
+			return nil, nil, ErrTagIdentity
+		}
+		key := "tags"
+		if c.collection == "author" {
+			key = format + "Tags"
+		}
+		var tags []int
+		// A missing format field is not proof of support on an older Chaptarr.
+		if json.Unmarshal(raw[key], &tags) != nil {
+			return nil, nil, errors.New("The library does not expose the required requester tag field.")
+		}
+		return raw, &taggedTitle{ID: id, Tags: tags}, nil
+	}
+	readTitle := func() (*taggedTitle, error) {
+		_, title, err := read()
+		return title, err
+	}
+	add := func(tagID int) error {
+		if c.collection == "artist" {
+			return c.do(ctx, http.MethodPut, c.apiPath+"/artist/editor", map[string]any{"artistIds": []int{id}, "tags": []int{tagID}, "applyTags": "add"}, nil, beforeWrite)
+		}
+		// Chaptarr 0.9.911's bulk editor changes only legacy Tags, while its
+		// reader displays the format arrays. Use the individual editor with a
+		// fresh union and only fields its mapper/validator requires preserving.
+		// Omit format monitoring entirely: echoing it marks inherited settings
+		// manually overridden even when the value has not changed.
+		if beforeWrite == nil {
+			return errors.New("Requester tag authorization is missing.")
+		}
+		if err := beforeWrite(); err != nil {
+			return err
+		}
+		raw, title, err := read()
+		if err != nil {
+			return err
+		}
+		if slices.Contains(title.Tags, tagID) {
+			return nil
+		}
+		body := map[string]json.RawMessage{}
+		for _, key := range []string{"id", "path", "monitored", "audiobookRootFolderPath", "ebookRootFolderPath", "addOptions", "lastSelectedMediaType", "ebookQualityProfileId", "audiobookQualityProfileId"} {
+			if value, ok := raw[key]; ok {
+				body[key] = value
+			}
+		}
+		body[format+"Tags"], _ = json.Marshal(append(title.Tags, tagID))
+		return c.do(ctx, http.MethodPut, path, body, nil, beforeWrite)
+	}
+	return c.apply(ctx, prefix, label, readTitle, add, beforeWrite)
 }

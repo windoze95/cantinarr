@@ -456,9 +456,23 @@ void main() {
     expect(tester.widget<SwitchListTile>(toggle).value, false);
     await tester.pumpWidget(const SizedBox.shrink());
     await _pumpEdit(tester, adapter: adapter, users: const [], requesterTagging: true,
-      screen: const InstanceEditScreen(initialServiceType: 'lidarr'));
+      screen: const InstanceEditScreen(initialServiceType: 'plex'));
     expect(find.text('Tag requests with requester'), findsNothing);
   });
+
+  for (final service in ['chaptarr', 'lidarr']) {
+    testWidgets('$service requester tagging explains native parent scope', (tester) async {
+      await _pumpEdit(tester, adapter: _FakeAdapter(), users: const [], requesterTagging: true,
+        screen: InstanceEditScreen(initialServiceType: service));
+      final toggle = find.widgetWithText(SwitchListTile, 'Tag requests with requester');
+      await tester.ensureVisible(toggle);
+      expect(tester.widget<SwitchListTile>(toggle).value, false);
+      expect(find.textContaining(service == 'chaptarr' ? 'Chaptarr author' : 'Lidarr artist'), findsOneWidget);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(toggle).value, true);
+    });
+  }
 
   testWidgets('saving a directly opened editor returns to Settings without a warning',
       (tester) async {

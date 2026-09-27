@@ -427,6 +427,21 @@ class _HistoryDetailState extends ConsumerState<_HistoryDetail> {
         if (item.denyReason.isNotEmpty) _field(context, item.decision == 'cancelled' ? 'Reason' : 'Denial reason', item.denyReason),
         if (_tagging case final tagging?) ...[
           _field(context, 'Requester tag', tagging.label),
+          if (item.mediaType == 'book' || item.mediaType == 'music')
+            Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(
+              item.mediaType == 'book'
+                  ? 'Chaptarr tags the author for the requested format. The tag also applies to their other books in that format.'
+                  : 'Lidarr tags the artist. The tag also applies to their other albums.',
+            )),
+          for (final receipt in tagging.recipients) ...[
+            _field(context, receipt.label, receipt.tagging.label),
+            if (receipt.tagging.tagLabel.isNotEmpty)
+              _field(context, 'Tag', receipt.tagging.tagLabel),
+            if (receipt.tagging.appliedAt != null)
+              _field(context, 'Applied', _date(receipt.tagging.appliedAt)),
+            if (receipt.tagging.message.isNotEmpty)
+              Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(receipt.tagging.message)),
+          ],
           if (tagging.tagLabel.isNotEmpty) _field(context, 'Tag', tagging.tagLabel),
           if (tagging.appliedAt != null) _field(context, 'Applied', _date(tagging.appliedAt)),
           if (tagging.message.isNotEmpty)

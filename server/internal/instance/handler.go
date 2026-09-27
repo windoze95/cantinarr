@@ -107,8 +107,8 @@ func applyTagRequests(inst *Instance, value *bool, existing *Instance) error {
 	if value != nil {
 		inst.TagRequests = *value
 	}
-	if inst.TagRequests && inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" {
-		return fmt.Errorf("requester tagging requires Radarr or Sonarr")
+	if inst.TagRequests && inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" && inst.ServiceType != "chaptarr" && inst.ServiceType != "lidarr" {
+		return fmt.Errorf("requester tagging requires Radarr, Sonarr, Chaptarr or Lidarr")
 	}
 	return nil
 }

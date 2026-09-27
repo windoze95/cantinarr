@@ -18,14 +18,36 @@ import 'package:go_router/go_router.dart';
 import 'request_history_fixture.dart';
 
 void main() {
+  testWidgets('shared book tags show each requester and format at narrow width', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await _pump(tester, _HistoryAdapter(), requesterTagging: true);
+    await tester.scrollUntilVisible(find.text('Project Hail Mary'), 150,
+      scrollable: find.descendant(of: find.byType(ListView), matching: find.byType(Scrollable)));
+    await tester.tap(find.text('Project Hail Mary'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Alex • eBook'));
+    expect(find.text('cantinarr-2-alex'), findsOneWidget);
+    expect(find.text('Sam • Audiobook'), findsOneWidget);
+    expect(find.textContaining('Chaptarr tags the author'), findsOneWidget);
+    await tester.ensureVisible(find.text('Retry tag'));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('tag retry keeps loaded pages and recorded decisions', (tester) async {
     final adapter = _HistoryAdapter()..tagging = {
       'status': 'failed', 'message': 'The library returned HTTP 401.', 'can_retry': true,
     };
     await _pump(tester, adapter, requesterTagging: true);
+    await tester.ensureVisible(find.text('Load older requests'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Load older requests'));
     await tester.pumpAndSettle();
     final listReads = adapter.calls.length;
+    await tester.ensureVisible(find.descendant(of: find.byType(ListView), matching: find.text('Dune')));
+    await tester.pumpAndSettle();
     await tester.tap(find.descendant(of: find.byType(ListView), matching: find.text('Dune')));
     await tester.pumpAndSettle();
     expect(find.text('The library returned HTTP 401.'), findsOneWidget);
@@ -53,6 +75,8 @@ void main() {
     await tester.enterText(find.byType(TextField), 'Dune');
     await tester.pump(const Duration(milliseconds: 350));
     await tester.pumpAndSettle();
+    await tester.ensureVisible(find.descendant(of: find.byType(ListView), matching: find.text('Dune')));
+    await tester.pumpAndSettle();
     await tester.tap(find.descendant(of: find.byType(ListView), matching: find.text('Dune')));
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('Retry tag'));
@@ -66,6 +90,8 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await _pump(tester, adapter);
     expect(find.text('Tag retry scheduled'), findsNothing);
+    await tester.ensureVisible(find.descendant(of: find.byType(ListView), matching: find.text('Dune')));
+    await tester.pumpAndSettle();
     await tester.tap(find.descendant(of: find.byType(ListView), matching: find.text('Dune')));
     await tester.pumpAndSettle();
     expect(find.text('Retry tag'), findsNothing);
@@ -76,6 +102,8 @@ void main() {
     await _pump(tester, adapter);
     expect(find.text('Dune'), findsOneWidget);
     expect(find.text('Kind of Blue'), findsNothing);
+    await tester.ensureVisible(find.text('Load older requests'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Load older requests'));
     await tester.pumpAndSettle();
     expect(adapter.calls.last.queryParameters['before'], 7);

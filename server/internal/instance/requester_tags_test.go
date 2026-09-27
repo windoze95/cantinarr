@@ -16,7 +16,7 @@ func TestRequesterTagSettingDefaultsAndOldClientEdits(t *testing.T) {
 			}
 			i.TagRequests = true
 			err = store.Update(i)
-			if kind != "radarr" && kind != "sonarr" {
+			if kind == "plex" {
 				if err == nil {
 					t.Fatal("unsupported type accepted tags")
 				}

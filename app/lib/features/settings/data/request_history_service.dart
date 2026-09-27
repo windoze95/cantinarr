@@ -2,21 +2,40 @@ import 'package:dio/dio.dart';
 
 import '../../request/data/request_service.dart';
 
+class RequesterTagReceipt {
+  final String username;
+  final String format;
+  final RequesterTagStatus tagging;
+
+  RequesterTagReceipt.fromJson(Map<String, dynamic> json)
+      : username = (json['username'] as String? ?? '').trim(),
+        format = json['format'] as String? ?? '',
+        tagging = RequesterTagStatus.fromJson(json);
+
+  String get label => '${username.isEmpty ? 'Unknown requester' : username} • '
+      '${format == 'ebook' ? 'eBook' : format == 'audiobook' ? 'Audiobook' : 'Request'}';
+}
+
 class RequesterTagStatus {
   final String status;
   final String message;
   final bool canRetry;
   final String tagLabel;
   final DateTime? appliedAt;
+  final List<RequesterTagReceipt> recipients;
 
   RequesterTagStatus.fromJson(Map<String, dynamic> json)
       : status = json['status'] as String? ?? '',
         message = json['message'] as String? ?? '',
         canRetry = json['can_retry'] as bool? ?? false,
         tagLabel = json['tag_label'] as String? ?? '',
-        appliedAt = DateTime.tryParse(json['applied_at'] as String? ?? '')?.toLocal();
+        appliedAt = DateTime.tryParse(json['applied_at'] as String? ?? '')?.toLocal(),
+        recipients = (json['recipients'] as List? ?? [])
+            .map((r) => RequesterTagReceipt.fromJson(r as Map<String, dynamic>))
+            .toList();
 
   String get label => switch (status) {
+    'partial' => 'Tag results differ by requester or format',
     'waiting' => 'Tag waiting for request',
     'pending' => 'Tag pending',
     'retrying' => 'Tag retry scheduled',

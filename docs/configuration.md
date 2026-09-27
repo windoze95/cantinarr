@@ -41,7 +41,7 @@ Included AI is an explicit per-user entitlement for new accounts; the initial ad
 
 ## Requester tags
 
-Each Radarr or Sonarr instance has a **Tag requests with requester** setting, off by default. Enable and save it in the instance editor to add native requester tags for newly submitted movie/TV requests after approval and successful library delivery. Tags use the original requester and preserve existing tags. Turning it off or changing the instance URL cancels unfinished tagging; applied tags remain. Re-enabling does not backfill old history. Check **Approvals > History** for status and **Retry tag**. No environment variable is required.
+Each Radarr, Sonarr, Chaptarr, or Lidarr instance has a **Tag requests with requester** setting, off by default. Enable and save it in the instance editor to add native requester tags for newly submitted requests after approval and successful library delivery. Tags use the original requester and preserve existing tags. Radarr tags movies, Sonarr tags series, Lidarr tags artists, and Chaptarr tags authors for the requested eBook or audiobook format. Artist and author tags also apply to their other albums or books. Shared book subscribers have separate tagging results. Turning it off or changing the instance URL cancels unfinished tagging; applied tags remain. Re-enabling does not backfill old history. Check **Approvals > History** for status and **Retry tag**. No environment variable is required.
 
 ## Library file downloads
 

@@ -328,8 +328,8 @@ func clearSiblingDefaults(tx *sql.Tx, inst *Instance) error {
 
 // Create inserts a new instance and returns it with a generated ID.
 func (s *Store) Create(inst *Instance) error {
-	if inst.TagRequests && inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" {
-		return errors.New("requester tagging requires Radarr or Sonarr")
+	if inst.TagRequests && inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" && inst.ServiceType != "chaptarr" && inst.ServiceType != "lidarr" {
+		return errors.New("requester tagging requires Radarr, Sonarr, Chaptarr or Lidarr")
 	}
 	if inst.ID == "" {
 		inst.ID = inst.ServiceType + "-" + uuid.New().String()[:8]
@@ -392,8 +392,8 @@ func (s *Store) Update(inst *Instance) error {
 	if err != nil {
 		return fmt.Errorf("update instance: %w", err)
 	}
-	if inst.TagRequests && inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" {
-		return errors.New("requester tagging requires Radarr or Sonarr")
+	if inst.TagRequests && inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" && inst.ServiceType != "chaptarr" && inst.ServiceType != "lidarr" {
+		return errors.New("requester tagging requires Radarr, Sonarr, Chaptarr or Lidarr")
 	}
 	mappingsJSON, err := encodeMediaPathMappings(inst)
 	if err != nil {

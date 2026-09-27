@@ -126,3 +126,7 @@ Saved history is preserved. Old Open Library requests with verified native bindi
 **Waiting for library** means Chaptarr accepted an author import and owns its retry loop. Cantinarr observes its pending-import API and managed webhook without repeatedly adding it. An import that lands resumes the remaining formats; a failed, cancelled, or ambiguous import needs attention. Older Chaptarr versions without that API retain their supported add-probe fallback.
 
 Publication details name their catalog or library source and show edition publisher/format when available. Different editions may have different page counts. Dates more than five years ahead appear as **Date unconfirmed (year)** and move to the undated end of an author's bibliography; Cantinarr keeps the source value rather than inventing a correction.
+
+## Requester tags
+
+Enable **Tag requests with requester** in the Chaptarr instance editor to tag new requests after successful delivery. It is off by default. Chaptarr stores these tags on the author for the requested format (eBook or audiobook), so they also apply to that author's other books in the same format. Each subscriber to a shared request gets their own tag and format-specific receipt. Existing tags remain. **Approvals > History** shows the result and offers **Retry tag** for failures without requesting the media again. Disabling tagging cancels unfinished jobs and leaves applied tags. Enabling it does not tag old history.

@@ -155,12 +155,9 @@ func (s *Service) adminHistory(ctx context.Context, f adminHistoryFilter) (*Admi
 	rows, err := tx.QueryContext(ctx, `SELECT r.id, r.tmdb_id, COALESCE(r.foreign_id, ''), COALESCE(r.catalog_provider, ''), r.media_type, r.title,
  COALESCE(r.instance_id, ''), COALESCE(i.name, ''), COALESCE(r.season_scope, ''), COALESCE(r.book_format, ''),
  `+historyDecisionSQL+`, COALESCE(a.username, ''), r.decided_at, COALESCE(r.deny_reason, ''), r.requested_at,
- COALESCE(r.user_id, 0), COALESCE(u.username, ''),
- COALESCE(j.state,''), COALESCE(j.message,''), COALESCE(j.tag_label,''), j.applied_at,
- COALESCE(j.state IN ('failed','retrying') AND `+tagEligibleSQL+` AND `+tagDeliveredSQL+`,0)
+ COALESCE(r.user_id, 0), COALESCE(u.username, '')
  FROM request_log r LEFT JOIN users u ON u.id = r.user_id LEFT JOIN users a ON a.id = r.approved_by
  LEFT JOIN service_instances i ON i.id = r.instance_id
- LEFT JOIN request_tag_jobs j ON j.request_id = r.id
  WHERE `+strings.Join(where, " AND ")+` ORDER BY r.id DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
@@ -170,19 +167,15 @@ func (s *Service) adminHistory(ctx context.Context, f adminHistoryFilter) (*Admi
 		var item AdminHistoryItem
 		var requester HistoryRequester
 		var decided sql.NullTime
-		var tagState, tagMessage, tagLabel string
-		var tagApplied sql.NullTime
-		var tagCanRetry bool
 		if err = rows.Scan(&item.ID, &item.TmdbID, &item.ForeignID, &item.CatalogProvider, &item.MediaType, &item.Title, &item.InstanceID, &item.InstanceName,
 			&item.SeasonScope, &item.BookFormat, &item.Decision, &item.DecidedBy, &decided, &item.DenyReason, &item.RequestedAt,
-			&requester.UserID, &requester.Username, &tagState, &tagMessage, &tagLabel, &tagApplied, &tagCanRetry); err != nil {
+			&requester.UserID, &requester.Username); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		if decided.Valid {
 			item.DecidedAt = &decided.Time
 		}
-		item.RequesterTagging = requesterTagStatus(tagState, tagMessage, tagLabel, tagApplied, tagCanRetry)
 		requester.BookFormat = item.BookFormat
 		item.Requesters = []HistoryRequester{requester}
 		page.Requests = append(page.Requests, item)
@@ -198,6 +191,10 @@ func (s *Service) adminHistory(ctx context.Context, f adminHistoryFilter) (*Admi
 	}
 	for i := range page.Requests {
 		item := &page.Requests[i]
+		item.RequesterTagging, err = loadRequesterTagStatus(ctx, tx, item.ID)
+		if err != nil {
+			return nil, err
+		}
 		if item.MediaType != "book" {
 			continue
 		}

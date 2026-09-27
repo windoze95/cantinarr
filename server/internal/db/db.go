@@ -13,6 +13,24 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const requesterTagJobsSQL = `CREATE TABLE IF NOT EXISTS request_tag_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER NOT NULL REFERENCES request_log(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL,
+    format TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'waiting',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+    lease_until INTEGER NOT NULL DEFAULT 0,
+    lease_token TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    tag_label TEXT NOT NULL DEFAULT '',
+    applied_at DATETIME,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(request_id, user_id, format)
+);
+CREATE INDEX IF NOT EXISTS request_tag_jobs_due ON request_tag_jobs(state, next_attempt_at);`
+
 const initSQL = `
 -- Allowances start unlimited, with no historical charge backfill. Accounting
 -- is independent of mutable request owners, subscriptions and library state.
@@ -204,19 +222,7 @@ CREATE INDEX IF NOT EXISTS request_dispatch_due ON request_dispatch(state, next_
 
 -- Captured only when a new request is admitted with requester tagging enabled.
 -- A tagging receipt is independent of approval, delivery and live library state.
-CREATE TABLE IF NOT EXISTS request_tag_jobs (
-    request_id INTEGER PRIMARY KEY REFERENCES request_log(id) ON DELETE CASCADE,
-    state TEXT NOT NULL DEFAULT 'waiting',
-    attempts INTEGER NOT NULL DEFAULT 0,
-    next_attempt_at INTEGER NOT NULL DEFAULT 0,
-    lease_until INTEGER NOT NULL DEFAULT 0,
-    lease_token TEXT NOT NULL DEFAULT '',
-    message TEXT NOT NULL DEFAULT '',
-    tag_label TEXT NOT NULL DEFAULT '',
-    applied_at DATETIME,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS request_tag_jobs_due ON request_tag_jobs(state, next_attempt_at);
+` + requesterTagJobsSQL + `
 
 -- Local TV corrections are independent of the reviewed defaults bundled with
 -- the server. Reset retains a revision tombstone so stale edits stay stale.
@@ -1452,6 +1458,11 @@ func Open(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("migrate Discord event receipts: %w", err)
 	}
 
+	if err := migrateRequesterTagRecipients(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate requester tag recipients: %w", err)
+	}
+
 	return db, nil
 }
 
@@ -1796,4 +1807,28 @@ func repairAutoIssueDedupe(db *sql.DB) error {
 		return fmt.Errorf("commit auto-issue dedupe repair: %w", err)
 	}
 	return nil
+}
+
+// Preserve receipts from previews that stored one movie/TV job per request.
+// This migration never creates tagging eligibility for historical requests.
+func migrateRequesterTagRecipients(db *sql.DB) error {
+	rows, err := db.Query(`SELECT id FROM request_tag_jobs LIMIT 0`)
+	if err == nil {
+		return rows.Close()
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`ALTER TABLE request_tag_jobs RENAME TO request_tag_jobs_legacy;
+ DROP INDEX request_tag_jobs_due;
+` + requesterTagJobsSQL + `
+ INSERT INTO request_tag_jobs(request_id,user_id,state,attempts,next_attempt_at,lease_until,lease_token,message,tag_label,applied_at,updated_at)
+ SELECT j.request_id,COALESCE(r.user_id,0),j.state,j.attempts,j.next_attempt_at,j.lease_until,j.lease_token,j.message,j.tag_label,j.applied_at,j.updated_at
+ FROM request_tag_jobs_legacy j JOIN request_log r ON r.id=j.request_id;
+ DROP TABLE request_tag_jobs_legacy;`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

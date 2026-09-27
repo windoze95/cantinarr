@@ -25,7 +25,7 @@ An approval records a decision, not proof that a file is available now. Choose *
 
 If history cannot load, use **Retry**. A refresh failure keeps the last successful results visible with a warning. An older server without this endpoint prompts you to update it.
 
-For libraries with [requester tagging](/integrations/radarr-sonarr/#tag-titles-with-their-requesters) enabled when a request was submitted, each row also shows tagging status. Open the row to inspect a failure or use **Retry tag**. This retries only the tag and preserves the request's decision and delivery. Refresh History to check completion. **Tag applied** is a saved receipt, not a live check of tags in the library.
+For Radarr, Sonarr, Chaptarr, and Lidarr libraries with requester tagging enabled when a request was submitted, each row also shows tagging status. Open the row to inspect a failure or use **Retry tag**. This retries only the tag and preserves the request's decision and delivery. Refresh History to check completion. **Tag applied** is a saved receipt, not a live check of tags in the library. Shared book requests show each requester and format separately. Sonarr tags the series, Lidarr tags the artist, and Chaptarr tags the author for the requested format, so those tags also cover other content under that parent. Enable **Tag requests with requester** in the instance editor; existing tags remain and old requests are not backfilled.
 
 ## Season and quality choices
 
