@@ -830,6 +830,7 @@ func androidAssetLinksHandler(cfg *config.Config) http.HandlerFunc {
 
 type configInstanceStore interface {
 	ListAll() ([]instance.Instance, error)
+	HasConfiguredInstances() (bool, error)
 	ListUserDefaults(userID int64) (map[string]string, error)
 	VisibleInstanceIDs(userID int64, serviceType string) ([]string, error)
 	AssignedDefaultInstanceID(userID int64, serviceType string) (string, error)
@@ -901,7 +902,14 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
 			return
 		}
+		setupStarted, err := store.HasConfiguredInstances()
+		if err != nil {
+			http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+			return
+		}
+		initialInstanceSetup := isAdmin && !setupStarted
 		hiddenTabs := []string{}
+		hiddenWhenUnconfigured := map[string]bool{}
 		downloadsUserScope := "all"
 		cover4KBadges := false
 		configured := map[string]bool{}
@@ -916,10 +924,13 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			}
 			downloadsUserScope = preferences.DownloadsUserScope
 			cover4KBadges = preferences.Cover4KBadges
-			for _, mediaType := range []string{"movie", "tv", "book", "music"} {
-				if preferences.HiddenWhenUnconfigured[mediaType] && !configured[serversettings.DiscoverServices()[mediaType]] {
-					hiddenTabs = append(hiddenTabs, mediaType)
-				}
+			hiddenWhenUnconfigured = preferences.HiddenWhenUnconfigured
+		}
+		for _, mediaType := range []string{"movie", "tv", "book", "music"} {
+			serviceType := serversettings.DiscoverServices()[mediaType]
+			if (!initialInstanceSetup && len(visible[serviceType]) == 0) ||
+				(hiddenWhenUnconfigured[mediaType] && !configured[serviceType]) {
+				hiddenTabs = append(hiddenTabs, mediaType)
 			}
 		}
 		for _, inst := range allInstances {
@@ -1004,6 +1015,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"request_quotas":           true,
 			"requester_tagging":        true,
 			"instance_assignments":     true,
+			"initial_instance_setup":   initialInstanceSetup,
 			"tv_match_corrections":     true,
 			"tv_library_navigation":    true,
 			"downloads_activity":       true,

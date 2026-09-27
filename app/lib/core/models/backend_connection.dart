@@ -98,6 +98,9 @@ class BackendConnection {
   final bool requestQuotas;
   final bool requesterTagging;
   final bool instanceAssignments;
+
+  /// Fresh-install admin discovery stays visible until the first instance.
+  final bool initialInstanceSetup;
   final bool downloadsActivity;
   final String downloadsUserScope;
 
@@ -132,6 +135,7 @@ class BackendConnection {
     this.requestQuotas = false,
     this.requesterTagging = false,
     this.instanceAssignments = false,
+    this.initialInstanceSetup = false,
     this.downloadsActivity = false,
     this.downloadsUserScope = 'all',
     this.cover4KBadges = false,
@@ -159,6 +163,7 @@ class BackendConnection {
     bool? requestQuotas,
     bool? requesterTagging,
     bool? instanceAssignments,
+    bool? initialInstanceSetup,
     bool? downloadsActivity,
     String? downloadsUserScope,
     bool? cover4KBadges,
@@ -180,6 +185,7 @@ class BackendConnection {
         requestQuotas: requestQuotas ?? this.requestQuotas,
         requesterTagging: requesterTagging ?? this.requesterTagging,
         instanceAssignments: instanceAssignments ?? this.instanceAssignments,
+        initialInstanceSetup: initialInstanceSetup ?? this.initialInstanceSetup,
         downloadsActivity: downloadsActivity ?? this.downloadsActivity,
         downloadsUserScope: downloadsUserScope ?? this.downloadsUserScope,
         cover4KBadges: cover4KBadges ?? this.cover4KBadges,

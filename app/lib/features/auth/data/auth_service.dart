@@ -598,6 +598,9 @@ class ServerConfig {
   final bool requestQuotas;
   final bool requesterTagging;
   final bool instanceAssignments;
+
+  /// Fresh-install admin discovery stays visible until the first instance.
+  final bool initialInstanceSetup;
   final bool downloadsActivity;
   final String downloadsUserScope;
 
@@ -625,6 +628,7 @@ class ServerConfig {
     this.requestQuotas = false,
     this.requesterTagging = false,
     this.instanceAssignments = false,
+    this.initialInstanceSetup = false,
     this.downloadsActivity = false,
     this.downloadsUserScope = 'all',
     this.cover4KBadges = false,
@@ -656,6 +660,7 @@ class ServerConfig {
       requestQuotas: json['request_quotas'] as bool? ?? false,
       requesterTagging: json['requester_tagging'] as bool? ?? false,
       instanceAssignments: json['instance_assignments'] as bool? ?? false,
+      initialInstanceSetup: json['initial_instance_setup'] as bool? ?? false,
       downloadsActivity: json['downloads_activity'] as bool? ?? false,
       downloadsUserScope: json['downloads_user_scope'] as String? ?? 'all',
       cover4KBadges: json['cover_4k_badges'] as bool? ?? false,

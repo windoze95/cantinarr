@@ -611,7 +611,7 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			}
 			assertExactMapKeys(t, payload,
 				"server_name", "version", "min_app_version", "services", "instances", "issues_enabled", "allow_reporting",
-				"plex_access_requestable", "media_account_management", "admin_catalog_browsing", "hidden_discover_tabs", "apple_tv_remote", "tv_match_corrections", "tv_library_navigation", "request_quotas", "requester_tagging", "instance_assignments", "downloads_activity", "downloads_user_scope", "cover_4k_badges",
+				"plex_access_requestable", "media_account_management", "admin_catalog_browsing", "hidden_discover_tabs", "apple_tv_remote", "tv_match_corrections", "tv_library_navigation", "request_quotas", "requester_tagging", "instance_assignments", "initial_instance_setup", "downloads_activity", "downloads_user_scope", "cover_4k_badges",
 			)
 
 			if string(payload["apple_tv_remote"]) != "false" {
@@ -700,6 +700,10 @@ type configHandlerResponse struct {
 type failingConfigInstanceStore struct {
 	defaultsErr  error
 	listAllCalls int
+}
+
+func (s *failingConfigInstanceStore) HasConfiguredInstances() (bool, error) {
+	return true, nil
 }
 
 func (s *failingConfigInstanceStore) ListUserDefaults(int64) (map[string]string, error) {

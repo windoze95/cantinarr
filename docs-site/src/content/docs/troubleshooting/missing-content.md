@@ -5,11 +5,11 @@ sidebar:
   order: 3
 ---
 
-## Books or Music is missing
+## A discovery page is missing
 
-For a requester, check access to the intended Chaptarr or Lidarr instance. The person needs an explicit library assignment. Global defaults and personal preferences do not grant access. Open the instance and choose **Manage users** to review assignments.
+Check the account's assignments to Radarr, Sonarr, Chaptarr, or Lidarr. Movies, TV Shows, Books, and Music each require an assignment to their matching service, including for administrators. Global defaults and personal preferences do not grant access. Open the instance and choose **Manage users**, or use **Settings > Users**.
 
-For an administrator, check whether the unconfigured tab was hidden under **Settings > Modules > Discover > Discover tabs**. Connecting the service restores it even if the service is later offline.
+Admins can still open every configured instance through the navigation pickers. On a new installation they also see every discovery option until the first instance is added. During that initial setup, check **Settings > Modules > Discover > Discover tabs** if an option was explicitly hidden. Removing the last instance later does not reopen setup catalogs.
 
 ## A movie or show does not appear
 

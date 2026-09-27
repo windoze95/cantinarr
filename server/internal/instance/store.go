@@ -318,6 +318,14 @@ func clearSiblingDefaults(tx *sql.Tx, inst *Instance) error {
 	return nil
 }
 
+// HasConfiguredInstances stays true after the last instance is deleted. Only a
+// new installation may expose every discovery tab before personal assignment.
+func (s *Store) HasConfiguredInstances() (bool, error) {
+	var configured bool
+	err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM settings WHERE key='instance_setup_started')").Scan(&configured)
+	return configured, err
+}
+
 // Create inserts a new instance and returns it with a generated ID.
 func (s *Store) Create(inst *Instance) error {
 	if inst.TagRequests && inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" && inst.ServiceType != "chaptarr" && inst.ServiceType != "lidarr" {

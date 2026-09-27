@@ -109,7 +109,7 @@ func TestInstanceAssignmentUpgradePreservesAccessOnce(t *testing.T) {
 		got[uid] = append(got[uid], id)
 	}
 	rows.Close()
-	if !reflect.DeepEqual(got, map[int64][]string{1: {"a"}, 2: {"b", "books", "playback"}, 4: {"a"}}) {
+	if !reflect.DeepEqual(got, map[int64][]string{1: {"a"}, 2: {"b", "books", "playback"}, 3: {"a"}, 4: {"a"}}) {
 		t.Fatalf("upgraded access=%v", got)
 	}
 	var dest string
@@ -181,5 +181,134 @@ func TestAssignmentMigrationRollsBackOnFailure(t *testing.T) {
 	var grants int
 	if err = database.QueryRow("SELECT COUNT(*) FROM user_instance_grants").Scan(&grants); err != nil || grants != 1 {
 		t.Fatalf("retry grants=%d,%v", grants, err)
+	}
+}
+
+func TestAdminVideoUpgradePreservesDestinationsAndDoesNotEnrollAgain(t *testing.T) {
+	for _, globalDefault := range []bool{false, true} {
+		t.Run(fmt.Sprintf("default=%v", globalDefault), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "upgrade.db")
+			database, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { database.Close() })
+			exec := func(q string, args ...any) {
+				t.Helper()
+				if _, err := database.Exec(q, args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reopen := func() {
+				t.Helper()
+				if err := database.Close(); err != nil {
+					t.Fatal(err)
+				}
+				database, err = Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			exec("INSERT INTO users(id,username,password_hash,role) VALUES(1,'implicit','','admin'),(2,'pinned','','admin'),(3,'assigned','','admin'),(4,'regular','','user'),(5,'broken','','admin')")
+			for _, service := range []string{"radarr", "sonarr"} {
+				exec("INSERT INTO service_instances(id,service_type,name,url,api_key,is_default,sort_order) VALUES(?,?,'First','http://first','k',0,0),(?,?,'Second','http://second','k',?,1)", service+"-a", service, service+"-b", service, globalDefault)
+				exec("INSERT INTO user_default_instances(user_id,service_type,instance_id) VALUES(2,?,?),(5,?,'missing')", service, service+"-b", service)
+				exec("INSERT INTO user_instance_grants(user_id,instance_id) VALUES(3,?)", service+"-a")
+			}
+			exec("DELETE FROM settings WHERE key='instance_assignments_v1'")
+			reopen()
+			want := map[int][]string{1: {"radarr-a", "sonarr-a"}, 2: {"radarr-b", "sonarr-b"}, 3: {"radarr-a", "sonarr-a"}}
+			if globalDefault {
+				want[1] = []string{"radarr-b", "sonarr-b"}
+			}
+			want[4] = want[1]
+			if globalDefault {
+				want[3] = []string{"radarr-a", "radarr-b", "sonarr-a", "sonarr-b"}
+			}
+			check := func() {
+				t.Helper()
+				rows, err := database.Query("SELECT user_id,instance_id FROM user_instance_grants ORDER BY user_id,instance_id")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer rows.Close()
+				got := map[int][]string{}
+				for rows.Next() {
+					var uid int
+					var id string
+					if err := rows.Scan(&uid, &id); err != nil {
+						t.Fatal(err)
+					}
+					got[uid] = append(got[uid], id)
+				}
+				if err := rows.Err(); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("assignments=%v, want %v", got, want)
+				}
+			}
+			check()
+			exec("DELETE FROM user_instance_grants WHERE user_id=1")
+			exec("INSERT INTO users(id,username,password_hash,role) VALUES(6,'new-admin','','admin')")
+			delete(want, 1)
+			reopen()
+			check()
+		})
+	}
+}
+
+func TestInstanceSetupHistorySurvivesDeletionAndUpgrade(t *testing.T) {
+	for _, upgrade := range []bool{false, true} {
+		t.Run(fmt.Sprintf("upgrade=%v", upgrade), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "setup.db")
+			database, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { database.Close() })
+			check := func(want bool) {
+				t.Helper()
+				var got bool
+				if err := database.QueryRow("SELECT EXISTS(SELECT 1 FROM settings WHERE key='instance_setup_started')").Scan(&got); err != nil {
+					t.Fatal(err)
+				}
+				if got != want {
+					t.Fatalf("setup started=%v, want %v", got, want)
+				}
+			}
+			exec := func(q string) {
+				t.Helper()
+				if _, err := database.Exec(q); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reopen := func() {
+				t.Helper()
+				if err := database.Close(); err != nil {
+					t.Fatal(err)
+				}
+				database, err = Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			check(false)
+			// Failed/rolled-back creation cannot end first-run setup.
+			exec("BEGIN; INSERT INTO service_instances(id,service_type,name,url,api_key) VALUES('cancelled','radarr','Cancelled','http://test','k'); ROLLBACK;")
+			check(false)
+			if upgrade {
+				exec("DROP TRIGGER remember_instance_setup")
+			}
+			exec("INSERT INTO service_instances(id,service_type,name,url,api_key) VALUES('first','plex','First','http://test','k')")
+			if upgrade {
+				check(false)
+				reopen()
+			}
+			check(true)
+			exec("DELETE FROM service_instances")
+			reopen()
+			check(true)
+		})
 	}
 }

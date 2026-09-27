@@ -18,7 +18,7 @@ final discoverSessionProvider = Provider<String>((ref) => ref.watch(
           for (final instance in connection?.instances ?? [])
             if (instance.serviceType == 'radarr' ||
                 instance.serviceType == 'sonarr')
-              '${instance.serviceType}:${instance.id}',
+              '${instance.serviceType}:${instance.id}:${instance.assigned}',
         ]..sort();
         return jsonEncode([
           connection?.serverUrl,
@@ -32,6 +32,8 @@ final discoverSessionProvider = Provider<String>((ref) => ref.watch(
           connection?.defaultSonarrInstance?.id,
           connection?.hiddenDiscoverTabs,
           connection?.adminCatalogBrowsing,
+          connection?.instanceAssignments,
+          connection?.initialInstanceSetup,
         ]);
       }),
     ));

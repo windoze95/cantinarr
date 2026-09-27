@@ -17,7 +17,7 @@ Credentials are stored encrypted on the server. On settings that preserve a save
 
 ## Automation defaults
 
-Radarr, Sonarr, Chaptarr, and Lidarr share the same rules. Regular users can access only their assigned instances. A global default chooses a preferred request destination; it never grants access or removes access to another assigned library. Administrators can browse and manage all automation instances. Their personal request destinations use explicit assignments too.
+Radarr, Sonarr, Chaptarr, and Lidarr share the same rules. Regular users can access only their assigned instances. A global default chooses a preferred request destination; it never grants access or removes access to another assigned library. Administrators can browse and manage all automation instances. Their personal request destinations and discovery pages use explicit assignments too. New installations show every discovery option to admins until the first instance is configured.
 
 When adding an instance, **Default Instance** starts on if that service has no default. **Automatically add new users** also starts on. Saving either setting does not assign existing users. Enable automatic assignment on several instances when new accounts should receive several libraries.
 
@@ -37,7 +37,7 @@ Review the matching and selected counts, then choose **Add selected** or **Remov
 
 Automatic assignment excludes administrators and runs once when a regular account is created through an invitation, media-server import, OIDC, or Plex sign-in. Replacement invitations, identity linking, and later sign-ins do not reapply it. To update existing users, use **Manage users**.
 
-Upgrades preserve existing access as explicit assignments. Existing instances start with automatic assignment off; enable it deliberately for future accounts. Changing or removing a default never restores a revoked assignment.
+Upgrades preserve existing access as explicit assignments, including existing admins' Radarr and Sonarr default destinations. Later removals remain removed after restart. Existing instances start with automatic assignment off; enable it deliberately for future accounts. Changing or removing a default never restores a revoked assignment.
 
 ## Books and music
 

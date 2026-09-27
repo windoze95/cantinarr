@@ -227,6 +227,16 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         return state.uri.path == landing ? null : landing;
       }
       final isAdmin = auth?.user?.isAdmin ?? false;
+      final browseType = state.uri.pathSegments.length >= 2 &&
+              state.uri.pathSegments.first == 'browse'
+          ? state.uri.pathSegments[1]
+          : null;
+      if (isAuthenticated &&
+          (auth?.connection?.instanceAssignments ?? false) &&
+          const ['movie', 'tv', 'books', 'music'].contains(browseType) &&
+          !discovery.isVisible(browseType == 'books' ? 'book' : browseType!)) {
+        return landing;
+      }
       if (isAuthenticated && !isAdmin && _isAdminOnlyRoute(state.uri.path)) {
         return landing;
       }

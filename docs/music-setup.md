@@ -26,7 +26,7 @@ Lidarr speaks the Servarr `/api/v1` API. Enter just the base URL; Cantinarr appe
 
 ## 3. Grant access per user
 
-Open the saved instance and choose **Manage users**, filter the directory, select the people to assign, and choose **Add selected**. **Select all matching** includes every account matching the current filters, including administrators. **Remove selected** revokes only those assignments and clears any preference pointing to this instance. Administrators can browse all automation instances, but their personal requests use the instances assigned here.
+Open the saved instance and choose **Manage users**, filter the directory, select the people to assign, and choose **Add selected**. **Select all matching** includes every account matching the current filters, including administrators. **Remove selected** revokes only those assignments and clears any preference pointing to this instance. Administrators can browse all automation instances through the navigation pickers. Their personal requests and Music discovery page use the instances assigned here. New installations show every discovery option to admins until the first instance is configured.
 
 **Automatically add new users** starts on for new instances. It assigns this instance when Cantinarr creates a regular account through an invitation, import, OIDC, or Plex sign-in. Administrator accounts are excluded. It does not assign existing users or restore removed access on later sign-ins. You can enable it on several instances. Existing instances retain their access on upgrade and start with automatic assignment off.
 

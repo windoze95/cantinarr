@@ -314,7 +314,7 @@ CREATE TABLE IF NOT EXISTS service_instances (
 );
 
 -- Per-user automation routing preferences. A preference must name an assigned
--- instance (administrators can choose any). It never grants or restricts access.
+-- instance. It never grants or restricts access.
 CREATE TABLE IF NOT EXISTS user_default_instances (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     service_type TEXT NOT NULL,
@@ -484,6 +484,16 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- First-run discovery ends when the first instance is configured. Remember it
+-- after deletions so an empty installation cannot reopen onboarding catalogs.
+CREATE TRIGGER IF NOT EXISTS remember_instance_setup
+AFTER INSERT ON service_instances
+BEGIN
+    INSERT OR IGNORE INTO settings(key,value) VALUES('instance_setup_started','true');
+END;
+INSERT OR IGNORE INTO settings(key,value)
+    SELECT 'instance_setup_started','true' WHERE EXISTS(SELECT 1 FROM service_instances);
 
 CREATE TABLE IF NOT EXISTS refresh_tokens (
     token_hash TEXT PRIMARY KEY,
@@ -1847,7 +1857,7 @@ func migrateInstanceAssignments(db *sql.DB) error {
  UPDATE service_instances SET is_default=EXISTS(SELECT 1 FROM winners w WHERE w.id=service_instances.id AND w.priority=1) WHERE service_type IN ('radarr','sonarr')`,
 		`INSERT OR IGNORE INTO user_instance_grants(user_id,instance_id)
    SELECT u.id,si.id FROM users u JOIN service_instances si ON si.service_type IN ('radarr','sonarr') AND si.is_default=1
-   WHERE u.role!='admin' AND NOT EXISTS(SELECT 1 FROM user_default_instances d WHERE d.user_id=u.id AND d.service_type=si.service_type)`,
+   WHERE NOT EXISTS(SELECT 1 FROM user_default_instances d WHERE d.user_id=u.id AND d.service_type=si.service_type)`,
 		`INSERT OR IGNORE INTO user_instance_grants(user_id,instance_id)
    SELECT d.user_id,d.instance_id FROM user_default_instances d JOIN service_instances si ON si.id=d.instance_id AND si.service_type=d.service_type
    WHERE si.service_type IN ('radarr','sonarr','chaptarr','lidarr','jellyfin','emby','plex','audiobookshelf')`,
