@@ -404,7 +404,7 @@ type AddAuthorRequest struct {
 	Monitored                  bool   `json:"monitored"`
 	AddOptions                 struct {
 		// Monitor is Chaptarr's monitor scope applied at add time: one of
-		// all/future/missing/existing/none. Empty means Chaptarr's default.
+		// all/future/missing/existing/none/specificBook. Empty means Chaptarr's default.
 		Monitor               string `json:"monitor,omitempty"`
 		SearchForMissingBooks bool   `json:"searchForMissingBooks"`
 	} `json:"addOptions"`
@@ -748,15 +748,9 @@ func (c *Client) GetAllAuthors() ([]Author, error) {
 
 // GetAuthor returns a single author by id.
 func (c *Client) GetAuthor(id int) (*Author, error) {
-	resp, err := c.doRequest("GET", fmt.Sprintf("/api/v1/author/%d", id))
-	if err != nil {
-		return nil, fmt.Errorf("chaptarr get author: %w", err)
-	}
-	defer resp.Body.Close()
-
 	var author Author
-	if err := json.NewDecoder(resp.Body).Decode(&author); err != nil {
-		return nil, fmt.Errorf("decode chaptarr author: %w", err)
+	if err := c.do("GET", fmt.Sprintf("/api/v1/author/%d", id), nil, &author); err != nil {
+		return nil, fmt.Errorf("chaptarr get author: %w", err)
 	}
 	return &author, nil
 }
@@ -902,15 +896,9 @@ func (c *Client) GetBookFilesForBook(bookID int) ([]BookFile, error) {
 }
 
 func (c *Client) GetQualityProfiles() ([]QualityProfile, error) {
-	resp, err := c.doRequest("GET", "/api/v1/qualityprofile")
-	if err != nil {
-		return nil, fmt.Errorf("chaptarr quality profiles: %w", err)
-	}
-	defer resp.Body.Close()
-
 	var profiles []QualityProfile
-	if err := json.NewDecoder(resp.Body).Decode(&profiles); err != nil {
-		return nil, fmt.Errorf("decode quality profiles: %w", err)
+	if err := c.do("GET", "/api/v1/qualityprofile", nil, &profiles); err != nil {
+		return nil, fmt.Errorf("chaptarr quality profiles: %w", err)
 	}
 	return profiles, nil
 }
@@ -1001,29 +989,17 @@ func (c *Client) UpdateCustomFormatRawContext(ctx context.Context, id int, body 
 }
 
 func (c *Client) GetMetadataProfiles() ([]MetadataProfile, error) {
-	resp, err := c.doRequest("GET", "/api/v1/metadataprofile")
-	if err != nil {
-		return nil, fmt.Errorf("chaptarr metadata profiles: %w", err)
-	}
-	defer resp.Body.Close()
-
 	var profiles []MetadataProfile
-	if err := json.NewDecoder(resp.Body).Decode(&profiles); err != nil {
-		return nil, fmt.Errorf("decode metadata profiles: %w", err)
+	if err := c.do("GET", "/api/v1/metadataprofile", nil, &profiles); err != nil {
+		return nil, fmt.Errorf("chaptarr metadata profiles: %w", err)
 	}
 	return profiles, nil
 }
 
 func (c *Client) GetRootFolders() ([]RootFolder, error) {
-	resp, err := c.doRequest("GET", "/api/v1/rootfolder")
-	if err != nil {
-		return nil, fmt.Errorf("chaptarr root folders: %w", err)
-	}
-	defer resp.Body.Close()
-
 	var folders []RootFolder
-	if err := json.NewDecoder(resp.Body).Decode(&folders); err != nil {
-		return nil, fmt.Errorf("decode root folders: %w", err)
+	if err := c.do("GET", "/api/v1/rootfolder", nil, &folders); err != nil {
+		return nil, fmt.Errorf("chaptarr root folders: %w", err)
 	}
 	return folders, nil
 }

@@ -212,7 +212,17 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
     final active = deliveries
         .where((d) => !{'complete', 'cancelled'}.contains(d['state']))
         .toList();
-    if (widget.progressOnly && active.isEmpty) return const SizedBox.shrink();
+    if (widget.progressOnly && active.isEmpty) {
+      if (saved.hasError) {
+        return TextButton.icon(
+          onPressed: () => ref.invalidate(savedDeliveryProvider(key)),
+          icon: const Icon(Icons.refresh),
+          label: const Text('Could not check request progress. Try again.'),
+        );
+      }
+      if (saved.isLoading) return const Text('Checking request progress…');
+      return const SizedBox.shrink();
+    }
     final canonical = _knownNativeId ??
         data?['canonical_foreign_id'] as String? ??
         widget.nativeId;

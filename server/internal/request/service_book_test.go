@@ -1315,6 +1315,8 @@ func TestBookRequestAddsCanonicalSiblingWhenLookupIDDiffers(t *testing.T) {
 	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":4,"name":"Default"}]`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
 			_, _ = w.Write([]byte(`[{"id":4,"authorId":12,"title":"Flock","titleSlug":"flock","foreignBookId":"library-flock","monitored":true,"mediaType":"audiobook"}]`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/author/12":
