@@ -1644,13 +1644,9 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		if err != nil {
 			return "", "", fmt.Errorf("load existing book author: %w", err)
 		}
-		config, ok := bookConfigFromAuthor(author)
-		if !ok {
-			return "", "", fmt.Errorf("existing book configuration is incomplete for one or more formats")
-		}
-		config.includeRequestedFormats(r.bookFormat)
-		if r.requestedBookFormats != "" {
-			config.includeRequestedFormats(r.requestedBookFormats)
+		config, err := existingBookConfig(client, author, missing)
+		if err != nil {
+			return "", "", err
 		}
 		// Missing sibling formats are added under the id the library groups this
 		// title by — the attach id — so an alias-fulfilled request never splits
@@ -1828,8 +1824,8 @@ func mainBookTitle(title string) string {
 	return trimmed
 }
 
-// bookAddConfig is the complete Chaptarr author configuration required by
-// current releases. Chaptarr keeps separate quality/metadata profiles and root
+// bookAddConfig carries Chaptarr's per-format author configuration. Unrequested
+// formats on existing authors may be unset. Chaptarr keeps profiles and root
 // paths for ebooks and audiobooks; the legacy singular fields in the add body
 // are still populated from the concrete format for older releases.
 type bookAddConfig struct {
@@ -1906,15 +1902,15 @@ func selectBookConfig(qualityProfiles []chaptarr.QualityProfile, metadataProfile
 	for _, format := range []string{BookFormatEbook, BookFormatAudiobook} {
 		qualityProfileID, ok := selectBookQualityProfile(qualityProfiles, format)
 		if !ok {
-			return bookAddConfig{}, fmt.Errorf("Chaptarr %s quality profile selection is ambiguous", format)
+			return bookAddConfig{}, &bookConfigurationError{format, "a quality profile"}
 		}
 		metadataProfileID, ok := selectBookMetadataProfile(metadataProfiles, format)
 		if !ok {
-			return bookAddConfig{}, fmt.Errorf("Chaptarr %s metadata profile selection is ambiguous", format)
+			return bookAddConfig{}, &bookConfigurationError{format, "a metadata profile"}
 		}
 		root, ok := selectBookRoot(folders, format)
 		if !ok {
-			return bookAddConfig{}, fmt.Errorf("no accessible root folder available for %s", format)
+			return bookAddConfig{}, &bookConfigurationError{format, "a download folder"}
 		}
 		if format == BookFormatEbook {
 			config.ebookQualityProfileID = qualityProfileID
@@ -2158,10 +2154,14 @@ func (s *Service) addChaptarrBookRecord(client *chaptarr.Client, match *chaptarr
 	addReq.Author.AudiobookMetadataProfileID = config.audiobookMetadataProfileID
 	addReq.Author.EbookRootFolderPath = config.ebookRootFolderPath
 	addReq.Author.AudiobookRootFolderPath = config.audiobookRootFolderPath
-	addReq.Author.EbookMonitorFuture = config.ebookMonitorFuture || mediaType == BookFormatEbook
-	addReq.Author.AudiobookMonitorFuture = config.audiobookMonitorFuture || mediaType == BookFormatAudiobook
+	addReq.Author.EbookMonitorFuture = config.ebookMonitorFuture
+	addReq.Author.AudiobookMonitorFuture = config.audiobookMonitorFuture
 	addReq.Author.Monitored = true
 	addReq.Author.AddOptions.Monitor = "all"
+	if config.authorID != 0 {
+		// Adding one format must not start following the author's other books.
+		addReq.Author.AddOptions.Monitor = "specificBook"
+	}
 	addReq.AddOptions.SearchForNewBook = true
 
 	// Round-trip the lookup's editions verbatim, marking them monitored so

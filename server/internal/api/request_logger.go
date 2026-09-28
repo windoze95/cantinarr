@@ -9,7 +9,8 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-// safeRequestLogger keeps useful access logs without ever serializing the query
+// safeRequestLogger records failed HTTP requests without routine success noise
+// and without ever serializing the query
 // string, headers, or body. Query values commonly contain OAuth material and
 // older Cantinarr webhook URLs carried bearer credentials there.
 func safeRequestLogger(next http.Handler) http.Handler {
@@ -20,6 +21,9 @@ func safeRequestLogger(next http.Handler) http.Handler {
 		status := ww.Status()
 		if status == 0 {
 			status = http.StatusOK
+		}
+		if status < http.StatusBadRequest {
+			return
 		}
 		route := "<unmatched>"
 		if routeContext := chi.RouteContext(r.Context()); routeContext != nil && routeContext.RoutePattern() != "" {

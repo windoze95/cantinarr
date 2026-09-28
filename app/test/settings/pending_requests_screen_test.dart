@@ -199,6 +199,76 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('saved delivery shows its actual blocker without a waiting claim',
+      (tester) async {
+    const message =
+        'Cantinarr could not choose a quality profile for this audiobook.';
+    const delivery = [
+      {
+        'request_id': 7,
+        'format': 'audiobook',
+        'state': 'attention',
+        'code': 'book_configuration',
+        'message': message,
+        'can_retry': true,
+        'can_cancel': true,
+        'can_manage': true,
+      },
+    ];
+    final adapter = _ApprovalsAdapter(waiting: const [
+      {
+        'id': 7,
+        'media_type': 'book',
+        'title': 'Selected',
+        'book_format': 'audiobook',
+        'foreign_id': 'hc:100',
+        'wait_reason': 'delivery',
+        'delivery': delivery,
+      },
+    ], delivery: delivery);
+    await tester.pumpWidget(ProviderScope(overrides: [
+      authProvider.overrideWith(_FakeAuthNotifier.new),
+      backendClientProvider.overrideWithValue(
+          Dio(BaseOptions(baseUrl: 'http://localhost'))
+            ..httpClientAdapter = adapter),
+      realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
+    ], child: const MaterialApp(home: PendingRequestsScreen())));
+    await tester.pumpAndSettle();
+    expect(find.textContaining(message), findsOneWidget);
+    expect(find.text('Try again'), findsOneWidget);
+    expect(find.textContaining('The library is not ready'), findsNothing);
+    expect(find.textContaining('Being retried automatically'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('an unreadable saved delivery offers a refresh', (tester) async {
+    final adapter = _ApprovalsAdapter(waiting: const [
+      {
+        'id': 7,
+        'media_type': 'book',
+        'title': 'Selected',
+        'book_format': 'audiobook',
+        'foreign_id': 'hc:100',
+        'wait_reason': 'delivery',
+        'delivery': [
+          {'request_id': 7, 'state': 'attention'}
+        ],
+      },
+    ], deliveryStatusCode: 503);
+    await tester.pumpWidget(ProviderScope(overrides: [
+      authProvider.overrideWith(_FakeAuthNotifier.new),
+      backendClientProvider.overrideWithValue(
+          Dio(BaseOptions(baseUrl: 'http://localhost'))
+            ..httpClientAdapter = adapter),
+      realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
+    ], child: const MaterialApp(home: PendingRequestsScreen())));
+    await tester.pumpAndSettle();
+    expect(find.text('Could not check request progress. Try again.'),
+        findsOneWidget);
+    expect(find.textContaining('The library is not ready'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('a book row keeps its placeholder and stays inert without an id',
       (tester) async {
     tester.view.physicalSize = const Size(390, 844);
@@ -866,6 +936,7 @@ class _FakeAuthNotifier extends AuthNotifier {
 }
 
 class _ApprovalsAdapter implements HttpClientAdapter {
+  final int deliveryStatusCode;
   final List<Map<String, dynamic>> pending;
   final List<Map<String, dynamic>> delivery;
   Map<String, dynamic> approvalResponse;
@@ -882,6 +953,7 @@ class _ApprovalsAdapter implements HttpClientAdapter {
   Map<String, dynamic> waitResponse = const {'message': 'Waiting resumed.'};
 
   _ApprovalsAdapter({
+    this.deliveryStatusCode = 200,
     this.pending = const [],
     this.delivery = const [],
     this.approvalResponse = const {},
@@ -937,6 +1009,7 @@ class _ApprovalsAdapter implements HttpClientAdapter {
       _ => const <String, dynamic>{},
     };
     final statusCode = switch (options.uri.path) {
+      '/api/requests/delivery-status' => deliveryStatusCode,
       '/api/admin/requests/7/approve' => approvalStatusCode,
       '/api/admin/requests/waiting' => waitingStatusCode,
       _ => 200,

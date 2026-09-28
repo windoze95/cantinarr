@@ -317,6 +317,8 @@ func TestApproveAudiobookBesideExistingEbookUsesPerFormatAuthorConfiguration(t *
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(chaptarrMetadataProfiles0720))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
 			_, _ = w.Write([]byte(`[
 				{
@@ -420,7 +422,7 @@ func TestApproveAudiobookBesideExistingEbookUsesPerFormatAuthorConfiguration(t *
 		"ebookRootFolderPath":        "/library/ebooks",
 		"audiobookRootFolderPath":    "/library/audiobooks",
 		"ebookMonitorFuture":         true,
-		"audiobookMonitorFuture":     true,
+		"audiobookMonitorFuture":     false,
 	})
 }
 

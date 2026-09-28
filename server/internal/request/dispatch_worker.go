@@ -303,7 +303,10 @@ func (s *Service) dispatchFormat(ctx context.Context, id int64, format string) {
 			s.finishDelivery(id, format, token, "attention", "access_unavailable", nil)
 			return
 		}
+		var bookConfigErr *bookConfigurationError
 		switch {
+		case errors.As(err, &bookConfigErr):
+			s.finishDelivery(id, format, token, "attention", "book_configuration", err)
 		case errors.Is(err, chaptarr.ErrAuthorPendingImport):
 			s.finishDelivery(id, format, token, "waiting_library", "author_import", nil)
 		case errors.Is(err, chaptarr.ErrEditionsNotHydrated):
@@ -342,7 +345,9 @@ func (s *Service) finishDelivery(id int64, format, token, state, code string, ca
 	}
 	defer tx.Rollback()
 	var attempts int
-	if err = tx.QueryRow(`SELECT attempts FROM request_dispatch WHERE request_id=? AND format=? AND lease_token=? AND state='processing'`, id, format, token).Scan(&attempts); err != nil {
+	var userID int64
+	var instanceID, mediaType string
+	if err = tx.QueryRow(`SELECT d.attempts,r.user_id,COALESCE(r.instance_id,''),r.media_type FROM request_dispatch d JOIN request_log r ON r.id=d.request_id WHERE d.request_id=? AND d.format=? AND d.lease_token=? AND d.state='processing'`, id, format, token).Scan(&attempts, &userID, &instanceID, &mediaType); err != nil {
 		return
 	}
 	next := int64(0)
@@ -366,13 +371,9 @@ func (s *Service) finishDelivery(id int64, format, token, state, code string, ca
 		}
 	}
 	message := deliveryMessage(state, code)
-	if cause != nil {
-		var upstream *transporterr.Upstream
-		if errors.As(cause, &upstream) {
-			log.Printf("request: delivery %d format %s: %s, upstream HTTP %d (attempt %d)", id, format, code, upstream.Status, attempts)
-		} else {
-			log.Printf("request: delivery %d format %s: %s (attempt %d)", id, format, code, attempts)
-		}
+	var bookConfigErr *bookConfigurationError
+	if code == "book_configuration" && errors.As(cause, &bookConfigErr) {
+		message = bookConfigErr.Error()
 	}
 	if _, err = tx.Exec(`UPDATE request_dispatch SET state=?,code=?,message=?,next_attempt_at=?,lease_until=0,lease_token='' WHERE request_id=? AND format=? AND lease_token=?`, state, code, message, next, id, format, token); err != nil {
 		return
@@ -396,6 +397,17 @@ func (s *Service) finishDelivery(id int64, format, token, state, code string, ca
 	}
 	if err = tx.Commit(); err != nil {
 		return
+	}
+	if state == "attention" || state == "retry" || state == "waiting_library" || state == "needs_match" {
+		upstreamStatus := 0
+		var upstream *transporterr.Upstream
+		if errors.As(cause, &upstream) {
+			upstreamStatus = upstream.Status
+		}
+		// Log the saved outcome even when there is no Go error (for example a
+		// revoked grant or a failed author import). Only safe local messages,
+		// never upstream error text, URLs, credentials, or title payloads.
+		log.Printf("request: delivery request_id=%d user_id=%d instance_id=%q media_type=%s format=%s state=%s code=%s attempt=%d next_attempt_at=%d upstream_status=%d message=%q", id, userID, instanceID, mediaType, format, state, code, attempts, next, upstreamStatus, message)
 	}
 	s.notifyDelivery(id, state)
 	s.quotaRequestChanged(id)
