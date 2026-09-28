@@ -73,7 +73,7 @@ class TVLibraryService extends RequestService {
   @override
   Future<RequestStatusDetail> checkStatusDetail(int tmdbId, MediaType mediaType,
       {String? instanceId, bool includeInstanceStatuses = true,
-      CancelToken? cancelToken}) async {
+      bool include4K = false, CancelToken? cancelToken}) async {
     if (instanceId != libraryId) throw const FormatException('Library changed');
     final result = await load(cancelToken: cancelToken);
     if (result.catalogId > 0) throw const FormatException('Reopen this title');

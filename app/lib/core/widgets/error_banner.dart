@@ -6,12 +6,14 @@ class ErrorBanner extends StatelessWidget {
   final String message;
   final VoidCallback? onDismiss;
   final VoidCallback? onRetry;
+  final int? maxLines;
 
   const ErrorBanner({
     super.key,
     required this.message,
     this.onDismiss,
     this.onRetry,
+    this.maxLines = 2,
   });
 
   @override
@@ -33,7 +35,7 @@ class ErrorBanner extends StatelessWidget {
             child: Text(
               message,
               style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
-              maxLines: 2,
+              maxLines: maxLines,
               overflow: TextOverflow.ellipsis,
             ),
           ),

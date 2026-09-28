@@ -38,15 +38,17 @@ const (
 // with its web UI password alone; ruTorrent with optional Basic-auth
 // credentials.
 type Instance struct {
-	ID          string `json:"id"`
-	ServiceType string `json:"service_type"` // "radarr", "sonarr", "sabnzbd", "deluge", …
-	Name        string `json:"name"`
-	URL         string `json:"url"`
-	APIKey      string `json:"api_key"`
-	Username    string `json:"username"`
-	Password    string `json:"password"`
-	IsDefault   bool   `json:"is_default"`
-	SortOrder   int    `json:"sort_order"`
+	ID           string `json:"id"`
+	ServiceType  string `json:"service_type"` // "radarr", "sonarr", "sabnzbd", "deluge", …
+	Name         string `json:"name"`
+	URL          string `json:"url"`
+	APIKey       string `json:"api_key"`
+	Username     string `json:"username"`
+	Password     string `json:"password"`
+	IsDefault    bool   `json:"is_default"`
+	AutoAddUsers bool   `json:"auto_add_users"`
+	TagRequests  bool   `json:"tag_requests"`
+	SortOrder    int    `json:"sort_order"`
 	// MediaDownloadMode is disabled until an admin saves explicit per-instance
 	// path mappings (mapped). Downloads have no implicit configuration.
 	MediaDownloadMode string              `json:"-"`
@@ -60,7 +62,7 @@ type Instance struct {
 	CreatedAt                time.Time         `json:"created_at"`
 }
 
-const instanceColumns = "id, service_type, name, url, api_key, username, password, is_default, sort_order, media_download_mode, media_path_mappings, media_server_config, created_at"
+const instanceColumns = "id, service_type, name, url, api_key, username, password, is_default, sort_order, media_download_mode, media_path_mappings, media_server_config, created_at, tag_requests, auto_add_users"
 
 // EffectiveMediaPathMappings returns the instance's current routing rules:
 // exactly the mappings an admin saved, or nothing.
@@ -185,6 +187,7 @@ func scanInstance(scanner rowScanner) (Instance, error) {
 		&mappingsJSON,
 		&mediaServerJSON,
 		&inst.CreatedAt,
+		&inst.TagRequests, &inst.AutoAddUsers,
 	); err != nil {
 		return Instance{}, err
 	}
@@ -292,20 +295,11 @@ func (s *Store) Get(id string) (*Instance, error) {
 	return &inst, nil
 }
 
-// normalizeDefault applies the service-type default rules before persisting:
-// grant-only service types have no global default — their instances are
-// granted per user — so the flag is forced off for them.
+// Media-server libraries remain grant-only and have no routing default.
 func normalizeDefault(inst *Instance) {
-	if isGrantOnlyType(inst.ServiceType) {
+	if IsMediaServerType(inst.ServiceType) {
 		inst.IsDefault = false
 	}
-}
-
-// isGrantOnlyType reports a service type with no global default instance:
-// Chaptarr, Lidarr, and the media servers. For these, a user's per-user rows
-// (pin or grant) are the entire access story — no rows means no access.
-func isGrantOnlyType(serviceType string) bool {
-	return serviceType == "chaptarr" || serviceType == "lidarr" || IsMediaServerType(serviceType)
 }
 
 // clearSiblingDefaults keeps at most one default per service type: saving an
@@ -324,12 +318,26 @@ func clearSiblingDefaults(tx *sql.Tx, inst *Instance) error {
 	return nil
 }
 
+// HasConfiguredInstances stays true after the last instance is deleted. Only a
+// new installation may expose every discovery tab before personal assignment.
+func (s *Store) HasConfiguredInstances() (bool, error) {
+	var configured bool
+	err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM settings WHERE key='instance_setup_started')").Scan(&configured)
+	return configured, err
+}
+
 // Create inserts a new instance and returns it with a generated ID.
 func (s *Store) Create(inst *Instance) error {
+	if inst.TagRequests && inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" && inst.ServiceType != "chaptarr" && inst.ServiceType != "lidarr" {
+		return errors.New("requester tagging requires Radarr, Sonarr, Chaptarr or Lidarr")
+	}
 	if inst.ID == "" {
 		inst.ID = inst.ServiceType + "-" + uuid.New().String()[:8]
 	}
 	inst.CreatedAt = time.Now()
+	if inst.AutoAddUsers && !IsAutomationType(inst.ServiceType) {
+		return errors.New("automatic assignment requires an automation instance")
+	}
 	normalizeDefault(inst)
 
 	apiKey, password, err := s.encryptSecrets(inst)
@@ -353,8 +361,8 @@ func (s *Store) Create(inst *Instance) error {
 		return err
 	}
 	if _, err := tx.Exec(
-		"INSERT INTO service_instances (id, service_type, name, url, api_key, username, password, is_default, sort_order, media_download_mode, media_path_mappings, media_server_config, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		inst.ID, inst.ServiceType, inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.MediaDownloadMode, mappingsJSON, mediaServerJSON, inst.CreatedAt,
+		"INSERT INTO service_instances ("+instanceColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		inst.ID, inst.ServiceType, inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.MediaDownloadMode, mappingsJSON, mediaServerJSON, inst.CreatedAt, inst.TagRequests, inst.AutoAddUsers,
 	); err != nil {
 		return fmt.Errorf("create instance: %w", err)
 	}
@@ -387,6 +395,9 @@ func (s *Store) Update(inst *Instance) error {
 	if err != nil {
 		return fmt.Errorf("update instance: %w", err)
 	}
+	if inst.TagRequests && inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" && inst.ServiceType != "chaptarr" && inst.ServiceType != "lidarr" {
+		return errors.New("requester tagging requires Radarr, Sonarr, Chaptarr or Lidarr")
+	}
 	mappingsJSON, err := encodeMediaPathMappings(inst)
 	if err != nil {
 		return err
@@ -395,13 +406,16 @@ func (s *Store) Update(inst *Instance) error {
 	if err != nil {
 		return err
 	}
+	if inst.AutoAddUsers && !IsAutomationType(inst.ServiceType) {
+		return errors.New("automatic assignment requires an automation instance")
+	}
 	normalizeDefault(inst)
 	if err := clearSiblingDefaults(tx, inst); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(
-		"UPDATE service_instances SET name = ?, url = ?, api_key = ?, username = ?, password = ?, is_default = ?, sort_order = ?, media_download_mode = ?, media_path_mappings = ?, media_server_config = ? WHERE id = ?",
-		inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.MediaDownloadMode, mappingsJSON, mediaServerJSON, inst.ID,
+		"UPDATE service_instances SET name = ?, url = ?, api_key = ?, username = ?, password = ?, is_default = ?, sort_order = ?, media_download_mode = ?, media_path_mappings = ?, media_server_config = ?, tag_requests = ?, auto_add_users = ? WHERE id = ?",
+		inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.MediaDownloadMode, mappingsJSON, mediaServerJSON, inst.TagRequests, inst.AutoAddUsers, inst.ID,
 	); err != nil {
 		return fmt.Errorf("update instance: %w", err)
 	}
@@ -411,6 +425,13 @@ func (s *Store) Update(inst *Instance) error {
 	if oldURL != inst.URL {
 		if _, err := tx.Exec("DELETE FROM arr_queue_witness WHERE instance_id = ?", inst.ID); err != nil {
 			return fmt.Errorf("clear instance queue witness: %w", err)
+		}
+	}
+	// Disabling or repointing cancels unfinished intent atomically. Re-enabling
+	// cannot revive an old job, including one with an outstanding worker lease.
+	if !inst.TagRequests || oldURL != inst.URL {
+		if _, err := tx.Exec(`UPDATE request_tag_jobs SET state='cancelled', message='Requester tagging was disabled or the library destination changed.', lease_token='', lease_until=0, updated_at=CURRENT_TIMESTAMP WHERE state NOT IN ('applied','cancelled') AND request_id IN (SELECT id FROM request_log WHERE instance_id=?)`, inst.ID); err != nil {
+			return fmt.Errorf("cancel requester tags: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -632,10 +653,8 @@ func (s *Store) Delete(id string) error {
 	if rows == 0 {
 		return fmt.Errorf("instance not found: %s", id)
 	}
-	// Drop any per-user defaults/grants that pointed at this instance so a
-	// deleted instance neither lingers as someone's default nor (for grant-only
-	// types)
-	// keeps granting access to a now-removed instance. user_instance_grants
+	// Drop preferences and grants that pointed at the deleted instance.
+	// user_instance_grants
 	// also declares ON DELETE CASCADE; the explicit delete keeps the cleanup
 	// independent of the foreign_keys pragma.
 	if _, err := tx.Exec("DELETE FROM user_default_instances WHERE instance_id = ?", id); err != nil {
@@ -689,10 +708,8 @@ func (s *Store) GetDefault(serviceType string) (*Instance, error) {
 	return &inst, nil
 }
 
-// GetUserDefault returns the instance ID a user has pinned as their default for
-// a service type, or ("", false, nil) when the user has no per-user override
-// (the caller should fall back to the global default). For service types with no
-// global default (chaptarr/lidarr), the returned ID is also the access grant.
+// GetUserDefault reads a routing preference. It never grants access; callers
+// resolving requests use EffectiveDefaultInstanceID.
 func (s *Store) GetUserDefault(userID int64, serviceType string) (string, bool, error) {
 	var instanceID string
 	err := s.db.QueryRow(
@@ -709,7 +726,7 @@ func (s *Store) GetUserDefault(userID int64, serviceType string) (string, bool, 
 }
 
 // ListUserDefaults returns a user's per-user default overrides keyed by service
-// type. Service types absent from the map inherit the global default.
+// type. Omitted types use automatic routing within the accessible set.
 func (s *Store) ListUserDefaults(userID int64) (map[string]string, error) {
 	rows, err := s.db.Query(
 		"SELECT service_type, instance_id FROM user_default_instances WHERE user_id = ?",
@@ -745,7 +762,19 @@ func (s *Store) SetUserDefault(userID int64, serviceType, instanceID string) err
 	if inst.ServiceType != serviceType {
 		return fmt.Errorf("instance %s is %q, not %q", instanceID, inst.ServiceType, serviceType)
 	}
-	_, err = s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var allowed bool
+	if err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM user_instance_grants WHERE user_id=? AND instance_id=?) OR (? AND EXISTS(SELECT 1 FROM users WHERE id=? AND role='admin'))`, userID, instanceID, !IsAutomationType(serviceType), userID).Scan(&allowed); err != nil {
+		return err
+	}
+	if !allowed {
+		return errors.New("assign this instance before choosing it as a preference")
+	}
+	_, err = tx.Exec(
 		"INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (?, ?, ?) "+
 			"ON CONFLICT(user_id, service_type) DO UPDATE SET instance_id = excluded.instance_id",
 		userID, serviceType, instanceID,
@@ -753,7 +782,7 @@ func (s *Store) SetUserDefault(userID int64, serviceType, instanceID string) err
 	if err != nil {
 		return fmt.Errorf("set user default instance: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // ListTypeUserDefaults returns every per-user default row for a service type
@@ -797,11 +826,8 @@ func (s *Store) ServiceTypeOf(instanceID string) (string, error) {
 	return serviceType, nil
 }
 
-// SetInstanceUsers pins instanceID as the per-user default for exactly
-// userIDs: listed users are pinned to it (moving off a sibling instance if
-// needed), and users previously pinned to THIS instance but absent from the
-// list revert to the global default (for grant-only types: access revoked). Pins to
-// sibling instances are otherwise untouched.
+// SetInstanceUsers replaces preferences for this instance only. Every selected
+// regular user must already be assigned; no access is granted or revoked here.
 func (s *Store) SetInstanceUsers(instanceID string, userIDs []int64) error {
 	serviceType, err := s.ServiceTypeOf(instanceID)
 	if err != nil {
@@ -821,6 +847,13 @@ func (s *Store) SetInstanceUsers(instanceID string, userIDs []int64) error {
 		return fmt.Errorf("set instance users: %w", err)
 	}
 	for _, userID := range userIDs {
+		var allowed bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM user_instance_grants WHERE user_id=? AND instance_id=?) OR EXISTS(SELECT 1 FROM users WHERE id=? AND role='admin')`, userID, instanceID, userID).Scan(&allowed); err != nil {
+			return err
+		}
+		if !allowed {
+			return errors.New("assign this instance before choosing it as a preference")
+		}
 		if _, err := tx.Exec(
 			"INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (?, ?, ?) "+
 				"ON CONFLICT(user_id, service_type) DO UPDATE SET instance_id = excluded.instance_id",
@@ -835,8 +868,7 @@ func (s *Store) SetInstanceUsers(instanceID string, userIDs []int64) error {
 	return nil
 }
 
-// ClearUserDefault removes a user's per-user override for a service type, so it
-// reverts to the global default (or, for grant-only types, revokes access).
+// ClearUserDefault restores automatic routing without changing access.
 func (s *Store) ClearUserDefault(userID int64, serviceType string) error {
 	if _, err := s.db.Exec(
 		"DELETE FROM user_default_instances WHERE user_id = ? AND service_type = ?",
@@ -847,119 +879,69 @@ func (s *Store) ClearUserDefault(userID int64, serviceType string) error {
 	return nil
 }
 
-// UserHasInstanceAccess reports whether a user has an explicit row (per-user
-// default pin or access grant) naming a specific instance. Used to gate access
-// to service types that have no global default (chaptarr/lidarr); admins bypass this
-// check at the caller.
-func (s *Store) UserHasInstanceAccess(userID int64, instanceID string) (bool, error) {
-	var one int
-	err := s.db.QueryRow(
-		`SELECT 1 WHERE EXISTS (
-		     SELECT 1 FROM user_default_instances WHERE user_id = ? AND instance_id = ?)
-		   OR EXISTS (
-		     SELECT 1 FROM user_instance_grants WHERE user_id = ? AND instance_id = ?)`,
-		userID, instanceID, userID, instanceID,
-	).Scan(&one)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("check user instance access: %w", err)
-	}
-	return true, nil
+// IsAutomationType identifies the four requester library services.
+func IsAutomationType(serviceType string) bool {
+	return serviceType == "radarr" || serviceType == "sonarr" || serviceType == "chaptarr" || serviceType == "lidarr"
 }
 
-// GrantedInstanceIDs returns the user's explicitly granted set for a service
-// type — access-grant rows plus the per-user default pin — in deterministic
-// (sort_order, name, id) order. An empty result means the user has no explicit
-// rows: radarr/sonarr callers fall back to the global default, grant-only
-// callers treat it as no access. Metadata-only; never decrypts credentials.
+// UserHasInstanceAccess reads explicit assignments, never routing preferences.
+func (s *Store) UserHasInstanceAccess(userID int64, instanceID string) (bool, error) {
+	var allowed bool
+	err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM user_instance_grants WHERE user_id=? AND instance_id=?)", userID, instanceID).Scan(&allowed)
+	return allowed, err
+}
+
+// GrantedInstanceIDs returns explicit assignments in configured order.
 func (s *Store) GrantedInstanceIDs(userID int64, serviceType string) ([]string, error) {
-	rows, err := s.db.Query(
-		`SELECT si.id FROM service_instances si
-		 WHERE si.service_type = ?
-		   AND (EXISTS (
-		         SELECT 1 FROM user_instance_grants g
-		         WHERE g.user_id = ? AND g.instance_id = si.id)
-		     OR EXISTS (
-		         SELECT 1 FROM user_default_instances d
-		         WHERE d.user_id = ? AND d.instance_id = si.id))
-		 ORDER BY si.sort_order, si.name, si.id`,
-		serviceType, userID, userID,
-	)
+	rows, err := s.db.Query(`SELECT si.id FROM service_instances si JOIN user_instance_grants g ON g.instance_id=si.id
+ WHERE g.user_id=? AND si.service_type=? ORDER BY si.sort_order,si.name,si.id`, userID, serviceType)
 	if err != nil {
-		return nil, fmt.Errorf("list granted instances: %w", err)
+		return nil, err
 	}
 	defer rows.Close()
-	var ids []string
+	ids := []string{}
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan granted instance: %w", err)
+		if err = rows.Scan(&id); err != nil {
+			return nil, err
 		}
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
 }
 
-// EffectiveDefaultInstanceID resolves the one instance a user's implicit
-// (no instance selected) operations target: their pin when set, else the
-// global Radarr/Sonarr default chain — grants never move the default, they
-// only widen what may be selected. Chaptarr, Lidarr, and the media servers
-// have no global chain: an unpinned user's implicit target is their first
-// granted instance, and no rows means no access (the first-instance fallback
-// the other types get would leak a library).
+// EffectiveDefaultInstanceID chooses only from the user's accessible set:
+// preference, global default, then first assignment. Administrator routing
+// retains its all-instance scope; media-server eligibility remains explicit.
 func (s *Store) EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error) {
-	pinnedID, pinned, err := s.GetUserDefault(userID, serviceType)
-	if err != nil {
-		return "", err
-	}
-	if pinned {
-		return pinnedID, nil
-	}
-	if isGrantOnlyType(serviceType) {
-		granted, err := s.GrantedInstanceIDs(userID, serviceType)
-		if err != nil {
-			return "", err
-		}
-		if len(granted) == 0 {
-			return "", nil
-		}
-		return granted[0], nil
-	}
-	return s.defaultInstanceID(serviceType)
+	return s.defaultInstanceID(userID, serviceType, true)
 }
 
-// VisibleInstanceIDs is the full set of instances one user may see and select
-// for a service type, in deterministic order: their explicit rows (grants ∪
-// pin) plus their effective default. Grants are purely additive — granting a
-// sibling never removes the default — while a pin keeps its historic
-// exclusive behavior: a pinned user's set is their pin plus grants, without
-// the global default.
+// AssignedDefaultInstanceID resolves personal request routing without administrator visibility.
+func (s *Store) AssignedDefaultInstanceID(userID int64, serviceType string) (string, error) {
+	return s.defaultInstanceID(userID, serviceType, false)
+}
+
+func (s *Store) defaultInstanceID(userID int64, serviceType string, administratorAccess bool) (string, error) {
+	var id string
+	err := s.db.QueryRow(`SELECT si.id FROM service_instances si
+ WHERE si.service_type=? AND (EXISTS(SELECT 1 FROM user_instance_grants g WHERE g.user_id=? AND g.instance_id=si.id)
+ OR (? AND EXISTS(SELECT 1 FROM users u WHERE u.id=? AND u.role='admin')))
+ ORDER BY EXISTS(SELECT 1 FROM user_default_instances d WHERE d.user_id=? AND d.instance_id=si.id AND d.service_type=si.service_type) DESC,
+ si.is_default DESC,si.sort_order,si.name,si.id LIMIT 1`, serviceType, userID, administratorAccess && IsAutomationType(serviceType), userID, userID).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return id, err
+}
+
+// VisibleInstanceIDs never adds access through a global default or preference.
 func (s *Store) VisibleInstanceIDs(userID int64, serviceType string) ([]string, error) {
-	ids, err := s.GrantedInstanceIDs(userID, serviceType)
-	if err != nil {
-		return nil, err
-	}
-	defaultID, err := s.EffectiveDefaultInstanceID(userID, serviceType)
-	if err != nil {
-		return nil, err
-	}
-	if defaultID != "" {
-		for _, id := range ids {
-			if id == defaultID {
-				return ids, nil
-			}
-		}
-		ids = append(ids, defaultID)
-	}
-	return ids, nil
+	return s.GrantedInstanceIDs(userID, serviceType)
 }
 
-// ListUserGrants returns a user's access-grant rows keyed by service type, in
-// the same deterministic instance order as GrantedInstanceIDs. Pins are NOT
-// included: this is the grants surface the admin endpoints edit, while the
-// effective granted set a requester holds is GrantedInstanceIDs (grants ∪ pin).
+// ListUserGrants returns explicit assignments keyed by service type, in
+// configured order. Preferences never alter this set.
 func (s *Store) ListUserGrants(userID int64) (map[string][]string, error) {
 	rows, err := s.db.Query(
 		`SELECT si.service_type, si.id FROM user_instance_grants g
@@ -1037,6 +1019,10 @@ func (s *Store) SetUserGrants(userID int64, grants map[string][]string) error {
 			}
 		}
 	}
+	if _, err := tx.Exec(`DELETE FROM user_default_instances WHERE user_id=? AND service_type IN ('radarr','sonarr','chaptarr','lidarr')
+ AND NOT EXISTS(SELECT 1 FROM user_instance_grants g WHERE g.user_id=user_default_instances.user_id AND g.instance_id=user_default_instances.instance_id)`, userID); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("set user instance grants: %w", err)
 	}
@@ -1071,14 +1057,9 @@ func (s *Store) ListTypeUserGrants(serviceType string) (map[int64][]string, erro
 	return out, rows.Err()
 }
 
-// SetInstanceGrantUsers replaces which users have an explicit row on exactly
-// this instance: listed users gain a grant row, users absent from the list
-// lose their grant AND any per-user default pin naming this instance (their
-// default reverts to the global chain; for grant-only types, access is revoked).
-// Clearing the pin too is what makes an admin's uncheck a real revocation —
-// legacy assignments are pin rows, and a surviving pin would silently keep
-// granting the library. Listed users' pins and every sibling instance's rows
-// are untouched.
+// SetInstanceGrantUsers replaces all grants on this instance and clears
+// preferences to revoked grants. Sibling assignments remain unchanged.
+// New filtered directory clients must use ChangeAssignments instead.
 func (s *Store) SetInstanceGrantUsers(instanceID string, userIDs []int64) error {
 	serviceType, err := s.ServiceTypeOf(instanceID)
 	if err != nil {
@@ -1141,12 +1122,9 @@ func (s *Store) SetInstanceGrantUsers(instanceID string, userIDs []int64) error 
 	return nil
 }
 
-// UserCanAccessInstance reports whether instanceID is a service instance
-// exposed to a requester: exactly membership in VisibleInstanceIDs — their
-// explicit rows (grants are additive, a pin is an exclusive default) plus,
-// for an unpinned Radarr/Sonarr user, the global default. Chaptarr and Lidarr
-// deliberately have no global fallback, so their rows are the entire grant.
-// All lookups are metadata-only and never decrypt the instance's credentials.
+// UserCanAccessInstance checks an explicit automation assignment of the
+// required service type without reading credentials. Administrators bypass
+// this check at the authorization boundary.
 func (s *Store) UserCanAccessInstance(userID int64, instanceID, serviceType string) (bool, error) {
 	if serviceType != "radarr" && serviceType != "sonarr" && serviceType != "chaptarr" && serviceType != "lidarr" {
 		return false, nil
@@ -1161,29 +1139,6 @@ func (s *Store) UserCanAccessInstance(userID int64, instanceID, serviceType stri
 		}
 	}
 	return false, nil
-}
-
-// defaultInstanceID mirrors GetDefault's explicit-default-then-first fallback
-// without selecting or decrypting any credential columns.
-func (s *Store) defaultInstanceID(serviceType string) (string, error) {
-	var instanceID string
-	err := s.db.QueryRow(
-		"SELECT id FROM service_instances WHERE service_type = ? AND is_default = 1 ORDER BY sort_order, name, id LIMIT 1",
-		serviceType,
-	).Scan(&instanceID)
-	if err == sql.ErrNoRows {
-		err = s.db.QueryRow(
-			"SELECT id FROM service_instances WHERE service_type = ? ORDER BY sort_order, name, id LIMIT 1",
-			serviceType,
-		).Scan(&instanceID)
-	}
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("get default instance id: %w", err)
-	}
-	return instanceID, nil
 }
 
 // Count returns the number of instances for a service type.

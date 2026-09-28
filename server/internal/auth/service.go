@@ -109,6 +109,7 @@ type Claims struct {
 }
 
 type Service struct {
+	grantAdded func(int64, string)
 	// Serializes credential issuance and policy changes. Provider requests run
 	// outside this lock; their configuration and initiating session are checked
 	// again before any account, grant, or session is committed.
@@ -568,24 +569,39 @@ func (s *Service) GetUser(userID int64) (*User, error) {
 }
 
 func (s *Service) CreateConnectToken(createdBy int64, name, serverURL string) (*CreateConnectTokenResponse, error) {
-	// Find or create the passwordless user this invite links to. Two admins
-	// (or one admin double-submitting) creating the first invite for the same
-	// new username must converge on one user row rather than racing the
-	// username UNIQUE constraint and failing one caller with a 500.
-	user, err := s.getUserByUsername(name)
+	tx, err := s.db.Begin()
 	if err != nil {
-		if _, err := s.db.Exec(
-			"INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?) ON CONFLICT(username) DO NOTHING",
-			name, "", "user",
-		); err != nil {
-			return nil, fmt.Errorf("create user: %w", err)
-		}
-		user, err = s.getUserByUsername(name)
+		return nil, err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec("INSERT INTO users(username,password_hash,role) VALUES (?,'','user') ON CONFLICT(username) DO NOTHING", name)
+	if err != nil {
+		return nil, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	var userID int64
+	if err = tx.QueryRow("SELECT id FROM users WHERE username=?", name).Scan(&userID); err != nil {
+		return nil, err
+	}
+	var added []string
+	if n == 1 {
+		added, err = autoAssignUser(tx, userID)
 		if err != nil {
-			return nil, fmt.Errorf("load connect user: %w", err)
+			return nil, err
 		}
 	}
-	return issueConnectToken(s.db, createdBy, user.ID, serverURL)
+	response, err := issueConnectToken(tx, createdBy, userID, serverURL)
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	s.notifyAutoAssignments(userID, added)
+	return response, nil
 }
 
 // CreateImportUser requires a new account. An import's remote username never
@@ -607,6 +623,10 @@ func (s *Service) CreateImportUser(createdBy int64, name, serverURL string) (int
 	if err != nil {
 		return 0, nil, ErrAuthUnavailable
 	}
+	added, err := autoAssignUser(tx, id)
+	if err != nil {
+		return 0, nil, err
+	}
 	response, err := issueConnectToken(tx, createdBy, id, serverURL)
 	if err != nil {
 		return 0, nil, err
@@ -614,6 +634,7 @@ func (s *Service) CreateImportUser(createdBy int64, name, serverURL string) (int
 	if err = tx.Commit(); err != nil {
 		return 0, nil, ErrAuthUnavailable
 	}
+	s.notifyAutoAssignments(id, added)
 	return id, response, nil
 }
 

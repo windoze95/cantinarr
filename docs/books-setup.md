@@ -2,7 +2,7 @@
 
 Books differ from movies and TV in two ways worth knowing before you start:
 
-- **Chaptarr has no global default instance.** Requesters need a per-user pin or explicit instance grant to see Books. Admins see the Chaptarr setup action until a library is connected.
+- **Chaptarr uses explicit library assignments.** Requesters need an assignment to see Books. A default chooses where requests go; it never grants access.
 - **An ebook can finish downloading between two polls.** Instant updates aren't a nicety here; they're what makes the "ready to read" notification reliable.
 
 This page is the whole path, in order.
@@ -11,7 +11,7 @@ This page is the whole path, in order.
 
 Cantinarr manages an existing Chaptarr instance — it doesn't deploy one. What it needs from you:
 
-- A URL the **Cantinarr server** can reach. Clients never dial instance URLs, so cluster-internal names are fine and preferred; see the [instance URL guidance](../README.md#configuration).
+- A URL the **Cantinarr server** can reach. Clients never dial instance URLs, so cluster-internal names are fine and preferred; see the [instance URL guidance](configuration.md#instance-addresses).
 - A Chaptarr API key.
 - Chaptarr itself already working: a root folder, an indexer, a download client, and grabs that actually complete.
 
@@ -29,11 +29,15 @@ Use Chaptarr's **root** URL, never one of its media-scoped prefixes (`/ebook`, `
 
 ## 3. Grant access per user
 
-This is the step people miss. Unlike Radarr and Sonarr, Chaptarr has no global default — pinning a user to a Chaptarr instance is how you grant that user access to books.
+Open the saved instance and choose **Manage users**, filter the directory, select the people to assign, and choose **Add selected**. **Select all matching** includes every account matching the current filters, including administrators. **Remove selected** revokes only those assignments and clears any preference pointing to this instance. Administrators can browse all automation instances through the navigation pickers. Their personal requests and Books discovery page use the instances assigned here. New installations show every discovery option to admins until the first instance is configured.
 
-Pin from either side: the instance editor, or **Settings → Users** for one person. Remove both the pin and any explicit grants to revoke access. Admins see Books before setup unless it was conditionally hidden for the server, and see configured Chaptarr instances without a pin; everyone else needs one, and until they have it `services.chaptarr` stays `false` and the Books tab stays hidden.
+**Automatically add new users** starts on for new instances. It assigns this instance when Cantinarr creates a regular account through an invitation, import, OIDC, or Plex sign-in. Administrator accounts are excluded. It does not assign existing users or restore removed access on later sign-ins. You can enable it on several instances. Existing instances retain their access on upgrade and start with automatic assignment off.
 
-Running more than one Chaptarr instance is fine — pin different households or different libraries to different instances.
+**Default Instance** starts on when this service has no global default. A user can request into any assigned instance. Without an explicit selection, Cantinarr uses their assigned personal preference, then an assigned global default, then their first assigned instance in configured order. No assignment means no Books library access. Defaults never grant access, and pending requests keep their saved destination.
+
+With several assigned instances, choosing **Request** opens a destination confirmation with the user’s default selected. The saved request and its status stay tied to the confirmed instance. Administrators with no personal assignments must add one before using this request flow.
+
+For one person, edit their assigned libraries and preferred destination under **Settings > Users**. This applies to kids accounts too.
 
 ## 4. Check instant updates
 
@@ -119,6 +123,12 @@ A format tap saves the native request and immediately acknowledges it. The durab
 
 The format panel offers a separate retry for each failed format and **Cancel request** for remaining work. Admins can manage saved work under **Settings > Pending requests > Saved requests**. Delivery waits do not increase the approval badge. Shared requests retain each subscriber's requested formats; cancelling a subscription preserves others, and cancelling remaining work never removes delivered files.
 
+Owning an ebook does not prevent requesting its audiobook, or the reverse. When the author is already in Chaptarr, Cantinarr keeps their existing settings and fills missing settings for the requested format from the library's unambiguous profiles and default folder. A **None** metadata profile is replaced for that format. Cantinarr verifies the saved settings, adds the format, and monitors that book without enabling the author's other books or future releases. Approval requirements still apply before any changes.
+
+If Cantinarr cannot choose a profile or folder, **Needs attention** names the missing setting and format. An administrator can set it in the author's Chaptarr settings, then select **Try again** on the saved request. The saved request panel shows the actual delivery message, including when automatic retries have stopped.
+
+Container logs record delivery problems with the request, user, library, format, attempt, and reason, including problems that did not produce an HTTP error. Routine successful HTTP requests are silent; failed HTTP requests still log their route and status without query strings, headers, or bodies.
+
 Delivery uses the originally selected native ID and instance, rechecks the requester's current access before writes, and never substitutes another title or library. When identifiers establish a library binding, existing formats and missing-format requests use that library record while the receipt keeps the original selection. Conflicting matches need attention rather than risking a duplicate or a wrong-book request. Saved delivery status is independent of current files: the app reads saved state with `include_live=false` and checks availability separately against Chaptarr. The existing default status read still includes live availability for older clients.
 
 Saved history is preserved. Old Open Library requests with verified native bindings continue. Unresolved source requests stop matching and show **Needs attention**, cancellation, and a native search link. Their existing approval requirements remain intact; retry or approval cannot convert an unresolved source into a new native request.
@@ -126,3 +136,7 @@ Saved history is preserved. Old Open Library requests with verified native bindi
 **Waiting for library** means Chaptarr accepted an author import and owns its retry loop. Cantinarr observes its pending-import API and managed webhook without repeatedly adding it. An import that lands resumes the remaining formats; a failed, cancelled, or ambiguous import needs attention. Older Chaptarr versions without that API retain their supported add-probe fallback.
 
 Publication details name their catalog or library source and show edition publisher/format when available. Different editions may have different page counts. Dates more than five years ahead appear as **Date unconfirmed (year)** and move to the undated end of an author's bibliography; Cantinarr keeps the source value rather than inventing a correction.
+
+## Requester tags
+
+Enable **Tag requests with requester** in the Chaptarr instance editor to tag new requests after successful delivery. It is off by default. Chaptarr stores these tags on the author for the requested format (eBook or audiobook), so they also apply to that author's other books in the same format. Each subscriber to a shared request gets their own tag and format-specific receipt. Existing tags remain. **Approvals > History** shows the result and offers **Retry tag** for failures without requesting the media again. Disabling tagging cancels unfinished jobs and leaves applied tags. Enabling it does not tag old history.

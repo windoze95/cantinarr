@@ -271,7 +271,10 @@ class _FakeAdapter implements HttpClientAdapter {
 }
 
 class _FakeAuthNotifier extends AuthNotifier {
-  _FakeAuthNotifier(this.users, {this.listUsersError});
+  _FakeAuthNotifier(this.users, {this.listUsersError, this.requesterTagging = false, this.instanceAssignments = false});
+
+  final bool requesterTagging;
+  final bool instanceAssignments;
 
   final List<UserSummary> users;
 
@@ -280,13 +283,15 @@ class _FakeAuthNotifier extends AuthNotifier {
   final Object? listUsersError;
 
   @override
-  Future<AuthState> build() async => const AuthState(
+  Future<AuthState> build() async => AuthState(
         connection: BackendConnection(
           serverUrl: 'http://localhost',
           accessToken: 'access',
           refreshToken: 'refresh',
+          requesterTagging: requesterTagging,
+          instanceAssignments: instanceAssignments,
         ),
-        user: UserProfile(id: 1, username: 'admin', role: 'admin'),
+        user: const UserProfile(id: 1, username: 'admin', role: 'admin'),
       );
 
   @override
@@ -340,6 +345,8 @@ Future<void> _pumpEdit(
   Size viewSize = const Size(800, 1800),
   double textScaleFactor = 1,
   bool directLink = false,
+  bool requesterTagging = false,
+  bool instanceAssignments = false,
 }) async {
   // Tall viewport so the whole (lazily built) form list is materialized.
   tester.view.physicalSize = viewSize;
@@ -370,7 +377,7 @@ Future<void> _pumpEdit(
     ProviderScope(
       overrides: [
         authProvider.overrideWith(
-            () => _FakeAuthNotifier(users, listUsersError: listUsersError)),
+            () => _FakeAuthNotifier(users, listUsersError: listUsersError, requesterTagging: requesterTagging, instanceAssignments: instanceAssignments)),
         backendClientProvider.overrideWithValue(dio),
       ],
       child: MaterialApp.router(
@@ -422,6 +429,71 @@ Future<void> _saveHardcover(WidgetTester tester,
 }
 
 void main() {
+  for (final kind in ['radarr', 'sonarr', 'chaptarr', 'lidarr']) {
+    testWidgets('$kind offers default and automatic onboarding without assigning existing users', (tester) async {
+      final adapter = _FakeAdapter(instances: [{'id': '$kind-old', 'service_type': kind, 'name': 'Old', 'is_default': false}]);
+      await _pumpEdit(tester, adapter: adapter, users: [_user(7, 'Reader')], instanceAssignments: true,
+        screen: InstanceEditScreen(initialServiceType: kind));
+      final defaults = find.widgetWithText(SwitchListTile, 'Default Instance');
+      await tester.ensureVisible(defaults);
+      expect(tester.widget<SwitchListTile>(defaults).value, true);
+      final automatic = find.widgetWithText(SwitchListTile, 'Automatically add new users');
+      await tester.ensureVisible(automatic);
+      expect(tester.widget<SwitchListTile>(automatic).value, true);
+      expect(find.text('Save this instance to assign existing users.'), findsOneWidget);
+      expect(adapter.requests.where((r) => r.method == 'PUT' || r.method == 'PATCH'), isEmpty);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('requester tags load, mark edits dirty, and save explicit disable', (tester) async {
+    final adapter = _FakeAdapter(instances: [{..._mainRadarr, 'tag_requests': true}]);
+    await _pumpEdit(tester, adapter: adapter, users: const [], requesterTagging: true,
+      screen: const InstanceEditScreen(instanceId: 'radarr-main', initialServiceType: 'radarr',
+        initialName: 'Main Radarr', initialUrl: 'http://radarr-main', initialIsDefault: true));
+    final toggle = find.widgetWithText(SwitchListTile, 'Tag requests with requester');
+    await tester.ensureVisible(toggle);
+    expect(tester.widget<SwitchListTile>(toggle).value, true);
+    bool dirty() => tester.widget<UnsavedChangesGuard>(find.byType(UnsavedChangesGuard)).hasChanges();
+    expect(dirty(), false);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(dirty(), true);
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Save Changes'));
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Save Changes'));
+    await tester.pumpAndSettle();
+    final update = adapter.requests.singleWhere((r) => r.method == 'PUT' && r.path == '/api/instances/radarr-main');
+    expect(update.body['tag_requests'], false);
+  });
+
+  testWidgets('requester tags are opt in and absent on old servers and other services', (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+    expect(find.text('Tag requests with requester'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await _pumpEdit(tester, adapter: adapter, users: const [], requesterTagging: true);
+    final toggle = find.widgetWithText(SwitchListTile, 'Tag requests with requester');
+    expect(tester.widget<SwitchListTile>(toggle).value, false);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await _pumpEdit(tester, adapter: adapter, users: const [], requesterTagging: true,
+      screen: const InstanceEditScreen(initialServiceType: 'plex'));
+    expect(find.text('Tag requests with requester'), findsNothing);
+  });
+
+  for (final service in ['chaptarr', 'lidarr']) {
+    testWidgets('$service requester tagging explains native parent scope', (tester) async {
+      await _pumpEdit(tester, adapter: _FakeAdapter(), users: const [], requesterTagging: true,
+        screen: InstanceEditScreen(initialServiceType: service));
+      final toggle = find.widgetWithText(SwitchListTile, 'Tag requests with requester');
+      await tester.ensureVisible(toggle);
+      expect(tester.widget<SwitchListTile>(toggle).value, false);
+      expect(find.textContaining(service == 'chaptarr' ? 'Chaptarr author' : 'Lidarr artist'), findsOneWidget);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(toggle).value, true);
+    });
+  }
+
   testWidgets('saving a directly opened editor returns to Settings without a warning',
       (tester) async {
     await _pumpEdit(tester,

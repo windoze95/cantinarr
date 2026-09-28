@@ -6,7 +6,7 @@ import '../../discover/logic/discovery_access.dart';
 import '../../discover/ui/catalog_prefetch.dart';
 import '../../discover/ui/catalog_setup_footer.dart';
 
-/// Server visibility applies to everyone; requesters also need book/music grants. Visible tabs
+/// Discover follows personal assignments after initial setup. Visible tabs
 /// map onto fixed router branches, including when only Music is granted.
 /// Pages render as bottom navigation on mobile and sidebar items on desktop.
 class DashboardShell extends ConsumerWidget {
@@ -50,7 +50,9 @@ class EmptyDiscoverScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isAdmin = ref.watch(discoveryAccessProvider).isAdmin;
+    final access = ref.watch(discoveryAccessProvider);
+    final isAdmin = access.isAdmin;
+    final needsAssignments = access.requiresAssignments;
     final theme = Theme.of(context);
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -72,15 +74,21 @@ class EmptyDiscoverScreen extends ConsumerWidget {
                   const SizedBox(height: 8),
                   Text(
                     isAdmin
-                        ? 'Show a tab in Discover settings or connect a service to start browsing.'
+                        ? needsAssignments
+                            ? 'Assign a library to your account in Users to show its Discover page.'
+                            : 'Show a tab in Discover settings or connect a service to start browsing.'
                         : 'No Discover tabs are available for your account.',
                     textAlign: TextAlign.center,
                   ),
                   if (isAdmin) ...[
                     const SizedBox(height: 16),
                     FilledButton(
-                      onPressed: () => context.go('/settings/discovery'),
-                      child: const Text('Discover settings'),
+                      onPressed: () => context.go(needsAssignments
+                          ? '/settings/users'
+                          : '/settings/discovery'),
+                      child: Text(needsAssignments
+                          ? 'Manage users'
+                          : 'Discover settings'),
                     ),
                   ],
                 ],

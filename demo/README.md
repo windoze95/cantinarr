@@ -36,10 +36,10 @@ cantinarr://connect?token=demo00000000000000000000000000000000000000000000000000
 Full parity with the current Cantinarr API surface:
 
 - **Auth & session** — JWT login, opaque `cnr1.` refresh tokens, connect-link redemption, per-user permissions, device management
-- **Discovery** — trending, popular, top-rated, upcoming, and now-playing rows for movies, Airing This Week / Top Rated / Coming Soon for TV, real paging, full-text search, browse by genre, year range, rating, language, streaming service (per region), keyword, and studio, movie/TV/person details with cast, crew, studios, countries, budget and revenue, release dates by region, and IMDb/TMDB/Trakt link ids, Trakt lists/anticipated/calendar
+- **Discovery** — trending, popular, top-rated, upcoming, and now-playing rows for movies, Airing This Week / Top Rated / Coming Soon for TV, real paging, full-text search, browse by genre, year range, rating, language, streaming service (per region), keyword, and studio, movie/TV/person details with cast, crew, studios, countries, budget and revenue, release dates by region, and IMDb/TMDB/Trakt link ids, Trakt lists/anticipated/calendar, and the optional 4K cover badge setting
 - **Requests** — movie, TV (per-season), book (ebook/audiobook), and album requests with the full approval flow: pending → approve/deny → simulated download progress → available/partial, routed to a chosen library
 - **Kids accounts** — one seeded requester is a kids account with a content policy (rating caps, unrated and genre blocks); every title surface hides what it may not see, a hidden title's page reads "not available to your account", and its requests are refused; admins see the Child tag on the Users screen and edit the policy from that user's request settings, with the real certification catalog (US and GB)
-- **Multiple libraries** — two Radarr and two Sonarr instances, reached through additive per-user grants, so the Library chooser, the per-library status chips, and instance-scoped quality profiles all have something to show
+- **Multiple libraries** — two Radarr and two Sonarr instances, reached through explicit per-user assignments; the Library chooser, per-library status chips, instance-scoped quality profiles, and assignment editor all have something to show
 - **Books browsing** — the Chaptarr library by author and by series, with per-format ownership on every title, and book pages that link out to Goodreads and Open Library (the classics carry their real Goodreads and Open Library work ids; the invented titles carry none and show no Links line)
 - **Trending Books** — a Hardcover-connected trending row on the seeded Chaptarr instance, with typed identity keys so an owned book carries its availability badge; the retired Open Library discovery routes answer `catalog_retired` instead of an empty shelf. Admins connect Hardcover per instance by API token or device sign-in, and can share one connection across instances
 - **Music browsing** — the Lidarr library by artist, Recently Added, owned-aware search, requestable albums that walk pending → requested → downloading → available, and the admin Music module (library, queue with the Import Doctor, wanted, calendar, history, release search)
@@ -53,9 +53,9 @@ Full parity with the current Cantinarr API surface:
 - **Federated sign-in, configured but never federated** — OpenID Connect and Plex sign-in round-trip their admin settings and reflect into the sign-in screen, but every flow endpoint answers one clear refusal: the demo contacts no identity provider. SSO-only is refused outright so the published credentials always work
 - **AI chat** — streaming SSE assistant with tool calls and media results (kid-safe for the kids account), plus AI settings/credentials surfaces, the 41-tool registry, and the Codex and xAI Grok OAuth device flows
 - **Seerr-compatible API** — an administrator-issued `X-Api-Key` and the bounded request, media, user, status, and availability-sync surface used by Maintainerr, Dashbrr, Homepage, and similar integrations
-- **Admin console** — instance management (arrs incl. Lidarr, download clients incl. a qBittorrent in API-key mode, Tautulli, Tracearr, Tdarr, and media servers), per-user library grants, arr library browsing and editing (fake Radarr/Sonarr/Chaptarr/Lidarr proxies; Radarr Edit Movie, tags, refresh), download-client queue/history for two clients, Monitoring with both providers, issues + AI remediation (agent actions, runs, approval rules, reopen, and music included), configuration change history, the external address invite links are built from, users/devices, the 15-item setup checklist with skippable items, and update status
+- **Admin console** — instance management (arrs incl. Lidarr, download clients incl. a qBittorrent in API-key mode, Tautulli, Tracearr, Tdarr, and media servers), per-user library assignments and optional requester tags, arr library browsing and editing (fake Radarr/Sonarr/Chaptarr/Lidarr proxies; Radarr Edit Movie, tags, refresh), saved request history with a simulated requester-tag retry, download-client queue/history for two clients, Monitoring with both providers, issues + AI remediation (agent actions, runs, approval rules, reopen, and music included), configuration change history, the external address invite links are built from, users/devices, the 15-item setup checklist with skippable items, and update status
 - **Live updates** — WebSocket hub pushing download progress, request status changes, queue snapshots, approvals, issues, agent actions, allowance changes, and Plex invite events to the right audiences
-- **Server settings** — the outbound proxy the server would route its own internet traffic through (password write-only), Discord request alerts with a recent-delivery log, and the master push-notification policy with a switch per category
+- **Server settings** — the outbound proxy the server would route its own internet traffic through (password write-only), Discord request alerts and personal mention preferences with simulated delivery, and the master push-notification policy with a switch per category
 
 ## File Map
 
@@ -77,6 +77,7 @@ Full parity with the current Cantinarr API surface:
 | `requests.go` | `/api/requests*` — create, options, TMDB status, lifecycle machine |
 | `tv_library.go` | Native Sonarr-series navigation and revision-guarded requests through `/api/requests/tv-library` |
 | `requests_admin.go` | Admin request queue, approve/deny, global request settings |
+| `request_history.go` | Saved admin request history and simulated requester-tag retry |
 | `books.go` | Book status/library/recent/authors/series + the book request lifecycle |
 | `music.go` | `/api/requests/music-*` (status, library, recent, artists, artist) + the music request lifecycle |
 | `discover.go` | `/api/discover/*` (paged rows, browse filters, TV rows), `/api/search`, `/api/media/*` (details with credits and release dates), genres, providers, regions, languages, keyword and company search |
@@ -98,6 +99,7 @@ Full parity with the current Cantinarr API surface:
 | `notifications.go` | Push tokens + notification preferences |
 | `sso.go` | OpenID Connect and Plex sign-in: admin configuration, linked identities, and the refusals every flow endpoint answers |
 | `adminsettings.go` | Outbound proxy, Discord request alerts, master push-notification policy |
+| `discord_preferences.go` | Personal Discord mention preferences and simulated delivery |
 | `requestquotas.go` | Request allowances: defaults, per-user overrides, live counters, preview, reset |
 | `tvmatches.go` | TV matching corrections, the Sonarr series search behind the editor, and request repairs |
 | `mediaapps.go` | Video/listening app preferences, resolved Audiobookshelf listen links, per-user audiobook library access, link management |
@@ -119,7 +121,7 @@ Full parity with the current Cantinarr API surface:
 | `data_music_public_domain.go` | Four real CC0 releases with original covers, track titles, and durations; provenance in `assets/music/` |
 | `data_misc.go` | Genres and Trakt list fixtures |
 | `assets/` | `go:embed` — sample download file, landing HTML, Cantinarr branding, and the CC0 music catalog and covers |
-| `tools/smoke.sh` | Read-mostly parity smoke test (about 325 checks; `--mutate` adds the state-changing flows). Run it against a local or the live demo |
+| `tools/smoke.sh` | Read-mostly parity smoke test (hundreds of checks; `--mutate` adds the state-changing flows). Run it against a local or the live demo |
 
 ## Branch Workflow
 
@@ -135,7 +137,8 @@ Do not merge `demo` into `main` — demo-specific code should stay on this branc
 
 ## Cloud Deployment (DigitalOcean)
 
-Used for App Store review periods. Spin up before submission, destroy after approval.
+The public demo runs on a DigitalOcean droplet. Use the update procedure below
+for an existing host; the first-deployment steps create a new one.
 
 ### Prerequisites
 
@@ -330,12 +333,55 @@ demo/tools/smoke.sh https://demo.cantinarr.com
 # `doctl compute droplet get cantinarr-demo --format PublicIPv4`)
 curl --max-time 5 http://<droplet-ip>:8484/api/health  # should timeout
 
-# Confirm Authenticated Origin Pulls rejects non-CF clients
-curl -k --max-time 5 https://<droplet-ip>/api/health   # should fail
+# After Cloudflare Authenticated Origin Pulls is enabled and nginx uses
+# ssl_verify_client on, direct-origin HTTPS must reject a client certificate-
+# free request. This protection is pending on the current demo host.
+curl -sk --noproxy '*' --max-time 5 \
+  --resolve 'demo.cantinarr.com:443:<droplet-ip>' \
+  https://demo.cantinarr.com/api/health  # expect nginx's missing-client-cert error
 ```
 
 Cloudflare stamps its own `Last-Modified` on cached objects, so never read one
 as a deploy timestamp — check the binary's mtime on the droplet instead.
+
+### Update an existing demo
+
+Build from the committed `demo` branch worktree. Set `DEMO_SSH` to the
+authorized SSH destination; keep that address and any credentials out of the
+repository. The binary checksum ties the staged and running files to this
+build.
+
+```bash
+cd demo
+test -z "$(git status --porcelain)"
+git rev-parse HEAD
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -buildvcs=false -o cantinarr-demo .
+expected_sha=$(shasum -a 256 cantinarr-demo | awk '{print $1}')
+scp cantinarr-demo "$DEMO_SSH:/tmp/cantinarr-demo.next"
+staged_sha=$(ssh "$DEMO_SSH" 'sha256sum /tmp/cantinarr-demo.next' | awk '{print $1}')
+test "$staged_sha" = "$expected_sha"
+
+ssh "$DEMO_SSH" <<'REMOTE'
+set -e
+sudo cp -p /usr/local/bin/cantinarr-demo /usr/local/bin/cantinarr-demo.previous
+sudo install -m 755 /tmp/cantinarr-demo.next /usr/local/bin/cantinarr-demo
+sudo systemctl restart cantinarr-demo
+sudo systemctl is-active --quiet cantinarr-demo
+REMOTE
+
+running_sha=$(ssh "$DEMO_SSH" 'sha256sum /usr/local/bin/cantinarr-demo' | awk '{print $1}')
+test "$running_sha" = "$expected_sha"
+curl -fsS https://demo.cantinarr.com/api/health
+./tools/smoke.sh https://demo.cantinarr.com
+```
+
+If the service or smoke check fails, restore the saved binary, restart, and
+run the public smoke check again:
+
+```bash
+ssh "$DEMO_SSH" 'sudo install -m 755 /usr/local/bin/cantinarr-demo.previous /usr/local/bin/cantinarr-demo && sudo systemctl restart cantinarr-demo'
+./tools/smoke.sh https://demo.cantinarr.com
+```
 
 ### Tear Down
 

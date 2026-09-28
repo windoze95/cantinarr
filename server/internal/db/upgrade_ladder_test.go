@@ -72,6 +72,13 @@ func TestOpenUpgradesOldestShippedSchema(t *testing.T) {
 		t.Fatalf("re-Open upgraded database: %v", err)
 	}
 	defer database.Close()
+	var taggedInstances, tagJobs int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM service_instances WHERE tag_requests!=0`).Scan(&taggedInstances); err != nil || taggedInstances != 0 {
+		t.Fatalf("legacy instances enabled requester tags: count=%d error=%v", taggedInstances, err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM request_tag_jobs`).Scan(&tagJobs); err != nil || tagJobs != 0 {
+		t.Fatalf("upgrade backfilled requester tag jobs: count=%d error=%v", tagJobs, err)
+	}
 
 	// Users survive with their values, and the one-time backfills applied:
 	// password/passkey stay enabled for admins, shared AI access is
@@ -180,14 +187,21 @@ func TestOpenUpgradesOldestShippedSchema(t *testing.T) {
 		t.Fatalf("device = (%q, hardware %q), want (\"Legacy iPhone\", \"\")", deviceName, hardwareID)
 	}
 
-	// Nothing was invented or dropped by the two upgrade passes.
-	for table, want := range map[string]int{"users": 2, "service_instances": 4, "request_log": 1, "settings": 1, "devices": 1} {
+	// Existing rows survive both upgrade passes; settings also records the
+	// assignment migration and that this installation has been configured.
+	for table, want := range map[string]int{"users": 2, "service_instances": 4, "request_log": 1, "settings": 3, "devices": 1} {
 		var count int
 		if err := database.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
 			t.Fatalf("count %s: %v", table, err)
 		}
 		if count != want {
 			t.Fatalf("%s row count = %d after upgrade, want %d", table, count, want)
+		}
+	}
+	for _, key := range []string{"instance_assignments_v1", "instance_setup_started"} {
+		var value string
+		if err := database.QueryRow("SELECT value FROM settings WHERE key=?", key).Scan(&value); err != nil || value != "true" {
+			t.Fatalf("upgrade marker %s=%q, error=%v", key, value, err)
 		}
 	}
 

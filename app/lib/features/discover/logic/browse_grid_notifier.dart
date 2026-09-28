@@ -4,12 +4,15 @@ import '../data/discover_api_service.dart';
 import '../data/tmdb_models.dart';
 import 'browse_query.dart';
 import 'paged_feed.dart';
+import 'discover_session.dart';
 
 /// State behind one browse grid: the query, the titles paged so far, and
-/// whether the last read failed. Screen-local, like the detail and person
-/// notifiers, since a grid is one query for the life of its screen.
+/// whether the last read failed. Retained by the bounded session cache.
 class BrowseGridNotifier extends ChangeNotifier {
-  BrowseGridNotifier(this._api, BrowseQuery query) : _query = query;
+  BrowseGridNotifier(this._api, BrowseQuery query, {this.isCurrent}) : _query = query;
+
+  final bool Function()? isCurrent;
+  bool get _current => !_disposed && (isCurrent?.call() ?? true);
 
   /// A grid stops asking after this many pages (a thousand posters) however
   /// far the feed reports going; nobody scrolls further, and the memory is
@@ -21,7 +24,7 @@ class BrowseGridNotifier extends ChangeNotifier {
   static const ratedMinVotes = 100;
 
   final DiscoverApiService _api;
-  final PagedFeed _feed = PagedFeed();
+  final PagedFeed _feed = PagedFeed(pageLimit: maxPages);
 
   BrowseQuery _query;
   BrowseQuery get query => _query;
@@ -39,6 +42,7 @@ class BrowseGridNotifier extends ChangeNotifier {
 
   /// The headline feed names the source that answered, which titles the grid.
   String? _featuredSource;
+  String? _pendingFeaturedSource;
   String? get featuredSource => _featuredSource;
 
   /// Set once a page added nothing, whether the feed ended, its next pages
@@ -49,49 +53,107 @@ class BrowseGridNotifier extends ChangeNotifier {
 
   bool get hasMore => !_stalled && _feed.hasMore && _feed.page <= maxPages;
 
-  /// Loads the first page, replacing whatever was shown.
-  Future<void> load() async {
-    _feed.reset();
-    _items = const [];
-    _error = null;
-    _stalled = false;
-    await _run(replace: true);
+  bool _disposed = false;
+  int _generation = 0;
+  Future<void>? _refresh;
+  bool _hasLoaded = false;
+  bool get hasLoaded => _hasLoaded;
+  bool get isRefreshing => _refresh != null;
+
+  /// Saved with this complete query for remounts and browser Back.
+  double scrollOffset = 0;
+
+  Future<void> load() => refresh();
+
+  Future<void> refresh() {
+    if (!_current) return Future.value();
+    if (_refresh != null) return _refresh!;
+    final future = _refreshWindow();
+    _refresh = future;
+    return future.whenComplete(() {
+      if (identical(_refresh, future)) _refresh = null;
+    });
   }
 
-  /// Appends the next page, if there is one and none is in flight.
+  Future<void> _refreshWindow() async {
+    final generation = ++_generation;
+    final query = _query;
+    _pendingFeaturedSource = null;
+    _isLoading = !_hasLoaded;
+    notifyListeners();
+    final fresh = await _feed.refresh((page) => _fetch(query, page, generation));
+    if (!_current || generation != _generation || fresh == null) return;
+    _error = _feed.lastError;
+    if (_error == null) {
+      _items = fresh;
+      _hasLoaded = true;
+      _stalled = fresh.isEmpty;
+      _featuredSource = _pendingFeaturedSource ?? _featuredSource;
+    } else if (discoverAccessDenied(_error)) {
+      _items = const [];
+      _hasLoaded = false;
+    }
+    _isLoading = false;
+    notifyListeners();
+  }
+
+  /// Appends only outside a refresh. A late page cannot overwrite its window.
   Future<void> loadMore() async {
-    if (_isLoading || !hasMore) return;
-    await _run(replace: false);
-  }
-
-  /// Changes the query (filters or sort) and reloads from page one.
-  Future<void> setQuery(BrowseQuery query) {
-    _query = query;
-    return load();
-  }
-
-  Future<void> _run({required bool replace}) async {
+    if (!_current || !_hasLoaded || _refresh != null || _isLoading || !hasMore ||
+        _error != null) {
+      return;
+    }
+    final generation = _generation;
+    final query = _query;
     _isLoading = true;
     notifyListeners();
-    final fresh = await _feed.nextPage(_fetch);
-    if (fresh == null) return; // superseded by a reset
-    _items = replace ? fresh : [..._items, ...fresh];
-    _error = fresh.isEmpty ? _feed.lastError : null;
+    final fresh = await _feed.nextPage((page) => _fetch(query, page, generation));
+    if (!_current || generation != _generation || fresh == null) return;
+    _error = _feed.lastError;
+    _items = discoverAccessDenied(_error) ? const [] : [..._items, ...fresh];
     _stalled = fresh.isEmpty;
     _isLoading = false;
     notifyListeners();
   }
 
-  Future<TmdbPage<MediaItem>> _fetch(int page) async {
-    final type = _query.type;
+  /// Used outside the session cache; cached screens acquire a separate entry
+  /// for each complete query so returning to previous filters is immediate.
+  Future<void> setQuery(BrowseQuery query) {
+    _generation++;
+    _feed.reset();
+    _refresh = null;
+    _query = query;
+    _items = const [];
+    _hasLoaded = false;
+    _featuredSource = null;
+    _error = null;
+    _stalled = false;
+    scrollOffset = 0;
+    return refresh();
+  }
+
+  @override
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _generation++;
+    _feed.reset();
+    super.dispose();
+  }
+
+  Future<TmdbPage<MediaItem>> _fetch(
+      BrowseQuery query, int page, int generation) async {
+    final type = query.type;
     final tv = type == MediaType.tv;
-    final id = _query.id ?? 0;
-    switch (_query.feed) {
+    final id = query.id ?? 0;
+    switch (query.feed) {
       case BrowseFeed.featured:
         final feed = tv
             ? await _api.fetchFeaturedTV(page: page)
             : await _api.fetchFeaturedMovies(page: page);
-        _featuredSource ??= feed.source;
+        if (_current && generation == _generation) {
+          _pendingFeaturedSource = feed.source;
+        }
         return feed.asPage;
       case BrowseFeed.popular:
         return tv
@@ -114,7 +176,7 @@ class BrowseGridNotifier extends ChangeNotifier {
             await _api.getTraktAnticipated(tv ? 'shows' : 'movies', page: page);
         return openEndedPage(page, [for (final i in items) i.toMediaItem()]);
       case BrowseFeed.discover:
-        return _discover(page);
+        return _discover(query, page);
       case BrowseFeed.recommendations:
         return tv
             ? _api.tvRecommendations(id, page: page)
@@ -126,9 +188,9 @@ class BrowseGridNotifier extends ChangeNotifier {
     }
   }
 
-  Future<TmdbPage<MediaItem>> _discover(int page) {
-    final filters = _query.filters;
-    final sort = _query.sort;
+  Future<TmdbPage<MediaItem>> _discover(BrowseQuery query, int page) {
+    final filters = query.filters;
+    final sort = query.sort;
     final rated = filters.minRating != null || sort == BrowseSort.topRated;
     final from = filters.yearFrom == null ? null : '${filters.yearFrom}-01-01';
     final to = filters.yearTo == null ? null : '${filters.yearTo}-12-31';
@@ -142,7 +204,7 @@ class BrowseGridNotifier extends ChangeNotifier {
     final companyIds = filters.companies.isEmpty
         ? null
         : [for (final c in filters.companies) c.id];
-    return _query.type == MediaType.tv
+    return query.type == MediaType.tv
         ? _api.discoverTV(
             page: page,
             genreIds: genreIds,

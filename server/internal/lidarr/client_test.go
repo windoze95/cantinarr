@@ -346,8 +346,8 @@ func TestCommandPayloads(t *testing.T) {
 		t.Errorf("artist search payload = %v", got[1])
 	}
 	// Lidarr has no per-artist rescan command; RescanFolders scoped by
-	// artistId is the equivalent.
-	if got[2]["name"] != "RescanFolders" || got[2]["artistId"] != float64(7) {
+	// artistIds is the equivalent.
+	if ids, _ := got[2]["artistIds"].([]any); got[2]["name"] != "RescanFolders" || len(ids) != 1 || ids[0] != float64(7) {
 		t.Errorf("rescan payload = %v", got[2])
 	}
 }

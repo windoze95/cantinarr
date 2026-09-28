@@ -86,7 +86,7 @@ class _CatalogSetupFooterState extends ConsumerState<CatalogSetupFooter> {
             return Column(mainAxisSize: MainAxisSize.min, children: [
               const Text(
                   'Hiding this tab affects everyone on this server. '
-                  'It returns automatically when its service is connected.',
+                  'After setup, it appears for users assigned to its service.',
                   style:
                       TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
               if (!canHide)

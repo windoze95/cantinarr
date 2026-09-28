@@ -23,6 +23,7 @@ import '../../media_download/data/media_download_models.dart';
 import '../../media_download/ui/media_download_button.dart';
 import '../../request/data/album_ownership.dart';
 import '../../request/data/request_service.dart';
+import '../../request/ui/request_library_picker.dart';
 import '../../request/ui/album_request_panel.dart';
 import '../data/music_library_service.dart';
 
@@ -533,6 +534,9 @@ class _RequesterAlbumDetailScreenState
               foreignId: widget.foreignId,
               title: title,
               instanceId: instanceId,
+              requestLibraries: requestLibraries(ref.watch(authProvider).valueOrNull?.connection, 'lidarr'),
+              defaultRequestLibraryId: defaultRequestLibrary(ref.watch(authProvider).valueOrNull?.connection, 'lidarr'),
+              chooseRequestLibrary: true,
               searchTerm: widget.searchTerm,
               service: _requestService,
               ownership: owned,

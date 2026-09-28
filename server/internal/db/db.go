@@ -13,6 +13,24 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const requesterTagJobsSQL = `CREATE TABLE IF NOT EXISTS request_tag_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER NOT NULL REFERENCES request_log(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL,
+    format TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'waiting',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+    lease_until INTEGER NOT NULL DEFAULT 0,
+    lease_token TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    tag_label TEXT NOT NULL DEFAULT '',
+    applied_at DATETIME,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(request_id, user_id, format)
+);
+CREATE INDEX IF NOT EXISTS request_tag_jobs_due ON request_tag_jobs(state, next_attempt_at);`
+
 const initSQL = `
 -- Allowances start unlimited, with no historical charge backfill. Accounting
 -- is independent of mutable request owners, subscriptions and library state.
@@ -150,10 +168,11 @@ CREATE TABLE IF NOT EXISTS book_request_waiters (
 );
 
 -- Discord records delivery history, never current library availability.
--- One receipt per new request survives retries and process restarts.
+-- Stable event receipts survive retries and process restarts.
 CREATE TABLE IF NOT EXISTS discord_notifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    request_id INTEGER NOT NULL UNIQUE REFERENCES request_log(id) ON DELETE CASCADE,
+    request_id INTEGER REFERENCES request_log(id) ON DELETE CASCADE,
+    event_key TEXT NOT NULL UNIQUE,
     revision INTEGER NOT NULL,
     payload TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
@@ -164,6 +183,23 @@ CREATE TABLE IF NOT EXISTS discord_notifications (
     next_attempt_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS discord_notifications_due ON discord_notifications(status, next_attempt_at);
+
+CREATE TABLE IF NOT EXISTS discord_user_preferences (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    discord_ids TEXT NOT NULL DEFAULT '[]',
+    events TEXT NOT NULL DEFAULT '{}'
+);
+-- Observation receipts, not authoritative library availability. Each new
+-- activation establishes a baseline; a restart retains the existing baseline.
+-- observed_key fingerprints the provider state behind the last full read, so
+-- an unchanged TV library is not re-read on every sweep.
+CREATE TABLE IF NOT EXISTS discord_availability (
+    request_id INTEGER PRIMARY KEY REFERENCES request_log(id) ON DELETE CASCADE,
+    epoch INTEGER NOT NULL,
+    seen TEXT NOT NULL DEFAULT '[]',
+    observed_key TEXT NOT NULL DEFAULT ''
+);
 
 -- Durable delivery is separate from approval and from live library state.
 CREATE TABLE IF NOT EXISTS request_dispatch (
@@ -183,6 +219,10 @@ CREATE TABLE IF NOT EXISTS request_dispatch (
     PRIMARY KEY (request_id, format)
 );
 CREATE INDEX IF NOT EXISTS request_dispatch_due ON request_dispatch(state, next_attempt_at);
+
+-- Captured only when a new request is admitted with requester tagging enabled.
+-- A tagging receipt is independent of approval, delivery and live library state.
+` + requesterTagJobsSQL + `
 
 -- Local TV corrections are independent of the reviewed defaults bundled with
 -- the server. Reset retains a revision tombstone so stale edits stay stale.
@@ -264,6 +304,8 @@ CREATE TABLE IF NOT EXISTS service_instances (
     username TEXT NOT NULL DEFAULT '',
     password TEXT NOT NULL DEFAULT '',
     is_default BOOLEAN DEFAULT 0,
+    tag_requests BOOLEAN NOT NULL DEFAULT 0,
+    auto_add_users BOOLEAN NOT NULL DEFAULT 0,
     sort_order INTEGER DEFAULT 0,
     media_download_mode TEXT NOT NULL DEFAULT 'disabled',
     media_path_mappings TEXT NOT NULL DEFAULT '[]',
@@ -271,13 +313,8 @@ CREATE TABLE IF NOT EXISTS service_instances (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Per-user default *arr instance override (admin-managed). A row pins which
--- instance is THIS user's default source for a service type, overriding the
--- global service_instances.is_default. For service types that have NO global
--- default (chaptarr/lidarr), a row is ALSO the per-user access grant: without
--- one the user can neither see nor proxy to that instance. Absent row =
--- inherit the global default (or, for chaptarr/lidarr, no access). At most one row per
--- (user, service_type). Mirrors user_request_settings (admin-managed per-user).
+-- Per-user automation routing preferences. A preference must name an assigned
+-- instance. It never grants or restricts access.
 CREATE TABLE IF NOT EXISTS user_default_instances (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     service_type TEXT NOT NULL,
@@ -285,12 +322,8 @@ CREATE TABLE IF NOT EXISTS user_default_instances (
     PRIMARY KEY (user_id, service_type)
 );
 
--- Additional per-user instance access grants (admin-managed). A row lets the
--- user see and use this instance ALONGSIDE their effective default, so one
--- person can hold e.g. an HD and a 4K Radarr at once and choose per request.
--- The user_default_instances pin stays the user's default among their granted
--- set. With no grant rows the old model applies unchanged: the pin alone, or
--- the global default (chaptarr/lidarr stay grant-only, never falling back).
+-- Explicit instance assignments are the only library access source for regular
+-- users. A person can hold several instances of the same service type.
 CREATE TABLE IF NOT EXISTS user_instance_grants (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     instance_id TEXT NOT NULL REFERENCES service_instances(id) ON DELETE CASCADE,
@@ -451,6 +484,16 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- First-run discovery ends when the first instance is configured. Remember it
+-- after deletions so an empty installation cannot reopen onboarding catalogs.
+CREATE TRIGGER IF NOT EXISTS remember_instance_setup
+AFTER INSERT ON service_instances
+BEGIN
+    INSERT OR IGNORE INTO settings(key,value) VALUES('instance_setup_started','true');
+END;
+INSERT OR IGNORE INTO settings(key,value)
+    SELECT 'instance_setup_started','true' WHERE EXISTS(SELECT 1 FROM service_instances);
 
 CREATE TABLE IF NOT EXISTS refresh_tokens (
     token_hash TEXT PRIMARY KEY,
@@ -1022,6 +1065,8 @@ func Open(dbPath string) (*sql.DB, error) {
 	// are ignored). Backfill statements run only when the column is first added
 	// so they execute exactly once per database.
 	migrations := []schemaMigration{
+		{alter: "ALTER TABLE service_instances ADD COLUMN auto_add_users BOOLEAN NOT NULL DEFAULT 0"},
+		{alter: "ALTER TABLE service_instances ADD COLUMN tag_requests BOOLEAN NOT NULL DEFAULT 0"},
 		{alter: "ALTER TABLE request_dispatch ADD COLUMN delivery_started_at INTEGER NOT NULL DEFAULT 0"},
 		{
 			// Old request intake cached client hints without verification. Clear
@@ -1252,6 +1297,7 @@ func Open(dbPath string) (*sql.DB, error) {
 		// A connection change reserves a revision before provider I/O. A stale
 		// verification/device flow cannot replace a newer connection or deletion.
 		{alter: "ALTER TABLE service_instances ADD COLUMN hardcover_revision INTEGER NOT NULL DEFAULT 0"},
+		{alter: "ALTER TABLE discord_availability ADD COLUMN observed_key TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {
@@ -1277,16 +1323,14 @@ func Open(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("clear legacy agent-run cost estimates: %w", err)
 	}
 
-	// Chaptarr, Lidarr, and the media servers (Jellyfin, Emby, Plex) have no
-	// global default — instances are granted per user — but older versions let
-	// the flag be set. Zero any legacy rows so the admin/AI fallback
-	// (GetDefault) resolves purely by sort order. Runs every boot; idempotent
-	// and the table is tiny.
-	if _, err := db.Exec(
-		"UPDATE service_instances SET is_default = 0 WHERE service_type IN ('chaptarr', 'lidarr', 'jellyfin', 'emby', 'plex', 'audiobookshelf') AND is_default = 1",
-	); err != nil {
+	if err := migrateInstanceAssignments(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("clear grant-only default flags: %w", err)
+		return nil, fmt.Errorf("migrate instance assignments: %w", err)
+	}
+	// Media servers retain their explicit eligibility model.
+	if _, err := db.Exec("UPDATE service_instances SET is_default=0 WHERE service_type IN ('jellyfin','emby','plex','audiobookshelf')"); err != nil {
+		db.Close()
+		return nil, err
 	}
 
 	// Retire unresolved Open Library deliveries without approving, deleting,
@@ -1410,8 +1454,49 @@ func Open(dbPath string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := migrateDiscordEvents(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate Discord event receipts: %w", err)
+	}
+
+	if err := migrateRequesterTagRecipients(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate requester tag recipients: %w", err)
+	}
 
 	return db, nil
+}
+
+func migrateDiscordEvents(db *sql.DB) error {
+	var exists int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('discord_notifications') WHERE name='event_key'`).Scan(&exists); err != nil || exists != 0 {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec(`
+	ALTER TABLE discord_notifications RENAME TO discord_notifications_legacy;
+	CREATE TABLE discord_notifications (
+	    id INTEGER PRIMARY KEY AUTOINCREMENT,
+	    request_id INTEGER REFERENCES request_log(id) ON DELETE CASCADE,
+	    event_key TEXT NOT NULL UNIQUE,
+	    revision INTEGER NOT NULL, payload TEXT NOT NULL,
+	    status TEXT NOT NULL DEFAULT 'pending', detail TEXT NOT NULL DEFAULT 'Waiting to send.',
+	    attempts INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+	    next_attempt_at INTEGER NOT NULL DEFAULT 0
+	);
+	INSERT INTO discord_notifications(id,request_id,event_key,revision,payload,status,detail,attempts,created_at,updated_at,next_attempt_at)
+	SELECT id,request_id,'created:' || request_id,revision,payload,status,detail,attempts,created_at,updated_at,next_attempt_at FROM discord_notifications_legacy;
+	DROP TABLE discord_notifications_legacy;
+	CREATE INDEX discord_notifications_due ON discord_notifications(status,next_attempt_at);
+	`)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // backfillLegacyPersonalCodex runs only when the shared-AI grant column is
@@ -1723,4 +1808,81 @@ func repairAutoIssueDedupe(db *sql.DB) error {
 		return fmt.Errorf("commit auto-issue dedupe repair: %w", err)
 	}
 	return nil
+}
+
+// Preserve receipts from previews that stored one movie/TV job per request.
+// This migration never creates tagging eligibility for historical requests.
+func migrateRequesterTagRecipients(db *sql.DB) error {
+	rows, err := db.Query(`SELECT id FROM request_tag_jobs LIMIT 0`)
+	if err == nil {
+		return rows.Close()
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`ALTER TABLE request_tag_jobs RENAME TO request_tag_jobs_legacy;
+ DROP INDEX request_tag_jobs_due;
+` + requesterTagJobsSQL + `
+ INSERT INTO request_tag_jobs(request_id,user_id,state,attempts,next_attempt_at,lease_until,lease_token,message,tag_label,applied_at,updated_at)
+ SELECT j.request_id,COALESCE(r.user_id,0),j.state,j.attempts,j.next_attempt_at,j.lease_until,j.lease_token,j.message,j.tag_label,j.applied_at,j.updated_at
+ FROM request_tag_jobs_legacy j JOIN request_log r ON r.id=j.request_id;
+ DROP TABLE request_tag_jobs_legacy;`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// migrateInstanceAssignments snapshots only access users already held. The marker
+// and all changes commit together; later restarts never restore revoked grants.
+func migrateInstanceAssignments(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var done bool
+	if err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM settings WHERE key='instance_assignments_v1')").Scan(&done); err != nil {
+		return err
+	}
+	if done {
+		return nil
+	}
+	statements := []string{
+		// These flags were ignored and cleared by every previous startup.
+		`UPDATE service_instances SET is_default=0 WHERE service_type IN ('chaptarr','lidarr')`,
+		// Record the old explicit-default/first-instance winner for each video type.
+		`WITH winners AS MATERIALIZED (SELECT id,service_type,ROW_NUMBER() OVER(PARTITION BY service_type ORDER BY is_default DESC,sort_order,name,id) AS priority FROM service_instances WHERE service_type IN ('radarr','sonarr'))
+ UPDATE service_instances SET is_default=EXISTS(SELECT 1 FROM winners w WHERE w.id=service_instances.id AND w.priority=1) WHERE service_type IN ('radarr','sonarr')`,
+		`INSERT OR IGNORE INTO user_instance_grants(user_id,instance_id)
+   SELECT u.id,si.id FROM users u JOIN service_instances si ON si.service_type IN ('radarr','sonarr') AND si.is_default=1
+   WHERE NOT EXISTS(SELECT 1 FROM user_default_instances d WHERE d.user_id=u.id AND d.service_type=si.service_type)`,
+		`INSERT OR IGNORE INTO user_instance_grants(user_id,instance_id)
+   SELECT d.user_id,d.instance_id FROM user_default_instances d JOIN service_instances si ON si.id=d.instance_id AND si.service_type=d.service_type
+   WHERE si.service_type IN ('radarr','sonarr','chaptarr','lidarr','jellyfin','emby','plex','audiobookshelf')`,
+		// Bind legacy pending rows before a later default or assignment can move them.
+		`WITH targets AS MATERIALIZED (
+ SELECT r.id AS request_id,si.id AS instance_id,ROW_NUMBER() OVER(PARTITION BY r.id ORDER BY
+ EXISTS(SELECT 1 FROM user_default_instances d WHERE d.user_id=r.user_id AND d.instance_id=si.id) DESC,
+ si.is_default DESC,si.sort_order,si.name,si.id) AS priority
+ FROM request_log r JOIN service_instances si ON si.service_type=CASE r.media_type WHEN 'movie' THEN 'radarr' WHEN 'tv' THEN 'sonarr' WHEN 'book' THEN 'chaptarr' WHEN 'music' THEN 'lidarr' END
+ WHERE r.status='pending' AND COALESCE(r.instance_id,'')=''
+ AND NOT EXISTS(SELECT 1 FROM user_default_instances d WHERE d.user_id=r.user_id AND d.service_type=si.service_type
+ AND NOT EXISTS(SELECT 1 FROM service_instances target WHERE target.id=d.instance_id AND target.service_type=d.service_type))
+ AND (
+ EXISTS(SELECT 1 FROM user_instance_grants g WHERE g.user_id=r.user_id AND g.instance_id=si.id)
+ OR EXISTS(SELECT 1 FROM users u WHERE u.id=r.user_id AND u.role='admin')))
+ UPDATE request_log SET instance_id=(SELECT t.instance_id FROM targets t WHERE t.request_id=request_log.id AND t.priority=1)
+ WHERE status='pending' AND COALESCE(instance_id,'')=''`,
+		`UPDATE request_dispatch SET state='attention',code='access_unavailable',message='This request has no verified destination. Close it and submit a new request to an assigned instance.'
+   WHERE state NOT IN ('complete','cancelled') AND request_id IN (SELECT id FROM request_log WHERE status='pending' AND COALESCE(instance_id,'')='')`,
+		`INSERT INTO settings(key,value) VALUES('instance_assignments_v1','true')`,
+	}
+	for _, stmt := range statements {
+		if _, err = tx.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }

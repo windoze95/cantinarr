@@ -24,6 +24,7 @@ import '../../../core/widgets/shimmer_border.dart';
 import '../../ai_assistant/logic/ai_chat_provider.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
+import '../../discover/logic/cover_4k_badges_provider.dart';
 import '../../discover/logic/search_library_status.dart';
 import '../../discover/ui/book_search_results_view.dart';
 import '../../discover/ui/music_search_results_view.dart';
@@ -107,9 +108,9 @@ class _AppShellState extends ConsumerState<AppShell>
   SearchMode _prevMode = SearchMode.search;
   bool? _prevReduceMotion;
 
-  /// Whether the drawer's "Needs attention" row is showing its queues.
-  /// Deliberately not persisted: the group is a peek, so a reopened drawer
-  /// starts collapsed again and the navigation stays one screen of modules.
+  /// Whether "Needs attention" is showing its queues. Desktop navigation
+  /// preserves this state; closing the mobile drawer resets it so reopening
+  /// the drawer starts with the module list.
   bool _attentionExpanded = false;
 
   @override
@@ -574,11 +575,13 @@ class _AppShellState extends ConsumerState<AppShell>
         plexInvitesWaiting;
     final showSearchResults = searchState.searchMode == SearchMode.search ||
         searchState.searchMode == SearchMode.aiReady;
+    final show4K = ref.watch(cover4KBadgesProvider);
     final libraryStatus = searchState.isSearching && showSearchResults
         ? buildSearchLibraryStatus(
             searchResults: searchState.searchResults,
             movies: _radarrNotifier?.state.movies ?? const [],
             series: _sonarrNotifier?.state.series ?? const [],
+            show4K: show4K,
           )
         : const <(MediaType, int), LibraryStatus>{};
 
@@ -1137,6 +1140,7 @@ class _AppShellState extends ConsumerState<AppShell>
     if (path.startsWith('/browse/')) return 'Browse';
     if (path.startsWith('/detail/')) return 'Media details';
     if (path.startsWith('/settings')) return 'Settings';
+    if (path == '/approvals/history') return 'Request history';
     if (path.startsWith('/approvals')) return 'Approvals';
     if (path.startsWith('/issues')) return 'Issues';
     if (path.startsWith('/agent-')) return 'Agent workspace';
@@ -1219,6 +1223,7 @@ class _AppShellState extends ConsumerState<AppShell>
           semanticsIdentifier: 'nav-action-agent-fixes',
           count: pendingAgentActions,
           route: '/agent-actions',
+          detailRoutePrefix: '/agent-runs',
         ),
       if (showProfileApprovals)
         _AttentionEntry(
@@ -1484,13 +1489,12 @@ class _AppShellState extends ConsumerState<AppShell>
                                     title: entry.title,
                                     semanticsIdentifier:
                                         entry.semanticsIdentifier,
+                                    selected:
+                                        entry.matchesPath(widget.currentPath),
                                     badgeCount: entry.count,
                                     onTap: () {
-                                      setState(
-                                        () => _attentionExpanded = false,
-                                      );
                                       if (isOverlay) Navigator.pop(context);
-                                      context.push(entry.route);
+                                      _pushMenuRoute(context, entry.route);
                                     },
                                   ),
                                 ),
@@ -1514,7 +1518,7 @@ class _AppShellState extends ConsumerState<AppShell>
               semanticsIdentifier: 'nav-action-ai-assistant',
               onTap: () {
                 if (isOverlay) Navigator.pop(context);
-                context.push('/assistant');
+                _pushMenuRoute(context, '/assistant');
               },
             ),
           if (mediaAccessGuideVisible)
@@ -1524,7 +1528,7 @@ class _AppShellState extends ConsumerState<AppShell>
               semanticsIdentifier: 'nav-action-media-servers',
               onTap: () {
                 if (isOverlay) Navigator.pop(context);
-                context.push('/media-servers');
+                _pushMenuRoute(context, '/media-servers');
               },
             ),
           _DrawerItem(
@@ -1533,7 +1537,7 @@ class _AppShellState extends ConsumerState<AppShell>
             semanticsIdentifier: 'nav-action-settings',
             onTap: () {
               if (isOverlay) Navigator.pop(context);
-              context.push('/settings');
+              _pushMenuRoute(context, '/settings');
             },
           ),
           const SizedBox(height: 8),
@@ -1609,6 +1613,15 @@ class _AppShellState extends ConsumerState<AppShell>
         .id;
   }
 
+  void _pushMenuRoute(BuildContext context, String path) {
+    final router = GoRouter.of(context);
+    // Read the router instead of currentPath, which can lag behind rapid taps
+    // until the shell rebuilds. Compare exact paths so a detail page can still
+    // open its parent menu destination.
+    if (router.state.uri.path == path) return;
+    router.push(path);
+  }
+
   void _navigateToModule(
     BuildContext context,
     AppModule module, {
@@ -1653,7 +1666,7 @@ class _AppShellState extends ConsumerState<AppShell>
       case ModuleType.tdarr:
         context.go('/tdarr/activity');
       case ModuleType.assistant:
-        context.push('/assistant');
+        _pushMenuRoute(context, '/assistant');
     }
   }
 }
@@ -1800,6 +1813,7 @@ class _AttentionEntry {
     required this.semanticsIdentifier,
     required this.count,
     required this.route,
+    this.detailRoutePrefix,
   });
 
   final IconData icon;
@@ -1809,6 +1823,14 @@ class _AttentionEntry {
   /// How many items are waiting in this queue; 0 renders no badge.
   final int count;
   final String route;
+
+  /// Detail pages that live outside the queue's own route.
+  final String? detailRoutePrefix;
+
+  bool matchesPath(String path) =>
+      path == route ||
+      path.startsWith('$route/') ||
+      (detailRoutePrefix != null && path.startsWith('$detailRoutePrefix/'));
 }
 
 /// A page entry nested under the active module in the desktop sidebar —

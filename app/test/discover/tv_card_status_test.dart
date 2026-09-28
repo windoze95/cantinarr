@@ -169,6 +169,46 @@ void main() {
     expect(h.adapter.statusReads.length, expectedReads);
   });
 
+  test('4K is asked for only while an admin has badges on; switching refetches', () async {
+    final h = await _harness();
+    final sub = h.container.listen(tvCardStatusProvider(299939), (_, __) {});
+    addTearDown(sub.close);
+    h.adapter.statuses[299939] = 'available';
+    h.adapter.fourK.add(299939);
+    final off = await h.container.read(tvCardStatusProvider(299939).future);
+    expect(off?.label, 'Available');
+    expect(off?.is4K, isFalse);
+    expect(h.adapter.statusReads.single.queryParameters.containsKey('include_4k'), isFalse);
+
+    // An admin turns 4K badges on; the server's config says so.
+    h.auth.switchTo(_state.copyWith(
+        connection: _state.connection!.copyWith(cover4KBadges: true)));
+    await h.container.pump();
+    final on = await h.container.read(tvCardStatusProvider(299939).future);
+    expect(on?.label, 'Available');
+    expect(on?.is4K, isTrue);
+    expect(h.adapter.statusReads, hasLength(2));
+    expect(h.adapter.statusReads.last.queryParameters['include_4k'], isTrue);
+
+    // A server that says nothing about 4K never gets a claim made for it.
+    h.adapter.fourK.clear();
+    h.container.read(libraryRefreshTickProvider.notifier).state++;
+    expect((await h.container.read(tvCardStatusProvider(299939).future))?.is4K, isFalse);
+  });
+
+  testWidgets('a whole show in 4K carries the tag on its row card', (tester) async {
+    final h = await _harness(cover4K: true);
+    h.adapter.statuses[299939] = 'available';
+    h.adapter.fourK.add(299939);
+    await _pump(tester, h, _surface('row'));
+    await tester.pumpAndSettle();
+    expect(find.text('Available'), findsOneWidget);
+    expect(find.text('4K'), findsOneWidget);
+    expect(h.adapter.statusReads.last.queryParameters['include_4k'], isTrue);
+    await tester.pumpWidget(const SizedBox.shrink());
+    h.container.dispose();
+  });
+
   test('a session switch cancels and discards an in-flight result', () async {
     final h = await _harness();
     final cache = h.container.read(tvCardStatusCacheProvider);
@@ -294,9 +334,10 @@ Widget _surface(String surface) => switch (surface) {
 typedef _Harness = ({ProviderContainer container, _Adapter adapter,
   _Auth auth, StreamController<WsEvent> events});
 
-Future<_Harness> _harness({bool capable = true}) async {
+Future<_Harness> _harness({bool capable = true, bool cover4K = false}) async {
   final adapter = _Adapter();
-  final auth = _Auth(_state.copyWith(connection: _state.connection!.copyWith(tvMatchCorrections: capable)));
+  final auth = _Auth(_state.copyWith(connection: _state.connection!.copyWith(
+    tvMatchCorrections: capable, cover4KBadges: cover4K)));
   final events = StreamController<WsEvent>.broadcast();
   final container = ProviderContainer(overrides: [
     authProvider.overrideWith(() => auth),
@@ -340,6 +381,7 @@ class _Adapter implements HttpClientAdapter {
   DateTime Function() now = DateTime.now;
   final statusReads = <RequestOptions>[];
   final statuses = <int, String>{};
+  final fourK = <int>{};
   bool unknown = false;
   @override
   Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? requestStream,
@@ -353,6 +395,8 @@ class _Adapter implements HttpClientAdapter {
           'season_map': {'1': _ids.indexOf(id) + 1}},
         'seasons': [{'season_number': 1, 'status': statuses[id] ?? 'unavailable',
           'episode_file_count': 2, 'episode_count': 8}],
+        if (options.queryParameters['include_4k'] == true && fourK.contains(id))
+          'is_4k': true,
       };
     } else if (options.path == '/api/discover/tv/top-rated') {
       body = {'page': 1, 'total_pages': 1, 'total_results': 1,

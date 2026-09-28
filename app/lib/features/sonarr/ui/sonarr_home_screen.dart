@@ -1,16 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/storage/library_sort_preferences.dart';
+import '../../../core/widgets/library_sort_menu.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/storage/library_view_preferences.dart';
 import '../../../core/widgets/error_banner.dart';
+import '../../../core/widgets/library_actions.dart';
 import '../../../core/widgets/library_command_header.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import '../logic/sonarr_series_provider.dart';
 import 'series_actions.dart';
-import 'sonarr_releases_screen.dart';
 import 'sonarr_series_detail_screen.dart';
 import 'sonarr_series_list.dart';
 
@@ -30,6 +33,10 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
   @override
   void initState() {
     super.initState();
+    // Listen before the first frame so preference restoration cannot race the
+    // instance notifier's creation. Its initial selection is also read below.
+    ref.listenManual(librarySortProvider('sonarr'), (_, selection) =>
+        _notifier?.sorting.setSelection(selection));
     WidgetsBinding.instance.addPostFrameCallback((_) => _initNotifier());
   }
 
@@ -43,33 +50,24 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
       backendDio: backendDio,
       instanceId: activeInstance.id,
     );
+    _notifier?.dispose();
     _notifier = SonarrSeriesNotifier(service);
+    _notifier!.sorting.setSelection(ref.read(librarySortProvider('sonarr')));
     _notifier!.loadSeries();
     setState(() {});
   }
 
   @override
   void dispose() {
+    _notifier?.dispose();
     _searchController.dispose();
     super.dispose();
-  }
-
-  Future<void> _triggerAutomaticSearch(int seriesId) async {
-    try {
-      await _notifier!.searchForSeries(seriesId);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Series search started')));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to start search: $e')));
-    }
   }
 
   Future<void> _openSeries(SonarrSeries show) async {
     final instanceId = ref.read(instanceProvider).activeSonarrInstance?.id;
     if (instanceId == null) return;
+    final notifier = _notifier;
     await Navigator.of(context, rootNavigator: true).push(
       AmbientPageRoute(
         builder: (_) => SonarrSeriesDetailScreen(
@@ -79,13 +77,19 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
       ),
     );
     // The detail screen can edit or remove the series; refresh on return.
-    _notifier?.loadSeries();
+    if (mounted && identical(_notifier, notifier)) notifier?.loadSeries();
   }
 
-  /// Long-press menu: search monitored / edit / refresh / remove / monitor.
-  void _showSeriesActions(SonarrSeries show) {
+  /// Tile and detail menus run the same actions.
+  void _showSeriesActions(SonarrSeries show, LibraryAction action) {
     final instanceId = ref.read(instanceProvider).activeSonarrInstance?.id;
     if (instanceId == null) return;
+    final notifier = _notifier;
+    void reload() {
+      if (mounted && identical(_notifier, notifier)) {
+        notifier?.loadSeries();
+      }
+    }
     showSeriesActions(
       context,
       service: SonarrApiService(
@@ -94,58 +98,9 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
       ),
       instanceId: instanceId,
       series: show,
-      onChanged: () => _notifier?.loadSeries(),
-      onRemoved: () => _notifier?.loadSeries(),
-    );
-  }
-
-  /// Sonarr's interactive search is per-season, so pick a season first.
-  Future<void> _openInteractiveSearch(SonarrSeries show) async {
-    final instanceId = ref.read(instanceProvider).activeSonarrInstance?.id;
-    if (instanceId == null) return;
-
-    final seasons = [...show.seasons]
-      ..sort((a, b) => a.seasonNumber.compareTo(b.seasonNumber));
-    if (seasons.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('No seasons available')));
-      return;
-    }
-
-    final seasonNumber = await showDialog<int>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        backgroundColor: AppTheme.surface,
-        title: const Text('Select Season'),
-        children: seasons
-            .map((s) => SimpleDialogOption(
-                  onPressed: () => Navigator.pop(ctx, s.seasonNumber),
-                  child: Text(
-                    s.seasonNumber == 0
-                        ? 'Specials'
-                        : 'Season ${s.seasonNumber}',
-                    style: TextStyle(
-                      color: show.monitored && s.monitored
-                          ? AppTheme.textPrimary
-                          : AppTheme.textSecondary,
-                      fontSize: 15,
-                    ),
-                  ),
-                ))
-            .toList(),
-      ),
-    );
-    if (seasonNumber == null || !mounted) return;
-
-    Navigator.of(context, rootNavigator: true).push(
-      AmbientPageRoute(
-        builder: (_) => SonarrReleasesScreen(
-          instanceId: instanceId,
-          seriesId: show.id,
-          seasonNumber: seasonNumber,
-          seriesTitle: show.title,
-        ),
-      ),
+      selectedAction: action,
+      onChanged: reload,
+      onRemoved: reload,
     );
   }
 
@@ -160,6 +115,10 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
           child: CircularProgressIndicator(color: AppTheme.accent));
     }
 
+    final sort = ref.watch(librarySortProvider('sonarr'));
+    final viewMode = ref.watch(libraryViewModeProvider('sonarr'));
+    final instanceId = ref.watch(instanceProvider).activeSonarrInstance?.id;
+
     return ListenableBuilder(
       listenable: _notifier!,
       builder: (context, _) {
@@ -167,9 +126,15 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
         final instanceName =
             ref.watch(instanceProvider).activeSonarrInstance?.name ?? 'Sonarr';
 
-        return Column(
-          children: [
-            LibraryCommandHeader(
+        return LibraryCommandLayout(
+          key: ValueKey('sonarr-$instanceId'),
+          headerBuilder: (collapsed) => LibraryCommandHeader(
+              collapsed: collapsed,
+              sort: LibrarySortMenu(module: 'sonarr', selection: sort,
+                onSelected: (field) => ref.read(librarySortProvider('sonarr').notifier).select(field)),
+              viewMode: viewMode,
+              onViewModeChanged: (value) => ref
+                  .read(libraryViewModeProvider('sonarr').notifier).set(value),
               title: 'Series library',
               subtitle: '$instanceName  /  Sonarr',
               stats: [
@@ -218,6 +183,10 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
                     .toList(),
               ),
             ),
+          children: [
+            if (_notifier!.sorting.notice != null)
+              ErrorBanner(message: _notifier!.sorting.notice!, maxLines: null,
+                onRetry: _notifier!.sorting.canRetry ? _notifier!.sorting.refresh : null),
             if (state.error != null)
               ErrorBanner(
                 message: state.error!,
@@ -227,19 +196,19 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
               child: state.isLoading && state.series.isEmpty
                   ? const Center(
                       child: CircularProgressIndicator(color: AppTheme.accent))
-                  : RefreshIndicator(
-                      onRefresh: _notifier!.loadSeries,
-                      color: AppTheme.accent,
-                      child: SonarrSeriesList(
-                        series: state.filtered,
-                        onDelete: (id, {bool deleteFiles = false}) => _notifier!
-                            .deleteSeries(id, deleteFiles: deleteFiles),
-                        onSearch: _triggerAutomaticSearch,
-                        onInteractiveSearch: _openInteractiveSearch,
-                        onOpen: _openSeries,
-                        onLongPress: _showSeriesActions,
-                      ),
-                    ),
+                  : state.error != null && state.series.isEmpty
+                      ? const SizedBox.shrink()
+                      : RefreshIndicator(
+                          onRefresh: _notifier!.loadSeries,
+                          color: AppTheme.accent,
+                          child: SonarrSeriesList(
+                            viewMode: viewMode,
+                            scrollKey: 'sonarr-$instanceId-${_notifier!.sorting.effectiveSelection.key}',
+                            series: state.filtered,
+                            onOpen: _openSeries,
+                            onAction: _showSeriesActions,
+                          ),
+                        ),
             ),
           ],
         );

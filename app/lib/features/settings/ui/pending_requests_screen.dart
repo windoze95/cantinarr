@@ -447,7 +447,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
     }
   }
 
-  /// The screen's body: what needs a person, then what needs nothing.
+  /// Approval decisions, followed by saved delivery progress and recovery.
   ///
   /// The two are separate sections rather than one merged list because they are
   /// different kinds of fact. Merging them would put Approve next to a row the
@@ -492,7 +492,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
     if (_waiting.isNotEmpty || _waitingBlind) {
       children.add(const _SectionHeader(
         title: 'Saved requests',
-        caption: 'Being retried automatically. Nothing to approve.',
+        caption: 'Delivery progress and requests that need attention.',
       ));
       if (_waitingBlind) {
         children.add(const Padding(
@@ -517,7 +517,17 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Approvals')),
+      appBar: AppBar(
+        title: const Text('Approvals'),
+        actions: [
+          TextButton.icon(
+            onPressed: () => context.push('/approvals/history'),
+            icon: const Icon(Icons.history),
+            label: const Text('History'),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
       body: CenteredContent(
         child: Column(
           children: [
@@ -664,24 +674,25 @@ class _WaitingTile extends StatelessWidget {
             style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
           const SizedBox(height: 4),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Icon(Icons.schedule_rounded,
-                  size: 15, color: AppTheme.requested),
-              const SizedBox(width: 5),
-              Expanded(
-                child: Text(
-                  item.waitDescription ?? 'Waiting for the library',
-                  style: const TextStyle(
-                    color: AppTheme.requested,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
+          if (item.delivery.isEmpty)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.schedule_rounded,
+                    size: 15, color: AppTheme.requested),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Text(
+                    item.waitDescription ?? 'Waiting for the library',
+                    style: const TextStyle(
+                      color: AppTheme.requested,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
           if (item.delivery.isNotEmpty)
             CatalogRequestPanel(
                 mediaType: item.mediaType,

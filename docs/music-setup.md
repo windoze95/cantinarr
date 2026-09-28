@@ -2,7 +2,7 @@
 
 Music works like books, minus the part that makes books complicated:
 
-- **Lidarr has no global default instance.** A per-user pin or an explicit access grant authorizes the instance, so a requester without either doesn't see the Music tab at all — exactly the Chaptarr rule.
+- **Lidarr uses explicit library assignments.** Requesters need an assignment to see Music. A default chooses where requests go; it never grants access.
 - **One album is one record.** There is no eBook/Audiobook-style format split, so a request is a single tap and a single status.
 - **A single can finish downloading between two polls.** Instant updates aren't a nicety here; they're what makes the "ready to play" notification reliable.
 
@@ -12,7 +12,7 @@ This page is the whole path, in order.
 
 Cantinarr manages an existing Lidarr instance — it doesn't deploy one. What it needs from you:
 
-- A URL the **Cantinarr server** can reach. Clients never dial instance URLs, so cluster-internal names are fine and preferred; see the [instance URL guidance](../README.md#configuration).
+- A URL the **Cantinarr server** can reach. Clients never dial instance URLs, so cluster-internal names are fine and preferred; see the [instance URL guidance](configuration.md#instance-addresses).
 - A Lidarr API key.
 - Lidarr itself already working: a root folder, an indexer, a download client, and grabs that actually complete.
 
@@ -26,11 +26,15 @@ Lidarr speaks the Servarr `/api/v1` API. Enter just the base URL; Cantinarr appe
 
 ## 3. Grant access per user
 
-This is the step people miss, and it works exactly like books. Unlike Radarr and Sonarr, Lidarr has no global default — pinning a user or granting an instance gives that user access to music.
+Open the saved instance and choose **Manage users**, filter the directory, select the people to assign, and choose **Add selected**. **Select all matching** includes every account matching the current filters, including administrators. **Remove selected** revokes only those assignments and clears any preference pointing to this instance. Administrators can browse all automation instances through the navigation pickers. Their personal requests and Music discovery page use the instances assigned here. New installations show every discovery option to admins until the first instance is configured.
 
-Pin from either side: the instance editor, or **Settings → Users** for one person. Remove both the pin and any explicit grants to revoke access. Admins see Lidarr without a grant; everyone else needs one, and until they have it `services.lidarr` stays `false` and the Music tab stays hidden.
+**Automatically add new users** starts on for new instances. It assigns this instance when Cantinarr creates a regular account through an invitation, import, OIDC, or Plex sign-in. Administrator accounts are excluded. It does not assign existing users or restore removed access on later sign-ins. You can enable it on several instances. Existing instances retain their access on upgrade and start with automatic assignment off.
 
-Running more than one Lidarr instance is fine — pin different households or different libraries to different instances.
+**Default Instance** starts on when this service has no global default. A user can request into any assigned instance. Without an explicit selection, Cantinarr uses their assigned personal preference, then an assigned global default, then their first assigned instance in configured order. No assignment means no Music library access. Defaults never grant access, and pending requests keep their saved destination.
+
+With several assigned instances, choosing **Request** opens a destination confirmation with the user’s default selected. The saved request and its status stay tied to the confirmed instance. Administrators with no personal assignments must add one before using this request flow.
+
+For one person, edit their assigned libraries and preferred destination under **Settings > Users**. This applies to kids accounts too.
 
 ## 4. Check instant updates
 
@@ -90,3 +94,9 @@ The opening Popular Albums and New Releases pages start loading when you enter D
 External metadata is cached for one hour for feeds, six hours for genre searches, and 24 hours for album details and covers. A failed row offers Retry; a failed refresh keeps the previous results with a notice. Library availability still comes from the existing live music-status reads and instant updates. Requesting a discovered album follows the same direct-request or approval path as search, including durable delivery retries and saved requests that need attention.
 
 Cantinarr must be able to reach ListenBrainz, MusicBrainz, Cover Art Archive, and its Internet Archive artwork hosts. These calls honor the server's outbound proxy. The TMDB/Trakt source and English-only settings apply to movies and TV. Older callers retain the album/EP search default unless they send `include_singles=true`; existing native and catalog-reference request payloads remain accepted.
+
+## Requester tags
+
+Enable **Tag requests with requester** in the Lidarr instance editor to tag new requests after successful delivery. It is off by default. Lidarr stores these tags on the artist, so they also apply to that artist's other albums. Existing tags remain. **Approvals > History** shows the result and offers **Retry tag** for failures without requesting the media again. Disabling tagging cancels unfinished jobs and leaves applied tags. Enabling it does not tag old history.
+
+Several requesters can tag the same artist, whether they request the same album or different albums. Each gets a separate tag; **Approvals > History** keeps the album-specific attribution. Tagging waits for Lidarr's artist refresh to finish so that its background update does not overwrite the new tags.

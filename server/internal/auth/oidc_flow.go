@@ -456,6 +456,7 @@ func (s *Service) commitOIDCIdentity(a oidcAttempt, p oidcPrincipal) (*TokenResp
 	if err = oidcAttemptInTransaction(tx, a); err != nil {
 		return nil, err
 	}
+	var added []string
 	var linked int64
 	err = tx.QueryRow("SELECT user_id FROM oidc_identities WHERE issuer=? AND subject=?", a.Config.Issuer, p.Subject).Scan(&linked)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -520,7 +521,14 @@ func (s *Service) commitOIDCIdentity(a oidcAttempt, p oidcPrincipal) (*TokenResp
 					return nil, ErrAuthUnavailable
 				}
 				if n == 1 {
-					intended, _ = result.LastInsertId()
+					intended, e = result.LastInsertId()
+					if e != nil {
+						return nil, ErrAuthUnavailable
+					}
+					added, e = autoAssignUser(tx, intended)
+					if e != nil {
+						return nil, ErrAuthUnavailable
+					}
 					break
 				}
 			}
@@ -557,6 +565,7 @@ func (s *Service) commitOIDCIdentity(a oidcAttempt, p oidcPrincipal) (*TokenResp
 	if err = tx.Commit(); err != nil {
 		return nil, ErrAuthUnavailable
 	}
+	s.notifyAutoAssignments(user.ID, added)
 	response.User.PlexInvitedAt = s.plexInvitedAt(user.ID)
 	return response, nil
 }

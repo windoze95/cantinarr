@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/album_ownership.dart';
 import '../data/request_service.dart';
+import 'request_library_picker.dart';
+import 'request_options_sheet.dart';
 
 /// One stable action carries both saved intent and independently read live
 /// availability. A failed or lagging refresh never erases an accepted receipt.
@@ -10,6 +12,9 @@ class AlbumRequestPanel extends StatefulWidget {
   final String foreignId;
   final String title;
   final String? instanceId;
+  final List<LibraryChoice> requestLibraries;
+  final String? defaultRequestLibraryId;
+  final bool chooseRequestLibrary;
   final String? searchTerm;
   final RequestService service;
   final OwnedAlbum? ownership;
@@ -21,6 +26,9 @@ class AlbumRequestPanel extends StatefulWidget {
       required this.foreignId,
       required this.title,
       this.instanceId,
+      this.requestLibraries = const [],
+      this.defaultRequestLibraryId,
+      this.chooseRequestLibrary = false,
       this.searchTerm,
       required this.service,
       this.ownership,
@@ -32,6 +40,10 @@ class AlbumRequestPanel extends StatefulWidget {
 }
 
 class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
+  String? _requestLibraryId;
+  String? get _instanceId => _requestLibraryId ?? widget.instanceId;
+  bool get _sameLibrary => _instanceId == widget.instanceId;
+
   Map<String, dynamic>? _receipt;
   MusicRequestStatusDetail? _live;
   RequestStatus? _submitted;
@@ -65,6 +77,7 @@ class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
     if (oldWidget.foreignId != widget.foreignId ||
         oldWidget.instanceId != widget.instanceId ||
         oldWidget.service != widget.service) {
+      _requestLibraryId = null;
       _generation++;
       _receipt = null;
       _live = null;
@@ -94,7 +107,7 @@ class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
   void _follow(String? id) {
     if (id == null || id.isEmpty || id == _canonical) return;
     _canonical = id;
-    widget.onCanonicalForeignId?.call(id);
+    if (_sameLibrary) widget.onCanonicalForeignId?.call(id);
   }
 
   Future<void> _saved() async {
@@ -103,7 +116,7 @@ class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
     try {
       final data = await widget.service
           .musicDeliveryStatus(widget.foreignId,
-              instanceId: widget.instanceId, requestId: _requestId)
+              instanceId: _instanceId, requestId: _requestId)
           .timeout(const Duration(seconds: 10));
       if (!mounted || generation != _generation || read != _savedRead) return;
       final previous = _requestId ?? 0;
@@ -139,7 +152,7 @@ class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
     final read = ++_liveRead;
     final detail = await widget.service
         .checkMusicStatusDetail(_canonical ?? widget.foreignId,
-            instanceId: widget.instanceId)
+            instanceId: _instanceId)
         .timeout(const Duration(seconds: 10),
             onTimeout: () => const MusicRequestStatusDetail(isKnown: false));
     if (!mounted || generation != _generation || read != _liveRead) return;
@@ -148,7 +161,7 @@ class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
   }
 
   String get _label {
-    final owned = widget.ownership;
+    final owned = _sameLibrary ? widget.ownership : null;
     if (_live?.isKnown == true && _live?.status == RequestStatus.available) {
       return 'Available';
     }
@@ -184,7 +197,7 @@ class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
 
   Future<void> _perform({String? action, int? requestId}) async {
     if (_busy) return;
-    final generation = _generation;
+    var generation = _generation;
     _savedRead++;
     setState(() {
       _busy = true;
@@ -194,10 +207,26 @@ class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
       Map<String, dynamic>? receipt;
       RequestStatus? status;
       if (action == null) {
+        if (widget.chooseRequestLibrary) {
+          final target = await confirmRequestLibrary(context,
+              libraries: widget.requestLibraries,
+              defaultLibraryId: widget.defaultRequestLibraryId);
+          if (!mounted || generation != _generation || target == null) return;
+          if (target != _instanceId) {
+            generation = ++_generation;
+            setState(() {
+              _requestLibraryId = target;
+              _receipt = null;
+              _live = null;
+              _canonical = null;
+              _submitted = null;
+            });
+          }
+        }
         final submitted = await widget.service.requestAlbum(
             foreignId: _canonical ?? widget.foreignId,
             title: widget.title,
-            instanceId: widget.instanceId,
+            instanceId: _instanceId,
             searchTerm: widget.searchTerm);
         receipt = submitted?.receipt;
         status = submitted?.status;
@@ -239,6 +268,11 @@ class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
     final label = _label;
     final available = label == 'Available';
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      if (widget.chooseRequestLibrary && _requestLibraryId != null)
+        Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+                'Request library: ${requestLibraryName(widget.requestLibraries, _instanceId)}')),
       SizedBox(
           height: 54,
           child: FilledButton.icon(

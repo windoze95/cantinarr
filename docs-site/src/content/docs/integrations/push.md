@@ -56,7 +56,9 @@ If the app has been reinstalled or restored, sign in and check notification perm
 
 ## Privacy and network routing
 
-The configured gateway relays notification information and device delivery tokens to the platform push service. This is separate from ordinary browsing of your private server.
+The configured gateway receives push tokens, device identifiers, server-local user identifiers, and notification titles, bodies, and navigation data. It delivers through Apple's APNs on iOS or Google's FCM on Android. The community relay stores device registrations and delivery records that include notification titles. Its operator can read notification content; HTTPS protects transport, but this is not end-to-end encryption. See the [privacy policy](/reference/generated/privacy/) before choosing the community relay.
+
+Turning off delivery does not itself delete a gateway registration. Signing out attempts to unregister the device and can fail to reach an offline server or gateway. Contact your server administrator about a remaining registration.
 
 Gateway traffic uses the server's external transport. A self-hosted gateway on your LAN still belongs to that class. If it must bypass a proxy, use the standard proxy environment with an appropriate `NO_PROXY` entry rather than an in-app proxy that applies to all external traffic.
 

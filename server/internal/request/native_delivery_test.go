@@ -101,7 +101,7 @@ func TestRevokedDuringNativeLookupPreventsEveryWrite(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/api/v1/book" {
-			_, err := s.db.Exec(`DELETE FROM user_default_instances WHERE user_id=?`, uid)
+			_, err := s.db.Exec(`DELETE FROM user_instance_grants WHERE user_id=?`, uid)
 			if err != nil {
 				t.Error(err)
 			}

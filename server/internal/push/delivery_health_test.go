@@ -119,6 +119,7 @@ func TestDeliverySuccessAlwaysReportsHealth(t *testing.T) {
 	}
 	sink := &fakeHealthSink{}
 	mgr, _ := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 	n.SetDeliveryHealthSink(sink)
 

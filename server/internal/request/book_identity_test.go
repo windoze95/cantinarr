@@ -138,6 +138,8 @@ func TestVerifiedBookIdentityAddsOnlyTheMissingLibraryFormat(t *testing.T) {
 	var added []chaptarr.AddBookRequest
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			fmt.Fprint(w, `[{"id":4,"name":"Default"}]`)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
 			fmt.Fprint(w, `[{"id":1,"authorId":7,"title":"Ahsoka","foreignBookId":"hc:501","goodreadsWorkId":"gr:101","mediaType":"ebook","monitored":true,"statistics":{"bookFileCount":1}}]`)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":

@@ -93,9 +93,8 @@ for source, (path, title, description) in DIRECT.items():
     body = re.sub(r'^# [^\n]+\n', '', (ROOT / source).read_text(), count=1).strip()
     write(path, title, description, body, source)
 
-readme = (ROOT / 'README.md').read_text()
-config = section(readme, '## Configuration')
-environment = config.split('Optional server env vars for deployment tuning:', 1)[1].split('Source image builds also accept', 1)[0]
+config = (ROOT / 'docs/configuration.md').read_text()
+environment = section(config, '## Environment variables')
 write('reference/generated/environment', 'Environment variables',
       'Deployment settings, their defaults, and which address each part of Cantinarr needs.',
       'Most settings belong in the app. These variables configure the server process. '
@@ -110,7 +109,7 @@ write('reference/generated/environment', 'Environment variables',
       'The database lives at `/config/cantinarr.db`. There is no supported `CANTINARR_DB_PATH` setting, '
       'and current startup does not read `CANTINARR_ADMIN_PASSWORD`; create the first administrator in the setup screen. '
       'Preserve the whole `/config` directory and its encryption key. '
-      'See [backups](/install/backups/) and [networking](/install/networking/) for worked examples.', 'README.md', 1)
+      'See [backups](/install/backups/) and [networking](/install/networking/) for worked examples.', 'docs/configuration.md', 1)
 
 server = (ROOT / 'server/README.md').read_text()
 api = section(server, '## API Reference')

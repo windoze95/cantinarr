@@ -1,4 +1,6 @@
+import 'package:cantinarr/core/widgets/library_actions.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
+import 'package:cantinarr/core/storage/library_view_preferences.dart';
 import 'package:cantinarr/features/sonarr/data/sonarr_models.dart';
 import 'package:cantinarr/features/sonarr/ui/sonarr_series_list.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +15,7 @@ SonarrSeries _series({
   bool monitored = true,
   int files = 0,
   int count = 0,
+  int sizeOnDisk = 0,
 }) =>
     SonarrSeries(
       id: 1,
@@ -21,21 +24,28 @@ SonarrSeries _series({
       monitored: monitored,
       status: status,
       statistics:
-          SonarrStatistics(episodeFileCount: files, episodeCount: count),
+          SonarrStatistics(episodeFileCount: files, episodeCount: count,
+              sizeOnDisk: sizeOnDisk),
     );
 
 Future<void> _pump(
   WidgetTester tester,
   SonarrSeries show, {
   void Function(int id, {bool deleteFiles})? onDelete,
+  LibraryViewMode viewMode = LibraryViewMode.list,
 }) {
   return tester.pumpWidget(MaterialApp(
     home: Scaffold(
-      body: SonarrSeriesList(
+      body: Builder(builder: (context) => SonarrSeriesList(
         series: [show],
-        onDelete: onDelete ?? (_, {bool deleteFiles = false}) {},
-        onSearch: (_) {},
-      ),
+        viewMode: viewMode,
+        onAction: (item, action) async {
+          if (action != LibraryAction.remove) return;
+          final files = await confirmLibraryRemoval(context,
+              title: item.title, noun: 'series', service: 'Sonarr');
+          if (files != null) onDelete?.call(item.id, deleteFiles: files);
+        },
+      )),
     ),
   ));
 }
@@ -54,6 +64,29 @@ Color? _barColor(WidgetTester tester) {
 }
 
 void main() {
+  testWidgets('list shows disk size without year', (tester) async {
+    await _pump(tester, _series(status: 'ended', files: 2, count: 3,
+        sizeOnDisk: 2 * 1024 * 1024 * 1024));
+
+    expect(find.text('2/3 episodes · 2.0 GB'), findsOneWidget);
+    expect(find.text('2/3'), findsNothing);
+    expect(find.text('2/3 eps'), findsNothing);
+    expect(find.text('2020'), findsNothing);
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
+  });
+
+  testWidgets('grid keeps episode count without status or progress', (tester) async {
+    await _pump(tester, _series(status: 'ended', files: 2, count: 3,
+        sizeOnDisk: 2 * 1024 * 1024 * 1024), viewMode: LibraryViewMode.grid);
+
+    expect(find.text('Ended'), findsNothing);
+    expect(find.text('2/3 episodes'), findsOneWidget);
+    expect(find.text('2/3 eps'), findsNothing);
+    expect(find.text('2020'), findsNothing);
+    expect(find.text('2.0 GB'), findsNothing);
+    expect(find.byType(LinearProgressIndicator), findsNothing);
+  });
+
   testWidgets('caught-up continuing series stays Continuing with an info bar',
       (tester) async {
     await _pump(tester, _series(status: 'continuing', files: 33, count: 33));
@@ -96,7 +129,7 @@ void main() {
 
     await _openRemoveConfirmation(tester);
 
-    expect(find.text('Delete Series'), findsOneWidget);
+    expect(find.text('Remove series'), findsOneWidget);
     expect(find.text('Also delete files from disk'), findsOneWidget);
     final checkbox =
         tester.widget<CheckboxListTile>(find.byType(CheckboxListTile));
@@ -134,14 +167,14 @@ void main() {
     );
 
     await _openRemoveConfirmation(tester);
-    await tester.tap(find.text('Delete'));
+    await tester.tap(find.text('Remove'));
     await tester.pumpAndSettle();
     expect(deletions, [(id: 1, deleteFiles: false)]);
 
     await _openRemoveConfirmation(tester);
     await tester.tap(find.text('Also delete files from disk'));
     await tester.pump();
-    await tester.tap(find.text('Delete'));
+    await tester.tap(find.text('Remove'));
     await tester.pumpAndSettle();
     expect(
       deletions,

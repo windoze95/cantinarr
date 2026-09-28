@@ -84,9 +84,11 @@ import '../features/settings/ui/credentials_screen.dart';
 import '../features/settings/ui/devices_screen.dart';
 import '../features/settings/ui/discovery_settings_screen.dart';
 import '../features/settings/ui/discord_notifications_screen.dart';
+import '../features/settings/ui/discord_preferences_screen.dart';
 import '../features/settings/ui/seerr_api_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
 import '../features/settings/ui/pending_requests_screen.dart';
+import '../features/settings/ui/request_history_screen.dart';
 import '../features/settings/ui/request_settings_screen.dart';
 import '../features/request/ui/tv_matches_screen.dart';
 import '../features/settings/ui/settings_screen.dart';
@@ -225,6 +227,16 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         return state.uri.path == landing ? null : landing;
       }
       final isAdmin = auth?.user?.isAdmin ?? false;
+      final browseType = state.uri.pathSegments.length >= 2 &&
+              state.uri.pathSegments.first == 'browse'
+          ? state.uri.pathSegments[1]
+          : null;
+      if (isAuthenticated &&
+          (auth?.connection?.instanceAssignments ?? false) &&
+          const ['movie', 'tv', 'books', 'music'].contains(browseType) &&
+          !discovery.isVisible(browseType == 'books' ? 'book' : browseType!)) {
+        return landing;
+      }
       if (isAuthenticated && !isAdmin && _isAdminOnlyRoute(state.uri.path)) {
         return landing;
       }
@@ -866,6 +878,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 const AppAmbientBackground(child: PendingRequestsScreen()),
           ),
           GoRoute(
+            path: '/approvals/history',
+            builder: (_, __) =>
+                const AppAmbientBackground(child: RequestHistoryScreen()),
+          ),
+          GoRoute(
             path: '/issues',
             builder: (_, __) =>
                 const AppAmbientBackground(child: IssuesListScreen()),
@@ -927,6 +944,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/discord-notifications',
+            onExit: confirmSettingsExit,
+            builder: (_, __) =>
+                const AppAmbientBackground(child: DiscordPreferencesScreen()),
+          ),
+          GoRoute(
+            path: '/settings/discord-notifications/server',
             onExit: confirmSettingsExit,
             builder: (_, __) =>
                 const AppAmbientBackground(child: DiscordNotificationsScreen()),
@@ -1127,7 +1150,7 @@ bool _isAdminOnlyRoute(String path) {
     '/settings/agent-approval-rules',
     '/settings/request-settings',
     '/settings/tv-matches',
-    '/settings/discord-notifications',
+    '/settings/discord-notifications/server',
     '/settings/seerr-api',
     '/settings/push-notifications/server',
     '/settings/devices',

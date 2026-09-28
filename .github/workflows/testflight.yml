@@ -80,6 +80,7 @@ jobs:
     outputs:
       version: ${{ steps.build_number.outputs.version }}
       build_number: ${{ steps.build_number.outputs.build_number }}
+      uploaded: ${{ steps.upload.outcome == 'success' }}
 
     defaults:
       run:
@@ -216,9 +217,12 @@ jobs:
             --export-options-plist=ios/ExportOptions.plist
 
       - name: Recheck source before upload
-        run: python3 ../.release-policy/scripts/release_control.py current
+        id: publish
+        run: python3 ../.release-policy/scripts/release_control.py current --skip-paused
 
       - name: Upload to TestFlight
+        id: upload
+        if: steps.publish.outputs.enabled == 'true'
         env:
           BUILD_TEST_NOTES: ${{ format('{0} | PR {1} | commit {2}', needs.source.outputs.channel, inputs.preview_pr || 'merged', needs.source.outputs.sha) }}
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
@@ -229,6 +233,8 @@ jobs:
           fastlane beta
 
       - name: Record uploaded build identity
+        id: record
+        if: steps.upload.outcome == 'success'
         working-directory: .
         env:
           BUILD_VERSION: ${{ steps.build_number.outputs.version }}
@@ -236,6 +242,7 @@ jobs:
         run: python3 .release-policy/scripts/release_control.py record --platform ios
 
       - uses: actions/upload-artifact@v4
+        if: steps.record.outcome == 'success'
         with:
           name: ios-release-record-${{ github.run_attempt }}
           path: release.json
@@ -257,7 +264,7 @@ jobs:
   # Apple ingestion fails this job instead of blocking the next merge's build indefinitely.
   distribute:
     needs: [source, deploy]
-    if: needs.source.outputs.channel != 'preview'
+    if: needs.deploy.outputs.uploaded == 'true' && needs.source.outputs.channel != 'preview'
     runs-on: ubuntu-latest
     timeout-minutes: 50
 
@@ -280,9 +287,11 @@ jobs:
         run: pip install --quiet "pyjwt[crypto]>=2.8"
 
       - name: Recheck public beta ownership
-        run: python3 scripts/release_control.py current
+        id: publish
+        run: python3 scripts/release_control.py current --skip-paused
 
       - name: Distribute to external testers
+        if: steps.publish.outputs.enabled == 'true'
         env:
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}

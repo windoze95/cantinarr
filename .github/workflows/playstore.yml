@@ -217,11 +217,13 @@ jobs:
           if-no-files-found: error
 
       - name: Recheck source before upload
+        id: publish
         if: github.event_name != 'pull_request'
-        run: python3 ../.release-policy/scripts/release_control.py current
+        run: python3 ../.release-policy/scripts/release_control.py current --skip-paused
 
       - name: Upload to Play Store
-        if: github.event_name != 'pull_request' && steps.play.outputs.available == 'true'
+        id: upload
+        if: steps.publish.outputs.enabled == 'true' && steps.play.outputs.available == 'true'
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ github.event_name != 'pull_request' && secrets.PLAY_SERVICE_ACCOUNT_JSON || '' }}
           PLAY_TRACK: ${{ needs.source.outputs.channel == 'preview' && 'internal' || needs.source.outputs.channel == 'candidate' && 'both' || inputs.track || 'both' }}
@@ -237,7 +239,8 @@ jobs:
           fastlane beta
 
       - name: Record uploaded build identity
-        if: github.event_name != 'pull_request' && steps.play.outputs.available == 'true'
+        id: record
+        if: steps.upload.outcome == 'success'
         working-directory: .
         env:
           BUILD_VERSION: ${{ steps.build_number.outputs.version }}
@@ -245,7 +248,7 @@ jobs:
         run: python3 .release-policy/scripts/release_control.py record --platform android
 
       - uses: actions/upload-artifact@v4
-        if: github.event_name != 'pull_request' && steps.play.outputs.available == 'true'
+        if: steps.record.outcome == 'success'
         with:
           name: android-release-record-${{ github.run_attempt }}
           path: release.json

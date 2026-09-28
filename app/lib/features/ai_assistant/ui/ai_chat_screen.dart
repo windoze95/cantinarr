@@ -7,6 +7,7 @@ import '../../../core/providers/module_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/ai_models.dart';
+import '../data/ai_chat_capabilities.dart';
 import '../data/ai_settings_service.dart';
 import '../logic/ai_chat_provider.dart';
 import 'chat_bubble.dart';
@@ -30,6 +31,23 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
   final _focusNode = FocusNode();
+  bool _refreshingCachedSettings = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Settings can keep this shared provider alive beneath the assistant.
+    // An in-flight initial read is already fresh; completed data needs a new
+    // read before it can describe what this account can currently do.
+    _refreshingCachedSettings = !ref.read(aiSettingsProvider).isLoading;
+    if (_refreshingCachedSettings) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ref.invalidate(aiSettingsProvider);
+        setState(() => _refreshingCachedSettings = false);
+      });
+    }
+  }
 
   void _setNotifier(AiChatNotifier? notifier) {
     if (identical(_notifier, notifier)) return;
@@ -93,7 +111,9 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
             )) ==
         true;
     final aiSettings = ref.watch(aiSettingsProvider);
+    if (_refreshingCachedSettings) return _buildUnavailable(loading: true);
     return aiSettings.when(
+      skipLoadingOnRefresh: false,
       loading: () {
         _setNotifier(null);
         return _buildUnavailable(loading: true);
@@ -104,17 +124,20 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         return _buildUnavailable();
       },
       data: (settings) {
-        if (settings.effective.available) return _buildAvailableChat(context);
+        if (settings.effective.available) {
+          return _buildAvailableChat(context, settings.chatCapabilities);
+        }
         _setNotifier(null);
         return _buildUnavailable(settings: settings);
       },
     );
   }
 
-  Widget _buildAvailableChat(BuildContext context) {
+  Widget _buildAvailableChat(BuildContext context,
+      [AiChatCapabilities? capabilities]) {
     final notifier = ref.watch(aiChatProvider);
     _setNotifier(notifier);
-    return _buildChat(context, notifier);
+    return _buildChat(context, notifier, capabilities);
   }
 
   Widget _buildUnavailable({
@@ -210,7 +233,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         'provider or ask your server admin to check the provider.';
   }
 
-  Widget _buildChat(BuildContext context, AiChatNotifier notifier) {
+  Widget _buildChat(BuildContext context, AiChatNotifier notifier,
+      AiChatCapabilities? capabilities) {
     final state = notifier.state;
     final isAdmin =
         ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
@@ -232,7 +256,10 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
             ),
           IconButton(
             icon: const Icon(Icons.add_comment_outlined),
-            onPressed: notifier.clearChat,
+            onPressed: () {
+              notifier.clearChat();
+              ref.invalidate(aiSettingsProvider);
+            },
             tooltip: 'New chat',
           ),
         ],
@@ -265,7 +292,14 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                     if (index >= state.messages.length) {
                       return const _TypingIndicator();
                     }
-                    final msg = state.messages[index];
+                    var msg = state.messages[index];
+                    // The introduction is display-only. Derive it from this
+                    // settings read without rewriting the conversation.
+                    if (index == 0 && msg.excludeFromHistory &&
+                        msg.role == ChatRole.assistant) {
+                      msg = msg.copyWith(content:
+                          capabilities?.welcomeMessage ?? aiChatWelcomeFallback);
+                    }
                     final isLast = index == state.messages.length - 1;
                     return ChatBubble(
                       message: msg,
@@ -307,7 +341,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     if (state.messages.length <= 1) ...[
-                      _buildSuggestions(),
+                      _buildSuggestions(capabilities),
                       const SizedBox(height: 8),
                     ],
                     Row(
@@ -351,12 +385,9 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     );
   }
 
-  Widget _buildSuggestions() {
-    final suggestions = [
-      "What's trending?",
-      'Recommend sci-fi movies',
-      'Help me set up Plex',
-    ];
+  Widget _buildSuggestions(AiChatCapabilities? capabilities) {
+    final suggestions = capabilities?.suggestions ?? const <String>[];
+    if (suggestions.isEmpty) return const SizedBox.shrink();
 
     return SizedBox(
       height: 36,

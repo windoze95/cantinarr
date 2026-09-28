@@ -20,7 +20,11 @@ class _DiscoverAdapter implements HttpClientAdapter {
     required this.traktConfigured,
     this.tmdbUsingBuiltin = false,
     this.traktUsingBuiltin = false,
+    this.cover4KBadges,
   });
+
+  /// Null serves a server that predates the 4K badges setting.
+  final bool? cover4KBadges;
 
   /// Whether an admin CLIENT ID is stored; the built-in app makes Trakt
   /// available without one.
@@ -75,6 +79,9 @@ class _DiscoverAdapter implements HttpClientAdapter {
         'hidden_when_unconfigured':
             lastDiscoveryUpdate?['hidden_when_unconfigured'] ??
                 {'movie': false, 'tv': false, 'book': false, 'music': false},
+        if (cover4KBadges != null)
+          'cover_4k_badges':
+              lastDiscoveryUpdate?['cover_4k_badges'] ?? cover4KBadges,
       };
 
   ResponseBody _json(Map<String, dynamic> body) => ResponseBody.fromString(
@@ -102,12 +109,14 @@ Future<_DiscoverAdapter> _pumpScreen(
   required bool traktConfigured,
   bool tmdbUsingBuiltin = false,
   bool traktUsingBuiltin = false,
+  bool? cover4KBadges,
   String? highlightId,
 }) async {
   final adapter = _DiscoverAdapter(
     traktConfigured: traktConfigured,
     tmdbUsingBuiltin: tmdbUsingBuiltin,
     traktUsingBuiltin: traktUsingBuiltin,
+    cover4KBadges: cover4KBadges,
   );
   final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
     ..httpClientAdapter = adapter;
@@ -254,6 +263,57 @@ void main() {
       find.text('Add a Trakt client ID below to use this.'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('4K badges turn on for the whole server with Save', (t) async {
+    final adapter = await _pumpScreen(t,
+        traktConfigured: true,
+        cover4KBadges: false,
+        highlightId: SettingsAnchors.discoveryCover4KBadges);
+    bool dirty() => t
+        .widget<UnsavedChangesGuard>(find.byType(UnsavedChangesGuard))
+        .hasChanges();
+    final toggle =
+        find.byKey(const Key('discovery-cover-4k-badges'), skipOffstage: false);
+    await t.ensureVisible(toggle);
+    await t.pumpAndSettle();
+    expect(t.widget<SwitchListTile>(toggle).value, isFalse);
+    expect(find.textContaining('for everyone on this server'), findsOneWidget);
+    await t.tap(toggle);
+    await t.pumpAndSettle();
+    expect(t.widget<SwitchListTile>(toggle).value, isTrue);
+    expect(dirty(), isTrue);
+    final save = find.byKey(const Key('discovery-save'), skipOffstage: false);
+    await t.ensureVisible(save);
+    await t.pumpAndSettle();
+    await t.tap(save);
+    await t.pumpAndSettle();
+    expect(adapter.lastDiscoveryUpdate?['cover_4k_badges'], isTrue);
+    expect(dirty(), isFalse);
+  });
+
+  testWidgets('an older server shows 4K badges unavailable and never sends it',
+      (t) async {
+    final adapter = await _pumpScreen(t, traktConfigured: true);
+    await t.tap(find.widgetWithText(
+        SwitchListTile, 'Only show English-language titles'));
+    await t.pumpAndSettle();
+    final toggle = find.byKey(const Key('discovery-cover-4k-badges'));
+    await t.scrollUntilVisible(toggle, 120,
+        scrollable: find.byType(Scrollable).first);
+    await t.pumpAndSettle();
+    expect(t.widget<SwitchListTile>(toggle).onChanged, isNull);
+    expect(find.text('Update your Cantinarr server to show 4K badges.'),
+        findsOneWidget);
+    final save = find.byKey(const Key('discovery-save'));
+    await t.scrollUntilVisible(save, 120,
+        scrollable: find.byType(Scrollable).first);
+    await t.ensureVisible(save);
+    await t.pumpAndSettle();
+    await t.tap(save);
+    await t.pumpAndSettle();
+    expect(adapter.lastDiscoveryUpdate, isNotNull);
+    expect(adapter.lastDiscoveryUpdate!.containsKey('cover_4k_badges'), isFalse);
   });
 
   testWidgets('saves the picked source and language filter', (tester) async {

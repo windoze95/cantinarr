@@ -15,15 +15,33 @@ Enter a base URL, not an arbitrary API endpoint. Service-specific differences ar
 
 Credentials are stored encrypted on the server. On settings that preserve a saved secret when the field is blank, leave it blank to keep it. Use an explicit removal control when you mean to clear it.
 
-## Radarr and Sonarr defaults
+## Automation defaults
 
-Each service can have one global default. A user can have a selected instance of their own, and can also be granted other instances. Choosing a new global default can require takeover confirmation.
+Radarr, Sonarr, Chaptarr, and Lidarr share the same rules. Regular users can access only their assigned instances. A global default chooses a preferred request destination; it never grants access or removes access to another assigned library. Administrators can browse and manage all automation instances. Their personal request destinations and discovery pages use explicit assignments too. New installations show every discovery option to admins until the first instance is configured.
 
-Use recognizable names such as “Movies” and “Movies 4K.” The name tells people which library they are requesting into. A default is a selection rule, not a copy or synchronization operation.
+When adding an instance, **Default Instance** starts on if that service has no default. **Automatically add new users** also starts on. Saving either setting does not assign existing users. Enable automatic assignment on several instances when new accounts should receive several libraries.
+
+An explicitly selected, assigned library receives the request. Otherwise Cantinarr uses the user's assigned personal preference, then an assigned global default, then their first assigned instance in configured order. This works even when the global default is outside their assignments. An offline destination produces an error or retry for that destination; requests never move to another instance as a fallback.
+
+When several instances are personally assigned for a service, the Request button asks the user to confirm a destination with their default preselected. With no personal assignment, the normal Request button asks for an assignment first.
+
+Use recognizable names such as “Movies” and “Movies 4K.” Pending requests keep their recorded destination when defaults change. Removing a regular user’s assignment blocks approval and delivery until access is restored.
+
+## Manage users
+
+Open a saved instance and choose **Manage users**. Search usernames and filter by assignment, role, child account, SSO link, or pending invitation. **Select all matching** selects every matching account, including administrators. Assign administrators only to the instances they want for personal requests; their navigation pickers still show every instance.
+
+Each row shows **Assigned** or **Unassigned** for the instance being edited. The checkboxes select users for bulk changes; a checked box does not mean the user is assigned. **Request destination** shows where that user's requests go by default for this service and can name a different assigned instance.
+
+Review the matching and selected counts, then choose **Add selected** or **Remove selected**. Removal shows how many preferences will be cleared. Changing a filter clears the selection. Only selected users change, so a filtered list cannot remove people outside the selection.
+
+Automatic assignment excludes administrators and runs once when a regular account is created through an invitation, media-server import, OIDC, or Plex sign-in. Replacement invitations, identity linking, and later sign-ins do not reapply it. To update existing users, use **Manage users**.
+
+Upgrades preserve existing access as explicit assignments, including existing admins' Radarr and Sonarr default destinations. Later removals remain removed after restart. Existing instances start with automatic assignment off; enable it deliberately for future accounts. Changing or removing a default never restores a revoked assignment.
 
 ## Books and music
 
-Chaptarr and Lidarr do not have a global default for requester access. Grant each person access or pin them to the intended instance. This applies to kids accounts too.
+Chaptarr and Lidarr support global defaults and automatic assignment just like Radarr and Sonarr. Requesters, including kids accounts, still need an assignment to browse and request from those libraries.
 
 An administrator seeing a book or music catalog does not prove an ordinary user can see it. Administrators can browse supported metadata before setup; requests and library status still need the relevant service.
 

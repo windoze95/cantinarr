@@ -171,6 +171,14 @@ func TestDeleteRejectsPinnedPendingBookRequests(t *testing.T) {
 	s := newTestStore(t)
 	uid := createUser(t, s, "pending-books")
 	instanceID := mkInstance(t, s, "chaptarr", "Books")
+	if grants, e := s.ListUserGrants(uid); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["chaptarr"] = append(grants["chaptarr"], instanceID)
+		if e = s.SetUserGrants(uid, grants); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if err := s.SetUserDefault(uid, "chaptarr", instanceID); err != nil {
 		t.Fatal(err)
 	}
@@ -256,81 +264,6 @@ func TestLookupServiceTypeUsesServiceMetadata(t *testing.T) {
 }
 
 // AUTH-023: requester proxy access follows the same deterministic effective instance shown in config.
-func TestUserCanAccessInstanceUsesEffectiveDefaults(t *testing.T) {
-	s := newTestStore(t)
-	alice := createUser(t, s, "effective-alice")
-	bob := createUser(t, s, "effective-bob")
-
-	// Insert the lexically later name first with tied sort order. The fallback
-	// must still select Alpha, matching ListAll/GrantedInstanceIDs order rather
-	// than SQLite insertion order.
-	zulu := &Instance{
-		ServiceType: "radarr", Name: "Zulu", URL: "http://zulu.invalid",
-		APIKey: "zulu-key", SortOrder: 0,
-	}
-	alpha := &Instance{
-		ServiceType: "radarr", Name: "Alpha", URL: "http://alpha.invalid",
-		APIKey: "alpha-key", SortOrder: 0,
-	}
-	for _, inst := range []*Instance{zulu, alpha} {
-		if err := s.Create(inst); err != nil {
-			t.Fatalf("create %s: %v", inst.Name, err)
-		}
-	}
-
-	assertAccess := func(userID int64, instanceID, serviceType string, want bool) {
-		t.Helper()
-		got, err := s.UserCanAccessInstance(userID, instanceID, serviceType)
-		if err != nil {
-			t.Fatalf("UserCanAccessInstance(%d, %s, %s): %v", userID, instanceID, serviceType, err)
-		}
-		if got != want {
-			t.Fatalf("UserCanAccessInstance(%d, %s, %s) = %v, want %v", userID, instanceID, serviceType, got, want)
-		}
-	}
-
-	assertAccess(alice, alpha.ID, "radarr", true)
-	assertAccess(alice, zulu.ID, "radarr", false)
-	assertAccess(bob, alpha.ID, "radarr", true)
-	assertAccess(bob, zulu.ID, "radarr", false)
-
-	if err := s.SetUserDefault(alice, "radarr", zulu.ID); err != nil {
-		t.Fatalf("pin Alice to Zulu: %v", err)
-	}
-	assertAccess(alice, alpha.ID, "radarr", false)
-	assertAccess(alice, zulu.ID, "radarr", true)
-	assertAccess(bob, alpha.ID, "radarr", true)
-
-	// A global-default change affects unpinned users immediately but never
-	// broadens them to both siblings.
-	zulu.IsDefault = true
-	if err := s.Update(zulu); err != nil {
-		t.Fatalf("make Zulu global default: %v", err)
-	}
-	assertAccess(bob, alpha.ID, "radarr", false)
-	assertAccess(bob, zulu.ID, "radarr", true)
-	if err := s.ClearUserDefault(alice, "radarr"); err != nil {
-		t.Fatalf("clear Alice override: %v", err)
-	}
-	assertAccess(alice, zulu.ID, "radarr", true)
-	assertAccess(alice, alpha.ID, "radarr", false)
-
-	booksA := mkInstance(t, s, "chaptarr", "Books A")
-	booksB := mkInstance(t, s, "chaptarr", "Books B")
-	assertAccess(alice, booksA, "chaptarr", false)
-	assertAccess(alice, booksB, "chaptarr", false)
-	if err := s.SetUserDefault(alice, "chaptarr", booksB); err != nil {
-		t.Fatalf("grant Alice Books B: %v", err)
-	}
-	assertAccess(alice, booksA, "chaptarr", false)
-	assertAccess(alice, booksB, "chaptarr", true)
-
-	assertAccess(alice, zulu.ID, "sabnzbd", false)
-	if _, err := s.db.Exec("UPDATE service_instances SET api_key = 'enc:v1:corrupt' WHERE id = ?", zulu.ID); err != nil {
-		t.Fatalf("corrupt default secret: %v", err)
-	}
-	assertAccess(alice, zulu.ID, "radarr", true)
-}
 
 func TestUserDefaultInstances(t *testing.T) {
 	s := newTestStore(t)
@@ -344,6 +277,14 @@ func TestUserDefaultInstances(t *testing.T) {
 	}
 
 	// Set + read back.
+	if grants, e := s.ListUserGrants(user); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["sonarr"] = append(grants["sonarr"], sonarrID)
+		if e = s.SetUserGrants(user, grants); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if err := s.SetUserDefault(user, "sonarr", sonarrID); err != nil {
 		t.Fatalf("SetUserDefault: %v", err)
 	}
@@ -361,6 +302,14 @@ func TestUserDefaultInstances(t *testing.T) {
 	}
 
 	// Chaptarr grant: the granted user has access, a different user does not.
+	if grants, e := s.ListUserGrants(user); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["chaptarr"] = append(grants["chaptarr"], chaptarrID)
+		if e = s.SetUserGrants(user, grants); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if err := s.SetUserDefault(user, "chaptarr", chaptarrID); err != nil {
 		t.Fatalf("grant chaptarr: %v", err)
 	}
@@ -383,6 +332,14 @@ func TestUserDefaultInstances(t *testing.T) {
 
 	// Upsert: re-pinning the same service type replaces the instance.
 	sonarr2 := mkInstance(t, s, "sonarr", "Second Sonarr")
+	if grants, e := s.ListUserGrants(user); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["sonarr"] = append(grants["sonarr"], sonarr2)
+		if e = s.SetUserGrants(user, grants); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if err := s.SetUserDefault(user, "sonarr", sonarr2); err != nil {
 		t.Fatalf("re-pin sonarr: %v", err)
 	}
@@ -409,128 +366,7 @@ func TestUserDefaultInstances(t *testing.T) {
 
 // A grant widens a user's reachable set beside their default instead of
 // replacing it, and revoking a grant never moves the default.
-func TestUserInstanceGrantsWidenAccess(t *testing.T) {
-	s := newTestStore(t)
-	alice := createUser(t, s, "grant-alice")
-	bob := createUser(t, s, "grant-bob")
-	hd := mkDefaultInstance(t, s, "radarr", "Movies")
-	uhd := mkInstance(t, s, "radarr", "4K Movies")
 
-	assertAccess := func(userID int64, instanceID string, want bool) {
-		t.Helper()
-		got, err := s.UserCanAccessInstance(userID, instanceID, "radarr")
-		if err != nil {
-			t.Fatalf("UserCanAccessInstance(%d, %s): %v", userID, instanceID, err)
-		}
-		if got != want {
-			t.Fatalf("UserCanAccessInstance(%d, %s) = %v, want %v", userID, instanceID, got, want)
-		}
-	}
-
-	// Baseline: everyone reaches the global default only.
-	assertAccess(alice, hd, true)
-	assertAccess(alice, uhd, false)
-
-	// Granting the sibling ADDS it beside the default — the HD/4K shape needs
-	// exactly one checkbox, and a grant must never silently revoke the
-	// library the user already had.
-	if err := s.SetUserGrants(alice, map[string][]string{"radarr": {uhd}}); err != nil {
-		t.Fatalf("grant 4K: %v", err)
-	}
-	assertAccess(alice, uhd, true)
-	assertAccess(alice, hd, true)
-	if id, err := s.EffectiveDefaultInstanceID(alice, "radarr"); err != nil || id != hd {
-		t.Fatalf("effective default with a sibling grant = (%q, %v), want untouched global default %q", id, err, hd)
-	}
-	assertAccess(bob, uhd, false)
-
-	// A pin keeps its historic exclusive meaning: pinned to the sibling, the
-	// global default drops out unless separately granted.
-	if err := s.SetUserGrants(alice, map[string][]string{"radarr": nil}); err != nil {
-		t.Fatalf("clear grants: %v", err)
-	}
-	if err := s.SetUserDefault(alice, "radarr", uhd); err != nil {
-		t.Fatalf("pin 4K: %v", err)
-	}
-	assertAccess(alice, uhd, true)
-	assertAccess(alice, hd, false)
-	if err := s.SetUserGrants(alice, map[string][]string{"radarr": {hd}}); err != nil {
-		t.Fatalf("grant HD beside the pin: %v", err)
-	}
-	assertAccess(alice, hd, true)
-	assertAccess(alice, uhd, true)
-	if id, err := s.EffectiveDefaultInstanceID(alice, "radarr"); err != nil || id != uhd {
-		t.Fatalf("effective default with pin = (%q, %v), want pinned %q", id, err, uhd)
-	}
-
-	// Clearing the grant leaves the pin (and its exclusivity) in place.
-	if err := s.SetUserGrants(alice, map[string][]string{"radarr": nil}); err != nil {
-		t.Fatalf("clear grants: %v", err)
-	}
-	assertAccess(alice, hd, false)
-	assertAccess(alice, uhd, true)
-	if err := s.ClearUserDefault(alice, "radarr"); err != nil {
-		t.Fatalf("clear pin: %v", err)
-	}
-
-	// Type mismatches and unknown instances are rejected before any write.
-	sonarrID := mkInstance(t, s, "sonarr", "TV")
-	if err := s.SetUserGrants(alice, map[string][]string{"radarr": {sonarrID}}); err == nil {
-		t.Fatal("SetUserGrants with mismatched service_type should error")
-	}
-	if err := s.SetUserGrants(alice, map[string][]string{"radarr": {"nope-12345678"}}); err == nil {
-		t.Fatal("SetUserGrants with unknown instance should error")
-	}
-}
-
-// The effective default is the pin, else the global default chain — grants
-// never move it — and chaptarr never falls back past its explicit rows.
-func TestEffectiveDefaultInstanceID(t *testing.T) {
-	s := newTestStore(t)
-	user := createUser(t, s, "effective-default-user")
-	hd := mkDefaultInstance(t, s, "radarr", "Movies")
-	uhd := mkInstance(t, s, "radarr", "4K Movies")
-
-	// No rows: the global default chain answers.
-	if id, err := s.EffectiveDefaultInstanceID(user, "radarr"); err != nil || id != hd {
-		t.Fatalf("no rows = (%q, %v), want global default %q", id, err, hd)
-	}
-
-	// Grants never move the default; they only widen the visible set.
-	if err := s.SetUserGrants(user, map[string][]string{"radarr": {uhd}}); err != nil {
-		t.Fatalf("grant 4K only: %v", err)
-	}
-	if id, err := s.EffectiveDefaultInstanceID(user, "radarr"); err != nil || id != hd {
-		t.Fatalf("granted 4K only = (%q, %v), want untouched default %q", id, err, hd)
-	}
-	visible, err := s.VisibleInstanceIDs(user, "radarr")
-	if err != nil || len(visible) != 2 {
-		t.Fatalf("VisibleInstanceIDs = (%v, %v), want the grant plus the default", visible, err)
-	}
-
-	// A pin beats everything.
-	if err := s.SetUserDefault(user, "radarr", uhd); err != nil {
-		t.Fatalf("pin 4K: %v", err)
-	}
-	if id, err := s.EffectiveDefaultInstanceID(user, "radarr"); err != nil || id != uhd {
-		t.Fatalf("pinned = (%q, %v), want %q", id, err, uhd)
-	}
-
-	// Chaptarr: no rows means no instance — never the first-instance fallback
-	// that would leak a library.
-	books := mkInstance(t, s, "chaptarr", "Books")
-	if id, err := s.EffectiveDefaultInstanceID(user, "chaptarr"); err != nil || id != "" {
-		t.Fatalf("chaptarr with no rows = (%q, %v), want empty", id, err)
-	}
-	if err := s.SetUserGrants(user, map[string][]string{"chaptarr": {books}}); err != nil {
-		t.Fatalf("grant books: %v", err)
-	}
-	if id, err := s.EffectiveDefaultInstanceID(user, "chaptarr"); err != nil || id != books {
-		t.Fatalf("chaptarr granted = (%q, %v), want %q", id, err, books)
-	}
-}
-
-// Instance-centric grant assignment edits only this instance's grant rows.
 func TestSetInstanceGrantUsers(t *testing.T) {
 	s := newTestStore(t)
 	alice := createUser(t, s, "ig-alice")
@@ -541,6 +377,14 @@ func TestSetInstanceGrantUsers(t *testing.T) {
 	if err := s.SetInstanceGrantUsers(uhd, []int64{alice, bob}); err != nil {
 		t.Fatalf("grant 4K to both: %v", err)
 	}
+	if grants, e := s.ListUserGrants(alice); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["radarr"] = append(grants["radarr"], hd)
+		if e = s.SetUserGrants(alice, grants); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if err := s.SetUserDefault(alice, "radarr", hd); err != nil {
 		t.Fatalf("pin Alice to HD: %v", err)
 	}
@@ -549,7 +393,7 @@ func TestSetInstanceGrantUsers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTypeUserGrants: %v", err)
 	}
-	if len(grants[alice]) != 1 || grants[alice][0] != uhd || len(grants[bob]) != 1 {
+	if len(grants[alice]) != 2 || grants[alice][0] != uhd || len(grants[bob]) != 1 {
 		t.Fatalf("ListTypeUserGrants = %v, want both users granted %s", grants, uhd)
 	}
 
@@ -573,13 +417,21 @@ func TestSetInstanceGrantUsers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListUserGrants: %v", err)
 	}
-	if len(byType["radarr"]) != 1 || byType["radarr"][0] != uhd {
+	if len(byType["radarr"]) != 2 || byType["radarr"][0] != uhd {
 		t.Fatalf("ListUserGrants = %v, want radarr=[%s]", byType, uhd)
 	}
 
 	// An uncheck is a real revocation even for a legacy pin-based assignment:
 	// omitting a user whose only tie to this instance is a PIN clears that
 	// pin too, or the library would keep granting itself.
+	if grants, e := s.ListUserGrants(bob); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["radarr"] = append(grants["radarr"], uhd)
+		if e = s.SetUserGrants(bob, grants); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if err := s.SetUserDefault(bob, "radarr", uhd); err != nil {
 		t.Fatalf("pin Bob to 4K: %v", err)
 	}
@@ -593,6 +445,14 @@ func TestSetInstanceGrantUsers(t *testing.T) {
 		t.Fatal("unchecked pinned user must lose access to this instance")
 	}
 	// A checked user's pin survives the same save.
+	if grants, e := s.ListUserGrants(alice); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["radarr"] = append(grants["radarr"], uhd)
+		if e = s.SetUserGrants(alice, grants); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if err := s.SetUserDefault(alice, "radarr", uhd); err != nil {
 		t.Fatalf("pin Alice to 4K: %v", err)
 	}
@@ -604,6 +464,14 @@ func TestSetInstanceGrantUsers(t *testing.T) {
 	}
 	if err := s.ClearUserDefault(alice, "radarr"); err != nil {
 		t.Fatalf("clear Alice pin: %v", err)
+	}
+	if grants, e := s.ListUserGrants(alice); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["radarr"] = append(grants["radarr"], hd)
+		if e = s.SetUserGrants(alice, grants); e != nil {
+			t.Fatal(e)
+		}
 	}
 	if err := s.SetUserDefault(alice, "radarr", hd); err != nil {
 		t.Fatalf("re-pin Alice to HD: %v", err)
@@ -677,34 +545,6 @@ func TestSingleDefaultPerServiceType(t *testing.T) {
 	}
 }
 
-func TestChaptarrNeverGlobalDefault(t *testing.T) {
-	s := newTestStore(t)
-	inst := &Instance{ServiceType: "chaptarr", Name: "Books", URL: "http://localhost", APIKey: "key", IsDefault: true}
-	if err := s.Create(inst); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if inst.IsDefault {
-		t.Fatal("Create must normalize chaptarr IsDefault to false on the struct")
-	}
-	if isDefault(t, s, inst.ID) {
-		t.Fatal("chaptarr instance must not be stored as default")
-	}
-
-	got, _ := s.Get(inst.ID)
-	got.IsDefault = true
-	if err := s.Update(got); err != nil {
-		t.Fatalf("Update: %v", err)
-	}
-	if isDefault(t, s, inst.ID) {
-		t.Fatal("Update must not store a chaptarr default flag")
-	}
-
-	// The admin/AI fallback still resolves an instance — by sort order.
-	if def, err := s.GetDefault("chaptarr"); err != nil || def == nil || def.ID != inst.ID {
-		t.Fatalf("GetDefault(chaptarr) = %v, %v, want fallback to %s", def, err, inst.ID)
-	}
-}
-
 func TestSetInstanceUsers(t *testing.T) {
 	s := newTestStore(t)
 	alice := createUser(t, s, "alice")
@@ -715,8 +555,19 @@ func TestSetInstanceUsers(t *testing.T) {
 
 	// Alice is pinned to a sibling instance; assigning R1 to others must not
 	// touch her.
+	if grants, e := s.ListUserGrants(alice); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["radarr"] = append(grants["radarr"], r2)
+		if e = s.SetUserGrants(alice, grants); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if err := s.SetUserDefault(alice, "radarr", r2); err != nil {
 		t.Fatalf("SetUserDefault: %v", err)
+	}
+	if err := s.ChangeAssignments(r1, []int64{alice, bob, carol}, true); err != nil {
+		t.Fatal(err)
 	}
 	if err := s.SetInstanceUsers(r1, []int64{bob, carol}); err != nil {
 		t.Fatalf("SetInstanceUsers: %v", err)
@@ -835,50 +686,6 @@ func TestMediaServerConfigRoundTripAndFailClosed(t *testing.T) {
 // default ever persists, an ungranted user resolves to no instance at all
 // (never a first-instance fallback that would leak a library), and the pin or
 // grant is the entire access story.
-func TestLidarrGrantOnlyLikeChaptarr(t *testing.T) {
-	s := newTestStore(t)
-	inst := &Instance{ServiceType: "lidarr", Name: "Music", URL: "http://localhost", APIKey: "key", IsDefault: true}
-	if err := s.Create(inst); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if inst.IsDefault || isDefault(t, s, inst.ID) {
-		t.Fatal("lidarr instance must never persist a global default flag")
-	}
-
-	userID := createUser(t, s, "listener")
-	if id, err := s.EffectiveDefaultInstanceID(userID, "lidarr"); err != nil || id != "" {
-		t.Fatalf("ungranted effective default = %q, %v; want empty", id, err)
-	}
-	if ok, err := s.UserCanAccessInstance(userID, inst.ID, "lidarr"); err != nil || ok {
-		t.Fatalf("ungranted access = %v, %v; want false", ok, err)
-	}
-
-	if err := s.SetUserDefault(userID, "lidarr", inst.ID); err != nil {
-		t.Fatalf("SetUserDefault: %v", err)
-	}
-	if id, err := s.EffectiveDefaultInstanceID(userID, "lidarr"); err != nil || id != inst.ID {
-		t.Fatalf("pinned effective default = %q, %v", id, err)
-	}
-	if ok, err := s.UserCanAccessInstance(userID, inst.ID, "lidarr"); err != nil || !ok {
-		t.Fatalf("pinned access = %v, %v; want true", ok, err)
-	}
-
-	// Un-pinning IS revocation: there is no global chain to fall back to.
-	if err := s.ClearUserDefault(userID, "lidarr"); err != nil {
-		t.Fatalf("ClearUserDefault: %v", err)
-	}
-	if id, _ := s.EffectiveDefaultInstanceID(userID, "lidarr"); id != "" {
-		t.Fatalf("post-revocation effective default = %q, want empty", id)
-	}
-
-	// An additive grant row (no pin) also grants: first granted wins.
-	if err := s.SetUserGrants(userID, map[string][]string{"lidarr": {inst.ID}}); err != nil {
-		t.Fatalf("SetUserGrants: %v", err)
-	}
-	if id, _ := s.EffectiveDefaultInstanceID(userID, "lidarr"); id != inst.ID {
-		t.Fatalf("granted effective default = %q", id)
-	}
-}
 
 func TestMediaServerNeverGlobalDefault(t *testing.T) {
 	s := newTestStore(t)

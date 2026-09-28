@@ -1026,7 +1026,7 @@ func (c *Client) ProcessMonitoredDownloads() error {
 
 // RescanMovie rescans the files on disk for a movie.
 func (c *Client) RescanMovie(movieID int) error {
-	return c.triggerCommand(map[string]any{"name": "RescanMovie", "movieIds": []int{movieID}})
+	return c.triggerCommand(map[string]any{"name": "RescanMovie", "movieId": movieID})
 }
 
 // GetConfigSummary returns a bounded, secret-free summary of one settings

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/widgets/cached_image.dart';
+import '../../auth/logic/auth_provider.dart';
 import '../data/music_discovery_service.dart';
 import '../logic/discovery_access.dart';
 import '../logic/music_browse_query.dart';
@@ -44,7 +45,9 @@ class CatalogWarmup extends ConsumerWidget {
 final catalogArtworkLoaderProvider = Provider<
     Future<void> Function(
         ImageSource source, BuildContext context)>((ref) => (source, context) =>
-    precacheImage(cachedImageProvider(source), context, onError: (_, __) {}));
+    precacheImage(cachedImageProvider(source,
+        cacheScope: imageCacheScope(ref.read(authProvider).valueOrNull)),
+        context, onError: (_, __) {}));
 
 final _artworkQueueProvider = Provider.autoDispose((ref) {
   ref.watch(catalogDiscoveryScopeProvider);

@@ -85,6 +85,7 @@ func TestRouterRBACMatrixWithAdminAndRequesterTokens(t *testing.T) {
 		{http.MethodGet, "/api/admin/ai-tools"},
 		{http.MethodGet, "/api/admin/requests"},
 		{http.MethodGet, "/api/admin/requests/waiting"},
+		{http.MethodGet, "/api/admin/requests/history"},
 		{http.MethodGet, "/api/admin/issues"},
 		{http.MethodGet, "/api/admin/setup-status"},
 		{http.MethodGet, "/api/instances"},
@@ -464,9 +465,10 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 	store := instance.NewStore(database, cipher)
 	instanceRegistry := instance.NewRegistry(store)
 	bridge := tmdb.NewBridge(registry, database)
-	requestService := requestsvc.NewService(database, instanceRegistry, bridge, nil)
 	discordNotifications := discordnotify.NewService(database, cipher, nil)
+	requestService := requestsvc.NewService(database, instanceRegistry, bridge, discordNotifications)
 	requestService.SetCreationObserver(discordNotifications)
+	discordNotifications.SetSource(requestService)
 	requestHandler := requestsvc.NewHandler(requestService)
 	remediationService := remediation.NewService(database, instanceRegistry, bridge, nil)
 	remediationHandler := remediation.NewHandler(remediationService)

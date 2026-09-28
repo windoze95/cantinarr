@@ -1,4 +1,4 @@
-// Package discordnotify delivers opt-in administrator request alerts to Discord.
+// Package discordnotify delivers opt-in request and report updates to Discord.
 package discordnotify
 
 import (
@@ -34,14 +34,25 @@ func normalizeWebhook(raw string) (string, error) {
 }
 
 type requestAlert struct {
-	Title            string `json:"title"`
-	MediaType        string `json:"media_type"`
-	Username         string `json:"username"`
-	RequiresApproval bool   `json:"requires_approval"`
-	BookFormat       string `json:"book_format,omitempty"`
+	MentionIDs       []string           `json:"mention_ids,omitempty"`
+	SuppressRole     bool               `json:"suppress_role,omitempty"`
+	Kind             string             `json:"kind,omitempty"`
+	Subject          Subject            `json:"subject,omitempty"`
+	IssueID          int64              `json:"issue_id,omitempty"`
+	ActorID          int64              `json:"actor_id,omitempty"`
+	UserID           int64              `json:"user_id,omitempty"`
+	Parts            []availabilityPart `json:"parts,omitempty"`
+	Units            []Unit             `json:"units,omitempty"`
+	Title            string             `json:"title"`
+	MediaType        string             `json:"media_type"`
+	Username         string             `json:"username"`
+	RequiresApproval bool               `json:"requires_approval"`
+	BookFormat       string             `json:"book_format,omitempty"`
 }
 
 type Delivery struct {
+	Event         string `json:"event,omitempty"`
+	IssueID       int64  `json:"issue_id,omitempty"`
 	RequestID     int64  `json:"request_id,omitempty"`
 	Status        string `json:"status"`
 	Detail        string `json:"detail"`
@@ -81,41 +92,16 @@ func plainText(value string, limit int) string {
 	return string(runes)
 }
 
-func message(alert requestAlert, external string) map[string]any {
-	kind := map[string]string{"movie": "Movie", "tv": "TV show", "book": "Book", "music": "Music"}[alert.MediaType]
-	if alert.MediaType == "book" {
-		switch alert.BookFormat {
-		case "ebook":
-			kind = "Book · eBook"
-		case "audiobook":
-			kind = "Book · Audiobook"
-		case "both":
-			kind = "Book · eBook and Audiobook"
-		}
-	}
-	approval := "Automatically approved"
-	if alert.RequiresApproval {
-		approval = "Awaiting approval"
-	}
-	embed := map[string]any{"title": "New media request", "description": plainText(alert.Title, 1000),
-		"fields": []map[string]any{
-			{"name": "Type", "value": kind, "inline": true},
-			{"name": "Requester", "value": plainText(alert.Username, 256), "inline": true},
-			{"name": "Approval", "value": approval},
-		}}
-	if u, err := url.Parse(external); err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" {
-		u.Path = strings.TrimRight(u.Path, "/") + "/"
-		if alert.RequiresApproval {
-			u.Path += "approvals"
-		}
-		embed["url"] = u.String()
-	}
-	return map[string]any{"embeds": []any{embed}, "allowed_mentions": map[string]any{"parse": []string{}}, "tts": false}
-}
-
 func send(ctx context.Context, client *http.Client, webhook string, payload map[string]any) sendResult {
 	data, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhook+"?wait=true", bytes.NewReader(data))
+	u, err := url.Parse(webhook)
+	if err != nil {
+		return sendResult{Status: "failed", Detail: "The webhook could not be used."}
+	}
+	q := u.Query()
+	q.Set("wait", "true")
+	u.RawQuery = q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(data))
 	if err != nil {
 		return sendResult{Status: "failed", Detail: "The webhook could not be used."}
 	}

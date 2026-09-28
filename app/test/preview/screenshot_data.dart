@@ -8,6 +8,7 @@
 //   - discover/data/tmdb_models.dart          (TmdbPage / MediaItem / *Detail)
 //   - radarr|sonarr/data/*_models.dart         (verbatim v3 proxy shapes)
 //   - downloads/data/downloads_models.dart     (normalized queue)
+//   - downloads/data/downloads_activity.dart   (content groups and job counts)
 //   - request/data/request_service.dart        (status / options / seasons)
 //   - settings/data/request_settings_service.dart (approval queue)
 //
@@ -16,6 +17,8 @@
 // covers and author portraits come from the Open Library CDN for the same
 // reason — see the Books section below.
 library;
+
+import '../settings/request_history_fixture.dart';
 
 // ─── Image helpers ──────────────────────────────────────────────────────────
 
@@ -1130,6 +1133,67 @@ Map<String, dynamic> _dlItem({
   };
 }
 
+/// Content view of the same client queues. Completed transfers and processing
+/// jobs are excluded, matching the activity API's active-download count.
+Map<String, dynamic> _downloadActivity({bool summary = false}) {
+  final jobs = <Map<String, dynamic>>[];
+  final groups = <Map<String, dynamic>>[];
+  final sab = (_sabQueue()['items'] as List).cast<Map<String, dynamic>>();
+  final qbit = (_qbitQueue()['items'] as List).cast<Map<String, dynamic>>();
+
+  void add(Map<String, dynamic> item, {_Movie? movie, _Tv? tv,
+      int season = 0, int episode = 0, String episodeTitle = ''}) {
+    final id = item['id'] as String;
+    final usenet = id.startsWith('SABnzbd');
+    jobs.add({
+      ...item,
+      'status': item['status'] == 'stalledDL' ? 'stalled' :
+          (item['status'] as String).toLowerCase(),
+      'control': {
+        'instance_id': usenet ? 'sab-main' : 'qbit-main',
+        'item_id': id,
+        'service_type': usenet ? 'sabnzbd' : 'qbittorrent',
+        'client_name': usenet ? 'SABnzbd' : 'qBittorrent',
+      },
+    });
+    groups.add({
+      'id': 'content-$id',
+      'title': movie?.title ?? tv!.title,
+      'media_type': movie != null ? 'movie' : 'tv',
+      'year': movie != null ? int.parse(movie.releaseDate.substring(0, 4)) : 0,
+      'artwork': _remote(movie?.poster ?? tv!.poster),
+      'instance_name': movie != null ? 'Main Radarr' : 'Sonarr',
+      'progress': item['progress'],
+      'details_known': true,
+      'job_ids': [id],
+      'children': [
+        if (tv != null) {
+          'id': '$id-episode', 'season': season, 'episode': episode,
+          'title': episodeTitle, 'job_ids': [id],
+        },
+      ],
+    });
+  }
+
+  add(sab[0], movie: _phm);
+  add(sab[1], tv: _tv[4], season: 5, episode: 1, episodeTitle: 'The Beginning');
+  add(sab[2], movie: _movies[5]);
+  add(sab[3], tv: _tv[10], season: 1, episode: 1, episodeTitle: 'Homecoming');
+  add(qbit[0], movie: _movies[3]);
+  add(qbit[1], tv: _hotd, season: 3, episode: 3, episodeTitle: 'The Burning Mill');
+  add(qbit[3], tv: _tv[1], season: 3, episode: 10, episodeTitle: 'Revelations');
+  return {
+    'count': jobs.length, 'complete': true, 'stale': false,
+    'scope': 'all', 'user_scope': 'all',
+    'sources': [
+      for (final name in ['Main Radarr', 'Sonarr', 'SABnzbd', 'qBittorrent'])
+        {'name': name, 'available': true},
+    ],
+    if (!summary) 'jobs': jobs,
+    if (!summary) 'groups': groups,
+  };
+}
+
 // ─── Search results (shell search bar) ───────────────────────────────────────
 
 /// Multi-search results returned for ANY query. Ids/titles overlap the Radarr
@@ -1531,6 +1595,8 @@ Object? screenshotBodyFor(String rawPath, Map<String, dynamic> query) {
   }
 
   // ── Admin approvals + boot badges ──
+  if (path.endsWith('/api/admin/requests/history')) return historyFixturePage(query);
+  if (path.endsWith('/tags/retry')) return {'status': 'pending', 'can_retry': false};
   if (path.endsWith('/api/admin/request-settings')) {
     return _adminRequestSettings();
   }
@@ -1582,6 +1648,8 @@ Object? screenshotBodyFor(String rawPath, Map<String, dynamic> query) {
   }
 
   // ── Download client queues (per instance) ──
+  if (path.endsWith('/api/downloads/summary')) return _downloadActivity(summary: true);
+  if (path.endsWith('/api/downloads/activity')) return _downloadActivity();
   if (path.contains('/api/downloads/') && path.endsWith('/queue')) {
     return path.contains('qbit') ? _qbitQueue() : _sabQueue();
   }

@@ -33,6 +33,9 @@ func registerAuth(r chi.Router) {
 		r.Group(func(r chi.Router) {
 			r.Use(requireAuth)
 			r.Get("/me", authMeHandler)
+			r.Get("/discord-notifications", demoDiscordPrefsHandler)
+			r.Put("/discord-notifications", demoDiscordPrefsHandler)
+			r.Post("/discord-notifications/test", demoDiscordPrefsHandler)
 			r.Post("/logout", authLogoutHandler)
 			r.Post("/password", authPasswordHandler)
 			r.Post("/plex-email", authPlexEmailHandler)

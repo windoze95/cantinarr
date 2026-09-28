@@ -91,7 +91,7 @@ func setupBookReportService(t *testing.T, state *bookFileState) (*Service, int64
 	svc, _ := setupBookObservationService(t, state)
 	reporterID := seedUser(t, svc.db, "book-reporter")
 	if _, err := svc.db.Exec(
-		"INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (?, 'chaptarr', 'chaptarr-observe')",
+		"INSERT INTO user_instance_grants (user_id, instance_id) VALUES (?, 'chaptarr-observe')",
 		reporterID,
 	); err != nil {
 		t.Fatalf("assign chaptarr instance: %v", err)

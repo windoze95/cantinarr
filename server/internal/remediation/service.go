@@ -35,10 +35,11 @@ type Notifier interface {
 // and the global remediation settings. It mirrors request.Service's dependency
 // shape (db + registry + bridge + notifier).
 type Service struct {
-	db       *sql.DB
-	registry *instance.Registry
-	bridge   *tmdb.Bridge
-	notifier Notifier
+	db             *sql.DB
+	registry       *instance.Registry
+	bridge         *tmdb.Bridge
+	notifier       Notifier
+	reportObserver ReportObserver
 
 	// executor replays an approved proposal against the arr. It is the ONLY code
 	// that mutates Radarr/Sonarr, reached solely from ApproveAction. It is an
@@ -592,6 +593,7 @@ func (s *Service) notifyIssueCreated(issueID int64, title string) {
 }
 
 func (s *Service) notifyIssueCreatedWithSource(issueID int64, title, source string) {
+	s.observeReport("issue_created", issueID, 0, 0)
 	if s.notifier == nil {
 		return
 	}
@@ -718,10 +720,11 @@ func (s *Service) PostReply(issueID int64, authorKind string, authorID int64, bo
 		return fmt.Errorf("issue is closed")
 	}
 
-	if _, err := tx.Exec(
+	replyResult, err := tx.Exec(
 		"INSERT INTO issue_messages (issue_id, author_kind, author_id, body) VALUES (?, ?, ?, ?)",
 		issueID, authorKind, sqlNullInt64(authorID), body,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("post reply: %w", err)
 	}
 
@@ -761,6 +764,10 @@ func (s *Service) PostReply(issueID int64, authorKind string, authorID int64, bo
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit reply: %w", err)
+	}
+	messageID, _ := replyResult.LastInsertId()
+	if authorKind == AuthorUser || authorKind == AuthorAdmin {
+		s.observeReport("issue_comment", issueID, authorID, messageID)
 	}
 
 	// Ping the counterpart so a live thread refreshes. Body text is never put on
@@ -831,10 +838,11 @@ func (s *Service) saveUnresumableApprovalReply(issueID int64, authorKind string,
 	} else if closedAt.Valid {
 		return fmt.Errorf("issue is closed")
 	}
-	if _, err := tx.Exec(
+	replyResult, err := tx.Exec(
 		"INSERT INTO issue_messages (issue_id, author_kind, author_id, body) VALUES (?, ?, ?, ?)",
 		issueID, authorKind, sqlNullInt64(authorID), body,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("save fallback approval reply: %w", err)
 	}
 	if _, err := tx.Exec(
@@ -868,6 +876,11 @@ func (s *Service) saveUnresumableApprovalReply(issueID int64, authorKind string,
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	messageID, _ := replyResult.LastInsertId()
+	if authorKind == AuthorUser || authorKind == AuthorAdmin {
+		s.observeReport("issue_comment", issueID, authorID, messageID)
+	}
+
 	s.notifyActionsChanged(issueID, ActionSuperseded)
 	if s.notifier != nil {
 		if authorKind == AuthorAdmin && reporterID.Valid {
@@ -906,10 +919,11 @@ func (s *Service) saveUnresumableReply(issueID int64, authorKind string, authorI
 	} else if closedAt.Valid {
 		return fmt.Errorf("issue is closed")
 	}
-	if _, err := tx.Exec(
+	replyResult, err := tx.Exec(
 		"INSERT INTO issue_messages (issue_id, author_kind, author_id, body) VALUES (?, ?, ?, ?)",
 		issueID, authorKind, sqlNullInt64(authorID), body,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("save fallback reply: %w", err)
 	}
 	if escalated > 0 {
@@ -930,6 +944,11 @@ func (s *Service) saveUnresumableReply(issueID int64, authorKind string, authorI
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit fallback reply: %w", err)
 	}
+	messageID, _ := replyResult.LastInsertId()
+	if authorKind == AuthorUser || authorKind == AuthorAdmin {
+		s.observeReport("issue_comment", issueID, authorID, messageID)
+	}
+
 	s.pingIssueUpdated(issueID)
 	if s.notifier != nil {
 		if authorKind == AuthorAdmin && reporterID.Valid {

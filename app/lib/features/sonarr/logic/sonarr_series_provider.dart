@@ -1,4 +1,8 @@
 import 'package:flutter/foundation.dart';
+
+import '../../../core/logic/library_sort_controller.dart';
+import '../../../core/models/library_sort.dart';
+import 'sonarr_library_sort.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 
@@ -48,37 +52,68 @@ enum SonarrFilter { all, monitored, continuing, ended, missing }
 
 class SonarrSeriesNotifier extends ChangeNotifier {
   final SonarrApiService _service;
+  late final LibrarySortController sorting;
+  bool _disposed = false;
+  int _loadGeneration = 0;
 
   SonarrSeriesState _state = const SonarrSeriesState();
   SonarrSeriesState get state => _state;
   set state(SonarrSeriesState value) {
+    if (_disposed) return;
     _state = value;
     notifyListeners();
   }
 
-  SonarrSeriesNotifier(this._service);
+  SonarrSeriesNotifier(this._service) {
+    sorting = LibrarySortController(module: 'sonarr',
+      loaders: {
+        LibrarySortLookup.qualityProfiles: () async => {
+          for (final profile in await _service.getQualityProfiles()) profile.id: profile.name,
+        },
+        LibrarySortLookup.tags: () async => {
+          for (final tag in await _service.getTags()) tag.id: tag.label,
+        },
+      }, onChanged: _resort);
+  }
+
+  void _resort() {
+    state = state.copyWith(error: state.error,
+      filtered: _applyFilters(state.series, state.searchQuery, state.filter));
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    sorting.dispose();
+    super.dispose();
+  }
 
   Future<void> loadSeries() async {
+    final generation = ++_loadGeneration;
+    final labels = sorting.refresh();
     state = state.copyWith(isLoading: true);
     try {
       final series = await _service.getSeries();
-      series.sort(
-          (a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+      if (_disposed || generation != _loadGeneration) return;
       state = state.copyWith(
         isLoading: false,
         series: series,
         filtered: _applyFilters(series, state.searchQuery, state.filter),
       );
     } catch (e) {
+      if (_disposed || generation != _loadGeneration) return;
       state = state.copyWith(
         isLoading: false,
         error: 'Failed to load series: $e',
       );
+    } finally {
+      await labels;
     }
   }
 
   void search(String query) {
     state = state.copyWith(
+      error: state.error,
       searchQuery: query,
       filtered: _applyFilters(state.series, query, state.filter),
     );
@@ -86,6 +121,7 @@ class SonarrSeriesNotifier extends ChangeNotifier {
 
   void setFilter(SonarrFilter filter) {
     state = state.copyWith(
+      error: state.error,
       filter: filter,
       filtered: _applyFilters(state.series, state.searchQuery, filter),
     );
@@ -123,6 +159,6 @@ class SonarrSeriesNotifier extends ChangeNotifier {
           .toList(),
     };
 
-    return result;
+    return sortSonarrLibrary(result, sorting.effectiveSelection, sorting.labels);
   }
 }

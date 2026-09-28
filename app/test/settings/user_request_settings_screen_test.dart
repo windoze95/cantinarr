@@ -18,7 +18,7 @@ void main() {
   late _FakeAdapter adapter;
 
   Future<void> pumpScreen(WidgetTester tester,
-      {bool targetIsAdmin = false}) async {
+      {bool targetIsAdmin = false, bool assignments = false}) async {
     tester.view.physicalSize = const Size(390, 1600);
     tester.view.devicePixelRatio = 1;
     addTearDown(() {
@@ -30,7 +30,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          authProvider.overrideWith(() => _FakeAuthNotifier(_adminState())),
+          authProvider.overrideWith(() => _FakeAuthNotifier(_adminState(assignments: assignments))),
           backendClientProvider.overrideWithValue(dio),
         ],
         child: MaterialApp(
@@ -62,6 +62,23 @@ void main() {
     ).first);
     return chip.selected;
   }
+
+  testWidgets('single library assignments and preference revocation save grants first', (tester) async {
+    adapter = _FakeAdapter(grants: {'sonarr': ['sonarr-main']}, preferences: {'sonarr': 'sonarr-main'});
+    await pumpScreen(tester, assignments: true);
+    await scrollTo(tester, find.text('Assigned Sonarr libraries'));
+    final tv = find.widgetWithText(CheckboxListTile, 'TV');
+    expect(tester.widget<CheckboxListTile>(tv).value, isTrue);
+    await tester.tap(tv); await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await save(tester);
+    final grantsIndex = adapter.requests.indexWhere((r) => r.method == 'PUT' && r.path.endsWith('/instance-grants'));
+    final defaultsIndex = adapter.requests.indexWhere((r) => r.method == 'PUT' && r.path.endsWith('/default-instances'));
+    expect(grantsIndex, greaterThanOrEqualTo(0));
+    expect(defaultsIndex, greaterThan(grantsIndex));
+    expect((adapter.requests[grantsIndex].body as Map)['sonarr'], isEmpty);
+    expect((adapter.requests[defaultsIndex].body as Map)['sonarr'], isNull);
+  });
 
   testWidgets(
       'grants checkboxes appear beside the default and save additively',
@@ -270,13 +287,14 @@ void main() {
   });
 }
 
-AuthState _adminState() => const AuthState(
+AuthState _adminState({bool assignments = false}) => AuthState(
       connection: BackendConnection(
         serverUrl: 'http://localhost',
+        instanceAssignments: assignments,
         accessToken: 'access',
         refreshToken: 'refresh',
-        services: AvailableServices(),
-        instances: [
+        services: const AvailableServices(),
+        instances: const [
           ServiceInstance(
             id: 'radarr-main',
             serviceType: 'radarr',
@@ -296,7 +314,7 @@ AuthState _adminState() => const AuthState(
           ),
         ],
       ),
-      user: UserProfile(id: 1, username: 'admin', role: 'admin'),
+      user: const UserProfile(id: 1, username: 'admin', role: 'admin'),
     );
 
 class _FakeAuthNotifier extends AuthNotifier {
@@ -305,10 +323,13 @@ class _FakeAuthNotifier extends AuthNotifier {
 
   @override
   Future<AuthState> build() async => authState;
+  @override
+  Future<void> refreshConfig() async {}
 }
 
 class _FakeAdapter implements HttpClientAdapter {
   final Map<String, List<String>> grants;
+  final Map<String, String> preferences;
   final List<({String method, String path, dynamic body})> requests = [];
 
   /// The user's stored kids-account policy; null answers 404 (not a kids
@@ -323,6 +344,7 @@ class _FakeAdapter implements HttpClientAdapter {
 
   _FakeAdapter({
     this.grants = const {},
+    this.preferences = const {},
     this.policy,
     this.certifications = _usCatalog,
     this.certificationsStatus,
@@ -402,7 +424,7 @@ class _FakeAdapter implements HttpClientAdapter {
               'sonarr_profiles': <dynamic>[],
             };
     } else if (path.endsWith('/default-instances')) {
-      response = <String, dynamic>{};
+      response = preferences;
     } else if (path.endsWith('/instance-grants')) {
       response = grants;
     }

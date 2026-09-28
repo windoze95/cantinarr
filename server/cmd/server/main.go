@@ -210,6 +210,7 @@ func main() {
 	})
 	instanceHandler.SetGrantObserver(mediaAccessService.OnGrantsChanged)
 	instanceStore.SetGrantAddedObserver(mediaAccessService.OnGrantAdded)
+	authService.SetGrantAddedObserver(mediaAccessService.OnGrantAdded)
 	instanceHandler.SetSharedLibrariesObserver(mediaAccessService.OnSharedLibrariesChanged)
 	authHandler.SetUserDeleteHook(mediaAccessService.BeforeUserDelete)
 
@@ -264,10 +265,11 @@ func main() {
 	// concrete *push.Composite satisfies both request.Notifier and
 	// remediation.Notifier, so the same fan-out drives both.
 	var notifier *push.Composite
+	discordNotifications := discordnotify.NewService(database, cipher, func() string { return serverSettings.Get().ExternalURL })
 	if pushNotifier != nil {
-		notifier = push.NewComposite(wsHub, pushNotifier)
+		notifier = push.NewComposite(wsHub, pushNotifier, discordNotifications)
 	} else {
-		notifier = push.NewComposite(wsHub)
+		notifier = push.NewComposite(wsHub, discordNotifications)
 	}
 	// Media-server invites (Plex): "user shared their Plex email" goes through
 	// the media-access service, which sends the invites their grants owe (or
@@ -277,9 +279,9 @@ func main() {
 	authHandler.SetAccessRequestHook(mediaAccessService.OnPlexEmailShared)
 	requestService := request.NewService(database, registry, bridge, notifier)
 	wsHub.SetTVImportResolver(requestService)
-	discordNotifications := discordnotify.NewService(database, cipher, func() string { return serverSettings.Get().ExternalURL })
 	requestService.SetCreationObserver(request.CreationObservers{discordNotifications, pushNotifier})
-	discordNotifications.Start(ctx)
+	discordNotifications.SetSource(requestService)
+	requestService.SetDiscordAvailabilityWake(discordNotifications.WakeAvailability)
 	requestHandler := request.NewHandler(requestService)
 	mediaAccessHandler.SetListeningBooks(requestService)
 
@@ -287,6 +289,7 @@ func main() {
 	// the read-only agent, and (Wave 5) accepts auto-dispatched issues from the
 	// poller. AutoDispatch ships OFF; the opener re-checks the live toggle per call.
 	remediationService := remediation.NewService(database, registry, bridge, notifier)
+	remediationService.SetReportObserver(discordNotifications)
 	remediationHandler := remediation.NewHandler(remediationService)
 
 	// Parked book requests (Chaptarr 0.9.879+ still importing the author) are
@@ -296,6 +299,7 @@ func main() {
 	requestService.SetBookImportStallSink(remediationService)
 	requestService.StartBookParkMaintenance(ctx)
 	requestService.StartDispatchMaintenance(ctx)
+	requestService.StartRequesterTagMaintenance(ctx)
 
 	// A grant write never fails because a media server is down, so a
 	// switch-off decided during an outage can be owed to the server. This
@@ -392,11 +396,14 @@ func main() {
 	discoverHandler.SetContentPolicy(contentPolicy)
 	toolServer.SetContentPolicy(contentPolicy)
 	requestService.SetContentPolicy(contentPolicy)
+	discordNotifications.Start(ctx)
 	aiHandler.SetContentPolicy(contentPolicy)
 	pushNotifier.SetContentPolicy(contentPolicy)
 	proxyHandler.SetContentPolicy(contentPolicy)
 	// browse_titles honors the same English-only default the browse grid does.
 	toolServer.SetDiscoveryPrefs(serverSettings)
+	// Show covers get their 4K answer only while an admin has it switched on.
+	requestService.SetCover4KBadges(func() bool { return serverSettings.Get().Cover4KBadges })
 
 	// Arr webhook receiver (Sonarr/Radarr → Connect → Webhook): pushes
 	// out-of-band library changes (manual imports, deletes) into the same WS

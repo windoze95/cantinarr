@@ -21,16 +21,27 @@ class LibraryStatus {
   /// Partial.
   final String? episodeSubtitle;
 
+  /// Whether the library's copy is 4K: a movie file Radarr measured at 4K,
+  /// or a show the library holds in full with every episode file Sonarr
+  /// measured at 4K. Only ever set alongside Available.
+  final bool is4K;
+
   const LibraryStatus({
     required this.label,
     required this.color,
     this.episodeSubtitle,
+    this.is4K = false,
   });
 }
 
 const _available = LibraryStatus(
   label: 'Available',
   color: AppTheme.available,
+);
+const _available4K = LibraryStatus(
+  label: 'Available',
+  color: AppTheme.available,
+  is4K: true,
 );
 const _partial = LibraryStatus(
   label: 'Partial',
@@ -53,7 +64,7 @@ LibraryStatus? tvLibraryStatus(RequestStatusDetail detail) {
     return unknownTVLibraryStatus;
   }
   return switch (detail.status) {
-    RequestStatus.available => _available,
+    RequestStatus.available => detail.is4K ? _available4K : _available,
     RequestStatus.requested => _requested,
     RequestStatus.pending => const LibraryStatus(
         label: 'Pending', color: AppTheme.requested),
@@ -95,10 +106,15 @@ LibraryStatus _scopedPartial(List<RequestSeasonStatus> seasons) {
 /// enough — same-named shows are distinct records (the 2003 "Tremors" series
 /// and the 2018 reboot pilot, say), and a title-only match dresses the one
 /// you can't have in the availability of the one you own.
+///
+/// [show4K] marks a movie whose file Radarr measured at 4K (the device's 4K
+/// badges setting). Series from the Sonarr list never get it: the list carries
+/// no file measurements, so only the per-card server read can say.
 Map<(MediaType, int), LibraryStatus> buildSearchLibraryStatus({
   required List<MediaItem> searchResults,
   required List<RadarrMovie> movies,
   required List<SonarrSeries> series,
+  bool show4K = false,
 }) {
   final map = <(MediaType, int), LibraryStatus>{};
 
@@ -107,7 +123,10 @@ Map<(MediaType, int), LibraryStatus> buildSearchLibraryStatus({
     final tmdbId = movie.tmdbId;
     if (tmdbId == null) continue;
     if (movie.hasFile) {
-      map[(MediaType.movie, tmdbId)] = _available;
+      map[(MediaType.movie, tmdbId)] =
+          show4K && (movie.movieFile?.measures4K ?? false)
+              ? _available4K
+              : _available;
     } else if (movie.monitored) {
       map[(MediaType.movie, tmdbId)] = _requested;
     }

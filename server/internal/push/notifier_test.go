@@ -103,6 +103,7 @@ func TestNotifyUserRequestDecision(t *testing.T) {
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, request_decision) VALUES (42, 1)")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyUser(42, "request_decision", map[string]interface{}{
@@ -145,6 +146,7 @@ func TestNotifyUserBookRequestDecisionCarriesPinnedFormatScope(t *testing.T) {
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, request_decision) VALUES (42, 1)")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyUser(42, "request_decision", map[string]interface{}{
@@ -207,6 +209,7 @@ func TestNotifyUserRequestDecisionSuppressedByDefault(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (42, 'req', '', 'user')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyUser(42, "request_decision", map[string]interface{}{
@@ -232,6 +235,7 @@ func TestNotifyUserRequestDecisionSuppressedWhenOff(t *testing.T) {
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, request_decision) VALUES (42, 0)")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyUser(42, "request_decision", map[string]interface{}{
@@ -253,6 +257,7 @@ func TestNotifyUserIgnoresOtherEvents(t *testing.T) {
 		t.Fatalf("open db: %v", err)
 	}
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyUser(42, "request_status_changed", map[string]interface{}{"title": "X"})
@@ -277,6 +282,7 @@ func TestNotifyAdminsResolvesAdminIDs(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'bob', '', 'user')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyAdmins("request_pending", map[string]interface{}{
@@ -306,6 +312,7 @@ func TestNotifyAdminsSetsBadgeFromPendingCount(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyAdmins("request_pending", map[string]interface{}{
@@ -331,6 +338,7 @@ func TestNotifyAdminsUsesAutomaticIssueCopy(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyAdmins("issue_created", map[string]interface{}{
@@ -365,6 +373,7 @@ func TestNotifyAdminsUsesGenericSystemIssueCopy(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyAdmins("issue_created", map[string]interface{}{
@@ -400,6 +409,7 @@ func TestNotifyAdminsCoalescesSystemConditions(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyAdmins("issue_created", map[string]interface{}{
@@ -431,6 +441,7 @@ func TestNotifyAdminsCoalescesAnIssueWave(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyAdmins("issue_created", map[string]interface{}{
@@ -467,6 +478,7 @@ func TestNotifyAdminsKeepsSingleIssueAlertUncollapsed(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyAdmins("issue_created", map[string]interface{}{"issue_id": 7, "count": 1})
@@ -494,6 +506,7 @@ func TestNotifyAdminsCoalescesAnApprovalWave(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyAdmins("agent_action_pending", map[string]interface{}{
@@ -528,6 +541,7 @@ func TestNotifyAdminsKeepsSingleApprovalPushUncollapsed(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyAdmins("agent_action_pending", map[string]interface{}{"issue_id": 7})
@@ -563,6 +577,7 @@ func TestNotifyAdminsHonorsOptOutAndRole(t *testing.T) {
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, request_pending) VALUES (3, 1)")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyAdmins("request_pending", map[string]interface{}{"title": "The Matrix"})
@@ -583,8 +598,8 @@ func TestNotifierDisabledClientIsNoop(t *testing.T) {
 	n := NewNotifier(database, nil, nil)
 	n.NotifyUser(1, "request_decision", map[string]interface{}{"decision": "approved", "title": "X"})
 	n.NotifyAdmins("request_pending", map[string]interface{}{"title": "X"})
-	n.NotifyNewMovie("The Matrix", 603, "")
-	n.NotifyNewEpisode("Severance", 95396, "")
+	n.NotifyNewMovie("The Matrix", 603, seedPushLibrary(t, database, "radarr"))
+	n.NotifyNewEpisode("Severance", 95396, seedPushLibrary(t, database, "sonarr"))
 	n.NotifyNewBook("Ahsoka", "29749107", "books-a", "ebook")
 	n.NotifyUpgradedMovie("The Matrix", 603, "")
 	n.NotifyUpgradedEpisode("Severance", 95396, "")
@@ -643,6 +658,7 @@ func TestNotifyUpgradedMovieReachesOptedInAdminsOnly(t *testing.T) {
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, content_upgraded) VALUES (2, 1)")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyUpgradedMovie("The Matrix", 603, "")
@@ -697,6 +713,7 @@ func TestNotifyUpgradedBookIsAdminScopedNotInstanceScoped(t *testing.T) {
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, content_upgraded) VALUES (2, 1)")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyUpgradedBook("Ahsoka", "29749107", "books-a", "ebook")
@@ -744,6 +761,7 @@ func TestNotifyUpgradedMusicIsAdminScopedNotInstanceScoped(t *testing.T) {
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, content_upgraded) VALUES (2, 1)")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyUpgradedMusic("Fear Inoculum", "Tool", "1f4a9e6b", "music-a")
@@ -788,9 +806,10 @@ func TestNotifyNewMovieReachesOptedInUsers(t *testing.T) {
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_movie) VALUES (3, 1)")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
-	n.NotifyNewMovie("The Matrix", 603, "")
+	n.NotifyNewMovie("The Matrix", 603, seedPushLibrary(t, database, "radarr"))
 
 	body := cap.waitForNotification(t)
 	ids := userIDsOf(t, body)
@@ -817,7 +836,7 @@ func TestNotifyNewMovieReachesOptedInUsers(t *testing.T) {
 		t.Errorf("data.tmdb_id = %v, want 603", data["tmdb_id"])
 	}
 	opts, _ := body["options"].(map[string]any)
-	if opts["collapse_id"] != "new_movie:603" {
+	if opts["collapse_id"] != "new_movie:test-radarr|603" {
 		t.Errorf("collapse_id = %v, want new_movie:603", opts["collapse_id"])
 	}
 }
@@ -833,9 +852,10 @@ func TestNotifyNewEpisodeReachesOptedInUsers(t *testing.T) {
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_episode) VALUES (2, 0)")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
-	n.NotifyNewEpisode("Severance", 95396, "")
+	n.NotifyNewEpisode("Severance", 95396, seedPushLibrary(t, database, "sonarr"))
 
 	body := cap.waitForNotification(t)
 	ids := userIDsOf(t, body)
@@ -854,7 +874,7 @@ func TestNotifyNewEpisodeReachesOptedInUsers(t *testing.T) {
 		t.Errorf("data = %v, want type/media_type new_episode/tv", data)
 	}
 	opts, _ := body["options"].(map[string]any)
-	if opts["collapse_id"] != "new_episode:95396" {
+	if opts["collapse_id"] != "new_episode:test-sonarr|95396" {
 		t.Errorf("collapse_id = %v, want new_episode:95396", opts["collapse_id"])
 	}
 }
@@ -868,16 +888,18 @@ func TestNotifyNewMovieScopesToLibraryAndAlertsSiblings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	mustExec(t, database, "INSERT INTO service_instances (id, service_type, name, url, api_key, is_default) VALUES ('radarr-hd', 'radarr', 'Movies', 'http://hd', 'k', 1)")
-	mustExec(t, database, "INSERT INTO service_instances (id, service_type, name, url, api_key) VALUES ('radarr-4k', 'radarr', '4K Movies', 'http://4k', 'k')")
+	mustExec(t, database, "INSERT OR IGNORE INTO service_instances (id, service_type, name, url, api_key, is_default) VALUES ('radarr-hd', 'radarr', 'Movies', 'http://hd', 'k', 1)")
+	mustExec(t, database, "INSERT OR IGNORE INTO service_instances (id, service_type, name, url, api_key) VALUES ('radarr-4k', 'radarr', '4K Movies', 'http://4k', 'k')")
 	// alice(1): default library only. bob(2): pinned 4K.
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'bob', '', 'user')")
 	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (2, 'radarr', 'radarr-4k')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
+	mustExec(t, database, "INSERT INTO user_instance_grants(user_id,instance_id) VALUES (1,'radarr-hd')")
 	n.NotifyNewMovie("Dune", 438631, "radarr-hd")
 	body := cap.waitForNotification(t)
 	if ids := userIDsOf(t, body); len(ids) != 1 || ids[0] != "1" {
@@ -917,6 +939,7 @@ func TestNotifyNewBookScopesRecipientsAndCarriesBookIdentity(t *testing.T) {
 	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (3, 'chaptarr', 'books-b')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyNewBook("Ahsoka (Star Wars)", "29749107", "books-a", "ebook")
@@ -965,6 +988,7 @@ func TestNotifyNewBookAudiobookCopyAndNoUngrantedRecipients(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (5, 'dave', '', 'user')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyNewBook("Ahsoka (Star Wars)", "29749107", "books-a", "audiobook")
@@ -990,6 +1014,7 @@ func TestNotifyNewBookNoEligibleRecipientsIsNoop(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (5, 'dave', '', 'user')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyNewBook("Ahsoka (Star Wars)", "29749107", "books-a", "ebook")
@@ -1020,6 +1045,7 @@ func TestNotifyNewMusicScopesRecipientsAndCarriesMusicIdentity(t *testing.T) {
 	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (3, 'lidarr', 'music-b')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyNewMusic("Fear Inoculum", "Tool", "1f4a9e6b", "music-a")
@@ -1068,6 +1094,7 @@ func TestNotifyNewMusicNoEligibleRecipientsIsNoop(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (5, 'dave', '', 'user')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyNewMusic("Fear Inoculum", "Tool", "1f4a9e6b", "music-a")
@@ -1099,10 +1126,11 @@ func TestNotifierPrunesDeadTokenOnPrunedResult(t *testing.T) {
 	if mgr.Ensure(context.Background()) == nil {
 		t.Fatal("Ensure returned nil")
 	}
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	// new_movie is on by default, so user 1 is targeted and a send happens.
-	n.NotifyNewMovie("The Matrix", 603, "")
+	n.NotifyNewMovie("The Matrix", 603, seedPushLibrary(t, database, "radarr"))
 
 	// The pruned token's local row must be deleted (fire-and-forget, so poll).
 	deadline := time.After(2 * time.Second)
@@ -1132,9 +1160,10 @@ func TestNotifyNewContentNoRecipientsIsNoop(t *testing.T) {
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_movie) VALUES (1, 0)")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
-	n.NotifyNewMovie("The Matrix", 603, "")
+	n.NotifyNewMovie("The Matrix", 603, seedPushLibrary(t, database, "radarr"))
 
 	select {
 	case <-cap.ch:
@@ -1161,6 +1190,7 @@ func TestNotifyAdminsAutoApprovalPausedFixedTemplateAndSharedPref(t *testing.T) 
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'user3', '', 'user')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyAdmins("agent_autoapproval_paused", map[string]interface{}{
@@ -1213,6 +1243,7 @@ func TestNotifyAdminsProfileChangePendingSharedPrefAndCollapse(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'user3', '', 'user')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyAdmins("profile_change_pending", map[string]interface{}{
@@ -1263,6 +1294,7 @@ func TestNotifyAgentDigestOutcomeBody(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'boss', '', 'admin')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 
 	// The live shape that motivated the change: 438 self-cleared, nothing else.
@@ -1308,4 +1340,18 @@ func TestNotifyAgentDigestOutcomeBody(t *testing.T) {
 	if notif["body"] != "Last 7 days: 1 resolved — on its own" {
 		t.Errorf("singular body = %q", notif["body"])
 	}
+}
+
+// Older tests represented assignments as pins; set up the actual grants too.
+func grantPinnedPushFixtures(t *testing.T, database *sql.DB) {
+	t.Helper()
+	mustExec(t, database, `INSERT OR IGNORE INTO service_instances(id,service_type,name,url,api_key) SELECT DISTINCT instance_id,service_type,instance_id,'http://fixture','key' FROM user_default_instances`)
+	mustExec(t, database, `INSERT OR IGNORE INTO user_instance_grants(user_id,instance_id) SELECT user_id,instance_id FROM user_default_instances`)
+}
+func seedPushLibrary(t *testing.T, database *sql.DB, service string) string {
+	t.Helper()
+	id := "test-" + service
+	mustExec(t, database, "INSERT OR IGNORE INTO service_instances(id,service_type,name,url,api_key) VALUES (?,?,?,'http://fixture','key')", id, service, id)
+	mustExec(t, database, "INSERT OR IGNORE INTO user_instance_grants(user_id,instance_id) SELECT id,? FROM users", id)
+	return id
 }

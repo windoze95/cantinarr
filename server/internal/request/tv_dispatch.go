@@ -289,6 +289,9 @@ func (s *Service) saveTVDelivery(r *resolvedRequest, target *TVRequestTarget, ap
 	if _, err = tx.Exec(`INSERT INTO request_dispatch(request_id,format,state) VALUES (?,'',?)`, id, state); err != nil {
 		return 0, false, err
 	}
+	if err = captureRequesterTag(tx, id); err != nil {
+		return 0, false, err
+	}
 	if allFree {
 		if _, err = tx.Exec(`UPDATE request_log SET status=? WHERE id=?`, target.noOpStatus, id); err != nil {
 			return 0, false, err

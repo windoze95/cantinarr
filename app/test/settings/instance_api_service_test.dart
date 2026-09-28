@@ -113,6 +113,17 @@ InstanceApiService _service(_RecordingAdapter adapter) {
 }
 
 void main() {
+  test('requester tagging distinguishes omitted settings from explicit false', () async {
+    final adapter = _RecordingAdapter();
+    final service = _service(adapter);
+    await service.createInstance(serviceType: 'radarr', name: 'Movies', url: 'http://radarr', tagRequests: true);
+    expect(adapter.requests.last.body['tag_requests'], true);
+    await service.updateInstance(id: 'radarr-new', name: 'Movies', url: 'http://radarr');
+    expect(adapter.requests.last.body.containsKey('tag_requests'), false);
+    await service.updateInstance(id: 'radarr-new', name: 'Movies', url: 'http://radarr', tagRequests: false);
+    expect(adapter.requests.last.body['tag_requests'], false);
+  });
+
   test('Tdarr test and save use the same explicit key-removal flag', () async {
     final adapter = _RecordingAdapter();
     final service = _service(adapter);

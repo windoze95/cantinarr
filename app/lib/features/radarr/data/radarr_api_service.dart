@@ -307,7 +307,7 @@ class RadarrApiService {
   Future<void> rescanMovie(int movieId) async {
     await _dio.post('$_basePath/command', data: {
       'name': 'RescanMovie',
-      'movieIds': [movieId],
+      'movieId': movieId,
     });
   }
 }

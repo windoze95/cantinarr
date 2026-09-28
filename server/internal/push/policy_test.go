@@ -19,6 +19,7 @@ func TestPolicyAndPersonalMastersFilterEveryCategory(t *testing.T) {
 	}
 	mustExec(t, database, `INSERT INTO users(id,username,password_hash,role) VALUES
 		(1,'admin','','admin'),(2,'user','','user'),(3,'muted','','admin'),(4,'category-muted','','admin')`)
+	grantPinnedPushFixtures(t, database)
 	store := NewPrefsStore(database)
 	for category, col := range categoryColumn {
 		t.Run(category, func(t *testing.T) {
@@ -164,6 +165,7 @@ func TestAutomaticRequestPushIsOptInAndDoesNotRequestReview(t *testing.T) {
 			mustExec(t, database, `INSERT INTO request_log(id,user_id,media_type,tmdb_id,title,foreign_id,book_format)
 				VALUES(1,2,?,550,'A title','catalog-id','both')`, kind)
 			mgr, capture := newNotifierTestGateway(t, database)
+			grantPinnedPushFixtures(t, database)
 			n := NewNotifier(database, mgr, nil)
 			n.RequestCreated(1, false)
 			select {
@@ -205,6 +207,7 @@ func TestMutedNotificationsDoNotReplayOrReportFailures(t *testing.T) {
 	}
 	mustExec(t, database, `INSERT INTO users(id,username,password_hash) VALUES(1,'alice','')`)
 	mgr, capture := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 	off := false
 	if err := n.prefs.setPolicy(&off, nil); err != nil {
@@ -213,13 +216,13 @@ func TestMutedNotificationsDoNotReplayOrReportFailures(t *testing.T) {
 	if !n.ContentReady() {
 		t.Fatal("muting must not pause library observation")
 	}
-	n.NotifyNewMovie("Muted movie", 550, "")
+	n.NotifyNewMovie("Muted movie", 550, seedPushLibrary(t, database, "radarr"))
 	on := true
 	if err := n.prefs.setPolicy(&on, nil); err != nil {
 		t.Fatal(err)
 	}
-	n.NotifyNewMovie("Muted movie", 550, "") // same import, still witnessed/deduped.
-	n.NotifyNewMovie("Next movie", 551, "")
+	n.NotifyNewMovie("Muted movie", 550, seedPushLibrary(t, database, "radarr")) // same import, still witnessed/deduped.
+	n.NotifyNewMovie("Next movie", 551, seedPushLibrary(t, database, "radarr"))
 	got := capture.waitForNotification(t)
 	if got["notification"].(map[string]any)["body"] != "Next movie is ready to watch" {
 		t.Fatalf("replayed muted alert: %v", got)

@@ -11,12 +11,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// The Radarr library list's two entry points into the shared movie action
-/// sheet: a long-press on a tile and "More actions…" in the row's overflow
-/// menu, the same wiring the Sonarr series list carries.
-///
-/// Fake Dio adapter: routes GETs to canned bodies and records every request
-/// (method, path, query, decoded body) for assertions.
+/// The list and long-press sheet dispatch the same exact movie action.
+/// Records request method, path, query, and body through a fake provider.
 class _FakeAdapter implements HttpClientAdapter {
   final List<
       ({
@@ -95,67 +91,6 @@ const _tags = [
 final _movie = RadarrMovie.fromJson(Map<String, dynamic>.from(_rawMovie));
 
 void main() {
-  group('RadarrMovieList long-press actions', () {
-    Future<void> pumpList(
-      WidgetTester tester, {
-      void Function(RadarrMovie movie)? onLongPress,
-    }) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: RadarrMovieList(
-              movies: [_movie],
-              onDelete: (_, {bool deleteFiles = false}) {},
-              onSearch: (_) {},
-              onLongPress: onLongPress,
-            ),
-          ),
-        ),
-      );
-    }
-
-    Future<void> openRowMenu(WidgetTester tester) async {
-      await tester.tap(find.byTooltip('Actions for Example Movie'));
-      await tester.pumpAndSettle();
-    }
-
-    testWidgets('long-pressing a tile hands that movie to onLongPress',
-        (tester) async {
-      final pressed = <RadarrMovie>[];
-      await pumpList(tester, onLongPress: pressed.add);
-
-      await tester.longPress(find.text('Example Movie'));
-      await tester.pumpAndSettle();
-
-      expect(pressed, hasLength(1));
-      expect(pressed.single.id, 7);
-    });
-
-    testWidgets('the row menu hides More actions until onLongPress is wired',
-        (tester) async {
-      await pumpList(tester);
-      await openRowMenu(tester);
-
-      expect(find.text('More actions…'), findsNothing);
-      // The explicit delete entry is untouched either way.
-      expect(find.text('Delete…'), findsOneWidget);
-    });
-
-    testWidgets('More actions in the row menu invokes the same callback',
-        (tester) async {
-      final pressed = <RadarrMovie>[];
-      await pumpList(tester, onLongPress: pressed.add);
-      await openRowMenu(tester);
-
-      expect(find.text('More actions…'), findsOneWidget);
-      await tester.tap(find.text('More actions…'));
-      await tester.pumpAndSettle();
-
-      expect(pressed, hasLength(1));
-      expect(pressed.single.id, 7);
-    });
-  });
-
   group('RadarrMovieList wired to showMovieActions', () {
     late _FakeAdapter adapter;
 
@@ -172,13 +107,12 @@ void main() {
               body: Builder(
                 builder: (ctx) => RadarrMovieList(
                   movies: [_movie],
-                  onDelete: (_, {bool deleteFiles = false}) {},
-                  onSearch: (_) {},
-                  onLongPress: (movie) => showMovieActions(
+                  onAction: (movie, action) => showMovieActions(
                     ctx,
                     service: service,
                     instanceId: 'inst1',
                     movie: movie,
+                    selectedAction: action,
                   ),
                 ),
               ),
@@ -196,16 +130,16 @@ void main() {
       await tester.longPress(find.text('Example Movie'));
       await tester.pumpAndSettle();
       for (final label in [
-        'Search Movie',
-        'Edit Movie',
-        'Refresh Movie',
-        'Remove Movie',
-        'Unmonitor Movie',
+        'Automatic search',
+        'Edit movie',
+        'Refresh metadata',
+        'Remove…',
+        'Unmonitor movie',
       ]) {
         expect(find.text(label), findsOneWidget);
       }
 
-      await tester.tap(find.text('Search Movie'));
+      await tester.tap(find.text('Automatic search'));
       await tester.pumpAndSettle();
 
       final posts = adapter.requests.where((r) => r.method == 'POST').toList();

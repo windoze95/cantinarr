@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../core/network/library_settings_service.dart';
+import 'artist_actions.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_ambient_background.dart';
@@ -142,6 +144,17 @@ class _LidarrArtistScreenState extends ConsumerState<LidarrArtistScreen> {
     }
   }
 
+  void _showActions() {
+    final artist = _artist;
+    if (artist == null) return;
+    showArtistActions(context, service: _service,
+      settings: LibrarySettingsService(dio: ref.read(backendClientProvider),
+        instanceId: widget.instanceId, kind: LibrarySettingsKind.artist, id: artist.id),
+      instanceId: widget.instanceId, artist: artist,
+      onChanged: () { if (mounted) _load(); },
+      onRemoved: () { if (mounted) Navigator.of(context).pop(); });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -149,6 +162,8 @@ class _LidarrArtistScreenState extends ConsumerState<LidarrArtistScreen> {
       appBar: AppBar(
         title: Text(_artist?.artistName ?? widget.artistName ?? 'Artist'),
         backgroundColor: AppTheme.background,
+        actions: [IconButton(onPressed: _artist == null ? null : _showActions,
+          icon: const Icon(Icons.more_vert), tooltip: 'Artist actions')],
       ),
       body: AppAmbientBackground(child: _buildBody()),
     );

@@ -124,11 +124,20 @@ func cfgHandleConfig(w http.ResponseWriter, r *http.Request) {
 			isDefault = pin == inst.ID
 		}
 
+		assigned := false
+		for _, id := range grantedInstanceIDs(u, inst.ServiceType) {
+			if id == inst.ID {
+				assigned = true
+				break
+			}
+		}
 		instances = append(instances, map[string]any{
 			"id":              inst.ID,
 			"service_type":    inst.ServiceType,
 			"name":            inst.Name,
 			"is_default":      isDefault,
+			"assigned":        assigned,
+			"request_default": effectiveInstanceIDFor(u, inst.ServiceType) == inst.ID,
 			"media_downloads": inst.MediaDownloads,
 		})
 	}
@@ -149,6 +158,10 @@ func cfgHandleConfig(w http.ResponseWriter, r *http.Request) {
 		// surface at all — never that the caller is authorized for it.
 		"admin_catalog_browsing":   true,
 		"request_quotas":           true,
+		"requester_tagging":        true,
+		"instance_assignments":     true,
+		"initial_instance_setup":   false,
+		"cover_4k_badges":          cfgCover4KBadges(),
 		"tv_match_corrections":     true,
 		"tv_library_navigation":    true,
 		"downloads_activity":       true,

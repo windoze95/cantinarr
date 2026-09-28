@@ -34,7 +34,16 @@ var (
 		Enabled             bool
 		HasWebhook          bool
 		IncludeAutoApproved bool
-	}{Enabled: true, HasWebhook: true, IncludeAutoApproved: false}
+		Events              map[string]bool
+		EnableMentions      bool
+		RoleID              string
+		RoleEvents          map[string]bool
+		ThreadID            string
+		Username            string
+		AvatarURL           string
+		EmbedPoster         bool
+	}{Enabled: true, HasWebhook: true, IncludeAutoApproved: false,
+		Events: map[string]bool{"request_pending": true}, RoleEvents: map[string]bool{}}
 
 	// admsDeliveries is the recent-delivery log the screen shows under the
 	// switches, newest first.
@@ -194,6 +203,14 @@ func admsDiscordView() map[string]any {
 		"enabled":               admsDiscord.Enabled,
 		"has_webhook":           admsDiscord.HasWebhook,
 		"include_auto_approved": admsDiscord.IncludeAutoApproved,
+		"events":                admsDiscord.Events,
+		"enable_mentions":       admsDiscord.EnableMentions,
+		"role_id":               admsDiscord.RoleID,
+		"role_events":           admsDiscord.RoleEvents,
+		"thread_id":             admsDiscord.ThreadID,
+		"username":              admsDiscord.Username,
+		"avatar_url":            admsDiscord.AvatarURL,
+		"embed_poster":          admsDiscord.EmbedPoster,
 		"recent":                recent,
 	}
 }
@@ -206,30 +223,80 @@ func admsDiscordHandler(w http.ResponseWriter, r *http.Request) {
 		admsDiscord.Enabled = false
 		admsDiscord.HasWebhook = false
 		admsDiscord.IncludeAutoApproved = false
+		admsDiscord.Events = map[string]bool{"request_pending": true}
+		admsDiscord.EnableMentions = false
+		admsDiscord.RoleID = ""
+		admsDiscord.RoleEvents = map[string]bool{}
+		admsDiscord.ThreadID = ""
+		admsDiscord.Username = ""
+		admsDiscord.AvatarURL = ""
+		admsDiscord.EmbedPoster = false
 	case http.MethodPut:
 		var body struct {
-			Enabled             bool    `json:"enabled"`
-			IncludeAutoApproved bool    `json:"include_auto_approved"`
-			WebhookURL          *string `json:"webhook_url"`
+			Enabled             bool             `json:"enabled"`
+			IncludeAutoApproved bool             `json:"include_auto_approved"`
+			WebhookURL          *string          `json:"webhook_url"`
+			Events              *map[string]bool `json:"events"`
+			EnableMentions      *bool            `json:"enable_mentions"`
+			RoleID              *string          `json:"role_id"`
+			RoleEvents          *map[string]bool `json:"role_events"`
+			ThreadID            *string          `json:"thread_id"`
+			Username            *string          `json:"username"`
+			AvatarURL           *string          `json:"avatar_url"`
+			EmbedPoster         *bool            `json:"embed_poster"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&body) != nil {
 			writeErr(w, http.StatusBadRequest, "invalid Discord settings")
 			return
 		}
+		hasWebhook := admsDiscord.HasWebhook
 		if body.WebhookURL != nil {
 			if !admsValidDiscordWebhook(*body.WebhookURL) {
 				writeErr(w, http.StatusBadRequest,
 					"the webhook address must be a https://discord.com/api/webhooks/… URL")
 				return
 			}
-			admsDiscord.HasWebhook = true
+			hasWebhook = true
 		}
-		if body.Enabled && !admsDiscord.HasWebhook {
+		if body.Enabled && !hasWebhook {
 			writeErr(w, http.StatusBadRequest, "add a webhook address first")
 			return
 		}
+		if body.Events != nil && !admsValidEvents(*body.Events) ||
+			body.RoleEvents != nil && !admsValidEvents(*body.RoleEvents) ||
+			body.RoleID != nil && *body.RoleID != "" && !admsValidDiscordID(*body.RoleID) ||
+			body.ThreadID != nil && *body.ThreadID != "" && !admsValidDiscordID(*body.ThreadID) ||
+			body.AvatarURL != nil && *body.AvatarURL != "" && !admsValidAvatarURL(*body.AvatarURL) {
+			writeErr(w, http.StatusBadRequest, "invalid Discord settings")
+			return
+		}
+		admsDiscord.HasWebhook = hasWebhook
 		admsDiscord.Enabled = body.Enabled
 		admsDiscord.IncludeAutoApproved = body.IncludeAutoApproved
+		if body.Events != nil {
+			admsDiscord.Events = *body.Events
+		}
+		if body.EnableMentions != nil {
+			admsDiscord.EnableMentions = *body.EnableMentions
+		}
+		if body.RoleID != nil {
+			admsDiscord.RoleID = *body.RoleID
+		}
+		if body.RoleEvents != nil {
+			admsDiscord.RoleEvents = *body.RoleEvents
+		}
+		if body.ThreadID != nil {
+			admsDiscord.ThreadID = *body.ThreadID
+		}
+		if body.Username != nil {
+			admsDiscord.Username = *body.Username
+		}
+		if body.AvatarURL != nil {
+			admsDiscord.AvatarURL = *body.AvatarURL
+		}
+		if body.EmbedPoster != nil {
+			admsDiscord.EmbedPoster = *body.EmbedPoster
+		}
 	}
 	writeJSON(w, http.StatusOK, admsDiscordView())
 }

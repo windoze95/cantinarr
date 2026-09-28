@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+import io
+from contextlib import redirect_stdout
 import json
 import os
 from pathlib import Path
@@ -110,11 +112,47 @@ class DistributionTests(unittest.TestCase):
         with patch.dict(os.environ, {"SOURCE_JSON": json.dumps(source)}), \
                 patch("release_control.branch_state", return_value={"main": "a" * 40, "release/1.0.0": "b" * 40}):
             self.assertEqual(td.wait_for_processing(client, BUILD_ID, deadline=0), "READY_FOR_BETA_SUBMISSION")
-            with self.assertRaises(td.ApiError):
+            with self.assertRaises(td.ReleasePaused):
                 td.submit_for_beta_review(client, BUILD_ID)
-            with self.assertRaises(td.ApiError):
+            with self.assertRaises(td.ReleasePaused):
                 td.add_to_group(client, GROUP_ID, BUILD_ID)
             self.assertEqual(client.mutations(), [])
+
+    def run_distribution(self, branches):
+        source = {"sha": "a" * 40, "ref": "refs/heads/main", "channel": "beta"}
+        client = FakeClient()
+        output = io.StringIO()
+        environment = {
+            "SOURCE_JSON": json.dumps(source), "APP_STORE_CONNECT_KEY_ID": "test",
+            "APP_STORE_CONNECT_ISSUER_ID": "test", "APP_STORE_CONNECT_API_KEY_B64": "dGVzdA==",
+            "GITHUB_STEP_SUMMARY": "",
+        }
+        argv = ["testflight_distribute.py", "--group-id", GROUP_ID, "--group-name", "Public Beta",
+                "--app-version", "0.1.0", "--build-number", "432"]
+        with patch.dict(os.environ, environment), patch.object(sys, "argv", argv), \
+                patch.object(td, "Client", return_value=client), \
+                patch("release_control.branch_state", side_effect=branches), redirect_stdout(output):
+            td.main()
+        return client, output.getvalue()
+
+    def test_freeze_after_processing_exits_cleanly_without_review_or_distribution(self):
+        client, log = self.run_distribution([{"main": "a" * 40, "release/1.0.0": "b" * 40}])
+        self.assertEqual(client.mutations(), [])
+        self.assertIn("::notice::", log)
+        self.assertNotIn("added build", log)
+
+    def test_freeze_after_review_skips_group_assignment_without_claiming_distribution(self):
+        client, log = self.run_distribution([
+            {"main": "a" * 40}, {"main": "a" * 40, "release/1.0.0": "b" * 40},
+        ])
+        self.assertEqual([path for _, path, _ in client.mutations()], ["/v1/betaAppReviewSubmissions"])
+        self.assertIn("::notice::", log)
+        self.assertNotIn("added build", log)
+
+    def test_changed_source_still_fails_distribution(self):
+        with self.assertRaises(SystemExit) as error:
+            self.run_distribution([{"main": "b" * 40}])
+        self.assertIn("superseded", str(error.exception))
 
     def test_already_distributed_build_is_a_no_op(self) -> None:
         client = FakeClient(group_builds=[{"type": "builds", "id": BUILD_ID}])

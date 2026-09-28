@@ -261,13 +261,15 @@ func init() {
 		},
 		&reqLogRow{
 			ID: 2, UserID: 2, TmdbID: 19, MediaType: mediaTypeMovie,
-			Title: "Metropolis", Status: statusAvailable,
+			InstanceID: instRadarr,
+			Title:      "Metropolis", Status: statusAvailable,
 			RequestedAt: time.Date(2026, 6, 18, 20, 41, 0, 0, time.UTC),
 			Waiters:     map[int]string{},
 		},
 		&reqLogRow{
 			ID: 3, UserID: 2, TmdbID: 90001, TvdbID: 390001, MediaType: mediaTypeTV,
-			Title: "Sherlock Holmes Adventures", Status: statusAvailable,
+			InstanceID: instSonarr,
+			Title:      "Sherlock Holmes Adventures", Status: statusAvailable,
 			SeasonScope: "all",
 			RequestedAt: time.Date(2026, 7, 2, 9, 12, 0, 0, time.UTC),
 			Waiters:     map[int]string{},
