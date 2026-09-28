@@ -169,6 +169,10 @@ func (s *Service) dispatchFormat(ctx context.Context, id int64, format string) {
 		s.finishDelivery(id, format, token, "attention", "instance_missing", nil)
 		return
 	}
+	if _, e := s.deliveryInstance(r.userID, r.mediaType, instanceID); e != nil {
+		s.finishDelivery(id, format, token, "attention", "access_unavailable", nil)
+		return
+	}
 	actor := r.userID
 	if r.mediaType == "movie" {
 		var approver int64

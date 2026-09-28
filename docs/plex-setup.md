@@ -19,7 +19,7 @@ The existing signed-in **Sign in with Plex** flow in the media-access guide also
 
 Turn on **Allow automatic signup** only if people already using your configured Plex servers should be able to create Cantinarr accounts themselves. Each signup reads current Plex account and server-share data. It requires an **accepted server share** or **verified ownership** of at least one configured Plex server. A friendship, pending invitation, removed share, or unreadable server does not prove access.
 
-Signup creates an ordinary user with the normal account defaults and a unique username. It adopts only the server access verified in that request, without sending invitations, changing library scopes, or modifying Plex sharing. An existing media-account link owned by another Cantinarr user is a conflict requiring administrator review, never permission to take over that user.
+Signup creates an ordinary user with the normal account defaults and a unique username. It receives the Radarr, Sonarr, Chaptarr, and Lidarr instances with **Automatically add new users** enabled. Later sign-ins and linking an existing identity do not reapply these assignments. It adopts only the server access verified in that request, without sending invitations, changing library scopes, or modifying Plex sharing. An existing media-account link owned by another Cantinarr user is a conflict requiring administrator review, never permission to take over that user.
 
 ## Browser approval and recovery
 

@@ -124,6 +124,14 @@ func TestLiveDisposableRequesterTags(t *testing.T) {
 				}
 				uid, _ := res.LastInsertId()
 				users = append(users, uid)
+				if grants, x := store.ListUserGrants(uid); x != nil {
+					t.Fatal(x)
+				} else {
+					grants[kind] = append(grants[kind], inst.ID)
+					if x = store.SetUserGrants(uid, grants); x != nil {
+						t.Fatal(x)
+					}
+				}
 				if e = store.SetUserDefault(uid, kind, inst.ID); e != nil {
 					t.Fatal(e)
 				}

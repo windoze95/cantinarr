@@ -69,6 +69,7 @@ func TestProblemResolvedRespectsEveryNotificationSwitch(t *testing.T) {
 			}
 			mustExec(t, database, "INSERT INTO users(id,username,password_hash) VALUES(7,'reporter','')")
 			mustExec(t, database, `INSERT INTO issues(id,source,status,reporter_id,tmdb_id,media_type,closed_at) VALUES(12,'user','resolved',7,1,'movie',CURRENT_TIMESTAMP)`)
+			grantPinnedPushFixtures(t, database)
 			store := NewPrefsStore(database)
 			switch mode {
 			case "personal category":

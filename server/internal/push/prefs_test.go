@@ -13,6 +13,7 @@ func TestPrefsGetDefaultsForMissingRow(t *testing.T) {
 	}
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
 
+	grantPinnedPushFixtures(t, database)
 	store := NewPrefsStore(database)
 	got, err := store.Get(1)
 	if err != nil {
@@ -31,6 +32,7 @@ func TestPrefsSetThenGet(t *testing.T) {
 	}
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
 
+	grantPinnedPushFixtures(t, database)
 	store := NewPrefsStore(database)
 	want := Prefs{RequestDecision: true, RequestPending: false, NewMovie: false, NewEpisode: true, NewBook: true, NewMusic: false, PlexAccessRequest: true, ContentUpgraded: true}
 	if err := store.Set(1, want); err != nil {
@@ -71,6 +73,7 @@ func TestUsersOptedIntoDefaultBehavior(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'admin', '', 'admin')")
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_movie) VALUES (2, 0)")
 
+	grantPinnedPushFixtures(t, database)
 	store := NewPrefsStore(database)
 
 	// new_movie/new_episode are per-library truth now: the unscoped query
@@ -88,7 +91,7 @@ func TestUsersOptedIntoDefaultBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("usersOptedIntoNewVideo(new_movie, \"\"): %v", err)
 	}
-	if !equalIDs(got, []int64{1, 3}) {
+	if len(got) != 0 {
 		t.Errorf("new_movie opted-in = %v, want [1 3]", got)
 	}
 
@@ -97,7 +100,7 @@ func TestUsersOptedIntoDefaultBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("usersOptedIntoNewVideo(new_episode, \"\"): %v", err)
 	}
-	if !equalIDs(got, []int64{1, 2, 3}) {
+	if len(got) != 0 {
 		t.Errorf("new_episode opted-in = %v, want [1 2 3]", got)
 	}
 
@@ -150,6 +153,7 @@ func TestOptedInSingleUser(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'bob', '', 'user')")
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, request_decision) VALUES (1, 1)")
 
+	grantPinnedPushFixtures(t, database)
 	store := NewPrefsStore(database)
 
 	if !store.optedIn(1, CategoryRequestDecision) {
@@ -174,6 +178,7 @@ func TestUsersOptedIntoUnknownCategory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	grantPinnedPushFixtures(t, database)
 	store := NewPrefsStore(database)
 	if _, err := store.usersOptedInto("bogus"); err == nil {
 		t.Error("expected error for unknown category")
@@ -212,6 +217,7 @@ func TestUsersOptedIntoNewBookScopesToInstanceAccess(t *testing.T) {
 	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (6, 'chaptarr', 'books-a')")
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_book) VALUES (3, 0)")
 
+	grantPinnedPushFixtures(t, database)
 	store := NewPrefsStore(database)
 
 	got, err := store.usersOptedIntoNewBook("books-a")
@@ -256,7 +262,7 @@ func TestUsersOptedIntoNewBookScopesToInstanceAccess(t *testing.T) {
 
 	// An access GRANT is an assignment too: a granted user joins that
 	// instance's audience without holding the pin.
-	mustExec(t, database, "INSERT INTO service_instances (id, service_type, name, url, api_key) VALUES ('books-a', 'chaptarr', 'Books A', 'http://books-a', 'k')")
+	mustExec(t, database, "INSERT OR IGNORE INTO service_instances (id, service_type, name, url, api_key) VALUES ('books-a', 'chaptarr', 'Books A', 'http://books-a', 'k')")
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (7, 'frank', '', 'user')")
 	mustExec(t, database, "INSERT INTO user_instance_grants (user_id, instance_id) VALUES (7, 'books-a')")
 	got, err = store.usersOptedIntoNewBook("books-a")
@@ -290,6 +296,7 @@ func TestUsersOptedIntoNewMusicScopesToInstanceAccess(t *testing.T) {
 	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (6, 'lidarr', 'music-a')")
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_music) VALUES (3, 0)")
 
+	grantPinnedPushFixtures(t, database)
 	store := NewPrefsStore(database)
 
 	// The unscoped audience is refused outright: a caller who cannot name the
@@ -330,7 +337,7 @@ func TestUsersOptedIntoNewMusicScopesToInstanceAccess(t *testing.T) {
 
 	// An access GRANT is an assignment too: a granted user joins that
 	// instance's audience without holding the pin.
-	mustExec(t, database, "INSERT INTO service_instances (id, service_type, name, url, api_key) VALUES ('music-a', 'lidarr', 'Music A', 'http://music-a', 'k')")
+	mustExec(t, database, "INSERT OR IGNORE INTO service_instances (id, service_type, name, url, api_key) VALUES ('music-a', 'lidarr', 'Music A', 'http://music-a', 'k')")
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (7, 'frank', '', 'user')")
 	mustExec(t, database, "INSERT INTO user_instance_grants (user_id, instance_id) VALUES (7, 'music-a')")
 	got, err = store.usersOptedIntoNewMusic("music-a")
@@ -352,8 +359,8 @@ func TestUsersOptedIntoNewVideoScopesToVisibleLibraries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	mustExec(t, database, "INSERT INTO service_instances (id, service_type, name, url, api_key, is_default, sort_order) VALUES ('radarr-hd', 'radarr', 'Movies', 'http://hd', 'k', 1, 0)")
-	mustExec(t, database, "INSERT INTO service_instances (id, service_type, name, url, api_key, is_default, sort_order) VALUES ('radarr-4k', 'radarr', '4K Movies', 'http://4k', 'k', 0, 1)")
+	mustExec(t, database, "INSERT OR IGNORE INTO service_instances (id, service_type, name, url, api_key, is_default, sort_order) VALUES ('radarr-hd', 'radarr', 'Movies', 'http://hd', 'k', 1, 0)")
+	mustExec(t, database, "INSERT OR IGNORE INTO service_instances (id, service_type, name, url, api_key, is_default, sort_order) VALUES ('radarr-4k', 'radarr', '4K Movies', 'http://4k', 'k', 0, 1)")
 	// alice(1): no rows — the default library only. bob(2): granted 4K
 	// beside the default. carol(3): PINNED 4K — exclusive, loses the
 	// default. dave(4): opted out of new_movie. erin(5): admin pinned HD —
@@ -369,6 +376,8 @@ func TestUsersOptedIntoNewVideoScopesToVisibleLibraries(t *testing.T) {
 	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (5, 'radarr', 'radarr-hd')")
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_movie) VALUES (4, 0)")
 
+	grantPinnedPushFixtures(t, database)
+	mustExec(t, database, "INSERT INTO user_instance_grants(user_id,instance_id) VALUES (1,'radarr-hd'),(2,'radarr-hd'),(4,'radarr-hd')")
 	store := NewPrefsStore(database)
 
 	got, err := store.usersOptedIntoNewVideo(CategoryNewMovie, "radarr", "radarr-hd")

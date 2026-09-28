@@ -23,7 +23,7 @@ const _tmdbId = 603;
 void main() {
   late _StatusAdapter adapter;
 
-  Future<void> pumpDetail(WidgetTester tester) async {
+  Future<void> pumpDetail(WidgetTester tester, {AuthState? auth, MediaType mediaType = MediaType.movie}) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(() {
@@ -38,7 +38,7 @@ void main() {
           path: '/detail/:type/:id',
           builder: (_, state) => MediaDetailScreen(
             id: int.parse(state.pathParameters['id']!),
-            mediaType: MediaType.movie,
+            mediaType: mediaType,
           ),
         ),
       ],
@@ -50,7 +50,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          authProvider.overrideWith(() => _FakeAuthNotifier(_twoLibraryState())),
+          authProvider.overrideWith(() => _FakeAuthNotifier(auth ?? _twoLibraryState())),
           backendClientProvider.overrideWithValue(dio),
           realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
         ],
@@ -89,6 +89,40 @@ void main() {
 
     expect(find.textContaining('Movies ·'), findsNothing);
   });
+
+  for (final type in [MediaType.movie, MediaType.tv]) {
+    for (final admin in [false, true]) {
+      testWidgets('${type.name} confirms personal default instead of browsed instance, admin=$admin', (tester) async {
+        adapter = _StatusAdapter(unavailable: true);
+        final service = type == MediaType.movie ? 'radarr' : 'sonarr';
+        await pumpDetail(tester, mediaType: type, auth: AuthState(
+          user: UserProfile(id: 1, username: 'viewer', role: admin ? 'admin' : 'user'),
+          connection: BackendConnection(serverUrl: 'http://localhost', accessToken: 'access', refreshToken: 'refresh',
+            instances: [
+              ServiceInstance(id: 'radarr-main', serviceType: service, name: 'Browsing', isDefault: true, assigned: true, requestDefault: false),
+              ServiceInstance(id: 'radarr-4k', serviceType: service, name: 'Personal default', assigned: true, requestDefault: true),
+              if (admin) ServiceInstance(id: 'admin-only', serviceType: service, name: 'Admin navigation', assigned: false, requestDefault: false),
+            ]),
+        ));
+        await tester.tap(find.widgetWithText(ElevatedButton, 'Request'));
+        await tester.pumpAndSettle();
+        expect(adapter.posts, isEmpty);
+        expect(tester.widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Personal default')).selected, isTrue);
+        expect(find.widgetWithText(ChoiceChip, 'Admin navigation'), findsNothing);
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+        expect(adapter.posts, isEmpty);
+        await tester.tap(find.widgetWithText(ElevatedButton, 'Request'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Request').last);
+        await tester.pumpAndSettle();
+        expect(adapter.posts.single['instance_id'], 'radarr-4k');
+        expect(adapter.posts.single['media_type'], type.name);
+        expect(adapter.posts.single['tmdb_id'], _tmdbId);
+        await tester.pumpWidget(const SizedBox.shrink());
+      });
+    }
+  }
 }
 
 AuthState _twoLibraryState() => const AuthState(
@@ -128,8 +162,11 @@ class _FakeAuthNotifier extends AuthNotifier {
 class _StatusAdapter implements HttpClientAdapter {
   final Map<String, Map<String, String>> instanceStatuses;
   final List<String?> statusInstanceIds = [];
+  final posts = <Map<String, dynamic>>[];
+  final bool unavailable;
 
   _StatusAdapter({
+    this.unavailable = false,
     this.instanceStatuses = const {
       'radarr-main': {'status': 'available'},
       'radarr-4k': {'status': 'unavailable'},
@@ -144,11 +181,16 @@ class _StatusAdapter implements HttpClientAdapter {
   ) async {
     final path = options.path;
     final Object body;
-    if (path.endsWith('/status')) {
+    if (options.method == 'POST' && path == '/api/requests') {
+      posts.add(Map<String, dynamic>.from(options.data as Map));
+      body = {'status': 'requested'};
+    } else if (path == '/api/requests/options') {
+      body = {'can_choose_season': false, 'can_choose_quality': false, 'default_season_scope': 'all', 'quality_profiles': <dynamic>[]};
+    } else if (path.endsWith('/status')) {
       final instanceId = options.queryParameters['instance_id'] as String?;
       statusInstanceIds.add(instanceId);
       body = {
-        'status': instanceId == 'radarr-4k' ? 'unavailable' : 'available',
+        'status': unavailable || instanceId == 'radarr-4k' ? 'unavailable' : 'available',
         'seasons': <dynamic>[],
         if (instanceStatuses.isNotEmpty) 'instance_statuses': instanceStatuses,
       };
@@ -156,6 +198,8 @@ class _StatusAdapter implements HttpClientAdapter {
       body = {'results': <dynamic>[]};
     } else if (path.contains('/api/media/movie/')) {
       body = {'id': _tmdbId, 'title': 'The Matrix'};
+    } else if (path.contains('/api/media/tv/')) {
+      body = {'id': _tmdbId, 'name': 'Test show', 'seasons': <dynamic>[]};
     } else {
       body = <dynamic>[];
     }

@@ -162,7 +162,7 @@ func TestNativeDedupAndRevokedAccess(t *testing.T) {
 	if err != nil || second.RequestID != first.RequestID {
 		t.Fatalf("source binding broke dedup: %+v %v", second, err)
 	}
-	s.db.Exec(`DELETE FROM user_default_instances WHERE user_id=?`, userID)
+	s.db.Exec(`DELETE FROM user_instance_grants WHERE user_id=?`, userID)
 	s.SweepDispatch(context.Background())
 	states, _ := s.deliveryStates(first.RequestID)
 	if states[0].State != "attention" || states[0].Code != "access_unavailable" {
@@ -180,7 +180,7 @@ func addDeliverySubscriber(t *testing.T, s *Service, instanceID string) int64 {
 		t.Fatal(err)
 	}
 	id, _ := res.LastInsertId()
-	if _, err = s.db.Exec(`INSERT INTO user_default_instances(user_id,service_type,instance_id) VALUES(?,'chaptarr',?)`, id, instanceID); err != nil {
+	if _, err = s.db.Exec(`INSERT INTO user_instance_grants(user_id,instance_id) VALUES(?,?)`, id, instanceID); err != nil {
 		t.Fatal(err)
 	}
 	return id

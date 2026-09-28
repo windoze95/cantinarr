@@ -26,9 +26,11 @@ A connect link is a credential. Do not paste one into a public issue, screenshot
 
 ## Give library access
 
-Radarr and Sonarr can have a global default, per-user selections, and additional granted libraries. Chaptarr and Lidarr require a per-user pin or explicit grant for requesters.
+Assign one or more Radarr, Sonarr, Chaptarr, or Lidarr libraries in the person's request settings. Their optional preferred instance must be one they can access. Without a preference, requests use an assigned global default or their first assigned instance. A default never grants access.
 
-The instance editor's **User Access** list is additive: checking a second library gives access alongside the current default. It does not move existing requests or files. Unchecking removes that library's access, including a legacy pin to it.
+For many people, open the instance's **Manage users** screen. Filter users, select all matching or individual rows, then add or remove the selected assignments. Removing an assignment clears a preference pointing there and leaves other libraries unchanged.
+
+New accounts receive every automation instance with **Automatically add new users** enabled at account creation. The switch starts on for new instances and off for upgraded existing instances. Turning it on later does not change existing users; repeat sign-ins and replacement invitations do not restore revoked access.
 
 See [instances and library selection](/admin/instances/) for multiple-library setups.
 

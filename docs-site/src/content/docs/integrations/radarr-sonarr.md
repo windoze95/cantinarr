@@ -19,7 +19,7 @@ If the service is installed under a URL base, include that base path. Do not app
 
 ## Select defaults and access
 
-Choose the global default for each service, then review per-user settings and additional library grants. Existing requests stay pinned to their recorded library when defaults change.
+Assign existing users through the instance’s **Manage users** screen. **Automatically add new users** applies only to accounts created later. Choose a global default for request routing; it does not grant access. Existing requests stay pinned to their recorded library when defaults change.
 
 Under **Request Settings**, set approval rules, season choice, quality choice, and default profiles. Profiles are read from the connected service. A name such as “HD” can mean different things on different instances.
 

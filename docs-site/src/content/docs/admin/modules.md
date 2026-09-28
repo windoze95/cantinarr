@@ -7,13 +7,15 @@ sidebar:
 
 Cantinarr's navigation follows the configured services, account permissions, and a few explicit visibility choices. Hiding a shortcut does not remove the underlying data or revoke access.
 
-## Unconfigured discovery tabs
+## Discovery pages and initial setup
 
-Administrators can browse supported catalogs before setting up their service. An unconfigured tab offers **Set up** and **Hide this tab**. Setup returns to the same catalog or title.
+Movies, TV Shows, Books, and Music appear when your account has an assignment to Radarr, Sonarr, Chaptarr, or Lidarr. This applies to administrators too. Admin instance pickers still show every configured instance for management. Use an instance's **Manage users** screen or **Settings > Users** to change personal assignments.
 
-Change these choices under **Settings > Modules > Discover > Discover tabs**. Hiding an unconfigured tab affects the server's users. Connecting its service restores the tab automatically, even when the service is currently offline. Removing that service makes the saved hide preference relevant again.
+On a new installation, administrators see all discovery options before any instance is configured. Unconfigured tabs offer **Set up** and **Hide this tab**. You can also change these choices under **Settings > Modules > Discover > Discover tabs**. After the first instance is added, discovery follows personal assignments. Removing the last assignment or deleting every instance does not restart initial setup.
 
-Releases hides only when Movies, TV Shows, and Music are all hidden. An empty release schedule alone does not hide it.
+An assigned instance keeps its page visible even when the service is offline. Removing its last assignment hides the page for that account. With no assignments, administrators see **Manage users** in Discover to restore access.
+
+Releases includes only visible Movies, TV Shows, and Music services. It hides when none of those pages is visible; Books alone does not keep it open. An empty release schedule alone does not hide it.
 
 ## Library views
 

@@ -17,6 +17,11 @@ class ServiceInstance {
   final String name;
   final bool isDefault;
 
+  /// Personal request assignment, separate from administrator navigation.
+  /// Null preserves compatibility with servers predating assignment metadata.
+  final bool? assigned;
+  final bool? requestDefault;
+
   /// Whether this exact instance has completed-media path mappings. Null means
   /// the server predates per-instance download capabilities.
   final bool? mediaDownloads;
@@ -26,6 +31,8 @@ class ServiceInstance {
     required this.serviceType,
     required this.name,
     this.isDefault = false,
+    this.assigned,
+    this.requestDefault,
     this.mediaDownloads,
   });
 
@@ -35,6 +42,8 @@ class ServiceInstance {
         serviceType: json['service_type'] as String,
         name: json['name'] as String,
         isDefault: json['is_default'] as bool? ?? false,
+        assigned: json['assigned'] as bool?,
+        requestDefault: json['request_default'] as bool?,
         mediaDownloads: json['media_downloads'] as bool?,
       );
 
@@ -43,6 +52,8 @@ class ServiceInstance {
         'service_type': serviceType,
         'name': name,
         'is_default': isDefault,
+        if (assigned != null) 'assigned': assigned,
+        if (requestDefault != null) 'request_default': requestDefault,
         if (mediaDownloads != null) 'media_downloads': mediaDownloads,
       };
 }
@@ -86,6 +97,10 @@ class BackendConnection {
   final bool tvLibraryNavigation;
   final bool requestQuotas;
   final bool requesterTagging;
+  final bool instanceAssignments;
+
+  /// Fresh-install admin discovery stays visible until the first instance.
+  final bool initialInstanceSetup;
   final bool downloadsActivity;
   final String downloadsUserScope;
 
@@ -119,6 +134,8 @@ class BackendConnection {
     this.tvLibraryNavigation = false,
     this.requestQuotas = false,
     this.requesterTagging = false,
+    this.instanceAssignments = false,
+    this.initialInstanceSetup = false,
     this.downloadsActivity = false,
     this.downloadsUserScope = 'all',
     this.cover4KBadges = false,
@@ -145,6 +162,8 @@ class BackendConnection {
     bool? tvLibraryNavigation,
     bool? requestQuotas,
     bool? requesterTagging,
+    bool? instanceAssignments,
+    bool? initialInstanceSetup,
     bool? downloadsActivity,
     String? downloadsUserScope,
     bool? cover4KBadges,
@@ -165,6 +184,8 @@ class BackendConnection {
         tvLibraryNavigation: tvLibraryNavigation ?? this.tvLibraryNavigation,
         requestQuotas: requestQuotas ?? this.requestQuotas,
         requesterTagging: requesterTagging ?? this.requesterTagging,
+        instanceAssignments: instanceAssignments ?? this.instanceAssignments,
+        initialInstanceSetup: initialInstanceSetup ?? this.initialInstanceSetup,
         downloadsActivity: downloadsActivity ?? this.downloadsActivity,
         downloadsUserScope: downloadsUserScope ?? this.downloadsUserScope,
         cover4KBadges: cover4KBadges ?? this.cover4KBadges,

@@ -52,6 +52,14 @@ func TestDiscordMovieAvailabilityRequiresOwningLibraryAndCurrentGrant(t *testing
 	if err = store.SetUserGrants(uid, map[string][]string{"radarr": {siblingID}}); err != nil {
 		t.Fatal(err)
 	}
+	if grants, x := store.ListUserGrants(uid); x != nil {
+		t.Fatal(x)
+	} else {
+		grants["radarr"] = append(grants["radarr"], siblingID)
+		if x = store.SetUserGrants(uid, grants); x != nil {
+			t.Fatal(x)
+		}
+	}
 	if err = store.SetUserDefault(uid, "radarr", siblingID); err != nil {
 		t.Fatal(err)
 	}

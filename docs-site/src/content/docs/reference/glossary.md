@@ -24,7 +24,7 @@ sidebar:
 | Root folder | The library manager's destination folder for organized media |
 | Path mapping | A translation between the path one service reports and the path another process can read |
 | Grant | Explicit permission for an account to use a library, media server, TV, or included AI service |
-| Pin / user default | A selected instance for a particular user, instead of relying on the service's global default |
+| Pin / user default | An assigned instance preferred for new requests; it never grants or restricts library access |
 | Webhook | A service calling Cantinarr when something changes, used for instant updates |
 | Callback URL | The address the calling service uses to send an event or finish an authorization flow |
 | Origin | A scheme, hostname, and optional port, without an extra path, such as `https://media.example.com` |

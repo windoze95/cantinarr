@@ -680,7 +680,7 @@ func NewRouter(
 				// Instance-centric view of user_default_instances (the static
 				// "users" segment wins over the proxy wildcard below): which
 				// users are pinned to which instance of this instance's service
-				// type, and (PUT) assign this instance to an exact set of users.
+				// type, and (PUT) choose this preference for an already assigned set.
 				r.Get("/instances/{instanceID}/users", instanceHandler.GetInstanceUsers)
 				r.Put("/instances/{instanceID}/users", instanceHandler.UpdateInstanceUsers)
 				// Instance-centric view of user_instance_grants: which users
@@ -689,6 +689,8 @@ func NewRouter(
 				// without moving anyone's default.
 				r.Get("/instances/{instanceID}/grant-users", instanceHandler.GetInstanceGrantUsers)
 				r.Put("/instances/{instanceID}/grant-users", instanceHandler.UpdateInstanceGrantUsers)
+				r.Get("/instances/{instanceID}/assignments", instanceHandler.GetAssignments)
+				r.Patch("/instances/{instanceID}/assignments", instanceHandler.ChangeAssignments)
 				// Configure the server-managed Radarr/Sonarr Connect webhook
 				// without ever returning its callback credential to the app.
 				r.Post("/instances/{instanceID}/webhook", instanceHandler.ConfigureWebhook)
@@ -828,9 +830,10 @@ func androidAssetLinksHandler(cfg *config.Config) http.HandlerFunc {
 
 type configInstanceStore interface {
 	ListAll() ([]instance.Instance, error)
+	HasConfiguredInstances() (bool, error)
 	ListUserDefaults(userID int64) (map[string]string, error)
 	VisibleInstanceIDs(userID int64, serviceType string) ([]string, error)
-	EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error)
+	AssignedDefaultInstanceID(userID int64, serviceType string) (string, error)
 }
 
 func configHandler(cfg *config.Config, store configInstanceStore, creds *credentials.Registry, aiHandler *ai.Handler, remediationService *remediation.Service, settings *serversettings.Service, appleTVCapability ...func() bool) http.HandlerFunc {
@@ -842,16 +845,13 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			ServiceType    string `json:"service_type"`
 			Name           string `json:"name"`
 			IsDefault      bool   `json:"is_default"`
+			Assigned       bool   `json:"assigned"`
+			RequestDefault bool   `json:"request_default"`
 			MediaDownloads bool   `json:"media_downloads"`
 		}
 
-		// The config payload is per-user: admins see every instance, while
-		// regular users see their granted Radarr/Sonarr/Chaptarr set — every
-		// access-granted instance plus their effective default (the global
-		// default when nothing was granted; for chaptarr only explicit rows,
-		// never a fallback). is_default is rewritten per user to mark THEIR
-		// effective default, which is how older clients that expect a single
-		// instance keep picking the right one.
+		// Administrators see all instances; regular users see explicit assignments.
+		// Mark their effective routing default so existing clients choose correctly.
 		claims := auth.GetClaims(r.Context())
 		var userID int64
 		isAdmin := false
@@ -870,28 +870,26 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 		}
 		visible := map[string]map[string]bool{}
 		visibleDefault := map[string]string{}
-		if !isAdmin {
-			// Media servers are listed too so a granted user's app can offer
-			// the account guide; their grant-only rules make the visible set
-			// exactly the grants (see EffectiveDefaultInstanceID).
-			for _, serviceType := range append([]string{"radarr", "sonarr", "chaptarr", "lidarr"}, instance.MediaServerTypes()...) {
-				visibleIDs, err := store.VisibleInstanceIDs(userID, serviceType)
-				if err != nil {
-					http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
-					return
-				}
-				defaultID, err := store.EffectiveDefaultInstanceID(userID, serviceType)
-				if err != nil {
-					http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
-					return
-				}
-				ids := map[string]bool{}
-				for _, id := range visibleIDs {
-					ids[id] = true
-				}
-				visible[serviceType] = ids
-				visibleDefault[serviceType] = defaultID
+		// Media servers are listed too so a granted user's app can offer
+		// the account guide; their grant-only rules make the visible set
+		// exactly the grants. Admin navigation is independent of these assignments.
+		for _, serviceType := range append([]string{"radarr", "sonarr", "chaptarr", "lidarr"}, instance.MediaServerTypes()...) {
+			visibleIDs, err := store.VisibleInstanceIDs(userID, serviceType)
+			if err != nil {
+				http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+				return
 			}
+			defaultID, err := store.AssignedDefaultInstanceID(userID, serviceType)
+			if err != nil {
+				http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+				return
+			}
+			ids := map[string]bool{}
+			for _, id := range visibleIDs {
+				ids[id] = true
+			}
+			visible[serviceType] = ids
+			visibleDefault[serviceType] = defaultID
 		}
 
 		instances := []instanceInfo{}
@@ -904,7 +902,14 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
 			return
 		}
+		setupStarted, err := store.HasConfiguredInstances()
+		if err != nil {
+			http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+			return
+		}
+		initialInstanceSetup := isAdmin && !setupStarted
 		hiddenTabs := []string{}
+		hiddenWhenUnconfigured := map[string]bool{}
 		downloadsUserScope := "all"
 		cover4KBadges := false
 		configured := map[string]bool{}
@@ -919,10 +924,13 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			}
 			downloadsUserScope = preferences.DownloadsUserScope
 			cover4KBadges = preferences.Cover4KBadges
-			for _, mediaType := range []string{"movie", "tv", "book", "music"} {
-				if preferences.HiddenWhenUnconfigured[mediaType] && !configured[serversettings.DiscoverServices()[mediaType]] {
-					hiddenTabs = append(hiddenTabs, mediaType)
-				}
+			hiddenWhenUnconfigured = preferences.HiddenWhenUnconfigured
+		}
+		for _, mediaType := range []string{"movie", "tv", "book", "music"} {
+			serviceType := serversettings.DiscoverServices()[mediaType]
+			if (!initialInstanceSetup && len(visible[serviceType]) == 0) ||
+				(hiddenWhenUnconfigured[mediaType] && !configured[serviceType]) {
+				hiddenTabs = append(hiddenTabs, mediaType)
 			}
 		}
 		for _, inst := range allInstances {
@@ -948,6 +956,8 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 				ServiceType:    inst.ServiceType,
 				Name:           inst.Name,
 				IsDefault:      isDefault,
+				Assigned:       visible[inst.ServiceType][inst.ID],
+				RequestDefault: visibleDefault[inst.ServiceType] == inst.ID,
 				MediaDownloads: inst.MediaDownloadsConfigured(cfg.MediaDownloadRoots),
 			})
 		}
@@ -1004,6 +1014,8 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"admin_catalog_browsing":   true,
 			"request_quotas":           true,
 			"requester_tagging":        true,
+			"instance_assignments":     true,
+			"initial_instance_setup":   initialInstanceSetup,
 			"tv_match_corrections":     true,
 			"tv_library_navigation":    true,
 			"downloads_activity":       true,

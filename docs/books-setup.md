@@ -2,7 +2,7 @@
 
 Books differ from movies and TV in two ways worth knowing before you start:
 
-- **Chaptarr has no global default instance.** Requesters need a per-user pin or explicit instance grant to see Books. Admins see the Chaptarr setup action until a library is connected.
+- **Chaptarr uses explicit library assignments.** Requesters need an assignment to see Books. A default chooses where requests go; it never grants access.
 - **An ebook can finish downloading between two polls.** Instant updates aren't a nicety here; they're what makes the "ready to read" notification reliable.
 
 This page is the whole path, in order.
@@ -29,11 +29,15 @@ Use Chaptarr's **root** URL, never one of its media-scoped prefixes (`/ebook`, `
 
 ## 3. Grant access per user
 
-This is the step people miss. Unlike Radarr and Sonarr, Chaptarr has no global default — pinning a user to a Chaptarr instance is how you grant that user access to books.
+Open the saved instance and choose **Manage users**, filter the directory, select the people to assign, and choose **Add selected**. **Select all matching** includes every account matching the current filters, including administrators. **Remove selected** revokes only those assignments and clears any preference pointing to this instance. Administrators can browse all automation instances through the navigation pickers. Their personal requests and Books discovery page use the instances assigned here. New installations show every discovery option to admins until the first instance is configured.
 
-Pin from either side: the instance editor, or **Settings → Users** for one person. Remove both the pin and any explicit grants to revoke access. Admins see Books before setup unless it was conditionally hidden for the server, and see configured Chaptarr instances without a pin; everyone else needs one, and until they have it `services.chaptarr` stays `false` and the Books tab stays hidden.
+**Automatically add new users** starts on for new instances. It assigns this instance when Cantinarr creates a regular account through an invitation, import, OIDC, or Plex sign-in. Administrator accounts are excluded. It does not assign existing users or restore removed access on later sign-ins. You can enable it on several instances. Existing instances retain their access on upgrade and start with automatic assignment off.
 
-Running more than one Chaptarr instance is fine — pin different households or different libraries to different instances.
+**Default Instance** starts on when this service has no global default. A user can request into any assigned instance. Without an explicit selection, Cantinarr uses their assigned personal preference, then an assigned global default, then their first assigned instance in configured order. No assignment means no Books library access. Defaults never grant access, and pending requests keep their saved destination.
+
+With several assigned instances, choosing **Request** opens a destination confirmation with the user’s default selected. The saved request and its status stay tied to the confirmed instance. Administrators with no personal assignments must add one before using this request flow.
+
+For one person, edit their assigned libraries and preferred destination under **Settings > Users**. This applies to kids accounts too.
 
 ## 4. Check instant updates
 

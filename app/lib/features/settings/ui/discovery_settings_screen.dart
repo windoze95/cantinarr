@@ -366,9 +366,9 @@ class _DiscoverySettingsScreenState
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Text(
-              'These choices affect everyone on this server. A hidden tab '
-              'returns automatically when its service is connected. If the service '
-              'is removed, the tab is hidden again. Access permissions stay the same.'),
+              'These choices hide unconfigured catalogs during initial setup. '
+              'After the first instance is added, Discover pages appear only '
+              'for accounts assigned to the matching service, including admins.'),
         ),
         if (edited.hiddenWhenUnconfigured == null)
           const Padding(

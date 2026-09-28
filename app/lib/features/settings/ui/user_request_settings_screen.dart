@@ -42,6 +42,7 @@ class UserRequestSettingsScreen extends ConsumerStatefulWidget {
 class _UserRequestSettingsScreenState
     extends ConsumerState<UserRequestSettingsScreen> {
   late final RequestSettingsService _service;
+  bool get _assignmentModel => ref.read(authProvider).valueOrNull?.connection?.instanceAssignments ?? false;
   late final ContentPolicyService _policyService;
 
   final _draft = SettingsDraft();
@@ -334,7 +335,7 @@ class _UserRequestSettingsScreenState
         for (final type in _instancesByType().keys)
           type: _defaultInstances[type],
       };
-      await _service.updateUserDefaultInstances(widget.userId, defaults);
+      if (!_assignmentModel) await _service.updateUserDefaultInstances(widget.userId, defaults);
       // Same rule for grants: name every visible type so an emptied set
       // clears its rows instead of being silently skipped.
       final grants = <String, List<String>>{
@@ -342,6 +343,10 @@ class _UserRequestSettingsScreenState
           type: (_instanceGrants[type] ?? const <String>{}).toList()..sort(),
       };
       await _service.updateUserInstanceGrants(widget.userId, grants);
+      if (_assignmentModel) {
+        await _service.updateUserDefaultInstances(widget.userId, defaults);
+        await ref.read(authProvider.notifier).refreshConfig();
+      }
       if (!mounted) return;
       setState(() {
         _draft.markSaved(_draftValues);
@@ -778,21 +783,21 @@ class _UserRequestSettingsScreenState
           ),
         ),
       ),
-      const Padding(
-        padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
         child: Text(
-          'Pin which instance this user defaults to per service. For regular '
+          _assignmentModel ? 'Assign libraries, then choose a preferred request destination. Without a preference, the accessible global default or first assigned library is used. Defaults do not grant access.' : 'Pin which instance this user defaults to per service. For regular '
           'users, choosing a Chaptarr instance grants Books access and a '
           'Lidarr instance grants Music access. Admins can pin their own '
           'request target here too. Below each default, extra libraries can '
           'be granted so the user chooses per request — a grant never moves '
           'the default.',
-          style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
         ),
       ),
       for (final entry in grouped.entries) ...[
         _defaultInstanceField(serviceType: entry.key, instances: entry.value),
-        if (entry.value.length > 1)
+        if (_assignmentModel || entry.value.length > 1)
           _instanceGrantsField(serviceType: entry.key, instances: entry.value),
       ],
     ];
@@ -812,7 +817,7 @@ class _UserRequestSettingsScreenState
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Also grant ${_serviceLabel(serviceType)} libraries',
+            _assignmentModel ? 'Assigned ${_serviceLabel(serviceType)} libraries' : 'Also grant ${_serviceLabel(serviceType)} libraries',
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 13,
@@ -834,6 +839,7 @@ class _UserRequestSettingsScreenState
                   next.add(inst.id);
                 } else {
                   next.remove(inst.id);
+                  if (_assignmentModel && _defaultInstances[serviceType] == inst.id) _defaultInstances[serviceType] = null;
                 }
                 _instanceGrants[serviceType] = next;
               }),
@@ -850,6 +856,9 @@ class _UserRequestSettingsScreenState
     // Chaptarr and Lidarr grants are per-user for regular users. Admins can
     // also use this setting to pin their own request target.
     final isGrantOnly = serviceType == 'chaptarr' || serviceType == 'lidarr';
+    if (_assignmentModel) {
+      instances = instances.where((i) => _instanceGrants[serviceType]?.contains(i.id) == true).toList();
+    }
     final value = _defaultInstances[serviceType];
     // Guard against a stored id that's no longer in the instance list.
     final hasValue = value != null && instances.any((i) => i.id == value);
@@ -874,7 +883,7 @@ class _UserRequestSettingsScreenState
           DropdownMenuItem<String?>(
             value: null,
             child: Text(
-              isGrantOnly
+              _assignmentModel ? 'Automatic (among assigned instances)' : isGrantOnly
                   ? 'No per-user ${_serviceLabel(serviceType)} assignment'
                   : 'Inherit (global default)',
               style: const TextStyle(color: AppTheme.textSecondary),

@@ -115,6 +115,13 @@ void main() {
     await tester.ensureVisible(find.text('Request 3 seasons'));
     await tester.tap(find.text('Request 3 seasons'));
     await tester.pumpAndSettle();
+    expect(adapter.requests.where((r) => r.method == 'POST'), isEmpty);
+    expect(tester.widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Other TV')).selected, isTrue);
+    expect(find.widgetWithText(ChoiceChip, 'Default TV'), findsNothing);
+    expect(find.textContaining('These seasons belong to this library.'), findsOneWidget);
+    await tester.tap(find.text('Request').last);
+    await tester.pumpAndSettle();
+    expect(adapter.requests.singleWhere((r) => r.method == 'POST').data['instance_id'], 'tv-other');
     expect(adapter.requests.singleWhere((r) => r.method == 'POST').data['seasons'], [1, 3, 4]);
     expect(table.notifier.state.seasons[1].isRequestable, isFalse);
     expect(tester.takeException(), isNull);

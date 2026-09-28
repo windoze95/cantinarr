@@ -361,14 +361,14 @@ func TestCreateUserIssueValidation(t *testing.T) {
 	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "tv", TmdbID: 1, Category: CategoryOther}); !errors.Is(err, ErrInstanceForbidden) {
 		t.Fatalf("TV report with Radarr instance error = %v, want ErrInstanceForbidden", err)
 	}
-	// A rowless user sees only the default-chain library; a sibling is
-	// forbidden even though it exists.
+	// A user without assignments cannot report on any library, including
+	// the global default.
 	rowless := seedUser(t, svc.db, "rowless")
 	if _, err := svc.CreateUserIssue(rowless, &CreateIssueRequest{InstanceID: testRadarrInstanceID2, MediaType: "movie", TmdbID: 1, Category: CategoryOther}); !errors.Is(err, ErrInstanceForbidden) {
 		t.Fatalf("ungranted sibling report error = %v, want ErrInstanceForbidden", err)
 	}
-	if _, err := svc.CreateUserIssue(rowless, &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "movie", TmdbID: 1, Category: CategoryOther}); err != nil {
-		t.Fatalf("default-library report should pass access: %v", err)
+	if _, err := svc.CreateUserIssue(rowless, &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "movie", TmdbID: 1, Category: CategoryOther}); !errors.Is(err, ErrInstanceForbidden) {
+		t.Fatalf("unassigned default-library report error: %v", err)
 	}
 
 	// Admins bypass the access check and keep the precise diagnostics.

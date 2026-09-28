@@ -418,6 +418,7 @@ func TestManagerReenrollsWhenStoredKeyRefused(t *testing.T) {
 	defer cancel()
 	mgr.StartRetry(ctx)
 
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 	mustExec(t, database, "INSERT OR IGNORE INTO users(id,username,password_hash) VALUES(1,'recipient','')")
 	n.sendWithOptions(stale, []int64{1}, "hello", "body", map[string]any{"type": CategoryNewMovie}, SendOptions{})
@@ -476,6 +477,7 @@ func TestManagerExplicitKeyRefusedNeverReenrolls(t *testing.T) {
 	defer cancel()
 	mgr.StartRetry(ctx)
 
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 	mustExec(t, database, "INSERT OR IGNORE INTO users(id,username,password_hash) VALUES(1,'recipient','')")
 	n.sendWithOptions(client, []int64{1}, "hello", "body", map[string]any{"type": CategoryNewMovie}, SendOptions{})
@@ -563,6 +565,7 @@ func TestManagerReenrollBacksOff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mgr.StartRetry(ctx)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 	mustExec(t, database, "INSERT OR IGNORE INTO users(id,username,password_hash) VALUES(1,'recipient','')")
 	n.sendWithOptions(stale, []int64{1}, "hello", "body", map[string]any{"type": CategoryNewMovie}, SendOptions{})

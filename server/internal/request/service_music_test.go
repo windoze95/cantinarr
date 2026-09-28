@@ -47,6 +47,14 @@ func newLidarrMusicTestService(t *testing.T, lidarrURL string) (*Service, int64,
 	if err := store.Create(inst); err != nil {
 		t.Fatalf("create lidarr instance: %v", err)
 	}
+	if grants, e := store.ListUserGrants(uid); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["lidarr"] = append(grants["lidarr"], inst.ID)
+		if e = store.SetUserGrants(uid, grants); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if err := store.SetUserDefault(uid, "lidarr", inst.ID); err != nil {
 		t.Fatalf("grant lidarr: %v", err)
 	}

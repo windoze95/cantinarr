@@ -3913,12 +3913,24 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 	if !s.userIsAdmin(adminID) {
 		return nil, ErrTVMatchAdmin
 	}
-	if r, status, err := s.loadRequest(requestID); err == nil && r.mediaType == "movie" && status == StatusPending && !s.hasDispatch(requestID) {
+	r, status, err := s.loadRequest(requestID)
+	if err != nil {
+		return nil, err
+	}
+	if status == StatusPending {
+		if r.instanceID == "" {
+			return nil, fmt.Errorf("request has no verified destination; close it and submit a new request to an assigned instance")
+		}
+		if _, err := s.deliveryInstance(r.userID, r.mediaType, r.instanceID); err != nil {
+			return nil, err
+		}
+	}
+	if r.mediaType == "movie" && status == StatusPending && !s.hasDispatch(requestID) {
 		if err := s.migrateMovieApproval(requestID, r); err != nil {
 			return nil, err
 		}
 	}
-	if r, status, err := s.loadRequest(requestID); err == nil && r.mediaType == "tv" && status == StatusPending && !s.hasDispatch(requestID) {
+	if r.mediaType == "tv" && status == StatusPending && !s.hasDispatch(requestID) {
 		if err := s.migrateTVApproval(requestID, r); err != nil {
 			return nil, err
 		}
@@ -4155,6 +4167,17 @@ func (s *Service) fulfillPendingRequest(actorID, requestID int64, override *Deci
 	if status != StatusPending {
 		return nil, fmt.Errorf("request is not pending")
 	}
+	if r.instanceID == "" {
+		return nil, fmt.Errorf("request has no verified destination")
+	}
+	r.beforeMutation = func() error {
+		_, err := s.deliveryInstance(r.userID, r.mediaType, r.instanceID)
+		return err
+	}
+	if err := r.beforeMutation(); err != nil {
+		return nil, err
+	}
+
 	audience := []bookRequestSubscriber{{UserID: r.userID}}
 	if r.mediaType == "book" {
 		if strings.TrimSpace(r.instanceID) == "" {
@@ -4176,10 +4199,8 @@ func (s *Service) fulfillPendingRequest(actorID, requestID int64, override *Deci
 		musicLock.Lock()
 		defer musicLock.Unlock()
 	}
-	// The request's instance was authorized and stamped at submission. Execute
-	// the decision under the approving admin so a later requester-grant change
-	// cannot reroute or strand it; history remains owned by r.userID. A
-	// system completion executes under the requester themselves instead.
+	// The administrator may override request options. The original requester
+	// must still have access to the saved destination at every mutation.
 	if system {
 		r.actorID = r.userID
 	} else {
