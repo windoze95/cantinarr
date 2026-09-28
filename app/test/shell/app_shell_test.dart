@@ -1108,6 +1108,112 @@ void main() {
   });
 
   for (final desktop in [false, true]) {
+    testWidgets(
+        '${desktop ? 'desktop' : 'mobile'} repeated menu clicks need only one Back',
+        (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'approvals_menu_only_when_pending': false,
+        'issues_menu_only_when_active': false,
+        'agent_fixes_menu_only_when_awaiting_review': false,
+        'profile_approvals_menu_only_when_pending': false,
+      });
+      final router = await _pumpAdminDrawer(
+        tester,
+        desktop: desktop,
+        setupRemaining: 1,
+        authState: _authenticatedAiState.copyWith(
+          connection: _authenticatedAiState.connection!.copyWith(
+            instances: _mediaServerState().connection!.instances,
+          ),
+        ),
+      );
+      final entries = {
+        ..._attentionRoutes,
+        'Setup checklist': '/setup',
+        'AI Assistant': '/assistant',
+        'Watch on Jellyfin': '/media-servers',
+        'Settings': '/settings',
+      };
+
+      Future<void> select(String label) async {
+        if (!desktop &&
+            find
+                .widgetWithText(ListTile, 'Settings')
+                .hitTestable()
+                .evaluate()
+                .isEmpty) {
+          await tester.tap(find.byIcon(Icons.menu));
+          await tester.pumpAndSettle();
+        }
+        final item = find.widgetWithText(ListTile, label);
+        if (item.evaluate().isEmpty) {
+          await tester.tap(find.text('Needs attention'));
+          await tester.pumpAndSettle();
+        }
+        await tester.ensureVisible(item);
+        await tester.tap(item);
+        await tester.pumpAndSettle();
+        if (!desktop) {
+          expect(find.byType(Drawer).hitTestable(), findsNothing,
+              reason: 'reselecting the current page still closes the drawer');
+        }
+      }
+
+      for (final entry in entries.entries) {
+        for (var click = 0; click < 6; click++) {
+          await select(entry.key);
+          expect(router.state.uri.path, entry.value);
+        }
+        await tester.tap(find.byTooltip('Back'));
+        await tester.pumpAndSettle();
+        expect(find.text('Dashboard home'), findsOneWidget,
+            reason: 'six clicks on ${entry.key} add only one page');
+        expect(router.canPop(), isFalse);
+
+        // A prior selection must not prevent opening the page after Back.
+        await select(entry.key);
+        expect(router.state.uri.path, entry.value);
+        await tester.tap(find.byTooltip('Back'));
+        await tester.pumpAndSettle();
+        expect(router.canPop(), isFalse);
+      }
+    });
+  }
+
+  testWidgets('rapid menu clicks do not stack before the shell rebuilds',
+      (tester) async {
+    final router = await _pumpAdminDrawer(tester, desktop: true);
+    final settings = find.widgetWithText(ListTile, 'Settings');
+    for (var click = 0; click < 6; click++) {
+      await tester.tap(settings);
+    }
+    await tester.pumpAndSettle();
+    expect(router.state.uri.path, '/settings');
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(find.text('Dashboard home'), findsOneWidget);
+    expect(router.canPop(), isFalse);
+  });
+
+  testWidgets('an active detail menu still opens its parent queue',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'issues_menu_only_when_active': false,
+    });
+    final router = await _pumpAdminDrawer(tester,
+        desktop: true, initialLocation: '/issues/42');
+    await tester.tap(find.text('Needs attention'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ListTile, 'Issues'));
+    await tester.pumpAndSettle();
+    expect(router.state.uri.path, '/issues');
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(router.state.uri.path, '/issues/42');
+    expect(router.canPop(), isFalse);
+  });
+
+  for (final desktop in [false, true]) {
     for (final entry in {
       '/issues/42': 'Issues',
       '/agent-runs/7': 'Agent fixes',
@@ -1853,6 +1959,7 @@ Future<GoRouter> _pumpAdminDrawer(
   String initialLocation = '/dashboard/movies',
   int setupRemaining = 0,
   Map<String, dynamic>? setupStatus,
+  AuthState authState = _authenticatedAiState,
 }) async {
   tester.view.physicalSize =
       desktop ? const Size(1280, 844) : const Size(390, 844);
@@ -1873,10 +1980,19 @@ Future<GoRouter> _pumpAdminDrawer(
             path: '/dashboard/movies',
             builder: (_, __) => const Scaffold(body: Text('Dashboard home')),
           ),
-          for (final route in _attentionRoutes.values)
+          for (final route in [
+            ..._attentionRoutes.values,
+            '/settings',
+            '/assistant',
+            '/media-servers',
+            '/setup',
+          ])
             GoRoute(
               path: route,
-              builder: (_, __) => Scaffold(body: Text(route)),
+              builder: (_, __) => Scaffold(
+                appBar: AppBar(),
+                body: Text(route),
+              ),
             ),
           for (final route in ['/issues/:id', '/agent-runs/:id'])
             GoRoute(
@@ -1892,7 +2008,7 @@ Future<GoRouter> _pumpAdminDrawer(
     ProviderScope(
       overrides: [
         authProvider.overrideWith(
-          () => _FakeAuthNotifier(_authenticatedAiState),
+          () => _FakeAuthNotifier(authState),
         ),
         backendClientProvider.overrideWithValue(_fakeDio(
           requests: requests,

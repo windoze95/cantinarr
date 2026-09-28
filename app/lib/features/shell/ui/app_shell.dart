@@ -1494,7 +1494,7 @@ class _AppShellState extends ConsumerState<AppShell>
                                     badgeCount: entry.count,
                                     onTap: () {
                                       if (isOverlay) Navigator.pop(context);
-                                      context.push(entry.route);
+                                      _pushMenuRoute(context, entry.route);
                                     },
                                   ),
                                 ),
@@ -1518,7 +1518,7 @@ class _AppShellState extends ConsumerState<AppShell>
               semanticsIdentifier: 'nav-action-ai-assistant',
               onTap: () {
                 if (isOverlay) Navigator.pop(context);
-                context.push('/assistant');
+                _pushMenuRoute(context, '/assistant');
               },
             ),
           if (mediaAccessGuideVisible)
@@ -1528,7 +1528,7 @@ class _AppShellState extends ConsumerState<AppShell>
               semanticsIdentifier: 'nav-action-media-servers',
               onTap: () {
                 if (isOverlay) Navigator.pop(context);
-                context.push('/media-servers');
+                _pushMenuRoute(context, '/media-servers');
               },
             ),
           _DrawerItem(
@@ -1537,7 +1537,7 @@ class _AppShellState extends ConsumerState<AppShell>
             semanticsIdentifier: 'nav-action-settings',
             onTap: () {
               if (isOverlay) Navigator.pop(context);
-              context.push('/settings');
+              _pushMenuRoute(context, '/settings');
             },
           ),
           const SizedBox(height: 8),
@@ -1613,6 +1613,15 @@ class _AppShellState extends ConsumerState<AppShell>
         .id;
   }
 
+  void _pushMenuRoute(BuildContext context, String path) {
+    final router = GoRouter.of(context);
+    // Read the router instead of currentPath, which can lag behind rapid taps
+    // until the shell rebuilds. Compare exact paths so a detail page can still
+    // open its parent menu destination.
+    if (router.state.uri.path == path) return;
+    router.push(path);
+  }
+
   void _navigateToModule(
     BuildContext context,
     AppModule module, {
@@ -1657,7 +1666,7 @@ class _AppShellState extends ConsumerState<AppShell>
       case ModuleType.tdarr:
         context.go('/tdarr/activity');
       case ModuleType.assistant:
-        context.push('/assistant');
+        _pushMenuRoute(context, '/assistant');
     }
   }
 }
