@@ -24,7 +24,7 @@
   <a href="https://demo.cantinarr.com">Live demo</a>
 </p>
 
-Cantinarr lets your household browse and request movies, TV shows, ebooks, audiobooks, and music. Administrators manage requests, libraries, and download clients from the same app. It connects to Radarr, Sonarr, Chaptarr, and Lidarr.
+Cantinarr lets your household and friends browse and request movies, TV shows, ebooks, audiobooks, and music. Administrators manage requests, libraries, and download clients from the same app. It connects to Radarr, Sonarr, Chaptarr, Lidarr, and more.
 
 ## Preview
 
@@ -35,12 +35,10 @@ Cantinarr lets your household browse and request movies, TV shows, ebooks, audio
   <a href="docs/images/music.jpg"><img src="docs/images/music.jpg" alt="Discover albums and genres with Music enabled in the navigation" width="24%"></a>
 </p>
 
-Navigation adapts to your services and permissions.
-
 ## Features
 
 - Movie, season, ebook, audiobook, and album requests with approvals and per-user limits.
-- Live availability, download progress, and push or Discord notifications.
+- Live availability, download progress, and Discord or push (free for the foreseeable future) notifications.
 - Library and download queue management across multiple service instances.
 - Plex, Jellyfin, Emby, and Audiobookshelf account access and playback links.
 - Connect links, passkeys, Plex sign-in, and OpenID Connect.
