@@ -500,6 +500,7 @@ POST   /api/admin/requests/{id}/deny       # admin: deny with optional reason
 POST   /api/admin/requests/{id}/wait       # admin: "try again" on an ended author-import wait — replay the add and resume the watch
 GET|PUT /api/admin/request-settings        # admin: global policy (require_approval,
                                            #   allow_season_choice, default scope/quality...)
+                                           #   quality-profile lists use each service's global default instance
 GET|PUT /api/admin/users/{userID}/request-settings  # admin: per-user overrides
 GET    /api/admin/tv-matches               # admin: bundled/custom/paused matches and revisions
 GET    /api/admin/tv-matches/candidates    # admin: q=title or TVDB ID; optional instance_id

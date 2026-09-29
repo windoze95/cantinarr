@@ -4945,14 +4945,37 @@ func (s *Service) GetRequestOptions(userID int64, isAdmin bool, mediaType, insta
 	return opts, nil
 }
 
-// qualityProfiles fetches the selectable quality profiles for a media type from
-// userID's source instance (userID 0 = global default).
-func (s *Service) qualityProfiles(userID int64, mediaType string) []QualityProfile {
-	out, _ := s.qualityProfilesForInstance(userID, mediaType, "")
+// globalQualityProfiles reads the configured default for the admin editor.
+// Requester routing requires real user grants and cannot represent this scope
+// with a synthetic user ID.
+func (s *Service) globalQualityProfiles(mediaType string) []QualityProfile {
+	out := []QualityProfile{}
+	if s.registry == nil {
+		return out
+	}
+	if mediaType == "tv" {
+		c, _, err := s.registry.GetDefaultSonarrClient()
+		if err == nil && c != nil {
+			if ps, err := c.GetQualityProfiles(); err == nil {
+				for _, p := range ps {
+					out = append(out, QualityProfile{ID: p.ID, Name: p.Name})
+				}
+			}
+		}
+		return out
+	}
+	c, _, err := s.registry.GetDefaultRadarrClient()
+	if err == nil && c != nil {
+		if ps, err := c.GetQualityProfiles(); err == nil {
+			for _, p := range ps {
+				out = append(out, QualityProfile{ID: p.ID, Name: p.Name})
+			}
+		}
+	}
 	return out
 }
 
-// qualityProfilesForInstance is qualityProfiles scoped to a selected library.
+// qualityProfilesForInstance reads requester profiles from a selected library.
 // Authorization failures surface so a forbidden selection is refused rather
 // than answered with the default library's profiles; an unreachable arr still
 // degrades to an empty list.
@@ -4991,8 +5014,8 @@ func (s *Service) qualityProfilesForInstance(userID int64, mediaType, instanceID
 func (s *Service) GetAdminSettings() *AdminSettingsView {
 	return &AdminSettingsView{
 		Settings:       s.GetGlobalSettings(),
-		RadarrProfiles: s.qualityProfiles(0, "movie"),
-		SonarrProfiles: s.qualityProfiles(0, "tv"),
+		RadarrProfiles: s.globalQualityProfiles("movie"),
+		SonarrProfiles: s.globalQualityProfiles("tv"),
 	}
 }
 
