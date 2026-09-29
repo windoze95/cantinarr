@@ -52,6 +52,8 @@ Disabling password sign-in clears the stored password. Disabling passkeys remove
 
 Use **Connected Devices** to revoke a lost device. Changing an upstream OIDC group or disabling a provider account does not immediately revoke already established Cantinarr sessions. For immediate removal, act on the Cantinarr devices or identity link as described in [SSO setup](/integrations/guides/oidc/).
 
+Device activity timestamps update at most once per minute during normal use. Revocations and permission changes are checked on every authenticated request.
+
 Before deleting a user or removing external access, review the app's confirmation and the effect on the associated media-server account. Revoking a media-server grant can disable an account or remove a Plex share without deleting the external account itself.
 
 ## Check as the intended user

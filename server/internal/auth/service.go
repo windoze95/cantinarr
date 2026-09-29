@@ -531,17 +531,32 @@ func (s *Service) refreshLegacyJWT(tokenStr string) (*TokenResponse, error) {
 	return resp, nil
 }
 
+// Device activity is display metadata, so a minute of precision is enough.
+// Writing it for every API/image request serializes homepage loads on disk.
+const deviceActivityInterval = time.Minute
+
 // requireActiveDevice confirms the device row exists, belongs to userID, and
-// is not revoked, then bumps last_seen_at. Missing/mismatched rows are a
-// genuine rejection; query faults are ErrAuthUnavailable.
+// is not revoked on every call. Only the last_seen_at write is throttled;
+// identity, role, and sign-in policy are never cached.
 func (s *Service) requireActiveDevice(deviceID string, userID int64) error {
-	if _, err := s.authoritativeSession(context.Background(), userID, deviceID); err != nil {
+	snapshot, err := s.authoritativeSession(context.Background(), userID, deviceID)
+	if err != nil {
 		return err
 	}
 
+	now := time.Now()
+	if snapshot.lastSeenAt.Valid && !snapshot.lastSeenAt.Time.After(now) && now.Sub(snapshot.lastSeenAt.Time) < deviceActivityInterval {
+		return nil
+	}
+	// Concurrent requests may have read the same old timestamp. Compare the
+	// exact stored value so only one updates it, including legacy timestamps
+	// written in a local timezone or by SQLite's CURRENT_TIMESTAMP default.
+	// A failed activity write remains best-effort, as before.
 	_, _ = s.db.Exec(
-		"UPDATE devices SET last_seen_at = ? WHERE id = ?",
-		time.Now(), deviceID,
+		`UPDATE devices SET last_seen_at = ?
+		 WHERE id = ? AND user_id = ? AND revoked_at IS NULL
+		 AND CAST(last_seen_at AS TEXT) IS ?`,
+		now, deviceID, userID, snapshot.lastSeenValue,
 	)
 	return nil
 }
@@ -1211,6 +1226,8 @@ func (s *Service) AuthorizePermission(ctx context.Context, userID int64, deviceI
 type authoritativeSessionSnapshot struct {
 	role            string
 	sharedAIEnabled bool
+	lastSeenAt      sql.NullTime
+	lastSeenValue   sql.NullString
 }
 
 func (s *Service) authoritativeSession(ctx context.Context, userID int64, deviceID string) (authoritativeSessionSnapshot, error) {
@@ -1224,12 +1241,12 @@ func (s *Service) authoritativeSession(ctx context.Context, userID int64, device
 		permitted bool
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT u.role, u.ai_shared_enabled, d.revoked_at,
+		SELECT u.role, u.ai_shared_enabled, d.revoked_at, d.last_seen_at, CAST(d.last_seen_at AS TEXT),
 			(u.role = 'admin' OR d.auth_method = 'oidc' OR COALESCE((SELECT value FROM settings WHERE key = 'oidc_sso_only'), 'false') = 'false') AND (d.auth_method != 'plex' OR (COALESCE((SELECT value FROM settings WHERE key='plex_auth_enabled'),'false')='true' AND EXISTS(SELECT 1 FROM plex_identities p WHERE p.user_id=u.id AND p.plex_account_id=d.plex_account_id)))
 		FROM users u
 		JOIN devices d ON d.user_id = u.id
 		WHERE u.id = ? AND d.id = ?
-	`, userID, deviceID).Scan(&snapshot.role, &snapshot.sharedAIEnabled, &revokedAt, &permitted)
+	`, userID, deviceID).Scan(&snapshot.role, &snapshot.sharedAIEnabled, &revokedAt, &snapshot.lastSeenAt, &snapshot.lastSeenValue, &permitted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return authoritativeSessionSnapshot{}, ErrInvalidCredentials
 	}
