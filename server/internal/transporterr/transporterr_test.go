@@ -25,6 +25,7 @@ func TestSummarize(t *testing.T) {
 	}{
 		{"dns failure", &url.Error{Op: "Get", URL: "http://radarr:7878/api", Err: &net.OpError{Op: "dial", Err: dnsErr}}, "could not resolve host"},
 		{"connection refused", &url.Error{Op: "Get", URL: "http://radarr:7878/api", Err: &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}}, "connection refused"},
+		{"connection reset", &url.Error{Op: "Get", URL: "http://radarr:7878/api", Err: &net.OpError{Op: "read", Err: syscall.ECONNRESET}}, "connection reset"},
 		{"timeout", &url.Error{Op: "Get", URL: "http://radarr:7878/api", Err: timeoutError{}}, "request timed out"},
 		{"context deadline", &url.Error{Op: "Get", URL: "http://radarr:7878/api", Err: context.DeadlineExceeded}, "request timed out"},
 		{"other", errors.New("http: server closed idle connection"), "could not connect"},
