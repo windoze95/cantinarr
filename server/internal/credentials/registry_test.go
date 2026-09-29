@@ -41,7 +41,7 @@ func TestAIProviderMetadataIncludesAuthType(t *testing.T) {
 	if codex.CredentialKey != "" {
 		t.Fatalf("Codex credential_key = %q, want empty", codex.CredentialKey)
 	}
-	wantCodexModels := []string{"default", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+	wantCodexModels := []string{"default", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
 	if len(codex.Models) != len(wantCodexModels) {
 		t.Fatalf("Codex models = %+v", codex.Models)
 	}

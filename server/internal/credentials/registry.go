@@ -208,6 +208,10 @@ var AIProviders = []AIProviderOption{
 		AuthType: AIAuthTypeUserOAuth,
 		Models: []AIModelOption{
 			{ID: "default", Label: "OpenAI recommended", Description: "Uses the current model recommended by Codex"},
+			{ID: "gpt-6.1-sol", Label: "GPT-6.1 Sol", Description: "Near-Astra capability at a lower cost"},
+			{ID: "gpt-6-astra", Label: "GPT-6 Astra", Description: "Highest-capability model for complex work"},
+			{ID: "gpt-6-sol", Label: "GPT-6 Sol", Description: "Previous Sol model for complex work"},
+			{ID: "gpt-6-luna", Label: "GPT-6 Luna", Description: "Fast model for focused, repeatable work"},
 			{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Description: "Highest-quality GPT-5.6 model for complex work"},
 			{ID: "gpt-5.6-terra", Label: "GPT-5.6 Terra", Description: "Pragmatic GPT-5.6 model for everyday work"},
 			{ID: "gpt-5.6-luna", Label: "GPT-5.6 Luna", Description: "Fast GPT-5.6 model for clear, repeatable work"},
