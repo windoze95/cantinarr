@@ -65,6 +65,7 @@ RUN go mod download
 COPY server/ .
 # Copy Flutter web build into the Go embed directory
 COPY --from=flutter-builder /app/build/web/ ./internal/web/dist/
+RUN go run ./cmd/compress-web
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags "-X github.com/windoze95/cantinarr-server/internal/version.Version=${VERSION}" -o cantinarr ./cmd/server
 
