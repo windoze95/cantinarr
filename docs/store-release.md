@@ -503,12 +503,14 @@ must also accept any pending Apple developer agreement in the console.
    permission is granted still needs review. Confirm linked-to-user answers and the live console
    selections before submission. Do not reuse the previous categorical "Data Not Collected"
    answer without that review. See [the privacy policy](privacy-policy.md).
-3. Age rating questionnaire: all descriptors None, gambling No, unrestricted web access No
-   (the in-app web view is scoped to auth/help flows). Strictly accurate result is 4+; setting
-   "Mature/Suggestive Themes: Infrequent/Mild" → **12+** is the conservative choice for an app
-   that displays TMDB artwork for arbitrary titles, and is what comparable media managers use.
+3. Age rating questionnaire: review Apple's current questions against the app's actual features
+   and catalog artwork/descriptions. Account for household issue messaging and server-enforced
+   kids content controls. The app has no unrestricted web access, public social feed, advertising,
+   or gambling. Do not reuse an all-None questionnaire or assume a fixed rating across operating
+   systems and regions. Review the calculated ratings before saving.
 4. Content rights: the app shows third-party content (TMDB metadata/artwork) → confirm you have
-   the rights (TMDB public API terms; attribution included in the listing copy).
+   the necessary permissions. **Settings > About** includes TMDB's approved logo and required
+   notice; keep both with the app under [TMDB's attribution requirements](https://developer.themoviedb.org/docs/faq).
 5. App availability + price (free), and App Review notes: reviewers need a reachable Cantinarr
    server — paste the demo server URL and a fresh connect link into the review notes before every
    submission.
