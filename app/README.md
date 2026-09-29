@@ -177,6 +177,8 @@ Refreshes run only while the tab is visible and the app is foregrounded (10 seco
 
 ### Settings
 
+**About** shows the app and connected server versions, plus TMDB's logo and attribution notice. The bundled `assets/tmdb_logo.png` is a raster copy of the approved **Alt short (blue)** logo from [TMDB's logos and attribution page](https://www.themoviedb.org/about/logos-attribution), preserving its colors and proportions.
+
 **Tag requests with requester** is an opt-in switch in each Radarr/Sonarr/Chaptarr/Lidarr instance editor. **Approvals > History** shows eligible requests' tag status, applied receipts and failures, including each shared book requester and format; **Retry tag** requeues only tagging without clearing the current history pages or filters. Lidarr tags the artist; Chaptarr tags the author for the requested format. The editor and History explain that broader scope. The controls require the server's `requester_tagging` capability. Turning tagging off leaves applied tags and cancels unfinished jobs; enabling it does not backfill old requests.
 
 **Request allowances** are edited in **Request Defaults** and each user's existing request-settings page. Each media allowance can inherit the User default, replace its whole count/window rule, or be unlimited. User pages show effective rules and usage; **Reset selected allowances** confirms the exact units restored and records an administrator audit. **Request allowance** is the last entry under **Settings > Account** (`/settings/request-allowance`); opening it shows usage, remaining units, and local next/full replenishment times. These controls are hidden when the server does not advertise `request_quotas`.

@@ -79,6 +79,14 @@ class AboutSheet extends ConsumerWidget {
           ],
           const SizedBox(height: AppTheme.spaceLg),
           // Required by TMDB's API terms of use.
+          Image.asset(
+            'assets/tmdb_logo.png',
+            width: 100,
+            height: 13,
+            fit: BoxFit.contain,
+            semanticLabel: 'The Movie Database (TMDB)',
+          ),
+          const SizedBox(height: AppTheme.spaceSm),
           const Text(
             'This product uses the TMDB API but is not endorsed '
             'or certified by TMDB.',

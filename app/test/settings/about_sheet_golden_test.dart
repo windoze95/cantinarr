@@ -46,6 +46,13 @@ void main() {
         scrollable: find.byType(Scrollable).last);
     expect(find.text('Version 0.1.0 (238)'), findsOneWidget);
     expect(find.text('Server 0.2.0'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('This product uses the TMDB API but is not endorsed '
+          'or certified by TMDB.'),
+      100,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('the sheet fills the screen width', (tester) async {
@@ -85,11 +92,15 @@ Future<void> _openAboutSheet(WidgetTester tester, Size size) async {
 
   await tester.tap(find.text('open'));
   await tester.pumpAndSettle();
-  // Decode the asset for real so the image contributes its true height —
+  // Decode the assets for real so the images contribute their true height —
   // the clipping this guards against came from how tall it is.
   await tester.runAsync(() async {
     await precacheImage(
       const AssetImage('assets/greedo.png'),
+      tester.element(find.byType(AboutSheet)),
+    );
+    await precacheImage(
+      const AssetImage('assets/tmdb_logo.png'),
       tester.element(find.byType(AboutSheet)),
     );
   });
