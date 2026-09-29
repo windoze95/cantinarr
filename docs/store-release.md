@@ -420,8 +420,11 @@ The Play 512 icon and the 1024×500 feature graphic derive from the committed 10
 changes (tests, dev tooling, and markdown excluded). It opens with a `gate` job that waits for the
 `CI` run on that exact commit and fails if it isn't green, so no IPA is even built from a commit
 the suite hasn't passed — an upload is irreversible and burns a build number permanently.
-Build number = latest TestFlight build + 1 (`next_build_number` lane in
-`app/ios/fastlane/Fastfile`); signing is manual via the `IOS_DIST_CERT_*` and
+The `next_build_number` lane in `app/ios/fastlane/Fastfile` reads every page of iOS builds
+across all marketing versions and chooses the highest build number + 1. Expired, processing,
+and failed uploads remain counted; a marketing version bump never resets the counter.
+Historical dotted build numbers contribute their leading integer, so the next integer exceeds
+them too. Signing is manual via the `IOS_DIST_CERT_*` and
 `IOS_PROVISIONING_PROFILE_BASE64` secrets (team `2M54LKDR89`, bundle `codes.julian.cantinarr`).
 Capability/entitlement changes invalidate the provisioning profile — regenerate it and update the
 secret.

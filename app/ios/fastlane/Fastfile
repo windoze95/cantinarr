@@ -1,25 +1,37 @@
 default_platform(:ios)
 
 platform :ios do
-  desc "Get next build number from TestFlight"
+  desc "Get next build number across all iOS TestFlight versions"
   lane :next_build_number do
-    api_key = app_store_connect_api_key(
+    app_store_connect_api_key(
       key_id: ENV["APP_STORE_CONNECT_KEY_ID"],
       issuer_id: ENV["APP_STORE_CONNECT_ISSUER_ID"],
       key_content: Base64.decode64(ENV["APP_STORE_CONNECT_API_KEY_B64"]),
       is_key_content_base64: false,
+      set_spaceship_token: true,
     )
 
-    version = ENV["APP_VERSION"]
-    current = latest_testflight_build_number(
-      api_key: api_key,
-      app_identifier: "codes.julian.cantinarr",
-      version: version,
-      initial_build_number: 0,
+    app = Spaceship::ConnectAPI::App.find("codes.julian.cantinarr")
+    UI.user_error!("Cantinarr was not found in App Store Connect") unless app
+    # Apple treats 1.0 and 1.0.0 as the same upload train, while an exact
+    # version filter can miss the older spelling. Build.all reads every page
+    # and includes expired, processing, and failed uploads that consumed IDs.
+    builds = Spaceship::ConnectAPI::Build.all(
+      app_id: app.id,
+      platform: "IOS",
+      includes: "preReleaseVersion",
+      limit: 200,
     )
+    numbers = builds.map do |build|
+      number = /\A([0-9]+)(?:\.[0-9]+){0,2}\z/.match(build.version.to_s)
+      UI.user_error!("Unsupported TestFlight build number: #{build.version.inspect}") unless number
+      # A new integer above the leading component also exceeds dotted builds.
+      number[1].to_i
+    end
+    current = numbers.max || 0
     next_build = current + 1
 
-    UI.message("Latest TestFlight build: #{current}, next: #{next_build}")
+    UI.message("Highest iOS TestFlight build: #{current}, next: #{next_build}")
     File.write(ENV['GITHUB_OUTPUT'], "build_number=#{next_build}\n", mode: "a") if ENV['GITHUB_OUTPUT']
   end
 
