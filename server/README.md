@@ -79,6 +79,10 @@ go build -o cantinarr ./cmd/server
 ./cantinarr
 ```
 
+Run `make` from the repository root to build the Flutter web app and embed it in the server. Both Dockerfiles and `make` run `go run ./cmd/compress-web` before compiling the server; when staging a web build manually in `server/internal/web/dist/`, run that command from `server/` too. It creates gzip alternatives for compressible text and WebAssembly assets only when they are smaller than the originals.
+
+The web handler negotiates gzip through `Accept-Encoding`, keeps the original content type, and sends `Vary: Accept-Encoding` for browser and proxy caches. Compression happens during the build, so direct connections to port 8585 get compressed assets without runtime compression work or a reverse proxy. Clients can still request the original files. API responses, streams, and artwork proxies use their existing handlers.
+
 ## Configuration
 
 Service credentials (TMDB, Trakt), the admin's included AI profile, and all service instances (Radarr, Sonarr, Chaptarr, SABnzbd, qBittorrent, NZBGet, Transmission, Deluge, ruTorrent, Tautulli, Tracearr) are managed through the admin UI. TMDB and Trakt need no credentials to start: the server ships a built-in public TMDB read token (`internal/tmdb/default_token.go` -- deliberately public, the Overseerr model; TMDB throttles per source IP, not per key) and a built-in Trakt application (`internal/trakt/default_client_id.go` -- also deliberately public; Trakt's public feeds authenticate with nothing but a client ID, and Trakt rate-limits per caller rather than per application, so each install's server spends its own budget). Stored admin values override either one. `GET /api/admin/credentials` reports the fallbacks as `tmdb_using_builtin` and `trakt_using_builtin`. The included AI profile and each user's optional personal override can use Anthropic/OpenAI/Gemini/xAI API keys, OpenAI OAuth backed by a ChatGPT account, or xAI Grok OAuth backed by a SuperGrok / X Premium+ account. Self-hosted servers are a dedicated shared-only `local_openai` provider ("Local (OpenAI-compatible)"): `local_openai_base_url` is required (stored plaintext -- configuration, not a secret; enter the endpoint's final URL, usually ending in `/v1`, because provider requests never follow redirects), `ai_model` must be explicit (no catalog), and `local_openai_key` is optional -- when unset the server authenticates with a fixed placeholder bearer that local servers ignore. The provider is filtered out of personal settings payloads and rejected as a personal selection, so its endpoint (which may name cluster-internal hosts) never rides a non-admin path; personal OpenAI keys always talk to api.openai.com. `openai_reasoning_effort` and `local_openai_reasoning_effort` (plaintext; `none`/`minimal`/`low`/`medium`/`high`, empty = auto) pin the reasoning_effort the shared OpenAI and Local turns send -- useful to keep thinking-heavy local models fast -- and backends that reject the field cost one silent retry without it. `local_openai_use_proxy` (plaintext `true`/`false`, default false) says the local endpoint is an internet host rather than one on the server's own network, which is the only thing that puts it behind the admin's outbound proxy; the address is never used to guess. An untouched install preselects OpenAI OAuth with the fast `gpt-5.6-luna` model; a stored API key alone is not a selection -- the derived default changes only when an admin picks a provider. No environment variables are needed for credentials.
@@ -596,6 +600,8 @@ Effective discovery visibility requires a personal assignment to the matching se
 | `GET /api/media/music/artists/{mbid}` | Artist metadata by exact MusicBrainz artist ID |
 | `GET /api/media/music/artists/{mbid}/albums` | Paginated albums, EPs, and singles by exact artist ID; `page`, optional authorized `instance_id` |
 | `GET /api/discover/music/artwork/{mbid}` | Authenticated Cover Art Archive raster image; `404` when absent |
+
+Artwork reads retry a transient connection/body-read failure or HTTP 408, 429, or 5xx once, sharing a 15-second total deadline. Retries wait at least one second and honor `Retry-After` only when it fits that deadline. Missing covers remain cached as absent; certificate failures, refused redirects, oversized images, and invalid raster bodies are not retried. Exhausted reads log a host-free `music artwork:` reason. Failed HTTP request logs append `request_context=canceled` or `request_context=deadline_exceeded` when applicable while retaining the attempted status.
 
 Every endpoint accepts `instance_id`. Music feeds return `{results, page, next_page?, source, scope, empty_message?}`. `next_page` follows provider position and exhaustion, not displayed item count: charts and genre searches request 20 provider entries, so filtering can leave a short or empty page with more results. The app suppresses repeated MBIDs across pages while preserving distinct IDs with identical titles. Results and album details use a separate string identity model: `{foreign_id, title, artist, release_date?, release_type, artwork?, disambiguation?}`. `foreign_id` is always a **release-group** ID. Artwork is a server-relative path; append `instance_id` when selecting a library and use the session bearer token; admins may omit the instance before setup.
 
@@ -1224,6 +1230,8 @@ SQLite (pure Go driver) with WAL mode. **The live schema is code**: `internal/db
 
 The instance-assignment upgrade preserves legacy Radarr/Sonarr default routing as explicit grants for existing users, including administrators, and retains saved library grants and personal pins. Later assignment removals and newly created admins are never enrolled on restart.
 
+Authenticated requests read current user, device, and sign-in policy state every time. Device `last_seen_at` activity writes occur at most once per minute during normal request traffic, including concurrent artwork loads. This limits disk writes on NAS storage while retaining immediate revocation and permission checks. The activity timestamp is best-effort display metadata, not an authorization cache.
+
 The pool holds **exactly one connection** (SQLite is single-writer), so every query in the process takes its turn through one door, and no query sets a timeout. Code that holds the connection while waiting for something that also needs it therefore wedges the whole server -- silently: nothing crashes, nothing errors, and a blocked goroutine writes no further log line, so the container keeps reporting itself healthy while the app has stopped working. Two rules follow. **Drain and close a cursor before calling anything that touches the database** (see `reportBookImportStalls`, whose comment records the deadlock this caused). And a **stall watchdog** (`internal/db/stallwatch.go`) probes the pool from outside every 10s; two consecutive 5s failures to acquire the connection log one `db: STALLED` line with the pool counters and a goroutine dump naming the holder, a reminder every 5 minutes while it lasts, and the duration on recovery. Only the probe carries a deadline -- real queries are untouched, so this cannot fail a slow query. It reports to the log and nowhere else on purpose: system issues and admin pushes are written through the very connection that is stuck, so during this failure the log is the only channel that still works.
 
 | Area | Tables |
@@ -1246,7 +1254,9 @@ The pool holds **exactly one connection** (SQLite is single-writer), so every qu
 
 ```
 server/
-├── cmd/server/main.go        # Entry point, dependency wiring
+├── cmd/
+│   ├── server/main.go        # Entry point, dependency wiring
+│   └── compress-web/         # Build-time gzip alternatives for embedded web assets
 ├── internal/
 │   ├── ai/                   # Multi-provider chat: SSE handler, API-key providers
 │   │                         #   provider-neutral streaming + conversation store

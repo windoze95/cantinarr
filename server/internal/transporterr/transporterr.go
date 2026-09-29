@@ -34,5 +34,8 @@ func Summarize(err error) string {
 	if errors.Is(err, syscall.ECONNREFUSED) {
 		return "connection refused"
 	}
+	if errors.Is(err, syscall.ECONNRESET) {
+		return "connection reset"
+	}
 	return "could not connect"
 }

@@ -15,6 +15,21 @@ sidebar:
 
 With Compose, use `docker compose ps` and recent logs. A container that repeatedly restarts needs its startup error fixed before investigating mobile settings.
 
+## The homepage or posters load slowly
+
+Check the slow request's **Timing** tab in the browser's Network panel. Its total duration includes time queued in the browser, server work, and the response transfer.
+
+- Long **Queueing** or **Stalled** time can mean artwork requests are occupying the browser's connections. Compare direct access to the published port with your reverse proxy. An HTTPS proxy with HTTP/2 can handle more requests on one connection.
+- Long **Waiting for server response** on `/api/config` points to work inside Cantinarr or its proxy. This route reads local configuration, without fetching discovery feeds. Check the NAS's CPU, memory, and disk activity, especially storage containing `/config`. Include any `db: STALLED` lines from the container log when reporting it.
+- A `502` from `/api/trakt/images/...` means the server could not fetch the artwork successfully. Music discovery `502` responses also need the response body and matching log lines to identify the provider failure.
+- A `503` from `/api/downloads/summary` can indicate unavailable activity or a failed access check. Record its response body; the status alone does not identify a DNS problem.
+
+Music cover downloads retry temporary failures once within a total 15-second limit. A `music artwork:` log line records the remaining failure, such as `connection reset`, a timeout, or an upstream HTTP status. Check the server's connection to Cover Art Archive and Internet Archive if these failures persist. A cover's `404` means no artwork is available for that album.
+
+Failed-request logs retain the attempted HTTP status after cancellation. `request_context=canceled` means the incoming request was canceled, often after leaving the page; `request_context=deadline_exceeded` means its deadline expired. Confirm the response in the browser's Network panel before treating either as an error received by an open page.
+
+Capture the server version from **Settings > About**, the affected route, its timing breakdown, and nearby container logs. Remove authorization headers, tokens, and personal data before sharing. See [get help](/troubleshooting/get-help/).
+
 ## The service opens on my laptop but fails Test Connection
 
 The test runs from Cantinarr, not your laptop. Check:

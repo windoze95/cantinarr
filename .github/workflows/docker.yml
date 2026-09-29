@@ -148,7 +148,7 @@ jobs:
             /usr/local/bin/codex-app-server --help | grep -q -- --listen
           '
 
-      - name: Verify the served web bundle carries the build number
+      - name: Verify the served web bundle carries the build number and compressed assets
         # End-to-end proof of the chain behind Settings → About: build arg →
         # `flutter build web --build-number` → version.json → embedded in the
         # binary → served. Dropping the arg from any build silently reverts
@@ -156,6 +156,7 @@ jobs:
         run: |
           docker run --rm -d --name cantinarr-version-smoke \
             -p 8585:8585 cantinarr-root-smoke:${{ github.sha }}
+          trap 'docker rm -f cantinarr-version-smoke >/dev/null 2>&1 || true' EXIT
           served=""
           for _ in $(seq 1 60); do
             curl -sf http://localhost:8585/version.json >/tmp/version.json \
@@ -163,6 +164,31 @@ jobs:
             sleep 1
           done
           [ -n "$served" ] || docker logs cantinarr-version-smoke
+          # Exercise the actual embedded build, including the WASM MIME type
+          # needed for browser streaming compilation. No client auto-decoding.
+          python3 - <<'PY'
+          import gzip
+          import urllib.request
+
+          for path, content_type in [
+              ("/main.dart.js", "javascript"),
+              ("/canvaskit/canvaskit.wasm", "application/wasm"),
+          ]:
+              url = "http://localhost:8585" + path
+              with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept-Encoding": "identity"})) as response:
+                  plain = response.read()
+                  assert response.headers.get("Content-Encoding") is None, path
+                  assert "Accept-Encoding" in ",".join(response.headers.get_all("Vary", [])), path
+              with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept-Encoding": "gzip"})) as response:
+                  compressed = response.read()
+                  assert response.headers.get("Content-Encoding") == "gzip", path
+                  assert content_type in response.headers.get("Content-Type", ""), path
+                  assert "Accept-Encoding" in ",".join(response.headers.get_all("Vary", [])), path
+                  assert int(response.headers["Content-Length"]) == len(compressed), path
+              assert gzip.decompress(compressed) == plain, path
+              assert len(compressed) < len(plain), path
+              print(f"{path}: {len(plain)} -> {len(compressed)} bytes")
+          PY
           # PID 1 is the server itself (the entrypoint exec's it) and, with no
           # PUID set, still root: the default must never move under an
           # existing deployment.

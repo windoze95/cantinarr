@@ -2,12 +2,15 @@ package api
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -59,6 +62,43 @@ func TestSafeRequestLoggerOnlyLogsFailures(t *testing.T) {
 			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/config", nil))
 			if logged := logs.Len() > 0; logged != (status >= 400) {
 				t.Fatalf("status %d logged=%v: %s", status, logged, &logs)
+			}
+		})
+	}
+}
+
+func TestSafeRequestLoggerDistinguishesCanceledRequests(t *testing.T) {
+	var logs bytes.Buffer
+	oldWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+	for _, lifecycle := range []string{"active", "canceled", "deadline_exceeded"} {
+		t.Run(lifecycle, func(t *testing.T) {
+			logs.Reset()
+			ctx := context.Background()
+			if lifecycle == "canceled" {
+				var cancel context.CancelCauseFunc
+				ctx, cancel = context.WithCancelCause(ctx)
+				cancel(errors.New("private cancellation details"))
+			} else if lifecycle == "deadline_exceeded" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, time.Now().Add(-time.Second))
+				defer cancel()
+			}
+			handler := safeRequestLogger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusBadGateway)
+			}))
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/?token=secret", nil).WithContext(ctx))
+			got := logs.String()
+			if !strings.Contains(got, "502") || strings.Contains(got, "secret") || strings.Contains(got, "private") {
+				t.Fatalf("lost status or leaked request details: %q", got)
+			}
+			if lifecycle == "active" {
+				if strings.Contains(got, "request_context=") {
+					t.Fatalf("active request mislabeled: %q", got)
+				}
+			} else if !strings.Contains(got, "request_context="+lifecycle) {
+				t.Fatalf("missing lifecycle evidence: %q", got)
 			}
 		})
 	}
