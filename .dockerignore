@@ -7,5 +7,7 @@ app/.packages
 app/.pub/
 app/.pub-cache/
 app/build/
+# The root image embeds the fresh flutter-builder output, not local artifacts.
+server/internal/web/dist/
 # Documentation is published separately and is not part of the server image.
 docs-site/

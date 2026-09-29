@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -29,6 +31,16 @@ func safeRequestLogger(next http.Handler) http.Handler {
 		if routeContext := chi.RouteContext(r.Context()); routeContext != nil && routeContext.RoutePattern() != "" {
 			route = routeContext.RoutePattern()
 		}
-		log.Printf("http: %s %s %d %s", r.Method, route, status, time.Since(started).Round(time.Millisecond))
+		// A handler can attempt an error response after the browser has left
+		// the page. Keep the status, but distinguish that request lifecycle
+		// from a failure delivered to a still-connected client.
+		requestContext := ""
+		switch {
+		case errors.Is(r.Context().Err(), context.Canceled):
+			requestContext = " request_context=canceled"
+		case errors.Is(r.Context().Err(), context.DeadlineExceeded):
+			requestContext = " request_context=deadline_exceeded"
+		}
+		log.Printf("http: %s %s %d %s%s", r.Method, route, status, time.Since(started).Round(time.Millisecond), requestContext)
 	})
 }

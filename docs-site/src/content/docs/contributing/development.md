@@ -41,7 +41,9 @@ flutter run --no-pub
 
 Dependencies are locked in `pubspec.lock`. Intentional dependency or SDK upgrades include the corresponding lockfile and pin changes. Subsequent analyze, test, and build commands use `--no-pub` so they do not silently resolve a different set.
 
-`make` builds Flutter web, copies it into the server's embedded assets, and builds the server. Mobile release builds run in CI.
+`make` builds Flutter web, copies it into the server's embedded assets, creates gzip alternatives, and builds the server. Both Dockerfiles also generate gzip alternatives before compiling the server. The web handler serves them when the browser accepts gzip, with compression done at build time rather than on the host serving requests.
+
+If you manually copy a web build into `server/internal/web/dist/`, run `go run ./cmd/compress-web` from `server/` before building the server. Mobile release builds run in CI.
 
 ## Build and test variables
 

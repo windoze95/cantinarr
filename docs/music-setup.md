@@ -93,6 +93,8 @@ The opening Popular Albums and New Releases pages start loading when you enter D
 
 External metadata is cached for one hour for feeds, six hours for genre searches, and 24 hours for album details and covers. A failed row offers Retry; a failed refresh keeps the previous results with a notice. Library availability still comes from the existing live music-status reads and instant updates. Requesting a discovered album follows the same direct-request or approval path as search, including durable delivery retries and saved requests that need attention.
 
+Cover downloads retry a temporary connection or provider failure once, within a total 15-second limit. If the download still fails, the container log records a short reason such as `connection reset` or the provider's HTTP status. A missing cover returns `404` and uses the album icon.
+
 Cantinarr must be able to reach ListenBrainz, MusicBrainz, Cover Art Archive, and its Internet Archive artwork hosts. These calls honor the server's outbound proxy. The TMDB/Trakt source and English-only settings apply to movies and TV. Older callers retain the album/EP search default unless they send `include_singles=true`; existing native and catalog-reference request payloads remain accepted.
 
 ## Requester tags

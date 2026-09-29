@@ -10,6 +10,7 @@ flutter-web:
 copy-web: flutter-web
 	rm -rf server/internal/web/dist/*
 	cp -r app/build/web/* server/internal/web/dist/
+	cd server && go run ./cmd/compress-web
 
 server: copy-web
 	cd server && CGO_ENABLED=0 go build -ldflags "-X github.com/windoze95/cantinarr-server/internal/version.Version=$(VERSION)" -o cantinarr-server ./cmd/server
