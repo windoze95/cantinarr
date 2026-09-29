@@ -79,6 +79,10 @@ go build -o cantinarr ./cmd/server
 ./cantinarr
 ```
 
+Run `make` from the repository root to build the Flutter web app and embed it in the server. Both Dockerfiles and `make` run `go run ./cmd/compress-web` before compiling the server; when staging a web build manually in `server/internal/web/dist/`, run that command from `server/` too. It creates gzip alternatives for compressible text and WebAssembly assets only when they are smaller than the originals.
+
+The web handler negotiates gzip through `Accept-Encoding`, keeps the original content type, and sends `Vary: Accept-Encoding` for browser and proxy caches. Compression happens during the build, so direct connections to port 8585 get compressed assets without runtime compression work or a reverse proxy. Clients can still request the original files. API responses, streams, and artwork proxies use their existing handlers.
+
 ## Configuration
 
 Service credentials (TMDB, Trakt), the admin's included AI profile, and all service instances (Radarr, Sonarr, Chaptarr, SABnzbd, qBittorrent, NZBGet, Transmission, Deluge, ruTorrent, Tautulli, Tracearr) are managed through the admin UI. TMDB and Trakt need no credentials to start: the server ships a built-in public TMDB read token (`internal/tmdb/default_token.go` -- deliberately public, the Overseerr model; TMDB throttles per source IP, not per key) and a built-in Trakt application (`internal/trakt/default_client_id.go` -- also deliberately public; Trakt's public feeds authenticate with nothing but a client ID, and Trakt rate-limits per caller rather than per application, so each install's server spends its own budget). Stored admin values override either one. `GET /api/admin/credentials` reports the fallbacks as `tmdb_using_builtin` and `trakt_using_builtin`. The included AI profile and each user's optional personal override can use Anthropic/OpenAI/Gemini/xAI API keys, OpenAI OAuth backed by a ChatGPT account, or xAI Grok OAuth backed by a SuperGrok / X Premium+ account. Self-hosted servers are a dedicated shared-only `local_openai` provider ("Local (OpenAI-compatible)"): `local_openai_base_url` is required (stored plaintext -- configuration, not a secret; enter the endpoint's final URL, usually ending in `/v1`, because provider requests never follow redirects), `ai_model` must be explicit (no catalog), and `local_openai_key` is optional -- when unset the server authenticates with a fixed placeholder bearer that local servers ignore. The provider is filtered out of personal settings payloads and rejected as a personal selection, so its endpoint (which may name cluster-internal hosts) never rides a non-admin path; personal OpenAI keys always talk to api.openai.com. `openai_reasoning_effort` and `local_openai_reasoning_effort` (plaintext; `none`/`minimal`/`low`/`medium`/`high`, empty = auto) pin the reasoning_effort the shared OpenAI and Local turns send -- useful to keep thinking-heavy local models fast -- and backends that reject the field cost one silent retry without it. `local_openai_use_proxy` (plaintext `true`/`false`, default false) says the local endpoint is an internet host rather than one on the server's own network, which is the only thing that puts it behind the admin's outbound proxy; the address is never used to guess. An untouched install preselects OpenAI OAuth with the fast `gpt-5.6-luna` model; a stored API key alone is not a selection -- the derived default changes only when an admin picks a provider. No environment variables are needed for credentials.
@@ -1246,7 +1250,9 @@ The pool holds **exactly one connection** (SQLite is single-writer), so every qu
 
 ```
 server/
-├── cmd/server/main.go        # Entry point, dependency wiring
+├── cmd/
+│   ├── server/main.go        # Entry point, dependency wiring
+│   └── compress-web/         # Build-time gzip alternatives for embedded web assets
 ├── internal/
 │   ├── ai/                   # Multi-provider chat: SSE handler, API-key providers
 │   │                         #   provider-neutral streaming + conversation store
