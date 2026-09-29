@@ -24,6 +24,10 @@ Check the slow request's **Timing** tab in the browser's Network panel. Its tota
 - A `502` from `/api/trakt/images/...` means the server could not fetch the artwork successfully. Music discovery `502` responses also need the response body and matching log lines to identify the provider failure.
 - A `503` from `/api/downloads/summary` can indicate unavailable activity or a failed access check. Record its response body; the status alone does not identify a DNS problem.
 
+Music cover downloads retry temporary failures once within a total 15-second limit. A `music artwork:` log line records the remaining failure, such as `connection reset`, a timeout, or an upstream HTTP status. Check the server's connection to Cover Art Archive and Internet Archive if these failures persist. A cover's `404` means no artwork is available for that album.
+
+Failed-request logs retain the attempted HTTP status after cancellation. `request_context=canceled` means the incoming request was canceled, often after leaving the page; `request_context=deadline_exceeded` means its deadline expired. Confirm the response in the browser's Network panel before treating either as an error received by an open page.
+
 Capture the server version from **Settings > About**, the affected route, its timing breakdown, and nearby container logs. Remove authorization headers, tokens, and personal data before sharing. See [get help](/troubleshooting/get-help/).
 
 ## The service opens on my laptop but fails Test Connection
