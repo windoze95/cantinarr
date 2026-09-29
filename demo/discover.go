@@ -44,9 +44,10 @@ import (
 // ─── Discovery settings state (seeded SAVED per contract §9) ────────────
 
 var (
-	discSettingsMu  sync.Mutex
-	discSource      = "tmdb_trending"
-	discEnglishOnly = false
+	discSettingsMu    sync.Mutex
+	discSource        = "tmdb_trending"
+	discEnglishOnly   = false
+	discCover4KBadges = false
 )
 
 // discoveryPrefsSaved reports whether an admin has ever saved discovery
@@ -60,11 +61,18 @@ func discCurrentSettings() (source string, englishOnly bool) {
 	return discSource, discEnglishOnly
 }
 
+func cfgCover4KBadges() bool {
+	discSettingsMu.Lock()
+	defer discSettingsMu.Unlock()
+	return discCover4KBadges
+}
+
 func discSettingsJSON() map[string]any {
 	source, englishOnly := discCurrentSettings()
 	return map[string]any{
 		"source":           source,
 		"english_only":     englishOnly,
+		"cover_4k_badges":  cfgCover4KBadges(),
 		"sources":          []string{"tmdb_trending", "trakt_trending", "tmdb_popular"},
 		"trakt_configured": true,
 		// Which Discover tabs an admin chose to hide while their service is
@@ -1486,6 +1494,7 @@ func discHandleSettingsPut(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Source                 string          `json:"source"`
 		EnglishOnly            bool            `json:"english_only"` // absent = false: full-replace semantics
+		Cover4KBadges          *bool           `json:"cover_4k_badges"`
 		HiddenWhenUnconfigured map[string]bool `json:"hidden_when_unconfigured"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -1515,6 +1524,9 @@ func discHandleSettingsPut(w http.ResponseWriter, r *http.Request) {
 	discSettingsMu.Lock()
 	discSource = source
 	discEnglishOnly = body.EnglishOnly
+	if body.Cover4KBadges != nil {
+		discCover4KBadges = *body.Cover4KBadges
+	}
 	// A patch: only the keys sent move, so an older client saving the source
 	// cannot clear a hide the admin set from a newer one.
 	for mediaType, hidden := range body.HiddenWhenUnconfigured {

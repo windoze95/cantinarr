@@ -339,6 +339,7 @@ func (s *Service) exchangePlex(ctx context.Context, flow, code, verifier string)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrAuthUnavailable
 	}
+	var added []string
 	if a.Purpose == "link" {
 		if linked != 0 && linked != a.Actor.UserID {
 			return nil, ErrPlexConflict
@@ -378,6 +379,10 @@ func (s *Service) exchangePlex(ctx context.Context, flow, code, verifier string)
 		linked, err = createExternalUser(tx, a.account.Username, "plex-user")
 		if err != nil {
 			return nil, err
+		}
+		added, err = autoAssignUser(tx, linked)
+		if err != nil {
+			return nil, ErrAuthUnavailable
 		}
 		email := mediaserver.CanonicalEmail(a.account.Email)
 		if !mediaserver.ValidEmail(email) {
@@ -419,6 +424,7 @@ func (s *Service) exchangePlex(ctx context.Context, flow, code, verifier string)
 	if tx.Commit() != nil {
 		return nil, ErrAuthUnavailable
 	}
+	s.notifyAutoAssignments(linked, added)
 	if a.Purpose == "link" {
 		return map[string]string{"status": "linked"}, nil
 	}

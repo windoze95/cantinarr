@@ -647,6 +647,10 @@ class RequestStatusDetail {
   final MovieReleaseDates releases;
   final Map<String, RequestStatus> instanceStatuses;
 
+  /// TV only, and only when the read asked for it: the selected library holds
+  /// the whole show and Sonarr measured every counted episode file at 4K.
+  final bool is4K;
+
   const RequestStatusDetail({
     this.isKnown = true,
     this.match,
@@ -657,6 +661,7 @@ class RequestStatusDetail {
     this.seasons = const [],
     this.releases = MovieReleaseDates.none,
     this.instanceStatuses = const {},
+    this.is4K = false,
   });
 
   factory RequestStatusDetail.fromJson(Map<String, dynamic> json) {
@@ -700,6 +705,7 @@ class RequestStatusDetail {
           : MovieReleaseDates.none,
       instanceStatuses: instanceStatuses,
       unknownInstanceIds: unknownInstanceIds,
+      is4K: json['is_4k'] == true,
     );
   }
 }
@@ -773,11 +779,14 @@ class RequestService {
   /// an already-requested season look requestable again.
   /// Catalog cards set [includeInstanceStatuses] false to avoid reading every
   /// sibling library. Older servers may ignore that optional query parameter.
+  /// TV cards set [include4K] while 4K badges are on; older servers ignore it
+  /// and never report 4K.
   Future<RequestStatusDetail> checkStatusDetail(
     int tmdbId,
     MediaType mediaType, {
     String? instanceId,
     bool includeInstanceStatuses = true,
+    bool include4K = false,
     CancelToken? cancelToken,
   }) async {
     final resp = await _backendDio.get(
@@ -787,6 +796,7 @@ class RequestService {
         if (instanceId != null && instanceId.isNotEmpty)
           'instance_id': instanceId,
         if (!includeInstanceStatuses) 'include_instance_statuses': false,
+        if (include4K) 'include_4k': true,
       },
       cancelToken: cancelToken,
     );

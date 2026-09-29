@@ -1,1 +1,1 @@
-Discover, request, manage, and fix stuck downloads on your media server.
+Request media for Plex or Jellyfin. Manage Radarr, Sonarr and downloads.

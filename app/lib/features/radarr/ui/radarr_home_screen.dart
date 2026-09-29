@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/storage/library_sort_preferences.dart';
+import '../../../core/widgets/library_sort_menu.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/storage/library_view_preferences.dart';
 import '../../../core/widgets/error_banner.dart';
+import '../../../core/widgets/library_actions.dart';
 import '../../../core/widgets/library_command_header.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../data/radarr_api_service.dart';
@@ -12,7 +16,6 @@ import '../logic/radarr_movies_provider.dart';
 import 'movie_actions.dart';
 import 'radarr_movie_detail_screen.dart';
 import 'radarr_movie_list.dart';
-import 'radarr_releases_screen.dart';
 
 /// Radarr library management screen (used in the Radarr module).
 /// Instance-aware: uses the active Radarr instance from the instance provider.
@@ -30,6 +33,10 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
   @override
   void initState() {
     super.initState();
+    // Listen before the first frame so preference restoration cannot race the
+    // instance notifier's creation. Its initial selection is also read below.
+    ref.listenManual(librarySortProvider('radarr'), (_, selection) =>
+        _notifier?.sorting.setSelection(selection));
     WidgetsBinding.instance.addPostFrameCallback((_) => _initNotifier());
   }
 
@@ -43,47 +50,24 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
       backendDio: backendDio,
       instanceId: activeInstance.id,
     );
+    _notifier?.dispose();
     _notifier = RadarrMoviesNotifier(service);
+    _notifier!.sorting.setSelection(ref.read(librarySortProvider('radarr')));
     _notifier!.loadMovies();
     setState(() {});
   }
 
   @override
   void dispose() {
+    _notifier?.dispose();
     _searchController.dispose();
     super.dispose();
-  }
-
-  Future<void> _triggerAutomaticSearch(int movieId) async {
-    try {
-      await _notifier!.searchForMovie(movieId);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Movie search started')));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to start search: $e')));
-    }
-  }
-
-  void _openInteractiveSearch(RadarrMovie movie) {
-    final instanceId = ref.read(instanceProvider).activeRadarrInstance?.id;
-    if (instanceId == null) return;
-    Navigator.of(context, rootNavigator: true).push(
-      AmbientPageRoute(
-        builder: (_) => RadarrReleasesScreen(
-          instanceId: instanceId,
-          movieId: movie.id,
-          movieTitle: movie.title,
-        ),
-      ),
-    );
   }
 
   Future<void> _openMovie(RadarrMovie movie) async {
     final instanceId = ref.read(instanceProvider).activeRadarrInstance?.id;
     if (instanceId == null) return;
+    final notifier = _notifier;
     await Navigator.of(context, rootNavigator: true).push(
       AmbientPageRoute(
         builder: (_) => RadarrMovieDetailScreen(
@@ -93,13 +77,19 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
       ),
     );
     // The detail screen can edit or remove the movie; refresh on return.
-    _notifier?.loadMovies();
+    if (mounted && identical(_notifier, notifier)) notifier?.loadMovies();
   }
 
-  /// Long-press menu: search / edit / refresh / remove / monitor.
-  void _showMovieActions(RadarrMovie movie) {
+  /// Tile and detail menus run the same actions.
+  void _showMovieActions(RadarrMovie movie, LibraryAction action) {
     final instanceId = ref.read(instanceProvider).activeRadarrInstance?.id;
     if (instanceId == null) return;
+    final notifier = _notifier;
+    void reload() {
+      if (mounted && identical(_notifier, notifier)) {
+        notifier?.loadMovies();
+      }
+    }
     showMovieActions(
       context,
       service: RadarrApiService(
@@ -108,8 +98,9 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
       ),
       instanceId: instanceId,
       movie: movie,
-      onChanged: () => _notifier?.loadMovies(),
-      onRemoved: () => _notifier?.loadMovies(),
+      selectedAction: action,
+      onChanged: reload,
+      onRemoved: reload,
     );
   }
 
@@ -124,6 +115,10 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
           child: CircularProgressIndicator(color: AppTheme.accent));
     }
 
+    final sort = ref.watch(librarySortProvider('radarr'));
+    final viewMode = ref.watch(libraryViewModeProvider('radarr'));
+    final instanceId = ref.watch(instanceProvider).activeRadarrInstance?.id;
+
     return ListenableBuilder(
       listenable: _notifier!,
       builder: (context, _) {
@@ -131,9 +126,15 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
         final instanceName =
             ref.watch(instanceProvider).activeRadarrInstance?.name ?? 'Radarr';
 
-        return Column(
-          children: [
-            LibraryCommandHeader(
+        return LibraryCommandLayout(
+          key: ValueKey('radarr-$instanceId'),
+          headerBuilder: (collapsed) => LibraryCommandHeader(
+              collapsed: collapsed,
+              sort: LibrarySortMenu(module: 'radarr', selection: sort,
+                onSelected: (field) => ref.read(librarySortProvider('radarr').notifier).select(field)),
+              viewMode: viewMode,
+              onViewModeChanged: (value) => ref
+                  .read(libraryViewModeProvider('radarr').notifier).set(value),
               title: 'Movie library',
               subtitle: '$instanceName  /  Radarr',
               stats: [
@@ -183,6 +184,10 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
               ),
             ),
 
+          children: [
+            if (_notifier!.sorting.notice != null)
+              ErrorBanner(message: _notifier!.sorting.notice!, maxLines: null,
+                onRetry: _notifier!.sorting.canRetry ? _notifier!.sorting.refresh : null),
             if (state.error != null)
               ErrorBanner(
                 message: state.error!,
@@ -194,19 +199,19 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
               child: state.isLoading && state.movies.isEmpty
                   ? const Center(
                       child: CircularProgressIndicator(color: AppTheme.accent))
-                  : RefreshIndicator(
-                      onRefresh: _notifier!.loadMovies,
-                      color: AppTheme.accent,
-                      child: RadarrMovieList(
-                        movies: state.filtered,
-                        onDelete: (id, {bool deleteFiles = false}) => _notifier!
-                            .deleteMovie(id, deleteFiles: deleteFiles),
-                        onSearch: _triggerAutomaticSearch,
-                        onInteractiveSearch: _openInteractiveSearch,
-                        onOpen: _openMovie,
-                        onLongPress: _showMovieActions,
-                      ),
-                    ),
+                  : state.error != null && state.movies.isEmpty
+                      ? const SizedBox.shrink()
+                      : RefreshIndicator(
+                          onRefresh: _notifier!.loadMovies,
+                          color: AppTheme.accent,
+                          child: RadarrMovieList(
+                            viewMode: viewMode,
+                            scrollKey: 'radarr-$instanceId-${_notifier!.sorting.effectiveSelection.key}',
+                            movies: state.filtered,
+                            onOpen: _openMovie,
+                            onAction: _showMovieActions,
+                          ),
+                        ),
             ),
           ],
         );

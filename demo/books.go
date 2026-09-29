@@ -188,11 +188,8 @@ func bookResolveInstance(u *DemoUser, explicitID string) (*DemoInstance, int, st
 		if inst == nil || inst.ServiceType != serviceChaptarr {
 			return nil, http.StatusBadRequest, "invalid chaptarr instance"
 		}
-		if u == nil || u.Role != roleAdmin {
-			eff := effectiveInstanceFor(u, serviceChaptarr)
-			if eff == nil || eff.ID != explicitID {
-				return nil, http.StatusForbidden, "chaptarr instance is not available to you"
-			}
+		if u == nil || (u.Role != roleAdmin && !userAssignedInstance(u, explicitID)) {
+			return nil, http.StatusForbidden, "chaptarr instance is not available to you"
 		}
 		return inst, 0, ""
 	}

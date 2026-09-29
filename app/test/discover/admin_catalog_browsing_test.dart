@@ -17,6 +17,7 @@ import 'package:cantinarr/features/dashboard/ui/dashboard_music_tab.dart';
 import 'package:cantinarr/features/dashboard/ui/library_artists_row.dart';
 import 'package:cantinarr/features/dashboard/ui/recently_added_books_row.dart';
 import 'package:cantinarr/features/discover/logic/discovery_access.dart';
+import 'package:cantinarr/features/discover/logic/discover_session.dart';
 import 'package:cantinarr/features/settings/ui/instance_edit_screen.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
@@ -27,11 +28,18 @@ import 'package:go_router/go_router.dart';
 
 const _albumId = 'c9e8c1f7-36f2-4e32-8fc3-ab36b6a49061';
 const _types = ['radarr', 'sonarr', 'chaptarr', 'lidarr'];
-ServiceInstance _instance(String type) =>
-    ServiceInstance(id: type, name: type, serviceType: type, isDefault: true);
+ServiceInstance _instance(String type, {bool? assigned}) => ServiceInstance(
+    id: type,
+    name: type,
+    serviceType: type,
+    isDefault: true,
+    assigned: assigned);
 AuthState _auth({
   String role = 'admin',
   bool capability = true,
+  bool assignments = false,
+  bool initialSetup = false,
+  List<String> assignedTypes = const [],
   bool child = false,
   List<String>? hidden = const [],
   bool confirmed = true,
@@ -45,6 +53,8 @@ AuthState _auth({
           accessToken: 'test-access',
           refreshToken: 'test-refresh',
           adminCatalogBrowsing: capability,
+          instanceAssignments: assignments,
+          initialInstanceSetup: initialSetup,
           hiddenDiscoverTabs: hidden,
           configConfirmed: confirmed,
           services: AvailableServices(
@@ -52,7 +62,10 @@ AuthState _auth({
               sonarr: types.contains('sonarr'),
               chaptarr: types.contains('chaptarr'),
               lidarr: types.contains('lidarr')),
-          instances: types.map(_instance).toList()),
+          instances: types
+              .map((type) => _instance(type,
+                  assigned: assignments ? assignedTypes.contains(type) : null))
+              .toList()),
       user: UserProfile(
           id: userId,
           username: 'tester',
@@ -104,6 +117,139 @@ void main() {
     expect(config.services.lidarr, isFalse);
   });
 
+  for (final size in [const Size(390, 900), const Size(1200, 900)]) {
+    testWidgets(
+        'fresh-install admin retains all navigation until configuration at $size',
+        (t) async {
+      final h = await _pump(t,
+          size: size, state: _auth(assignments: true, initialSetup: true));
+      expect(
+          h.container.read(discoveryAccessProvider).pages.map((p) => p.label),
+          ['Movies', 'TV Shows', 'Releases', 'Books', 'Music']);
+      expect(find.text('Set up Radarr'), findsOneWidget);
+      h.router.go('/dashboard/music');
+      await t.pumpAndSettle();
+      expect(find.text('Set up Lidarr'), findsOneWidget);
+      expect(h.backend.catalogReads, isNotEmpty);
+      h.auth.replace(_auth(assignments: true, types: ['radarr']));
+      await t.pumpAndSettle();
+      expect(
+          h.router.routerDelegate.currentConfiguration.uri.path, '/dashboard');
+      expect(find.text('Manage users'), findsOneWidget);
+      final reads = h.backend.discoveryReads.length;
+      // Even deleting every instance does not turn onboarding back on.
+      h.auth.replace(_auth(assignments: true));
+      await t.pumpAndSettle();
+      expect(
+          h.container.read(discoveryAccessProvider).visibleBranches, isEmpty);
+      expect(h.backend.discoveryReads.length, reads);
+      expect(find.byType(CatalogSetupFooter), findsNothing);
+      expect(t.takeException(), isNull);
+    });
+    for (final role in ['admin', 'user']) {
+      testWidgets(
+          '$role with no assignments has no discovery or preload at $size',
+          (t) async {
+        final h = await _pump(t,
+            size: size,
+            state: _auth(
+                role: role,
+                assignments: true,
+                types: role == 'admin' ? _types : []));
+        expect(h.router.routerDelegate.currentConfiguration.uri.path,
+            '/dashboard');
+        expect(find.text('No Discover tabs to show'), findsOneWidget);
+        expect(h.backend.catalogReads, isEmpty);
+        // Admin search still reads management libraries; hidden catalogs must not preload.
+        expect(h.backend.discoveryReads, isEmpty);
+        for (final route in [
+          '/dashboard/movies',
+          '/dashboard/tv',
+          '/dashboard/books',
+          '/dashboard/music',
+          '/dashboard/releases',
+          '/browse/movie/popular',
+          '/browse/tv/popular',
+          '/browse/books/trending',
+          '/browse/music/popular',
+          '/login'
+        ]) {
+          h.router.go(route);
+          await t.pumpAndSettle();
+          expect(h.router.routerDelegate.currentConfiguration.uri.path,
+              '/dashboard');
+        }
+        expect(h.backend.catalogReads, isEmpty);
+        if (role == 'admin') {
+          // Management inventory is independent of personal discovery.
+          expect(
+              h.container.read(authProvider).requireValue.connection!.instances,
+              hasLength(4));
+          await t.tap(find.text('Manage users').last);
+          await t.pumpAndSettle();
+          expect(h.router.routerDelegate.currentConfiguration.uri.path,
+              '/settings/users');
+        }
+        expect(t.takeException(), isNull);
+      });
+      for (final tab in discoverCatalogs) {
+        testWidgets('$role only assigned ${tab.label} discovery at $size',
+            (t) async {
+          final h = await _pump(t,
+              size: size,
+              state: _auth(
+                  role: role,
+                  assignments: true,
+                  types: role == 'admin' ? _types : [tab.serviceType],
+                  assignedTypes: [tab.serviceType]));
+          final expected = switch (tab.mediaType) {
+            'movie' => ['Movies', 'Releases'],
+            'tv' => ['TV Shows', 'Releases'],
+            'book' => ['Books'],
+            _ => ['Releases', 'Music'],
+          };
+          expect(
+              h.container
+                  .read(discoveryAccessProvider)
+                  .pages
+                  .map((p) => p.label),
+              expected);
+          if (size.width < 600 && expected.length > 1) {
+            expect(
+                t
+                    .widget<BottomNavigationBar>(
+                        find.byType(BottomNavigationBar))
+                    .items
+                    .map((p) => p.label),
+                expected);
+          }
+          if (tab.mediaType == 'music') {
+            expect(
+                h.backend.reads
+                    .where((r) => r.path.endsWith('/calendar'))
+                    .map((r) => r.path),
+                ['/api/instances/lidarr/api/v1/calendar']);
+          }
+          final scope = h.container.read(catalogDiscoveryScopeProvider);
+          final videoSession = h.container.read(discoverSessionProvider);
+          h.auth.replace(_auth(
+              role: role,
+              assignments: true,
+              types: role == 'admin' ? _types : []));
+          await t.pumpAndSettle();
+          expect(h.router.routerDelegate.currentConfiguration.uri.path,
+              '/dashboard');
+          expect(h.container.read(catalogDiscoveryScopeProvider), isNot(scope));
+          if (tab.mediaType == 'movie' || tab.mediaType == 'tv') {
+            expect(
+                h.container.read(discoverSessionProvider), isNot(videoSession));
+          }
+          expect(find.byType(CatalogSetupFooter), findsNothing);
+          expect(t.takeException(), isNull);
+        });
+      }
+    }
+  }
   for (final types in [
     <String>[],
     ..._types.map((t) => [t]),
@@ -499,10 +645,14 @@ void main() {
         reason: h.backend.catalogReads.map((r) => r.uri).join(', '));
     expect(
         h.backend.libraryReads
-            .where((r) => r.path != '/api/instances/radarr/api/v3/movie'),
+            .where((r) => !const {
+              '/api/instances/radarr/api/v3/movie',
+              '/api/instances/radarr/api/v3/qualityprofile',
+              '/api/instances/radarr/api/v3/tag',
+            }.contains(r.path)),
         isEmpty,
         reason:
-            'the existing movie library may load; no book/music library may load');
+            'the existing movie library and its sort labels may load; no book/music library may load');
   });
 }
 
@@ -613,6 +763,10 @@ class _Backend implements HttpClientAdapter {
   final hidden = <String, bool>{};
   bool failHide = false;
   Completer<void>? hideWait;
+  Iterable<RequestOptions> get discoveryReads => reads.where((r) =>
+      r.path.startsWith('/api/discover/') ||
+      r.path.startsWith('/api/genres/') ||
+      r.path.startsWith('/api/media/'));
   Iterable<RequestOptions> get catalogReads => reads.where((r) =>
       r.path.startsWith('/api/discover/books/') ||
       r.path.startsWith('/api/discover/music/') ||

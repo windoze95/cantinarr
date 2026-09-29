@@ -338,6 +338,11 @@ func (s *Service) saveDelivery(userID int64, req *CreateRequest, instanceID, for
 			return nil, false, e
 		}
 	}
+	if createdID != 0 && req.MediaType == "music" {
+		if err = captureRequesterTag(tx, createdID); err != nil {
+			return nil, false, err
+		}
+	}
 	ids := []int64{}
 	seen := map[int64]bool{}
 	for _, f := range formats {
@@ -347,6 +352,20 @@ func (s *Service) saveDelivery(userID int64, req *CreateRequest, instanceID, for
 			seen[id] = true
 		}
 		if req.MediaType == "book" {
+			// Capture before upserting the subscription: a repeat tap must not
+			// backfill an older subscriber. An explicit rejoin after cancelling
+			// is a new admission, unlike toggling tagging off and on.
+			_, err = tx.Exec(`INSERT INTO request_tag_jobs(request_id,user_id,format)
+ SELECT r.id,?,? FROM request_log r JOIN service_instances i ON i.id=r.instance_id
+ WHERE r.id=? AND i.tag_requests=1 AND i.service_type='chaptarr'
+ AND (? OR (NOT EXISTS(SELECT 1 FROM book_request_waiters bw WHERE bw.request_id=r.id AND bw.user_id=? AND (bw.book_format=? OR bw.book_format='both'))
+ AND NOT (r.user_id=? AND (r.book_format=? OR r.book_format='both'))))
+ ON CONFLICT(request_id,user_id,format) DO UPDATE SET state='waiting',attempts=0,next_attempt_at=0,
+ lease_token='',lease_until=0,message='',tag_label='',applied_at=NULL,updated_at=CURRENT_TIMESTAMP
+ WHERE request_tag_jobs.state='cancelled'`, userID, f, id, id == createdID, userID, f, userID, f)
+			if err != nil {
+				return nil, false, err
+			}
 			_, err = tx.Exec(`INSERT INTO book_request_waiters(request_id,user_id,book_format) VALUES (?,?,?)
 		 ON CONFLICT(request_id,user_id) DO UPDATE SET book_format=CASE WHEN book_request_waiters.book_format=excluded.book_format THEN excluded.book_format ELSE 'both' END`, id, userID, f)
 			if err != nil {

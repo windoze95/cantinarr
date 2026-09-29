@@ -99,10 +99,8 @@ type DemoUser struct {
 	PasswordEnabled  bool
 	PasskeyEnabled   bool
 	HasPassword      bool
-	DefaultInstances map[string]string // service_type -> instance id (per-user pin / chaptarr grant)
-	// InstanceGrants are ADDITIVE per-user access grants: service_type ->
-	// instance ids. A granted instance appears alongside the user's default so
-	// they can choose a library per request. Never nil.
+	DefaultInstances map[string]string // service_type -> preferred instance id; never grants access
+	// InstanceGrants are explicit per-user access assignments.
 	InstanceGrants  map[string][]string
 	RequireApproval *bool
 }
@@ -128,6 +126,8 @@ type DemoInstance struct {
 	URL               string
 	Username          string
 	IsDefault         bool
+	TagRequests       bool
+	AutoAddUsers      bool
 	MediaDownloads    bool
 	MediaPathMappings []map[string]string // {"arr_path": ..., "cantinarr_path": ...}; never nil
 	// MediaServerConfig is the jellyfin/emby/plex-only configuration. Zero for
@@ -211,7 +211,10 @@ func seedCoreState() {
 		DefaultInstances: map[string]string{},
 		// The admin holds an Emby grant with no account on it yet, so the
 		// guide's "I already have an account" card has something to link.
-		InstanceGrants: map[string][]string{serviceEmby: {instEmby}},
+		InstanceGrants: map[string][]string{
+			serviceRadarr: {instRadarr, instRadarr4K}, serviceSonarr: {instSonarr, instSonarrAnime},
+			serviceChaptarr: {instChaptarr}, serviceLidarr: {instLidarr}, serviceEmby: {instEmby},
+		},
 	}
 	requireApproval := true
 	demoUsers[2] = &DemoUser{
@@ -220,12 +223,12 @@ func seedCoreState() {
 		PasswordEnabled: true, PasskeyEnabled: false, HasPassword: true,
 		AISharedEnabled:  true,
 		DefaultInstances: map[string]string{serviceChaptarr: instChaptarr, serviceLidarr: instLidarr},
-		// Additive grants: the second Radarr and the second Sonarr sit
-		// ALONGSIDE the global defaults, which is what puts the Library
-		// chooser and the sibling status chips on screen.
+		// Explicit assignments preserve both library choices for this user.
 		InstanceGrants: map[string][]string{
-			serviceRadarr:         {instRadarr4K},
-			serviceSonarr:         {instSonarrAnime},
+			serviceRadarr:         {instRadarr, instRadarr4K},
+			serviceSonarr:         {instSonarr, instSonarrAnime},
+			serviceChaptarr:       {instChaptarr},
+			serviceLidarr:         {instLidarr},
 			serviceJellyfin:       {instJellyfin},
 			serviceAudiobookshelf: {instAudiobookshelf},
 		},
@@ -241,7 +244,7 @@ func seedCoreState() {
 		InstanceGrants:   map[string][]string{servicePlex: {instPlex}},
 	}
 	// The kids account: a per-user content policy (contentpolicy.go) makes it
-	// a child. No grants, so it sees only the global Radarr and Sonarr; the
+	// a child. Explicit assignments give it Radarr and Sonarr; the
 	// app pre-sets require-approval when it turns a kids account on.
 	kidRequireApproval := true
 	demoUsers[4] = &DemoUser{
@@ -250,7 +253,7 @@ func seedCoreState() {
 		PasswordEnabled: true, PasskeyEnabled: false, HasPassword: true,
 		AISharedEnabled:  true,
 		DefaultInstances: map[string]string{},
-		InstanceGrants:   map[string][]string{},
+		InstanceGrants:   map[string][]string{serviceRadarr: {instRadarr}, serviceSonarr: {instSonarr}},
 		RequireApproval:  &kidRequireApproval,
 	}
 
@@ -285,17 +288,17 @@ func seedCoreState() {
 	demoInstances = []*DemoInstance{
 		{
 			ID: instRadarr, ServiceType: serviceRadarr, Name: "Radarr",
-			URL: "http://radarr:7878", IsDefault: true, MediaDownloads: true,
+			URL: "http://radarr:7878", IsDefault: true, TagRequests: true, AutoAddUsers: true, MediaDownloads: true,
 			MediaPathMappings: []map[string]string{{"arr_path": "/movies", "cantinarr_path": "/media/movies"}},
 		},
 		{
 			ID: instSonarr, ServiceType: serviceSonarr, Name: "Sonarr",
-			URL: "http://sonarr:8989", IsDefault: true, MediaDownloads: true,
+			URL: "http://sonarr:8989", IsDefault: true, TagRequests: true, AutoAddUsers: true, MediaDownloads: true,
 			MediaPathMappings: []map[string]string{{"arr_path": "/tv", "cantinarr_path": "/media/tv"}},
 		},
 		{
 			ID: instChaptarr, ServiceType: serviceChaptarr, Name: "Chaptarr",
-			URL: "http://chaptarr:8787", IsDefault: false, MediaDownloads: true, // chaptarr is NEVER default
+			URL: "http://chaptarr:8787", IsDefault: false, AutoAddUsers: true, MediaDownloads: true, // chaptarr is NEVER default
 			MediaPathMappings: []map[string]string{{"arr_path": "/books", "cantinarr_path": "/media/books"}},
 		},
 		{
@@ -327,24 +330,22 @@ func seedCoreState() {
 			URL: "http://tdarr:8266", IsDefault: true, MediaDownloads: false,
 			MediaPathMappings: []map[string]string{},
 		},
-		// Sibling arr libraries. Neither carries the global default flag —
-		// they reach a requester through an additive grant, which is exactly
-		// the shape the Library chooser exists for.
+		// Sibling arr libraries. Neither carries the global default flag;
+		// each is still an explicit assignment when granted.
 		{
 			ID: instRadarr4K, ServiceType: serviceRadarr, Name: "Radarr 4K",
-			URL: "http://radarr-4k:7878", IsDefault: false, MediaDownloads: true,
+			URL: "http://radarr-4k:7878", IsDefault: false, AutoAddUsers: true, MediaDownloads: true,
 			MediaPathMappings: []map[string]string{{"arr_path": "/movies-4k", "cantinarr_path": "/media/movies-4k"}},
 		},
 		{
 			ID: instSonarrAnime, ServiceType: serviceSonarr, Name: "Sonarr Anime",
-			URL: "http://sonarr-anime:8989", IsDefault: false, MediaDownloads: true,
+			URL: "http://sonarr-anime:8989", IsDefault: false, AutoAddUsers: true, MediaDownloads: true,
 			MediaPathMappings: []map[string]string{{"arr_path": "/anime", "cantinarr_path": "/media/anime"}},
 		},
-		// Music. Never a global default: the per-user pin is the grant, exactly
-		// like Chaptarr.
+		// Music has no global default; routing chooses among assignments.
 		{
 			ID: instLidarr, ServiceType: serviceLidarr, Name: "Lidarr",
-			URL: "http://lidarr:8686", IsDefault: false, MediaDownloads: true, // lidarr is NEVER default
+			URL: "http://lidarr:8686", IsDefault: false, AutoAddUsers: true, MediaDownloads: true, // lidarr is NEVER default
 			MediaPathMappings: []map[string]string{{"arr_path": "/music", "cantinarr_path": "/media/music"}},
 		},
 		// Media servers. Never a global default — access is the grant.
@@ -444,6 +445,11 @@ func createInvitedUser(name string) *DemoUser {
 		CreatedAt:        time.Now(),
 		DefaultInstances: map[string]string{},
 		InstanceGrants:   map[string][]string{},
+	}
+	for _, inst := range demoInstances {
+		if inst.AutoAddUsers && instMgmtIsArrType(inst.ServiceType) {
+			u.InstanceGrants[inst.ServiceType] = append(u.InstanceGrants[inst.ServiceType], inst.ID)
+		}
 	}
 	demoNextUserID++
 	demoUsers[u.ID] = u
@@ -937,12 +943,8 @@ func removeInstance(id string) bool {
 	return false
 }
 
-// visibleInstances returns the instances a user may see: admins get all;
-// a regular user gets every access-granted instance plus their effective
-// default, across the grantable service types (radarr, sonarr, chaptarr and
-// the three media servers). Grants are ADDITIVE — a granted sibling sits
-// beside the default rather than replacing it — so renderers must mark
-// is_default per user with effectiveInstanceFor, not blanket-true.
+// visibleInstances returns all instances for administrators and only explicit
+// assignments for regular users.
 func visibleInstances(u *DemoUser) []*DemoInstance {
 	if u != nil && u.Role == roleAdmin {
 		return allInstances()
@@ -955,7 +957,7 @@ func visibleInstances(u *DemoUser) []*DemoInstance {
 	defer stateMu.Unlock()
 	seen := map[string]bool{}
 	for _, st := range grantableServiceTypes() {
-		for _, id := range lockedVisibleInstanceIDs(u, st) {
+		for _, id := range lockedGrantedInstanceIDs(u, st) {
 			if seen[id] {
 				continue
 			}
@@ -981,9 +983,7 @@ func grantableServiceTypes() []string {
 	return append([]string{serviceRadarr, serviceSonarr, serviceChaptarr, serviceLidarr}, mediaServerTypes()...)
 }
 
-// effectiveInstanceFor resolves the user's effective instance for a service
-// type: per-user pin -> (chaptarr and media servers) first grant, no fallback
-// -> global default -> first instance of that type.
+// effectiveInstanceFor resolves request routing from assigned instances only.
 func effectiveInstanceFor(u *DemoUser, serviceType string) *DemoInstance {
 	stateMu.Lock()
 	defer stateMu.Unlock()
@@ -998,46 +998,24 @@ func effectiveInstanceIDFor(u *DemoUser, serviceType string) string {
 }
 
 func lockedEffectiveInstanceID(u *DemoUser, serviceType string) string {
-	// A pin is never media-server eligibility — access to a media server is
-	// the grant and nothing else. Chaptarr is the opposite: its pin IS the
-	// grant. Both rules mirror the server exactly.
-	if u != nil && !isMediaServerType(serviceType) {
-		if pinned, ok := u.DefaultInstances[serviceType]; ok && pinned != "" {
-			if inst := lockedInstanceByID(pinned); inst != nil && inst.ServiceType == serviceType {
-				return inst.ID
-			}
-		}
-	}
-	// Chaptarr, Lidarr, and the media servers have NO global fallback — access
-	// is the grant. The first grant stands in as the default so a client that
-	// reads one instance per type still picks a real one.
-	if serviceType == serviceChaptarr || serviceType == serviceLidarr || isMediaServerType(serviceType) {
-		if u != nil {
-			for _, id := range u.InstanceGrants[serviceType] {
-				if inst := lockedInstanceByID(id); inst != nil && inst.ServiceType == serviceType {
-					return inst.ID
-				}
-			}
-		}
+	ids := lockedGrantedInstanceIDs(u, serviceType)
+	if len(ids) == 0 {
 		return ""
 	}
-	first := ""
-	for _, inst := range demoInstances {
-		if inst.ServiceType != serviceType {
-			continue
-		}
-		if inst.IsDefault {
-			return inst.ID
-		}
-		if first == "" {
-			first = inst.ID
+	for _, id := range ids {
+		if id == u.DefaultInstances[serviceType] {
+			return id
 		}
 	}
-	return first
+	for _, id := range ids {
+		if inst := lockedInstanceByID(id); inst != nil && inst.IsDefault {
+			return id
+		}
+	}
+	return ids[0]
 }
 
-// grantedInstanceIDs is the user's explicit grants for a service type plus
-// their per-user pin, in stable registry order. Never nil.
+// grantedInstanceIDs is the user's explicit assignments in registry order.
 func grantedInstanceIDs(u *DemoUser, serviceType string) []string {
 	stateMu.Lock()
 	defer stateMu.Unlock()
@@ -1064,16 +1042,10 @@ func lockedGrantedInstanceIDs(u *DemoUser, serviceType string) []string {
 	for _, id := range u.InstanceGrants[serviceType] {
 		add(id)
 	}
-	if !isMediaServerType(serviceType) {
-		// Same rule: a media-server pin confers nothing, so it must not leak
-		// into the visible set either.
-		add(u.DefaultInstances[serviceType])
-	}
 	return out
 }
 
-// visibleInstanceIDs is grantedInstanceIDs plus the effective default. Never
-// nil. Mirrors the server's instance.VisibleInstanceIDs.
+// visibleInstanceIDs mirrors explicit assignments; routing never adds access.
 func visibleInstanceIDs(u *DemoUser, serviceType string) []string {
 	stateMu.Lock()
 	defer stateMu.Unlock()
@@ -1081,17 +1053,25 @@ func visibleInstanceIDs(u *DemoUser, serviceType string) []string {
 }
 
 func lockedVisibleInstanceIDs(u *DemoUser, serviceType string) []string {
-	out := lockedGrantedInstanceIDs(u, serviceType)
-	def := lockedEffectiveInstanceID(u, serviceType)
-	if def == "" {
-		return out
+	return lockedGrantedInstanceIDs(u, serviceType)
+}
+
+// userAssignedInstance is the personal request boundary, including admins.
+// Administrative navigation has a separate all-instance scope.
+func userAssignedInstance(u *DemoUser, id string) bool {
+	if u == nil {
+		return false
 	}
-	for _, id := range out {
-		if id == def {
-			return out
+	inst := instanceByID(id)
+	if inst == nil {
+		return false
+	}
+	for _, granted := range grantedInstanceIDs(u, inst.ServiceType) {
+		if granted == id {
+			return true
 		}
 	}
-	return append(out, def)
+	return false
 }
 
 // userCanSeeInstance reports whether a non-admin holds this instance. Admins
@@ -1153,9 +1133,19 @@ func setUserInstanceGrants(userID int, grants map[string][]string) bool {
 	for st, ids := range grants {
 		if len(ids) == 0 {
 			delete(u.InstanceGrants, st)
-			continue
+		} else {
+			u.InstanceGrants[st] = append([]string{}, ids...)
 		}
-		u.InstanceGrants[st] = append([]string{}, ids...)
+		preferred := u.DefaultInstances[st]
+		if preferred != "" {
+			found := false
+			for _, id := range ids {
+				found = found || id == preferred
+			}
+			if !found {
+				delete(u.DefaultInstances, st)
+			}
+		}
 	}
 	return true
 }
@@ -1226,9 +1216,15 @@ func setInstanceGrantUsers(instanceID string, userIDs []int) error {
 		}
 		if len(kept) == 0 {
 			delete(u.InstanceGrants, inst.ServiceType)
+			if u.DefaultInstances[inst.ServiceType] == instanceID {
+				delete(u.DefaultInstances, inst.ServiceType)
+			}
 			continue
 		}
 		u.InstanceGrants[inst.ServiceType] = kept
+		if !want[u.ID] && u.DefaultInstances[inst.ServiceType] == instanceID {
+			delete(u.DefaultInstances, inst.ServiceType)
+		}
 	}
 	return nil
 }

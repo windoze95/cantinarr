@@ -36,11 +36,12 @@ func TestNotifyNewMovieDropsBlockedKidsAccounts(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'kid', '', 'user')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 	policy := &fakeRecipientPolicy{drop: map[int64]bool{2: true}}
 	n.SetContentPolicy(policy)
 
-	n.NotifyNewMovie("Deadpool", 293660, "")
+	n.NotifyNewMovie("Deadpool", 293660, seedPushLibrary(t, database, "radarr"))
 
 	body := cap.waitForNotification(t)
 	ids := userIDsOf(t, body)
@@ -61,11 +62,12 @@ func TestNotifyNewEpisodeKeepsAdultsWhenTheCheckFails(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'kid', '', 'user')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
+	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
 	// The service drops every child and reports why; the adults still hear.
 	n.SetContentPolicy(&fakeRecipientPolicy{drop: map[int64]bool{2: true}, err: errors.New("ratings unreachable")})
 
-	n.NotifyNewEpisode("Severance", 95396, "")
+	n.NotifyNewEpisode("Severance", 95396, seedPushLibrary(t, database, "sonarr"))
 
 	body := cap.waitForNotification(t)
 	ids := userIDsOf(t, body)

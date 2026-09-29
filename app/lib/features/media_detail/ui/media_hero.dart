@@ -1,17 +1,17 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui show ImageFilter;
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show OverScrollHeaderStretchConfiguration;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/automation/web_semantics.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/layout/adaptive.dart';
-import '../../../core/network/app_image_cache.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
+import '../../auth/logic/auth_provider.dart';
 
 /// Scroll-choreographed cinematic hero for the media detail screen.
 ///
@@ -482,21 +482,30 @@ class _BackdropPlaneState extends State<_BackdropPlane>
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => kIsWeb
+      ? Consumer(builder: (context, ref, _) => _buildImage(
+          context, auth: ref.watch(authProvider).valueOrNull))
+      : _buildImage(context);
+
+  Widget _buildImage(BuildContext context, {AuthState? auth}) {
     final physicalWidth =
         widget.width * MediaQuery.devicePixelRatioOf(context);
     // Decode capped near the display size, quantized so window resizes reuse
     // the cached decode instead of re-decoding per pixel of width change.
     final cacheWidth = (physicalWidth / 320).ceil() * 320;
-    // A plain Image over the shared cache: cached_network_image's imageBuilder
-    // path would resolve the un-resized provider a second time, so the resize
-    // wrapping happens here instead.
+    // The hero must share the standard web image lifecycle too: reconnecting
+    // the plugin's image stream after a nested detail route can blank its
+    // browser texture. Native still uses the shared disk cache and resize.
     final provider = ResizeImage.resizeIfNeeded(
       cacheWidth,
       null,
-      CachedNetworkImageProvider(
-        _imageUrl(physicalWidth),
-        cacheManager: appImageCache,
+      cachedImageProvider(
+        resolveImageSource(
+          url: _imageUrl(physicalWidth),
+          serverUrl: auth?.connection?.serverUrl,
+          accessToken: auth?.connection?.accessToken,
+        ),
+        cacheScope: imageCacheScope(auth),
       ),
     );
 

@@ -245,6 +245,7 @@ void main() {
       // The old module path stays admin-only through its redirect.
       '/tautulli/activity',
       '/approvals',
+      '/approvals/history',
       '/agent-actions',
       '/agent-runs/1',
       '/setup',
@@ -254,7 +255,7 @@ void main() {
       '/settings/change-history/1',
       '/settings/users',
       '/settings/request-settings',
-      '/settings/discord-notifications',
+      '/settings/discord-notifications/server',
       '/settings/seerr-api',
       '/settings/push-notifications/server',
       '/settings/agent-approval-rules',

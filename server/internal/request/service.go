@@ -214,16 +214,18 @@ type Notifier interface {
 }
 
 type Service struct {
-	Quotas           *requestquota.Service
-	tvMatchMu        sync.Mutex
-	MusicCatalog     musicdiscovery.Catalog
-	dispatchMu       sync.Mutex
-	dispatchWake     chan struct{}
-	db               *sql.DB
-	registry         *instance.Registry
-	bridge           *tmdb.Bridge
-	notifier         Notifier
-	creationObserver CreationObserver
+	Quotas                  *requestquota.Service
+	tvMatchMu               sync.Mutex
+	MusicCatalog            musicdiscovery.Catalog
+	dispatchMu              sync.Mutex
+	requesterTagsMu         sync.Mutex
+	dispatchWake            chan struct{}
+	db                      *sql.DB
+	registry                *instance.Registry
+	bridge                  *tmdb.Bridge
+	notifier                Notifier
+	creationObserver        CreationObserver
+	discordAvailabilityWake func()
 	// libraryCache holds reduced Chaptarr library digests keyed by instance id,
 	// so the owned-books digest doesn't refetch the whole library on every call.
 	libraryCache *cache.Cache
@@ -259,10 +261,17 @@ type Service struct {
 	// see the status of, or list a title outside their limits. nil until
 	// wired (SetContentPolicy); a server without it gates nothing.
 	contentPolicy *contentpolicy.Service
+
+	// cover4KBadges reads the admin's 4K badges switch. nil until wired
+	// (SetCover4KBadges), which answers no show 4K checks.
+	cover4KBadges func() bool
 }
 
 // SetContentPolicy wires the kids-account service.
 func (s *Service) SetContentPolicy(svc *contentpolicy.Service) { s.contentPolicy = svc }
+
+// SetCover4KBadges wires the server-wide 4K badges switch.
+func (s *Service) SetCover4KBadges(enabled func() bool) { s.cover4KBadges = enabled }
 
 var (
 	// ErrTitleNotAvailable is a kids account asking for a title outside its
@@ -685,6 +694,14 @@ type StatusResponse struct {
 	// grade means no Downloading state and up to the digest TTL of lag — the
 	// documented tradeoff the history overlay already accepts.
 	InstanceStatuses map[string]InstanceStatus `json:"instance_statuses,omitempty"`
+	// Is4K is set only for a TV status read that asked for it (include_4k)
+	// when the selected library holds the whole show and Sonarr measured every
+	// counted episode file at 4K. Unknown is never reported as 4K.
+	Is4K bool `json:"is_4k,omitempty"`
+
+	// tvFileIDs are the episode files a TV status counted, kept so the
+	// optional 4K check needs no second episode read. Never serialized.
+	tvFileIDs []int
 }
 
 // InstanceStatus is one library's digest-grade status inside
@@ -1627,13 +1644,9 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		if err != nil {
 			return "", "", fmt.Errorf("load existing book author: %w", err)
 		}
-		config, ok := bookConfigFromAuthor(author)
-		if !ok {
-			return "", "", fmt.Errorf("existing book configuration is incomplete for one or more formats")
-		}
-		config.includeRequestedFormats(r.bookFormat)
-		if r.requestedBookFormats != "" {
-			config.includeRequestedFormats(r.requestedBookFormats)
+		config, err := existingBookConfig(client, author, missing)
+		if err != nil {
+			return "", "", err
 		}
 		// Missing sibling formats are added under the id the library groups this
 		// title by — the attach id — so an alias-fulfilled request never splits
@@ -1811,8 +1824,8 @@ func mainBookTitle(title string) string {
 	return trimmed
 }
 
-// bookAddConfig is the complete Chaptarr author configuration required by
-// current releases. Chaptarr keeps separate quality/metadata profiles and root
+// bookAddConfig carries Chaptarr's per-format author configuration. Unrequested
+// formats on existing authors may be unset. Chaptarr keeps profiles and root
 // paths for ebooks and audiobooks; the legacy singular fields in the add body
 // are still populated from the concrete format for older releases.
 type bookAddConfig struct {
@@ -1889,15 +1902,15 @@ func selectBookConfig(qualityProfiles []chaptarr.QualityProfile, metadataProfile
 	for _, format := range []string{BookFormatEbook, BookFormatAudiobook} {
 		qualityProfileID, ok := selectBookQualityProfile(qualityProfiles, format)
 		if !ok {
-			return bookAddConfig{}, fmt.Errorf("Chaptarr %s quality profile selection is ambiguous", format)
+			return bookAddConfig{}, &bookConfigurationError{format, "a quality profile"}
 		}
 		metadataProfileID, ok := selectBookMetadataProfile(metadataProfiles, format)
 		if !ok {
-			return bookAddConfig{}, fmt.Errorf("Chaptarr %s metadata profile selection is ambiguous", format)
+			return bookAddConfig{}, &bookConfigurationError{format, "a metadata profile"}
 		}
 		root, ok := selectBookRoot(folders, format)
 		if !ok {
-			return bookAddConfig{}, fmt.Errorf("no accessible root folder available for %s", format)
+			return bookAddConfig{}, &bookConfigurationError{format, "a download folder"}
 		}
 		if format == BookFormatEbook {
 			config.ebookQualityProfileID = qualityProfileID
@@ -2141,10 +2154,14 @@ func (s *Service) addChaptarrBookRecord(client *chaptarr.Client, match *chaptarr
 	addReq.Author.AudiobookMetadataProfileID = config.audiobookMetadataProfileID
 	addReq.Author.EbookRootFolderPath = config.ebookRootFolderPath
 	addReq.Author.AudiobookRootFolderPath = config.audiobookRootFolderPath
-	addReq.Author.EbookMonitorFuture = config.ebookMonitorFuture || mediaType == BookFormatEbook
-	addReq.Author.AudiobookMonitorFuture = config.audiobookMonitorFuture || mediaType == BookFormatAudiobook
+	addReq.Author.EbookMonitorFuture = config.ebookMonitorFuture
+	addReq.Author.AudiobookMonitorFuture = config.audiobookMonitorFuture
 	addReq.Author.Monitored = true
 	addReq.Author.AddOptions.Monitor = "all"
+	if config.authorID != 0 {
+		// Adding one format must not start following the author's other books.
+		addReq.Author.AddOptions.Monitor = "specificBook"
+	}
 	addReq.AddOptions.SearchForNewBook = true
 
 	// Round-trip the lookup's editions verbatim, marking them monitored so
@@ -3896,12 +3913,24 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 	if !s.userIsAdmin(adminID) {
 		return nil, ErrTVMatchAdmin
 	}
-	if r, status, err := s.loadRequest(requestID); err == nil && r.mediaType == "movie" && status == StatusPending && !s.hasDispatch(requestID) {
+	r, status, err := s.loadRequest(requestID)
+	if err != nil {
+		return nil, err
+	}
+	if status == StatusPending {
+		if r.instanceID == "" {
+			return nil, fmt.Errorf("request has no verified destination; close it and submit a new request to an assigned instance")
+		}
+		if _, err := s.deliveryInstance(r.userID, r.mediaType, r.instanceID); err != nil {
+			return nil, err
+		}
+	}
+	if r.mediaType == "movie" && status == StatusPending && !s.hasDispatch(requestID) {
 		if err := s.migrateMovieApproval(requestID, r); err != nil {
 			return nil, err
 		}
 	}
-	if r, status, err := s.loadRequest(requestID); err == nil && r.mediaType == "tv" && status == StatusPending && !s.hasDispatch(requestID) {
+	if r.mediaType == "tv" && status == StatusPending && !s.hasDispatch(requestID) {
 		if err := s.migrateTVApproval(requestID, r); err != nil {
 			return nil, err
 		}
@@ -4138,6 +4167,17 @@ func (s *Service) fulfillPendingRequest(actorID, requestID int64, override *Deci
 	if status != StatusPending {
 		return nil, fmt.Errorf("request is not pending")
 	}
+	if r.instanceID == "" {
+		return nil, fmt.Errorf("request has no verified destination")
+	}
+	r.beforeMutation = func() error {
+		_, err := s.deliveryInstance(r.userID, r.mediaType, r.instanceID)
+		return err
+	}
+	if err := r.beforeMutation(); err != nil {
+		return nil, err
+	}
+
 	audience := []bookRequestSubscriber{{UserID: r.userID}}
 	if r.mediaType == "book" {
 		if strings.TrimSpace(r.instanceID) == "" {
@@ -4159,10 +4199,8 @@ func (s *Service) fulfillPendingRequest(actorID, requestID int64, override *Deci
 		musicLock.Lock()
 		defer musicLock.Unlock()
 	}
-	// The request's instance was authorized and stamped at submission. Execute
-	// the decision under the approving admin so a later requester-grant change
-	// cannot reroute or strand it; history remains owned by r.userID. A
-	// system completion executes under the requester themselves instead.
+	// The administrator may override request options. The original requester
+	// must still have access to the saved destination at every mutation.
 	if system {
 		r.actorID = r.userID
 	} else {
@@ -4294,6 +4332,7 @@ func (s *Service) fulfillPendingRequest(actorID, requestID int64, override *Deci
 
 	if s.notifier != nil && r.mediaType != "book" {
 		data := map[string]interface{}{
+			"request_id": requestID,
 			"decision":   "approved",
 			"tmdb_id":    r.tmdbID,
 			"media_type": r.mediaType,
@@ -4344,6 +4383,7 @@ func (s *Service) fulfillPendingRequest(actorID, requestID int64, override *Deci
 				continue
 			}
 			data := map[string]interface{}{
+				"request_id":   requestID,
 				"decision":     "approved",
 				"tmdb_id":      r.tmdbID,
 				"media_type":   r.mediaType,
@@ -4829,6 +4869,7 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 	}
 	if s.notifier != nil && r.mediaType != "book" {
 		data := map[string]interface{}{
+			"request_id": requestID,
 			"decision":   "denied",
 			"tmdb_id":    r.tmdbID,
 			"media_type": r.mediaType,
@@ -4852,6 +4893,7 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 	if s.notifier != nil && r.mediaType == "book" {
 		for _, subscriber := range audience {
 			data := map[string]interface{}{
+				"request_id":  requestID,
 				"decision":    "denied",
 				"tmdb_id":     r.tmdbID,
 				"media_type":  r.mediaType,

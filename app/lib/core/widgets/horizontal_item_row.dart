@@ -14,6 +14,9 @@ class HorizontalItemRow<T> extends StatefulWidget {
   final double artworkAspectRatio;
   final double paginationExtent;
   final double? cacheExtent;
+  final Object Function(T item)? itemKey;
+  final double? itemExtent;
+  final int paginationRevision;
 
   const HorizontalItemRow({
     super.key,
@@ -26,6 +29,9 @@ class HorizontalItemRow<T> extends StatefulWidget {
     this.artworkAspectRatio = 2 / 3,
     this.paginationExtent = 520,
     this.cacheExtent,
+    this.itemKey,
+    this.itemExtent,
+    this.paginationRevision = 0,
   });
 
   @override
@@ -48,8 +54,28 @@ class _HorizontalItemRowState<T> extends State<HorizontalItemRow<T>> {
   @override
   void didUpdateWidget(covariant HorizontalItemRow<T> oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final keyOf = widget.itemKey;
+    final extent = widget.itemExtent;
+    if (keyOf != null && extent != null && _controller.hasClients &&
+        oldWidget.items.isNotEmpty && !identical(oldWidget.items, widget.items)) {
+      final offset = _controller.offset;
+      final index = (offset / extent).floor().clamp(0, oldWidget.items.length - 1);
+      final anchor = keyOf(oldWidget.items[index]);
+      final next = widget.items.indexWhere((item) => keyOf(item) == anchor);
+      if (next >= 0 && next != index) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_controller.hasClients || _controller.offset != offset) return;
+          _controller.jumpTo((offset + (next - index) * extent).clamp(
+              0.0, _controller.position.maxScrollExtent));
+        });
+      }
+    }
+    if (oldWidget.paginationRevision != widget.paginationRevision) {
+      _lastPrefetchedLength = -1;
+    }
     if (oldWidget.items.length != widget.items.length ||
-        oldWidget.isLoading != widget.isLoading) {
+        oldWidget.isLoading != widget.isLoading ||
+        oldWidget.paginationRevision != widget.paginationRevision) {
       _scheduleMetricsCheck();
     }
   }
@@ -146,7 +172,11 @@ class _HorizontalItemRowState<T> extends State<HorizontalItemRow<T>> {
                 return ShimmerCard(
                     width: 100, artworkAspectRatio: widget.artworkAspectRatio);
               }
-              return widget.itemBuilder(widget.items[index]);
+              final item = widget.items[index];
+              return KeyedSubtree(
+                key: widget.itemKey == null ? null : ValueKey(widget.itemKey!(item)),
+                child: widget.itemBuilder(item),
+              );
             },
           ),
           if (desktop && _canScrollBack)

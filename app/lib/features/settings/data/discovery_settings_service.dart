@@ -56,12 +56,17 @@ class DiscoverySettings {
   final bool traktConfigured;
   final Map<String, bool>? hiddenWhenUnconfigured;
 
+  /// Whether covers mark titles whose library copy measures 4K, for everyone
+  /// on the server. Null means the server predates the setting.
+  final bool? cover4KBadges;
+
   const DiscoverySettings({
     required this.source,
     required this.englishOnly,
     required this.sources,
     required this.traktConfigured,
     this.hiddenWhenUnconfigured,
+    this.cover4KBadges,
   });
 
   factory DiscoverySettings.fromJson(Map<String, dynamic> json) {
@@ -85,6 +90,7 @@ class DiscoverySettings {
       traktConfigured: json['trakt_configured'] as bool? ?? false,
       hiddenWhenUnconfigured:
           (json['hidden_when_unconfigured'] as Map?)?.cast<String, bool>(),
+      cover4KBadges: json['cover_4k_badges'] as bool?,
     );
   }
 
@@ -95,7 +101,8 @@ class DiscoverySettings {
   DiscoverySettings copyWith(
           {String? source,
           bool? englishOnly,
-          Map<String, bool>? hiddenWhenUnconfigured}) =>
+          Map<String, bool>? hiddenWhenUnconfigured,
+          bool? cover4KBadges}) =>
       DiscoverySettings(
         source: source ?? this.source,
         englishOnly: englishOnly ?? this.englishOnly,
@@ -103,6 +110,7 @@ class DiscoverySettings {
         traktConfigured: traktConfigured,
         hiddenWhenUnconfigured:
             hiddenWhenUnconfigured ?? this.hiddenWhenUnconfigured,
+        cover4KBadges: cover4KBadges ?? this.cover4KBadges,
       );
 }
 
@@ -134,6 +142,8 @@ class DiscoverySettingsService {
         'english_only': settings.englishOnly,
         if (settings.hiddenWhenUnconfigured != null)
           'hidden_when_unconfigured': settings.hiddenWhenUnconfigured,
+        if (settings.cover4KBadges != null)
+          'cover_4k_badges': settings.cover4KBadges,
       },
     );
     return DiscoverySettings.fromJson(resp.data as Map<String, dynamic>);

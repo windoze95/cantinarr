@@ -193,14 +193,24 @@ void main() {
             String method) =>
         adapter.requests.where((r) => r.method == method).toList();
 
+    testWidgets('rescan queues only the selected movie', (tester) async {
+      await pumpHarness(tester);
+      await tester.tap(find.text('Rescan files'));
+      await tester.pumpAndSettle();
+      final posts = ofMethod('POST');
+      expect(posts, hasLength(1));
+      expect(posts.single.path, endsWith('/command'));
+      expect(posts.single.body, {'name': 'RescanMovie', 'movieId': 7});
+    });
+
     testWidgets('shows every action for a monitored movie', (tester) async {
       await pumpHarness(tester);
       for (final label in [
-        'Search Movie',
-        'Edit Movie',
-        'Refresh Movie',
-        'Remove Movie',
-        'Unmonitor Movie',
+        'Automatic search',
+        'Edit movie',
+        'Refresh metadata',
+        'Remove…',
+        'Unmonitor movie',
       ]) {
         expect(find.text(label), findsOneWidget);
       }
@@ -208,7 +218,7 @@ void main() {
 
     testWidgets('Search Movie posts a MoviesSearch command', (tester) async {
       await pumpHarness(tester);
-      await tester.tap(find.text('Search Movie'));
+      await tester.tap(find.text('Automatic search'));
       await tester.pumpAndSettle();
 
       final posts = ofMethod('POST');
@@ -222,7 +232,7 @@ void main() {
 
     testWidgets('Refresh Movie posts RefreshMovie and reloads', (tester) async {
       await pumpHarness(tester);
-      await tester.tap(find.text('Refresh Movie'));
+      await tester.tap(find.text('Refresh metadata'));
       await tester.pumpAndSettle();
 
       final posts = ofMethod('POST');
@@ -237,7 +247,7 @@ void main() {
         'Unmonitor round-trips the whole movie with only monitored flipped',
         (tester) async {
       await pumpHarness(tester);
-      await tester.tap(find.text('Unmonitor Movie'));
+      await tester.tap(find.text('Unmonitor movie'));
       await tester.pumpAndSettle();
 
       final puts = ofMethod('PUT');
@@ -258,7 +268,7 @@ void main() {
     testWidgets('Remove asks for confirmation and defaults to keeping files',
         (tester) async {
       await pumpHarness(tester);
-      await tester.tap(find.text('Remove Movie'));
+      await tester.tap(find.text('Remove…'));
       await tester.pumpAndSettle();
 
       final checkbox =
@@ -274,7 +284,7 @@ void main() {
       // Again, accept the safe default: keep files on disk.
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Remove Movie'));
+      await tester.tap(find.text('Remove…'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Remove'));
       await tester.pumpAndSettle();
@@ -289,7 +299,7 @@ void main() {
     testWidgets('Remove can opt in to deleting files from disk',
         (tester) async {
       await pumpHarness(tester);
-      await tester.tap(find.text('Remove Movie'));
+      await tester.tap(find.text('Remove…'));
       await tester.pumpAndSettle();
 
       await tester.tap(find.text('Also delete files from disk'));
@@ -308,7 +318,7 @@ void main() {
         'Edit Movie opens the editor; saving PUTs the patch and reloads',
         (tester) async {
       await pumpHarness(tester);
-      await tester.tap(find.text('Edit Movie'));
+      await tester.tap(find.text('Edit movie'));
       await tester.pumpAndSettle();
 
       // The editor loaded the fresh movie + profiles + tags.
@@ -398,8 +408,8 @@ void main() {
       // The overflow opens the movie action sheet.
       await tester.tap(find.byTooltip('Movie actions'));
       await tester.pumpAndSettle();
-      expect(find.text('Search Movie'), findsOneWidget);
-      await tester.tap(find.text('Search Movie'));
+      expect(find.text('Automatic search'), findsOneWidget);
+      await tester.tap(find.text('Automatic search'));
       await tester.pumpAndSettle();
       final posts = adapter.requests.where((r) => r.method == 'POST').toList();
       expect(posts.single.body, {

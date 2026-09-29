@@ -65,6 +65,49 @@ void main() {
     expect(find.byType(ElevatedButton), findsNothing);
   });
 
+  for (final confirm in [false, true]) {
+    testWidgets('season submit waits for destination confirmation: $confirm', (tester) async {
+      final adapter = _Adapter();
+      final n = notifier(adapter: adapter);
+      final confirmation = Completer<bool>();
+      await tester.pumpWidget(host(SeasonTable(seasons: seasons, notifier: n,
+          confirmDestination: () => confirmation.future)));
+      await tester.tap(find.text('All'));
+      await tester.pump();
+      await tester.tap(find.text('Request 2 seasons'));
+      await tester.pump();
+      expect(adapter.posts, isEmpty);
+      if (confirm) {
+        n.instanceId = 'confirmed-library';
+        n.state = const RequestState(hasStatus: true);
+      }
+      confirmation.complete(confirm);
+      await tester.pumpAndSettle();
+      if (confirm) {
+        expect(adapter.posts.single['instance_id'], 'confirmed-library');
+        expect(adapter.posts.single['seasons'], [1, 2]);
+      } else {
+        expect(adapter.posts, isEmpty);
+      }
+    });
+  }
+
+  testWidgets('new destination status blocks covered seasons before writing', (tester) async {
+    final adapter = _Adapter();
+    final n = notifier(adapter: adapter);
+    await tester.pumpWidget(host(SeasonTable(seasons: seasons, notifier: n,
+        confirmDestination: () async {
+          n.instanceId = 'covered-library';
+          n.state = const RequestState(hasStatus: true, status: RequestStatus.available);
+          return true;
+        })));
+    await tester.tap(find.text('All'));
+    await tester.pump();
+    await tester.tap(find.text('Request 2 seasons'));
+    await tester.pumpAndSettle();
+    expect(adapter.posts, isEmpty);
+  });
+
   testWidgets('unverified seasons are unknown, unchecked and never selected', (tester) async {
     final n = notifier(state: RequestState(hasStatus: true, seasons: [
       RequestSeasonStatus.fromJson({'season_number': 1, 'status_known': false}),

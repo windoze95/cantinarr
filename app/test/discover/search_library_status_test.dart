@@ -223,5 +223,58 @@ void main() {
       expect(map[(MediaType.tv, 500)]?.label, 'Partial');
       expect(map[(MediaType.tv, 500)]?.episodeSubtitle, isNull);
     });
+
+    test('4K marks only movies Radarr measured at 4K, and only when on', () {
+      // Radarr 6.4.4 list records as a live lab served them: a 3840x2160
+      // file, a wide 3840x1600 film, a 1080p file named 2160p (analysis
+      // measured it, so its quality reads 1080p), the same file with
+      // analysis switched off (quality taken from the name, no measurement),
+      // and a monitored movie with no file.
+      RadarrMovie movie(int tmdbId, String quality, int resolution,
+              String? measured) =>
+          RadarrMovie.fromJson({
+            'id': tmdbId,
+            'title': 'Movie $tmdbId',
+            'tmdbId': tmdbId,
+            'hasFile': true,
+            'monitored': true,
+            'movieFile': {
+              'id': tmdbId,
+              'quality': {
+                'quality': {'name': quality, 'resolution': resolution},
+              },
+              'mediaInfo': measured == null ? null : {'resolution': measured},
+            },
+          });
+      final movies = [
+        movie(603, 'Bluray-2160p', 2160, '3840x2160'),
+        movie(27205, 'Bluray-2160p', 2160, '3840x1600'),
+        movie(13, 'Bluray-1080p', 1080, '1920x1080'),
+        movie(550, 'Bluray-2160p', 2160, null),
+        RadarrMovie.fromJson({'id': 5, 'tmdbId': 680, 'monitored': true}),
+      ];
+
+      final off = buildSearchLibraryStatus(
+        searchResults: const [],
+        movies: movies,
+        series: const [],
+      );
+      expect(off.values.where((s) => s.is4K), isEmpty);
+
+      final on = buildSearchLibraryStatus(
+        searchResults: const [],
+        movies: movies,
+        series: const [],
+        show4K: true,
+      );
+      expect(on[(MediaType.movie, 603)]?.is4K, isTrue);
+      expect(on[(MediaType.movie, 27205)]?.is4K, isTrue);
+      expect(on[(MediaType.movie, 13)]?.is4K, isFalse);
+      expect(on[(MediaType.movie, 550)]?.is4K, isFalse,
+          reason: 'a quality name alone is not a measurement');
+      expect(on[(MediaType.movie, 680)]?.label, 'Requested');
+      expect(on[(MediaType.movie, 680)]?.is4K, isFalse);
+      expect(on[(MediaType.movie, 603)]?.label, 'Available');
+    });
   });
 }

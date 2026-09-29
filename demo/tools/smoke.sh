@@ -18,6 +18,8 @@ MUTATE=0
 for a in "$@"; do [ "$a" = "--mutate" ] && MUTATE=1; done
 UA="cantinarr-demo-smoke/1"
 pass=0; fail=0; failures=()
+SMOKE_BODY=$(mktemp)
+trap 'rm -f "$SMOKE_BODY"' EXIT
 
 login() {
   curl -sS -A "$UA" -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' \
@@ -35,21 +37,21 @@ chk() {
   local t; t=$(tok "$who")
   local out code
   if [ -n "$body" ]; then
-    out=$(curl -sS -A "$UA" -o /tmp/smoke.body -w '%{http_code}' -X "$method" "$BASE$path" \
+    out=$(curl -sS -A "$UA" -o "$SMOKE_BODY" -w '%{http_code}' -X "$method" "$BASE$path" \
       ${t:+-H "Authorization: Bearer $t"} -H 'Content-Type: application/json' -d "$body")
   else
-    out=$(curl -sS -A "$UA" -o /tmp/smoke.body -w '%{http_code}' -X "$method" "$BASE$path" \
+    out=$(curl -sS -A "$UA" -o "$SMOKE_BODY" -w '%{http_code}' -X "$method" "$BASE$path" \
       ${t:+-H "Authorization: Bearer $t"})
   fi
   code="$out"
   local ok=1
   [ "$code" = "$want" ] || ok=0
   if [ $ok = 1 ] && [ -n "$pred" ]; then
-    local r; r=$(jq -r "$pred" /tmp/smoke.body 2>/dev/null || echo "jq-error")
+    local r; r=$(jq -r "$pred" "$SMOKE_BODY" 2>/dev/null || echo "jq-error")
     [ "$r" = "true" ] || ok=0
   fi
   if [ $ok = 1 ]; then pass=$((pass+1)); else
-    fail=$((fail+1)); failures+=("$method $path [$who] got $code want $want pred=$pred body=$(head -c 200 /tmp/smoke.body)")
+    fail=$((fail+1)); failures+=("$method $path [$who] got $code want $want pred=$pred body=$(head -c 200 "$SMOKE_BODY")")
   fi
 }
 
@@ -60,21 +62,21 @@ chk_key() {
   local method="$1" path="$2" want="$3" pred="$4" key="$5" body="${6:-}"
   local out code
   if [ -n "$body" ]; then
-    out=$(curl -sS -A "$UA" -o /tmp/smoke.body -w '%{http_code}' -X "$method" "$BASE$path" \
+    out=$(curl -sS -A "$UA" -o "$SMOKE_BODY" -w '%{http_code}' -X "$method" "$BASE$path" \
       -H "X-Api-Key: $key" -H 'Content-Type: application/json' -d "$body")
   else
-    out=$(curl -sS -A "$UA" -o /tmp/smoke.body -w '%{http_code}' -X "$method" "$BASE$path" \
+    out=$(curl -sS -A "$UA" -o "$SMOKE_BODY" -w '%{http_code}' -X "$method" "$BASE$path" \
       -H "X-Api-Key: $key")
   fi
   code="$out"
   local ok=1
   [ "$code" = "$want" ] || ok=0
   if [ $ok = 1 ] && [ -n "$pred" ]; then
-    local r; r=$(jq -r "$pred" /tmp/smoke.body 2>/dev/null || echo "jq-error")
+    local r; r=$(jq -r "$pred" "$SMOKE_BODY" 2>/dev/null || echo "jq-error")
     [ "$r" = "true" ] || ok=0
   fi
   if [ $ok = 1 ]; then pass=$((pass+1)); else
-    fail=$((fail+1)); failures+=("$method $path [api-key] got $code want $want pred=$pred body=$(head -c 200 /tmp/smoke.body)")
+    fail=$((fail+1)); failures+=("$method $path [api-key] got $code want $want pred=$pred body=$(head -c 200 "$SMOKE_BODY")")
   fi
 }
 
@@ -88,10 +90,13 @@ chk GET /api/auth/me admin 200 '.username=="admin" and .child==false and (.conte
 chk GET /api/auth/me user 200 '.username=="user" and .child==false'
 chk GET /api/auth/me kid 200 '.child==true and .content_limits.max_movie_rating=="PG" and .content_limits.max_tv_rating=="TV-PG" and .content_limits.rating_region=="US"'
 chk GET /api/auth/passkeys user 200 'type=="array"'
+chk GET /api/auth/discord-notifications user 200 '.enabled==false and .discord_ids==[] and (.events|type=="object") and (.allowed_events|type=="object") and .allowed_events.request_pending==false and .server_enabled==true and .server_mentions==false and (.blocked_reason|test("Discord mentions"))'
+chk GET /api/auth/discord-notifications admin 200 '.allowed_events.request_pending==true and (.discord_ids|type=="array")'
+chk GET /api/auth/discord-notifications none 401 ''
 chk POST /api/auth/setup none 409 ''
 # ── config / setup ───────────────────────────────────────
-chk GET /api/config admin 200 '.services.lidarr==true and .services.radarr==true and (.instances|map(.service_type)|index("qbittorrent")!=null) and (.instances|map(.service_type)|index("tracearr")!=null) and (.instances|map(.service_type)|index("tdarr")!=null) and .downloads_activity==true and .downloads_user_scope=="all" and .tv_library_navigation==true and (.version|type=="string") and (.min_app_version|type=="string")'
-chk GET /api/config user 200 '.services.lidarr==true and ([.instances[]|select(.service_type=="lidarr")]|length==1) and ([.instances[]|select(.service_type=="lidarr")][0].is_default==true) and .downloads_activity==true'
+chk GET /api/config admin 200 '.services.lidarr==true and .services.radarr==true and (.instances|map(.service_type)|index("qbittorrent")!=null) and (.instances|map(.service_type)|index("tracearr")!=null) and (.instances|map(.service_type)|index("tdarr")!=null) and .downloads_activity==true and .downloads_user_scope=="all" and .tv_library_navigation==true and .requester_tagging==true and .instance_assignments==true and .initial_instance_setup==false and (.cover_4k_badges|type=="boolean") and (.version|type=="string") and (.min_app_version|type=="string")'
+chk GET /api/config user 200 '.services.lidarr==true and ([.instances[]|select(.service_type=="lidarr")]|length==1) and ([.instances[]|select(.service_type=="lidarr")][0]|.is_default==true and .assigned==true and .request_default==true) and (all(.instances[]; (.assigned|type=="boolean") and (.request_default|type=="boolean"))) and .downloads_activity==true'
 chk GET /api/config kid 200 '.services.lidarr==false and .services.chaptarr==false and ([.instances[]|.service_type]|sort==["radarr","sonarr"])'
 chk GET /api/admin/setup-status admin 200 '(.items|length)==15 and ([.items[].key]|index("music")!=null) and ([.items[].key]|index("tdarr")!=null) and ([.items[]|select(.key=="tautulli")][0].title|test("Tracearr")) and (.total==15) and (.configured|type=="number")'
 chk GET /api/admin/setup-status user 403 ''
@@ -172,7 +177,7 @@ chk GET /api/media/tv/90001/similar user 200 '.results|type=="array"'
 chk GET /api/media/person/1 user 200 '.id==1 and (.profile_path==null or (.profile_path|type=="string" and length>0))'
 chk GET /api/media/person/1/credits user 200 '(.cast|type=="array") and (.crew|type=="array") and ((.cast|length)+(.crew|length))>=1'
 chk GET /api/media/person/4/credits kid 200 '((.cast|length)+(.crew|length))==0'
-chk GET /api/admin/discovery-settings admin 200 '.source|type=="string"'
+chk GET /api/admin/discovery-settings admin 200 '(.source|type=="string") and (.cover_4k_badges|type=="boolean")'
 # ── trakt ────────────────────────────────────────────────
 chk "GET" "/api/trakt/trending?type=movies" user 200 'type=="array" and length>0 and (all(.[]; .movie.ids.tmdb>0))'
 chk "GET" "/api/trakt/trending?type=shows" user 200 'type=="array" and (all(.[]; .show.ids.tmdb>0))'
@@ -194,9 +199,15 @@ chk "GET" "/api/requests/options?media_type=music" user 200 '.can_choose_quality
 chk "GET" "/api/requests/961/status?media_type=movie" user 200 '.status=="available"'
 chk "GET" "/api/requests/10331/status?media_type=movie" kid 200 '.status=="unavailable" and .status_known==true'
 chk "GET" "/api/requests/90001/status?media_type=tv" user 200 '.status=="available" and (.seasons|type=="array")'
+chk "GET" "/api/requests/90001/status?media_type=tv&include_4k=true" user 200 '.status=="available" and (.seasons|type=="array")'
+chk "GET" "/api/requests/90001/status?media_type=tv&include_4k=maybe" user 400 '.error=="invalid include_4k"'
 chk POST /api/requests kid 404 '.error=="that title is not available for this account"' '{"media_type":"movie","tmdb_id":10331,"title":"Night of the Living Dead"}'
 chk GET /api/admin/requests admin 200 'type=="array" and ([.[]|select(.username=="kid")]|length)==1 and ([.[]|select(.media_type=="music")]|length)==1 and ([.[]|select(.media_type=="music")][0].add_failure_reason=="metadata_unresolved") and (all(.[]|select(.media_type!="book"); has("book_format")|not))'
-chk GET /api/admin/requests/waiting admin 200 'type=="array"'
+chk GET /api/admin/requests/waiting admin 200 'type=="array" and ([.[]|select(.id==6)][0]|.wait_reason=="author_import" and (.delivery|length)==1 and .delivery[0].state=="working")'
+chk GET /api/admin/requests/history admin 200 '(.requests|type=="array") and (.requesters|type=="array") and ([.requests[]|select(.id==3)][0]|.decision=="approved" and .requester_tagging.status=="failed" and .requester_tagging.can_retry==true) and ([.requests[]|select(.id==2)][0].requester_tagging.status=="applied") and (all(.requests[]; (.requesters|type=="array") and (.requested_at|type=="string")))'
+chk "GET" "/api/admin/requests/history?media_type=book&limit=1" admin 200 '(.requests|length)==1 and .requests[0].media_type=="book" and (.next_before|type=="number")'
+chk "GET" "/api/admin/requests/history?decision=bogus" admin 400 '.error=="invalid history filter"'
+chk GET /api/admin/requests/history user 403 ''
 chk GET /api/admin/request-settings admin 200 '.settings|has("require_approval")'
 # ── books (unchanged surfaces) ───────────────────────────
 chk "GET" "/api/requests/book-library" user 200 '.titles|type=="array"'
@@ -223,13 +234,15 @@ chk "GET" "/api/requests/music-status?foreign_id=b0000000-d3a0-4000-8000-0000000
 chk "GET" "/api/requests/music-status?foreign_id=b0000000-d3a0-4000-8000-000000000099" user 200 '.status=="pending"'
 chk "GET" "/api/requests/music-status" user 400 '.error=="foreign_id required"'
 # ── instances / proxies ──────────────────────────────────
-chk GET /api/instances admin 200 'type=="array" and length==15 and ([.[]|select(.service_type=="qbittorrent")][0].has_api_key==true) and ([.[]|select(.service_type=="tdarr")][0].has_api_key==true) and (all(.[]|select(.service_type!="qbittorrent" and .service_type!="tdarr"); has("has_api_key")|not)) and (all(.[]; has("id") and has("service_type") and has("name") and has("url") and has("username") and has("is_default") and has("media_path_mappings")))'
+chk GET /api/instances admin 200 'type=="array" and length==15 and ([.[]|select(.service_type=="qbittorrent")][0].has_api_key==true) and ([.[]|select(.service_type=="tdarr")][0].has_api_key==true) and (all(.[]|select(.service_type!="qbittorrent" and .service_type!="tdarr"); has("has_api_key")|not)) and (all(.[]; has("id") and has("service_type") and has("name") and has("url") and has("username") and has("is_default") and has("media_path_mappings") and (.tag_requests|type=="boolean")))'
 chk GET /api/instances user 403 ''
 chk GET /api/instances/media-roots admin 200 '.==["/media"]'
 chk POST /api/instances/test admin 400 '.error=="an API key, or a username and password, is required for qbittorrent"' '{"service_type":"qbittorrent","name":"q","url":"http://q:8081","username":"a"}'
 chk POST /api/instances/test admin 400 '.error=="name, url, and api_key are required"' '{"service_type":"tracearr","name":"t","url":"http://t:3000"}'
 chk POST /api/instances/test admin 400 '.error|test("lidarr.*tracearr")' '{"service_type":"bogus","name":"t","url":"http://t:3000","api_key":"k"}'
 chk GET /api/instances/radarr-1a2b3c4d/users admin 200 'type=="object" or type=="array"'
+chk GET /api/instances/radarr-1a2b3c4d/assignments admin 200 'type=="array" and length>=4 and ([.[]|select(.user_id==2)][0]|.assigned==true and (.preferred_instance_id|type=="string") and .effective_default_id=="radarr-1a2b3c4d") and (all(.[]; has("user_id") and (.assigned|type=="boolean") and has("preferred_instance_id") and has("effective_default_id")))'
+chk GET /api/instances/radarr-1a2b3c4d/assignments user 403 ''
 chk GET /api/instances/radarr-1a2b3c4d/webhook admin 200 'type=="object"'
 chk GET /api/instances/radarr-1a2b3c4d/api/v3/movie user 200 'type=="array" and length==11 and (all(.[]; has("imdbId") and has("tags") and has("qualityProfileId") and has("minimumAvailability")))'
 chk GET /api/instances/radarr-1a2b3c4d/api/v3/movie kid 200 'type=="array" and length==5 and (all(.[]; .tmdbId!=10331))'
@@ -283,7 +296,12 @@ chk "GET" "$L/queue?page=1&pageSize=50" user 200 '.records|type=="array"'
 chk "GET" "$L/history?page=1&pageSize=50" admin 200 '(.records|type=="array") and .totalRecords>=10 and (all(.records[]; has("eventType") and has("sourceTitle") and has("date")))'
 chk "GET" "$L/wanted/missing?page=1&pageSize=50" admin 200 '(.records|length)==3'
 chk "GET" "$L/wanted/cutoff?page=1&pageSize=50" admin 200 '(.records|length)==1'
-chk "GET" "$L/calendar?start=$(date -u -v-7d +%F 2>/dev/null || date -u -d '-7 days' +%F)&end=$(date -u -v+30d +%F 2>/dev/null || date -u -d '+30 days' +%F)&includeArtist=true" admin 200 'type=="array" and length==2'
+# The two calendar fixture dates are relative to process start, so discover
+# their current dates rather than assuming a freshly restarted demo.
+for album_id in 5 9; do
+  album_date=$(curl -fsS -A "$UA" -H "Authorization: Bearer $ADMIN" "$BASE$L/album/$album_id" | jq -r '.releaseDate[:10]')
+  chk "GET" "$L/calendar?start=$album_date&end=$album_date&includeArtist=true" admin 200 "type==\"array\" and length==1 and .[0].id==$album_id and (.[0].artist|type==\"object\")"
+done
 chk "GET" "$L/track?albumId=1" user 200 'type=="array" and length==10 and (all(.[]; has("trackNumber") and has("hasFile") and has("duration")))'
 chk "GET" "$L/trackfile?albumId=1" user 200 'type=="array" and length==10 and (all(.[]; (.path|startswith("/music/")) and has("quality") and has("mediaInfo")))'
 chk "GET" "$L/release?albumId=5" admin 200 'type=="array" and length==4 and ([.[]|select(.rejected==true)]|length)==1'
@@ -344,7 +362,7 @@ chk GET /api/admin/external-settings-changes admin 200 'type=="array" or type=="
 chk POST /api/media-files/coverage user 200 '.covered|type=="array"' '{"instance_id":"lidarr-4d5e6f7a","paths":["/music/Enrico Caruso/x.flac"]}'
 
 # ── request allowances ───────────────────────────────────
-chk GET /api/me/request-quotas user 200 '.exempt==false and (.allowances|length)==5 and ([.allowances[]|select(.media_type=="movie")][0]|.source=="user" and .count==20 and .used==3 and .remaining==17) and ([.allowances[]|select(.book_format=="audiobook")][0]|.window_days==30) and (.as_of|type=="string")'
+chk GET /api/me/request-quotas user 200 '.exempt==false and (.allowances|length)==5 and ([.allowances[]|select(.media_type=="movie")][0]|.source=="user" and .count==20 and (.used|type=="number") and .used>=0 and .used<=.count and .remaining==(.count-.used)) and (all(.allowances[]; (.used|type=="number") and .used>=0 and (if .count==null then .remaining==null else .remaining==([.count-.used,0]|max) end))) and ([.allowances[]|select(.book_format=="audiobook")][0]|.window_days==30) and (.as_of|type=="string")'
 chk GET /api/me/request-quotas admin 200 '.exempt==true'
 chk GET /api/admin/request-quotas admin 200 '(.allowances|length)==5 and (all(.allowances[]; has("media_type") and has("window_days") and has("count"))) and (all(.allowances[]; has("used")|not))'
 chk GET /api/admin/users/2/request-quotas admin 200 '([.allowances[]|select(.media_type=="tv")][0].source=="default")'
@@ -381,7 +399,7 @@ chk GET /api/admin/outbound-proxy admin 200 '.url=="" and .username=="" and .has
 chk GET /api/admin/outbound-proxy user 403 ''
 chk POST /api/admin/outbound-proxy/test admin 200 '.status=="ok"' '{"url":"http://proxy.lan:3128","username":"","password":""}'
 chk POST /api/admin/outbound-proxy/test admin 400 '(.error|test("scheme://host:port"))' '{"url":"proxy.lan:3128"}'
-chk GET /api/admin/discord-notifications admin 200 '.enabled==true and .has_webhook==true and (.recent|length)==3 and (.recent[0]|.status=="sent" and (.updated_at|type=="number"))'
+chk GET /api/admin/discord-notifications admin 200 '.enabled==true and .has_webhook==true and .enable_mentions==false and (.events|type=="object") and (.role_events|type=="object") and (.role_id|type=="string") and (.thread_id|type=="string") and (.username|type=="string") and (.avatar_url|type=="string") and (.embed_poster|type=="boolean") and (.recent|length)==3 and (.recent[0]|.status=="sent" and (.updated_at|type=="number"))'
 chk POST /api/admin/discord-notifications/test admin 200 '.status=="sent" and (.detail|test("never contacts Discord"))' '{}'
 chk POST /api/admin/discord-notifications/test admin 400 '(.error|test("discord.com/api/webhooks"))' '{"webhook_url":"https://example.com/hook"}'
 chk GET /api/admin/push-notifications admin 200 '.enabled==true and (.categories|length)==14 and .categories.media_server_access==true and .categories.request_auto_approved==true'
@@ -432,15 +450,18 @@ chk GET /api/discover/books/trending kid 403 '.error=="books are not available t
 chk GET /api/genres/music kid 403 '.error=="music is not available to you"'
 chk GET /api/discover/music/popular kid 403 '.error=="music is not available to you"'
 chk GET /api/media/music/b0000000-d3a0-4000-8000-000000000003 kid 403 ''
-# Books have no admin-without-a-library bypass (the connection IS the
-# instance's), so the admin — who holds no Chaptarr grant — is refused too.
-chk GET /api/discover/books/trending admin 403 '.error=="books are not available to you"'
+# The seeded admin holds the Chaptarr assignment, so the implicit route
+# resolves that library's Hardcover connection.
+chk GET /api/discover/books/trending admin 200 '.connected==true and .instance_id=="chaptarr-9c0d1e2f" and (.books|length)==8'
 chk GET /api/discover/books/trending?instance_id=chaptarr-9c0d1e2f admin 200 '.connected==true and (.books|length)==8'
 chk GET /api/genres/music admin 200 '(.genres|length)==12'
 
 # ── delivery receipts ────────────────────────────────────
 chk GET "/api/requests/delivery-status?media_type=music&foreign_id=b0000000-d3a0-4000-8000-000000000003&instance_id=lidarr-4d5e6f7a&include_live=false" user 200 '(.delivery|type=="array") and (has("success"))'
 chk GET "/api/requests/delivery-status?media_type=book&foreign_id=1885&instance_id=chaptarr-9c0d1e2f&include_live=false" user 200 '(.delivery|type=="array")'
+chk GET "/api/requests/delivery-status?request_id=6&include_live=false" user 200 '.success==true and .request_id==6 and (.delivery|length)==1 and (.delivery[0]|.request_id==6 and .format=="ebook" and .state=="working" and .attempts>=1 and (.message|length)>0 and .can_manage==false and .can_cancel==true)'
+chk GET "/api/requests/delivery-status?request_id=7&include_live=false" user 200 '.success==true and .delivery[0].state=="attention" and .delivery[0].format=="both" and .delivery[0].can_manage==true and .delivery[0].can_cancel==true and (.delivery[0].code|length)>0'
+chk GET "/api/requests/delivery-status?request_id=7&include_live=false" kid 403 ''
 chk GET "/api/requests/delivery-status?media_type=nope" user 400 ''
 chk GET "/api/requests/music-saved?instance_id=lidarr-4d5e6f7a" user 200 '(.requests|type=="array")'
 
@@ -455,6 +476,20 @@ chk POST /api/auth/passkey/setup-link user 403 ''
 chk DELETE /api/auth/passkeys/abc user 403 ''
 
 if [ $MUTATE = 1 ]; then
+  # assignment edits change only the named account and preserve other users
+  chk PATCH /api/instances/radarr-1a2b3c4d/assignments admin 200 '([.[]|select(.user_id==3)][0]|.assigned==true and .effective_default_id=="radarr-1a2b3c4d") and ([.[]|select(.user_id==2)][0].assigned==true)' '{"action":"add","user_ids":[3]}'
+  chk PATCH /api/instances/radarr-1a2b3c4d/assignments admin 200 '([.[]|select(.user_id==3)][0]|.assigned==false and .effective_default_id=="") and ([.[]|select(.user_id==2)][0].assigned==true)' '{"action":"remove","user_ids":[3]}'
+  # 4K badge setting survives a config read and can be restored
+  chk PUT /api/admin/discovery-settings admin 200 '.cover_4k_badges==true' '{"source":"trakt_trending","cover_4k_badges":true}'
+  chk GET /api/config user 200 '.cover_4k_badges==true'
+  chk PUT /api/admin/discovery-settings admin 200 '.cover_4k_badges==false' '{"source":"trakt_trending","cover_4k_badges":false}'
+  # personal Discord preferences stay scoped to their owner; sends are simulated
+  chk PUT /api/auth/discord-notifications user 200 '.enabled==true and .discord_ids==["123456789012345678"] and .events.request_approved==true and .server_mentions==false' '{"enabled":true,"discord_ids":["123456789012345678"],"events":{"request_approved":true}}'
+  chk GET /api/auth/discord-notifications admin 200 '.discord_ids==[] and .enabled==false'
+  chk PUT /api/auth/discord-notifications user 200 '.enabled==false and .discord_ids==[]' '{"enabled":false,"discord_ids":[],"events":{}}'
+  # an admin can retry a failed native requester tag without changing a decision
+  chk POST /api/admin/requests/3/tags/retry admin 202 '.status=="pending" and .can_retry==false'
+  chk GET /api/admin/requests/history admin 200 '([.requests[]|select(.id==3)][0]|.decision=="approved" and .requester_tagging.status=="pending")'
   # setup skip round-trip
   chk PUT /api/admin/setup-status/skips admin 200 '.key=="push" and .skipped==true' '{"key":"push","skipped":true}'
   chk GET /api/admin/setup-status admin 200 '([.items[]|select(.key=="push")][0].skipped==true)'

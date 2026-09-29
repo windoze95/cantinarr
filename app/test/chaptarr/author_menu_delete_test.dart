@@ -1,3 +1,5 @@
+import 'package:cantinarr/core/network/library_settings_service.dart';
+import 'package:cantinarr/features/chaptarr/ui/author_actions.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -52,12 +54,15 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
-            body: ChaptarrAuthorList(
+            body: Builder(builder: (context) => ChaptarrAuthorList(
               authors: const [_author],
               onTap: (_) {},
-              onDelete: (author, {bool deleteFiles = false}) =>
-                  service.deleteAuthor(author.id, deleteFiles: deleteFiles),
-            ),
+              onAction: (item, action) => showAuthorActions(context,
+                service: service, instanceId: 'inst1', author: item, selectedAction: action,
+                settings: LibrarySettingsService(dio: dio, instanceId: 'inst1',
+                  kind: LibrarySettingsKind.author, id: item.id),
+              ),
+            )),
           ),
         ),
       );
@@ -79,7 +84,7 @@ void main() {
       await pumpList(tester);
       expect(find.byType(Dismissible), findsNothing);
       await openDeleteConfirmation(tester);
-      expect(find.text('Delete Author'), findsOneWidget);
+      expect(find.text('Remove author'), findsOneWidget);
       expect(find.text('Also delete files from disk'), findsOneWidget);
       final box =
           tester.widget<CheckboxListTile>(find.byType(CheckboxListTile));
@@ -100,7 +105,7 @@ void main() {
         (tester) async {
       await pumpList(tester);
       await openDeleteConfirmation(tester);
-      await tester.tap(find.text('Delete'));
+      await tester.tap(find.text('Remove'));
       await tester.pumpAndSettle();
 
       final d = deletes();
@@ -114,7 +119,7 @@ void main() {
       await openDeleteConfirmation(tester);
       await tester.tap(find.text('Also delete files from disk'));
       await tester.pump();
-      await tester.tap(find.text('Delete'));
+      await tester.tap(find.text('Remove'));
       await tester.pumpAndSettle();
 
       final d = deletes();

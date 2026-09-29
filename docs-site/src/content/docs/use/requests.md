@@ -9,12 +9,16 @@ Open a title and choose **Request**. The options depend on the media type, your 
 
 ## Review the choices
 
-- **Library:** where the request should go. If you can access more than one library, choose carefully. A 4K library and a standard library may have different contents.
+- **Library:** where the request should go. With multiple personal assignments for that service, confirm a library before submitting. Your default is preselected, even if you were browsing another library. A 4K library and a standard library may have different contents.
 - **Seasons:** the TV seasons you want, when your account permits selecting them. Specials are separate from ordinary seasons.
 - **Quality:** an administrator-provided profile, when your account permits choosing one. A profile guides the library manager's future release selection.
 - **Format:** ebook, audiobook, or both for books.
 
 If a choice is absent, your administrator may have set it for your account. There is no need to look up an API key or a TVDB ID to make a normal request.
+
+Administrators use personal assignments for these requests while retaining access to all instances in navigation. If no request library is assigned, add one through **Settings > Users**.
+
+Requests for seasons selected from a native TV library page stay in that library because its season numbering can differ from other libraries. Use the show’s Discover page to choose a different destination.
 
 ## After you submit
 

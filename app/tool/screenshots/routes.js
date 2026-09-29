@@ -11,7 +11,8 @@ module.exports = [
     // the fold; scroll it into frame so the shot shows its subject.
     actions: async (page, d) => {
       await page.mouse.move(d.vw / 2, d.vh / 2);
-      await page.mouse.wheel(0, Math.round(d.vh * 0.85));
+      const scroll = d.tag === 'iphone69' ? 1.8 : d.tag === 'android' ? 2.1 : 0.85;
+      await page.mouse.wheel(0, Math.round(d.vh * scroll));
     },
   },
   {
@@ -38,25 +39,41 @@ module.exports = [
     settle: 7500,
     post: 4000,
   },
-  { name: 'movie_detail', route: '/detail/movie/687163', settle: 6500 },
-  { name: 'releases', route: '/dashboard/releases', settle: 5500 },
-  { name: 'downloads', route: '/downloads/queue', settle: 5500 },
-  { name: 'tv_library', route: '/sonarr/library', settle: 5500 },
   {
-    name: 'tv_home',
-    route: '/dashboard/tv',
-    settle: 6500,
-    // Play allows eight screenshots per device; the Books shelf earns that
-    // eighth slot over this one, which repeats Discover's row-of-posters shape
-    // with a different media type.
+    name: 'movie_detail', route: '/detail/movie/687163', settle: 6500,
     skip: ['android', 'tablet10'],
+  },
+  {
+    // Play slot 5 shows the TV library, formerly slot 8.
+    name: 'tv_library', route: '/sonarr/library', settle: 5500,
+    skip: ['iphone69', 'ipad13'],
+  },
+  { name: 'releases', route: '/dashboard/releases', settle: 5500 },
+  {
+    name: 'downloads', route: '/downloads/queue', settle: 5500,
+    // Select the current grouped Content view through the real control.
+    actions: async (page) => {
+      await page.locator('flt-semantics-placeholder').evaluate(el => el.click());
+      await page.getByRole('button', { name: 'Content', exact: true }).click();
+    },
+  },
+  {
+    name: 'tv_library', route: '/sonarr/library', settle: 5500,
+    skip: ['android', 'tablet10'],
+  },
+  {
+    // Music is slot 9 on Apple and slot 8 on Play. All earlier shots keep
+    // their original service profile without Music in the navigation.
+    name: 'music',
+    route: '/dashboard/music',
+    settle: 6500,
+    setup: require('./music.js'),
   },
   {
     name: 'approvals',
     route: '/approvals',
     settle: 5500,
-    // The App Store's tenth slot; Play has no room for it once Books takes
-    // the eighth.
+    // The App Store's tenth slot; Play is full at eight.
     skip: ['android', 'tablet10'],
   },
 ];

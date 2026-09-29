@@ -38,6 +38,7 @@ const _routableSettingsPaths = {
   '/settings/agent-approval-rules',
   '/settings/request-settings',
   '/settings/discord-notifications',
+  '/settings/discord-notifications/server',
   '/settings/seerr-api',
   '/settings/discovery',
   '/settings/devices',

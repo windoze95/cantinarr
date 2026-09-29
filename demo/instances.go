@@ -145,6 +145,8 @@ func instMgmtJSON(inst *DemoInstance) map[string]any {
 		"url":                 inst.URL,
 		"username":            inst.Username,
 		"is_default":          inst.IsDefault,
+		"tag_requests":        inst.TagRequests,
+		"auto_add_users":      inst.AutoAddUsers,
 		"sort_order":          instMgmtSortOrderOf(inst.ID),
 		"media_downloads":     inst.MediaDownloads,
 		"media_path_mappings": mappings,
@@ -190,6 +192,8 @@ type instMgmtBody struct {
 	Username          string             `json:"username"`
 	Password          string             `json:"password"`
 	IsDefault         bool               `json:"is_default"`
+	TagRequests       *bool              `json:"tag_requests"`
+	AutoAddUsers      *bool              `json:"auto_add_users"`
 	SortOrder         *int               `json:"sort_order"`
 	MediaPathMappings *[]instMgmtMapping `json:"media_path_mappings"` // nil = key omitted
 	// MediaServerConfig is nil when the key is omitted (keep stored),
@@ -355,6 +359,8 @@ func registerInstances(r chi.Router) {
 	// an exact set of users WITHOUT moving anyone's default.
 	admin.Get("/instances/{instanceID}/grant-users", instMgmtHandleGetGrantUsers)
 	admin.Put("/instances/{instanceID}/grant-users", instMgmtHandlePutGrantUsers)
+	admin.Get("/instances/{instanceID}/assignments", instMgmtHandleAssignments)
+	admin.Patch("/instances/{instanceID}/assignments", instMgmtHandleAssignments)
 	admin.Post("/instances/{instanceID}/webhook", instMgmtHandleWebhook)
 	admin.Get("/instances/{instanceID}/webhook", instMgmtHandleWebhookStatus)
 
@@ -411,6 +417,14 @@ func instMgmtHandleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.ClearAPIKey && body.APIKey != "" {
 		writeErr(w, http.StatusBadRequest, "api_key and clear_api_key cannot both be set")
+		return
+	}
+	if body.TagRequests != nil && *body.TagRequests && !instMgmtIsArrType(body.ServiceType) {
+		writeErr(w, http.StatusBadRequest, "requester tagging requires Radarr, Sonarr, Chaptarr or Lidarr")
+		return
+	}
+	if body.AutoAddUsers != nil && *body.AutoAddUsers && !instMgmtIsArrType(body.ServiceType) {
+		writeErr(w, http.StatusBadRequest, "automatic assignment requires an automation instance")
 		return
 	}
 	if body.Name == "" || body.URL == "" {
@@ -474,6 +488,8 @@ func instMgmtHandleCreate(w http.ResponseWriter, r *http.Request) {
 		URL:               trimmedURL,
 		Username:          creds.username,
 		IsDefault:         isDefault,
+		TagRequests:       body.TagRequests != nil && *body.TagRequests,
+		AutoAddUsers:      instMgmtIsArrType(body.ServiceType) && (body.AutoAddUsers == nil || *body.AutoAddUsers),
 		MediaDownloads:    mediaDownloads,
 		MediaPathMappings: mappings,
 		MediaServerConfig: mediaServerConfig,
@@ -612,6 +628,14 @@ func instMgmtHandleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "api_key and clear_api_key cannot both be set")
 		return
 	}
+	if body.TagRequests != nil && *body.TagRequests && !instMgmtIsArrType(serviceType) {
+		writeErr(w, http.StatusBadRequest, "requester tagging requires Radarr, Sonarr, Chaptarr or Lidarr")
+		return
+	}
+	if body.AutoAddUsers != nil && *body.AutoAddUsers && !instMgmtIsArrType(serviceType) {
+		writeErr(w, http.StatusBadRequest, "automatic assignment requires an automation instance")
+		return
+	}
 	if body.Name == "" || body.URL == "" {
 		writeErr(w, http.StatusBadRequest, "name and url are required")
 		return
@@ -663,6 +687,12 @@ func instMgmtHandleUpdate(w http.ResponseWriter, r *http.Request) {
 		// for a qBittorrent instance that just moved to an API key, "".
 		inst.Username = creds.username
 		inst.IsDefault = isDefault
+		if body.TagRequests != nil {
+			inst.TagRequests = *body.TagRequests
+		}
+		if body.AutoAddUsers != nil {
+			inst.AutoAddUsers = *body.AutoAddUsers
+		}
 		if body.MediaPathMappings != nil { // omitted key = keep current mappings
 			inst.MediaPathMappings = newMappings
 			inst.MediaDownloads = newDownloads
@@ -931,6 +961,75 @@ func instMgmtHandleMediaServerLibraries(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// ─── Instance-centric assignment endpoints ─────────────
+
+// The assignment editor changes only the named users. It never treats a
+// filtered list as a replacement set, and clearing access also clears a
+// preference that pointed at the removed instance.
+func instMgmtHandleAssignments(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "instanceID")
+	inst := instMgmtResolve(id)
+	if inst == nil || !instMgmtIsArrType(inst.ServiceType) {
+		writeErr(w, http.StatusBadRequest, "select existing users and an automation instance")
+		return
+	}
+	if r.Method == http.MethodPatch {
+		var body struct {
+			Action  string `json:"action"`
+			UserIDs []int  `json:"user_ids"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body) != nil ||
+			(body.Action != "add" && body.Action != "remove") || len(body.UserIDs) == 0 {
+			writeErr(w, http.StatusBadRequest, "provide add or remove and selected user_ids")
+			return
+		}
+		stateMu.Lock()
+		for _, uid := range body.UserIDs {
+			if demoUsers[uid] == nil {
+				stateMu.Unlock()
+				writeErr(w, http.StatusBadRequest, "select existing users and an automation instance")
+				return
+			}
+		}
+		for _, uid := range body.UserIDs {
+			u := demoUsers[uid]
+			ids := u.InstanceGrants[inst.ServiceType]
+			kept := make([]string, 0, len(ids)+1)
+			for _, granted := range ids {
+				if granted != id {
+					kept = append(kept, granted)
+				}
+			}
+			if body.Action == "add" {
+				kept = append(kept, id)
+			} else if u.DefaultInstances[inst.ServiceType] == id {
+				delete(u.DefaultInstances, inst.ServiceType)
+			}
+			u.InstanceGrants[inst.ServiceType] = kept
+		}
+		stateMu.Unlock()
+	}
+	rows := []map[string]any{}
+	for _, u := range allUsers() {
+		assigned := false
+		for _, granted := range grantedInstanceIDs(u, inst.ServiceType) {
+			if granted == id {
+				assigned = true
+				break
+			}
+		}
+		preferred := ""
+		withUser(u.ID, func(uu *DemoUser) { preferred = uu.DefaultInstances[inst.ServiceType] })
+		rows = append(rows, map[string]any{
+			"user_id": u.ID, "assigned": assigned,
+			"preferred_instance_id": preferred,
+			"effective_default_id":  effectiveInstanceIDFor(u, inst.ServiceType),
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i]["user_id"].(int) < rows[j]["user_id"].(int) })
+	writeJSON(w, http.StatusOK, rows)
+}
+
 // ─── Instance-centric grant endpoints ───────────────────
 
 // instMgmtHandleGetGrantUsers — GET /api/instances/{id}/grant-users. Every
@@ -1032,9 +1131,23 @@ func instMgmtHandlePutUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, uid := range body.UserIDs {
-		if userByID(uid) == nil {
+		u := userByID(uid)
+		if u == nil {
 			writeErr(w, http.StatusBadRequest, fmt.Sprintf("unknown user id: %d", uid))
 			return
+		}
+		if u.Role != roleAdmin {
+			assigned := false
+			for _, granted := range grantedInstanceIDs(u, inst.ServiceType) {
+				if granted == inst.ID {
+					assigned = true
+					break
+				}
+			}
+			if !assigned {
+				writeErr(w, http.StatusBadRequest, "assign this instance before choosing it as a preference")
+				return
+			}
 		}
 	}
 	listed := map[int]bool{}
@@ -1042,8 +1155,7 @@ func instMgmtHandlePutUsers(w http.ResponseWriter, r *http.Request) {
 		listed[uid] = true
 	}
 	// Exact-set semantics: listed users are pinned here (moved off siblings);
-	// users previously pinned to THIS instance but absent revert to the
-	// global default (chaptarr: access revoked).
+	// users previously pinned to THIS instance but absent use automatic routing.
 	serviceType, instID := inst.ServiceType, inst.ID
 	for _, u := range allUsers() {
 		withUser(u.ID, func(uu *DemoUser) {

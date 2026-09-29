@@ -373,6 +373,20 @@ func uaDefaultInstancesPutHandler(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("instance %s is %q, not %q", *val, inst.ServiceType, key))
 			return
 		}
+		user := userByID(id)
+		if user != nil && user.Role != roleAdmin {
+			assigned := false
+			for _, granted := range grantedInstanceIDs(user, key) {
+				if granted == *val {
+					assigned = true
+					break
+				}
+			}
+			if !assigned {
+				writeErr(w, http.StatusBadRequest, "assign this instance before choosing it as a preference")
+				return
+			}
+		}
 	}
 	applied := withUser(id, func(u *DemoUser) {
 		for key, val := range req {

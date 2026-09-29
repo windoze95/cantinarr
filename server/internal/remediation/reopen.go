@@ -102,8 +102,9 @@ func (s *Service) ReopenIssueByAdmin(ctx context.Context, adminID, issueID int64
 		FROM issues WHERE id = ?`, issueID).Scan(&status, &resolution, &kind, &closedAt); err != nil {
 		return nil, fmt.Errorf("read previous closure: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_messages (issue_id, author_kind, author_id, body)
-		VALUES (?, ?, ?, ?)`, issueID, AuthorAdmin, adminID, reopenAuditMessage(status, kind, resolution, closedAt)); err != nil {
+	reopenResult, err := tx.ExecContext(ctx, `INSERT INTO issue_messages (issue_id, author_kind, author_id, body)
+		VALUES (?, ?, ?, ?)`, issueID, AuthorAdmin, adminID, reopenAuditMessage(status, kind, resolution, closedAt))
+	if err != nil {
 		return nil, fmt.Errorf("record issue reopening: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, closed_at = NULL,
@@ -127,6 +128,8 @@ func (s *Service) ReopenIssueByAdmin(ctx context.Context, adminID, issueID int64
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit issue reopening: %w", err)
 	}
+	messageID, _ := reopenResult.LastInsertId()
+	s.observeReport("issue_reopened", issueID, adminID, messageID)
 	s.pingIssueUpdated(issueID)
 	return s.GetIssue(issueID)
 }

@@ -18,6 +18,8 @@ func registerRequestsAdmin(r chi.Router) {
 	r.With(requireAdmin).Get("/admin/requests", reqAdminQueueHandler)
 	// Static segment, so it wins over /admin/requests/{id}/… in chi's router.
 	r.With(requireAdmin).Get("/admin/requests/waiting", reqAdminWaitingHandler)
+	r.With(requireAdmin).Get("/admin/requests/history", reqAdminHistoryHandler)
+	r.With(requireAdmin).Post("/admin/requests/{id}/tags/retry", reqTagRetryHandler)
 	r.With(requireAdmin).Post("/admin/requests/{id}/approve", reqAdminApproveHandler)
 	r.With(requireAdmin).Post("/admin/requests/{id}/deny", reqAdminDenyHandler)
 	// "Try again" on a demoted author-import book request: resume the watch
@@ -120,6 +122,11 @@ func reqAdminPendingRowJSON(e reqAdminPendingEntry) map[string]any {
 		if last := reqParkLastAttempt(row.RequestedAt); last != nil {
 			m["last_attempt_at"] = *last
 		}
+		// Saved delivery progress is visible on the waiting card. The receipt
+		// comes from the request row, while library availability stays live.
+		dlvMu.Lock()
+		m["delivery"] = []map[string]any{dlvStateView(&row)}
+		dlvMu.Unlock()
 	}
 	if row.AddFailureReason != "" {
 		m["add_failure_reason"] = row.AddFailureReason

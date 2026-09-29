@@ -280,6 +280,10 @@ func reqCreateBook(w http.ResponseWriter, u *DemoUser, body *reqCreateBody) {
 		writeErr(w, errStatus, errMsg)
 		return
 	}
+	if !userAssignedInstance(u, inst.ID) {
+		writeErr(w, http.StatusForbidden, "chaptarr instance is not available to you")
+		return
+	}
 	requested := bookConcreteFormats(format)
 	pol := reqEffectivePolicy(u)
 	book, found := bookByForeignID(foreignID)
@@ -495,13 +499,17 @@ func reqResolveArrInstance(u *DemoUser, mediaType, requested string) (instanceID
 	}
 	requested = strings.TrimSpace(requested)
 	if requested == "" {
-		return effectiveInstanceIDFor(u, serviceType), 0, ""
+		id := effectiveInstanceIDFor(u, serviceType)
+		if id == "" {
+			return "", http.StatusForbidden, serviceType + " instance is not available to you"
+		}
+		return id, 0, ""
 	}
 	inst := instanceByID(requested)
 	if inst == nil || inst.ServiceType != serviceType {
 		return "", http.StatusBadRequest, "invalid " + serviceType + " instance"
 	}
-	if !userCanSeeInstance(u, requested) {
+	if !userAssignedInstance(u, requested) {
 		return "", http.StatusForbidden, serviceType + " instance is not available to you"
 	}
 	return requested, 0, ""
@@ -947,6 +955,12 @@ func reqTmdbStatusHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": statusUnavailable, "progress": 0})
 		return
 	}
+	if raw := r.URL.Query().Get("include_4k"); raw != "" {
+		if _, err := strconv.ParseBool(raw); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid include_4k")
+			return
+		}
+	}
 
 	// The user's latest own row decides the pending/denied overlays.
 	var latest *reqLogRow
@@ -1012,7 +1026,7 @@ func reqTmdbStatusHandler(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "invalid "+serviceType+" instance")
 			return
 		}
-		if !userCanSeeInstance(u, requested) {
+		if !userAssignedInstance(u, requested) {
 			writeErr(w, http.StatusForbidden, serviceType+" instance is not available to you")
 			return
 		}

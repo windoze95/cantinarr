@@ -75,6 +75,8 @@ type instanceResponse struct {
 	// removal without ever revealing the stored write-only credential.
 	HasAPIKey         bool                `json:"has_api_key,omitempty"`
 	IsDefault         bool                `json:"is_default"`
+	AutoAddUsers      bool                `json:"auto_add_users"`
+	TagRequests       bool                `json:"tag_requests"`
 	SortOrder         int                 `json:"sort_order"`
 	MediaDownloads    bool                `json:"media_downloads"`
 	MediaPathMappings []mediapath.Mapping `json:"media_path_mappings"`
@@ -84,6 +86,8 @@ type instanceResponse struct {
 
 type instanceRequest struct {
 	Instance
+	TagRequests  *bool `json:"tag_requests"`
+	AutoAddUsers *bool `json:"auto_add_users"`
 	// Pointer distinguishes an old client that omitted this new field from an
 	// admin explicitly sending [] to disable downloads on an existing instance.
 	MediaPathMappings *[]mediapath.Mapping `json:"media_path_mappings"`
@@ -98,6 +102,19 @@ type instanceRequest struct {
 	ClearAPIKey bool `json:"clear_api_key"`
 }
 
+func applyTagRequests(inst *Instance, value *bool, existing *Instance) error {
+	if existing != nil {
+		inst.TagRequests = existing.TagRequests
+	}
+	if value != nil {
+		inst.TagRequests = *value
+	}
+	if inst.TagRequests && inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" && inst.ServiceType != "chaptarr" && inst.ServiceType != "lidarr" {
+		return fmt.Errorf("requester tagging requires Radarr, Sonarr, Chaptarr or Lidarr")
+	}
+	return nil
+}
+
 func (h *Handler) toResponse(inst *Instance) instanceResponse {
 	mappings := inst.EffectiveMediaPathMappings()
 	if mappings == nil {
@@ -110,6 +127,8 @@ func (h *Handler) toResponse(inst *Instance) instanceResponse {
 		URL:               inst.URL,
 		Username:          inst.Username,
 		IsDefault:         inst.IsDefault,
+		AutoAddUsers:      inst.AutoAddUsers,
+		TagRequests:       inst.TagRequests,
 		SortOrder:         inst.SortOrder,
 		MediaDownloads:    inst.MediaDownloadsConfigured(h.mediaRoots),
 		MediaPathMappings: mappings,
@@ -273,6 +292,14 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	inst := request.Instance
+	if err := applyAutoAddUsers(&inst, request.AutoAddUsers, nil); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := applyTagRequests(&inst, request.TagRequests, nil); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	if !allowedServiceTypes[inst.ServiceType] {
 		http.Error(w, serviceTypeListError, http.StatusBadRequest)
@@ -348,6 +375,14 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	inst.ID = instanceID
 	// Service type is immutable; validate against the stored type.
 	inst.ServiceType = existing.ServiceType
+	if err := applyAutoAddUsers(&inst, request.AutoAddUsers, existing); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := applyTagRequests(&inst, request.TagRequests, existing); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	// Credentials are write-only: a blank value keeps the stored one.
 	if inst.APIKey == "" {
@@ -530,7 +565,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 
 // GetUserDefaultInstances returns a user's per-user default instance overrides
 // as a {service_type: instance_id} map (admin-only). Service types absent from
-// the map inherit the global default.
+// the map use automatic routing within the assigned set.
 func (h *Handler) GetUserDefaultInstances(w http.ResponseWriter, r *http.Request) {
 	userID, err := strconv.ParseInt(chi.URLParam(r, "userID"), 10, 64)
 	if err != nil {
@@ -713,8 +748,8 @@ func (h *Handler) GetInstanceUsers(w http.ResponseWriter, r *http.Request) {
 
 // UpdateInstanceUsers pins the addressed instance as the per-user default for
 // exactly the posted user ids (admin-only). Users previously pinned to this
-// instance but absent from the list revert to the global default (for
-// chaptarr: access revoked). Returns the updated pins for the service type.
+// instance but absent from the list return to automatic routing. Access stays
+// unchanged. Returns the updated preferences for the service type.
 func (h *Handler) UpdateInstanceUsers(w http.ResponseWriter, r *http.Request) {
 	instanceID := chi.URLParam(r, "instanceID")
 	serviceType, err := h.store.ServiceTypeOf(instanceID)
@@ -986,4 +1021,18 @@ func validateArrURL(baseURL, apiKey, apiVersion string) error {
 // ResolveHardcoverToken is wired only into upstream catalog cache misses.
 func (h *Handler) ResolveHardcoverToken(ctx context.Context, id, rejected string) (string, error) {
 	return h.hardcover.Token(ctx, id, rejected)
+}
+
+func applyAutoAddUsers(inst *Instance, value *bool, existing *Instance) error {
+	inst.AutoAddUsers = IsAutomationType(inst.ServiceType)
+	if existing != nil {
+		inst.AutoAddUsers = existing.AutoAddUsers
+	}
+	if value != nil {
+		inst.AutoAddUsers = *value
+	}
+	if inst.AutoAddUsers && !IsAutomationType(inst.ServiceType) {
+		return errors.New("automatic assignment requires an automation instance")
+	}
+	return nil
 }

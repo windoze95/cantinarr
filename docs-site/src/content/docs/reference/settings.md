@@ -39,6 +39,7 @@ The [complete searchable-settings catalog](/reference/generated/settings/) is bu
 | You want to | Look for | Read |
 | --- | --- | --- |
 | Choose catalog feeds or language | Discover | [Catalog providers](/integrations/discovery-providers/) |
+| Mark 4K titles on covers | Discover > Show 4K badges | [4K on covers](/use/status/#4k-on-covers) |
 | Hide an unconfigured tab | Modules > Discover > Discover tabs | [Navigation](/admin/modules/) |
 | Configure included AI | Providers & Credentials | [AI administration](/admin/ai/) |
 | Control assistant tools | AI Tools | [MCP](/integrations/mcp/) |
@@ -47,7 +48,7 @@ The [complete searchable-settings catalog](/reference/generated/settings/) is bu
 | Review a profile edit | Configuration History / Profile approvals | [Configuration changes](/admin/configuration-history/) |
 | Enable downloaded-file access | Instance path mappings and deployment media roots | [File downloads](/admin/file-downloads/) |
 | Connect a television | Apple TVs | [Apple TV setup](/integrations/guides/apple-tv/) |
-| Send requests to Discord | Discord Notifications | [Discord](/integrations/discord/) |
+| Choose Discord mentions and server events | Discord Notifications > Server Discord Notifications (admins) | [Discord](/integrations/discord/) |
 | Route metadata and AI traffic | Outbound Proxy | [Proxy setup](/integrations/outbound-proxy/) |
 
 ## Deployment-only choices

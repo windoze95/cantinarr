@@ -198,7 +198,7 @@ func TestMusicRevokedWhileLibraryLoadsPreventsEveryMutation(t *testing.T) {
 	done := make(chan struct{})
 	go func() { s.SweepDispatch(context.Background()); close(done) }()
 	<-started
-	if _, err = s.db.Exec(`DELETE FROM user_default_instances WHERE user_id=?`, uid); err != nil {
+	if _, err = s.db.Exec(`DELETE FROM user_instance_grants WHERE user_id=?`, uid); err != nil {
 		t.Fatal(err)
 	}
 	close(release)

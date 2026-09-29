@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/network/long_request_options.dart';
 import 'ai_provider_models.dart';
+import 'ai_chat_capabilities.dart';
 
 const _aiValidationReceiveTimeout = Duration(seconds: 75);
 
@@ -118,6 +119,7 @@ class AiSettings {
   final PersonalAiSettings personal;
   final SharedAiSettings shared;
   final EffectiveAiSettings effective;
+  final AiChatCapabilities? chatCapabilities;
 
   const AiSettings({
     required this.providers,
@@ -126,6 +128,7 @@ class AiSettings {
     required this.personal,
     required this.shared,
     required this.effective,
+    this.chatCapabilities,
   });
 
   AiProviderOption? provider(String id) {
@@ -141,7 +144,11 @@ class AiSettings {
     final personal = json['personal'];
     final shared = json['shared'];
     final effective = json['effective'];
+    final capabilities = json['chat_capabilities'];
     return AiSettings(
+      chatCapabilities: capabilities is Map<String, dynamic>
+          ? AiChatCapabilities.fromJson(capabilities)
+          : null,
       providers: ((json['providers'] as List?) ?? const [])
           .whereType<Map<String, dynamic>>()
           .map(AiProviderOption.fromJson)

@@ -44,6 +44,14 @@ func TestBookToolsUseNativeIdentityAndRetirePublicRequests(t *testing.T) {
 	if err = store.Create(inst); err != nil {
 		t.Fatal(err)
 	}
+	if grants, x := store.ListUserGrants(uid); x != nil {
+		t.Fatal(x)
+	} else {
+		grants["chaptarr"] = append(grants["chaptarr"], inst.ID)
+		if x = store.SetUserGrants(uid, grants); x != nil {
+			t.Fatal(x)
+		}
+	}
 	if err = store.SetUserDefault(uid, "chaptarr", inst.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -145,6 +153,14 @@ func TestAutomaticMCPRequestNotifiesOnceWithDiscordDisabled(t *testing.T) {
 	inst := &instance.Instance{ServiceType: "radarr", Name: "Movies", URL: arr.URL, APIKey: "fixture"}
 	if err := store.Create(inst); err != nil {
 		t.Fatal(err)
+	}
+	if grants, e := store.ListUserGrants(1); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["radarr"] = append(grants["radarr"], inst.ID)
+		if e = store.SetUserGrants(1, grants); e != nil {
+			t.Fatal(e)
+		}
 	}
 	if err := store.SetUserDefault(1, "radarr", inst.ID); err != nil {
 		t.Fatal(err)

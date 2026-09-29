@@ -21,17 +21,40 @@ import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/widgets/app_ambient_background.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/navigation/app_router.dart';
+import 'package:cantinarr/features/settings/data/discord_notifications_service.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'screenshot_data.dart';
+import 'screenshot_music.dart';
 
 void main() {
+  // Earlier store shots intentionally have no Music navigation. Enable the
+  // service only for this shot to demonstrate that navigation follows setup.
+  final musicShot = Uri.base.queryParameters['shot'] == 'music';
+  final state = musicShot
+      ? _adminState.copyWith(
+          connection: _adminState.connection!.copyWith(
+            serverUrl: Uri.base.origin,
+            hiddenDiscoverTabs: const [],
+            services: const AvailableServices(
+              radarr: true, sonarr: true, chaptarr: true, lidarr: true,
+              ai: true, tmdb: true,
+            ),
+            instances: [
+              ..._adminState.connection!.instances,
+              const ServiceInstance(
+                id: 'lidarr-main', serviceType: 'lidarr', name: 'Lidarr',
+              ),
+            ],
+          ),
+        )
+      : _adminState;
   runApp(
     ProviderScope(
       overrides: [
-        authProvider.overrideWith(() => _FakeAuthNotifier(_adminState)),
+        authProvider.overrideWith(() => _FakeAuthNotifier(state)),
         backendClientProvider.overrideWithValue(_stubDio()),
         realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
       ],
@@ -56,7 +79,7 @@ class _ScreenshotApp extends ConsumerWidget {
   }
 }
 
-/// Admin with every module lit up. Mirrors preview_main's instance set, plus a
+/// Original screenshot profile without Music. Mirrors preview_main's set, plus a
 /// second (qBittorrent) download client so the download-queue screen can be
 /// screenshotted for both SABnzbd (usenet) and qBittorrent (torrent) via the
 /// drawer's instance selector.
@@ -65,6 +88,9 @@ const _adminState = AuthState(
     serverUrl: 'http://localhost:8585',
     accessToken: 'screenshot-access',
     refreshToken: 'screenshot-refresh',
+    hiddenDiscoverTabs: ['music'],
+    downloadsActivity: true,
+    requesterTagging: true,
     services: AvailableServices(
       radarr: true,
       sonarr: true,
@@ -148,6 +174,24 @@ Dio _stubDio() {
 /// back to empty-but-well-shaped responses (matching preview_main) so any
 /// unmocked path settles into an empty state instead of crashing.
 class _ScreenshotAdapter implements HttpClientAdapter {
+  final _discordServer = <String, dynamic>{
+    'enabled': true, 'has_webhook': true, 'enable_mentions': true,
+    'include_auto_approved': true,
+    'events': {for (final key in discordEventLabels.keys) key: true},
+    'role_events': {'request_pending': true}, 'role_id': '345678901234567890',
+    'thread_id': '', 'username': 'Home media', 'avatar_url': '', 'embed_poster': true,
+    'recent': [
+      {'event': 'request_available', 'status': 'sent', 'detail': 'Discord confirmed delivery.', 'updated_at': 1800000000},
+      {'event': 'issue_comment', 'issue_id': 7, 'status': 'unconfirmed', 'detail': 'Delivery could not be confirmed. Check the channel before retrying.', 'updated_at': 1800000000},
+    ],
+  };
+  final _discordPersonal = <String, dynamic>{
+    'enabled': true, 'discord_ids': ['123456789012345678'],
+    'events': {'request_available': true, 'request_approved': true, 'issue_comment': true},
+    'allowed_events': {for (final key in discordEventLabels.keys) key: true},
+    'server_enabled': true, 'server_mentions': true,
+  };
+
   @override
   Future<ResponseBody> fetch(
     RequestOptions options,
@@ -155,7 +199,16 @@ class _ScreenshotAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     final path = options.path;
-    final body = screenshotBodyFor(path, options.queryParameters) ??
+    Object? discord;
+    if (path.contains('/discord-notifications')) {
+      final state = path.contains('/admin/') ? _discordServer : _discordPersonal;
+      if (options.method == 'PUT') state.addAll(Map<String, dynamic>.from(options.data as Map));
+      discord = path.endsWith('/test')
+          ? {'status': 'sent', 'detail': 'Fixture test confirmed. No Discord request was sent.'}
+          : state;
+    }
+    final body = discord ?? screenshotMusicBody(path) ??
+        screenshotBodyFor(path, options.queryParameters) ??
         _fallback(path);
     return ResponseBody.fromString(
       jsonEncode(body),

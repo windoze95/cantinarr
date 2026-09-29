@@ -31,7 +31,7 @@ import urllib.parse
 import urllib.request
 
 import jwt
-from release_control import ReleaseError, current
+from release_control import ReleaseError, ReleasePaused, current, report_pause
 
 API = "https://api.appstoreconnect.apple.com"
 
@@ -227,6 +227,8 @@ def check_publishing_source():
     if source := os.environ.get("SOURCE_JSON"):
         try:
             current(json.loads(source))
+        except ReleasePaused:
+            raise
         except ReleaseError as error:
             raise ApiError(str(error)) from error
 
@@ -304,6 +306,9 @@ def main():
             submit_for_beta_review(client, build_id)
 
         add_to_group(client, args.group_id, build_id)
+    except ReleasePaused:
+        report_pause()
+        return
     except ApiError as e:
         sys.exit(f"error: {e}")
 

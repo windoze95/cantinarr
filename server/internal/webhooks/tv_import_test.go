@@ -147,6 +147,9 @@ func TestTVWebhookCorrectedIdentityAudienceAndOverlap(t *testing.T) {
 	check(286801, f.sonarrID, "content_upgraded", "1")
 	// An upgrade's silent broadcast claim absorbs a later poll witness.
 	notifier.NotifyNewEpisode("Corrected story 286801", 286801, f.sonarrID)
+	if _, err := f.database.Exec("INSERT OR IGNORE INTO user_instance_grants(user_id,instance_id) VALUES (3,?)", other.ID); err != nil {
+		t.Fatal(err)
+	}
 	post(other.ID, 2, false)
 	check(225634, other.ID, "new_episode", "1,3")
 	select {

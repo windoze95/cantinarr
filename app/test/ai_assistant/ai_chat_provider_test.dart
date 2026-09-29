@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cantinarr/features/ai_assistant/data/ai_chat_service.dart';
+import 'package:cantinarr/features/ai_assistant/data/ai_chat_capabilities.dart';
 import 'package:cantinarr/features/ai_assistant/data/ai_models.dart';
 import 'package:cantinarr/features/ai_assistant/logic/ai_chat_provider.dart';
 import 'package:dio/dio.dart';
@@ -139,7 +140,7 @@ void main() {
     expect(notifier.state.messages, hasLength(1));
     expect(
       notifier.state.messages.single.content,
-      'Chat cleared! What can I help you find?',
+      aiChatWelcomeFallback,
     );
     expect(notifier.conversationId, isNull);
     expect(notifier.state.isLoading, isFalse);

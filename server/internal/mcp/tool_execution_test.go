@@ -179,6 +179,14 @@ func TestRequestMediaRoutesToCallersInstanceAndLogsAttribution(t *testing.T) {
 			t.Fatalf("create instance %s: %v", inst.Name, err)
 		}
 	}
+	if grants, e := store.ListUserGrants(uid); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["radarr"] = append(grants["radarr"], personalInst.ID)
+		if e = store.SetUserGrants(uid, grants); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if err := store.SetUserDefault(uid, "radarr", personalInst.ID); err != nil {
 		t.Fatalf("grant personal instance: %v", err)
 	}
@@ -339,7 +347,7 @@ func TestRequestMediaSelectsGrantedLibrary(t *testing.T) {
 	}
 	// The HD/4K shape: the default plus one granted sibling; Kids stays
 	// ungranted.
-	if err := store.SetUserGrants(uid, map[string][]string{"radarr": {uhdInst.ID}}); err != nil {
+	if err := store.SetUserGrants(uid, map[string][]string{"radarr": {hdInst.ID, uhdInst.ID}}); err != nil {
 		t.Fatalf("grant 4K: %v", err)
 	}
 
@@ -1219,8 +1227,7 @@ func TestRescanMediaMovieRescansThenRunsImportPass(t *testing.T) {
 		t.Fatalf("mutations = %+v, want rescan then import pass", mutations)
 	}
 	rescan := decodeBody(t, mutations[0].Body)
-	movieIDs, _ := rescan["movieIds"].([]any)
-	if rescan["name"] != "RescanMovie" || len(movieIDs) != 1 || movieIDs[0] != float64(7) {
+	if len(rescan) != 2 || rescan["name"] != "RescanMovie" || rescan["movieId"] != float64(7) {
 		t.Fatalf("first command = %v, want RescanMovie for movie 7", rescan)
 	}
 	if importPass := decodeBody(t, mutations[1].Body); importPass["name"] != "ProcessMonitoredDownloads" {
@@ -1606,6 +1613,14 @@ func TestBookRequesterToolWiring(t *testing.T) {
 	inst := &instance.Instance{ServiceType: "chaptarr", Name: "Books", URL: chaptarrSrv.URL, APIKey: "key", IsDefault: true}
 	if err := store.Create(inst); err != nil {
 		t.Fatalf("create instance: %v", err)
+	}
+	if grants, e := store.ListUserGrants(uid); e != nil {
+		t.Fatal(e)
+	} else {
+		grants["chaptarr"] = append(grants["chaptarr"], inst.ID)
+		if e = store.SetUserGrants(uid, grants); e != nil {
+			t.Fatal(e)
+		}
 	}
 	if err := store.SetUserDefault(uid, "chaptarr", inst.ID); err != nil {
 		t.Fatalf("grant chaptarr: %v", err)

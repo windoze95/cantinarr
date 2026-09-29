@@ -1,6 +1,7 @@
 package radarr
 
 import (
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -411,5 +412,23 @@ func TestDetailedQueueFileStateRequiresExactMovieIdentity(t *testing.T) {
 	item.Movie.MovieFileID = nil
 	if got := item.FileIDAtSnapshot(); got != nil {
 		t.Fatalf("omitted movieFileId produced file ID %v", *got)
+	}
+}
+
+func TestRescanMovieScopesProviderCommand(t *testing.T) {
+	var got map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v3/command" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	t.Cleanup(server.Close)
+	if err := NewClient(server.URL, "test-key").RescanMovie(7); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got["name"] != "RescanMovie" || got["movieId"] != float64(7) {
+		t.Fatalf("scoped rescan = %#v", got)
 	}
 }

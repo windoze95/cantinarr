@@ -130,9 +130,30 @@ class ChaptarrAuthor {
   final List<ChaptarrImage> images;
   final List<String> genres;
 
+  final String? sortName;
+  final String? sortNameLastFirst;
+  final String? authorNameLastFirst;
+  final DateTime? added;
+  final DateTime? nextBookRelease;
+  final DateTime? lastBookRelease;
+  final int? audiobookQualityProfileId;
+  final int? ebookQualityProfileId;
+  final int? audiobookMetadataProfileId;
+  final int? ebookMetadataProfileId;
+
   const ChaptarrAuthor({
     required this.id,
     required this.authorName,
+    this.sortName,
+    this.sortNameLastFirst,
+    this.authorNameLastFirst,
+    this.added,
+    this.nextBookRelease,
+    this.lastBookRelease,
+    this.audiobookQualityProfileId,
+    this.ebookQualityProfileId,
+    this.audiobookMetadataProfileId,
+    this.ebookMetadataProfileId,
     this.foreignAuthorId,
     this.titleSlug,
     this.overview,
@@ -148,6 +169,22 @@ class ChaptarrAuthor {
 
   factory ChaptarrAuthor.fromJson(Map<String, dynamic> json) => ChaptarrAuthor(
         id: json['id'] as int? ?? 0,
+        sortName: json['sortName'] as String?,
+        sortNameLastFirst: json['sortNameLastFirst'] as String?,
+        authorNameLastFirst: json['authorNameLastFirst'] as String?,
+        added: DateTime.tryParse(json['added'] as String? ?? ''),
+        nextBookRelease: DateTime.tryParse(
+            (json['nextBook'] as Map<String, dynamic>?)?['releaseDate'] as String? ?? ''),
+        lastBookRelease: DateTime.tryParse(
+            (json['lastBook'] as Map<String, dynamic>?)?['releaseDate'] as String? ?? ''),
+        audiobookQualityProfileId: (json.containsKey('audiobookQualityProfileId')
+            ? json['audiobookQualityProfileId'] : json['qualityProfileId']) as int?,
+        ebookQualityProfileId: (json.containsKey('ebookQualityProfileId')
+            ? json['ebookQualityProfileId'] : json['qualityProfileId']) as int?,
+        audiobookMetadataProfileId: (json.containsKey('audiobookMetadataProfileId')
+            ? json['audiobookMetadataProfileId'] : json['metadataProfileId']) as int?,
+        ebookMetadataProfileId: (json.containsKey('ebookMetadataProfileId')
+            ? json['ebookMetadataProfileId'] : json['metadataProfileId']) as int?,
         authorName: json['authorName'] as String? ?? 'Unknown Author',
         foreignAuthorId: json['foreignAuthorId'] as String?,
         titleSlug: json['titleSlug'] as String?,

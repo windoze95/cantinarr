@@ -27,7 +27,7 @@ Plex, Jellyfin, Emby, and Audiobookshelf have their own accounts and library res
 
 ## Books and music
 
-Requesters need an explicit Chaptarr or Lidarr grant or pin. There is no global default that makes these catalogs available to every requester. For a kids account, this is a deliberate grant without movie-style age ratings.
+Requesters need an explicit Chaptarr or Lidarr assignment, just as they do for Radarr and Sonarr. Global defaults and personal preferences choose among assigned instances and never grant access. For a kids account, this is a deliberate grant without movie-style age ratings.
 
 ## Included AI
 

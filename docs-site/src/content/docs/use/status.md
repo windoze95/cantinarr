@@ -37,6 +37,21 @@ Availability comes from the live library manager. Plex, Jellyfin, Emby, or Audio
 
 An available file can have an incorrect episode, audio track, or copy. Report that from the title. The empty download queue is normal after import and does not prove the file is correct.
 
+## 4K on covers
+
+An administrator can turn on **Settings > Discover > Show 4K badges** to mark titles your library holds in 4K. It applies to everyone on the server and starts off. Posters then carry a small **4K** tag in the bottom-right corner, and search results show a **4K** chip beside the status. Screen readers hear "Available in 4K".
+
+| Title | Shows 4K when |
+| --- | --- |
+| Movie | Radarr measured the movie's file at 4K |
+| Show | Every aired episode is in the library and Sonarr measured every one of those files at 4K |
+
+A show with some seasons or episodes in 4K and others in HD shows no tag. So does a show that is still missing episodes, even if every file it has is 4K.
+
+The tag describes the same library as the status beside it, your default library. If you also have access to a separate 4K library, open the title and use its library chips.
+
+Cantinarr reads the picture size Radarr and Sonarr measured from the file. The file's quality name is not enough, because with file analysis switched off the arr takes it from the release name. A 4K title with no tag usually means the arr has not analyzed that file. An administrator can open the arr's **Settings > Media Management** with **Show Advanced** on, and check that **Analyze video files** (Radarr) or **Analyse video files** (Sonarr) is enabled. Then run **Refresh & Scan** on the title in the arr.
+
 ## Libraries and formats have their own state
 
 A title available in one Radarr instance may be missing from another. A book's ebook can be available while the audiobook is still requested. Changing the selected library or format changes the question Cantinarr is answering.

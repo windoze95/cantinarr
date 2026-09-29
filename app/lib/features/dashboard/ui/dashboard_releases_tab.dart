@@ -1,13 +1,13 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import '../../../core/network/app_image_cache.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/day_sections.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../discover/logic/discovery_access.dart';
 import '../../lidarr/data/lidarr_api_service.dart';
 import '../../radarr/data/radarr_api_service.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
@@ -59,13 +59,11 @@ class _DashboardReleasesTabState extends ConsumerState<DashboardReleasesTab> {
   Future<void> _load() async {
     final token = ++_loadToken;
     final conn = ref.read(authProvider).valueOrNull?.connection;
-    final radarr = conn?.defaultRadarrInstance;
-    final sonarr = conn?.defaultSonarrInstance;
-    // Lidarr is grant-only: services.lidarr is the grant bit, and the
-    // connection's instance list already contains only what this user may
-    // read, so the effective instance is theirs, never a sibling library's.
-    final lidarr =
-        (conn?.services.lidarr ?? false) ? conn?.defaultLidarrInstance : null;
+    final access = ref.read(discoveryAccessProvider);
+    final radarr =
+        access.isVisible('movie') ? conn?.defaultRadarrInstance : null;
+    final sonarr = access.isVisible('tv') ? conn?.defaultSonarrInstance : null;
+    final lidarr = access.showMusic ? conn?.defaultLidarrInstance : null;
 
     if (radarr == null && sonarr == null && lidarr == null) {
       if (mounted && token == _loadToken) {
@@ -168,11 +166,19 @@ class _DashboardReleasesTabState extends ConsumerState<DashboardReleasesTab> {
       },
     );
 
+    ref.listen<String>(catalogDiscoveryScopeProvider, (prev, next) {
+      if (prev != next) {
+        _events = [];
+        _load();
+      }
+    });
+
     final conn = ref.watch(authProvider).valueOrNull?.connection;
-    final hasInstances = conn?.defaultRadarrInstance != null ||
-        conn?.defaultSonarrInstance != null ||
-        ((conn?.services.lidarr ?? false) &&
-            conn?.defaultLidarrInstance != null);
+    final access = ref.watch(discoveryAccessProvider);
+    final hasInstances =
+        (access.isVisible('movie') && conn?.defaultRadarrInstance != null) ||
+            (access.isVisible('tv') && conn?.defaultSonarrInstance != null) ||
+            (access.showMusic && conn?.defaultLidarrInstance != null);
 
     if (_isLoading) {
       return const Center(
@@ -487,33 +493,17 @@ class _ReleaseTile extends StatelessWidget {
   }
 
   Widget _poster(bool isTv, bool isMusic) {
-    final placeholder = Container(
-      color: AppTheme.surfaceVariant,
-      child: Center(
-        child: Icon(
-          isMusic
-              ? Icons.album_outlined
-              : (isTv ? Icons.tv : Icons.movie_outlined),
-          color: AppTheme.textSecondary,
-          size: 20,
-        ),
-      ),
-    );
-
     return ClipRRect(
       borderRadius: BorderRadius.circular(6),
       child: SizedBox(
         width: 44,
         height: 66,
-        child: event.posterUrl != null
-            ? CachedNetworkImage(
-                imageUrl: event.posterUrl!,
-                fit: BoxFit.cover,
-                cacheManager: appImageCache,
-                placeholder: (_, __) => placeholder,
-                errorWidget: (_, __, ___) => placeholder,
-              )
-            : placeholder,
+        child: CachedImage(
+          url: event.posterUrl,
+          icon: isMusic
+              ? Icons.album_outlined
+              : (isTv ? Icons.tv : Icons.movie_outlined),
+        ),
       ),
     );
   }

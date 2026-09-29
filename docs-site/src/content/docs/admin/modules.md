@@ -7,13 +7,61 @@ sidebar:
 
 Cantinarr's navigation follows the configured services, account permissions, and a few explicit visibility choices. Hiding a shortcut does not remove the underlying data or revoke access.
 
-## Unconfigured discovery tabs
+## Discovery pages and initial setup
 
-Administrators can browse supported catalogs before setting up their service. An unconfigured tab offers **Set up** and **Hide this tab**. Setup returns to the same catalog or title.
+Movies, TV Shows, Books, and Music appear when your account has an assignment to Radarr, Sonarr, Chaptarr, or Lidarr. This applies to administrators too. Admin instance pickers still show every configured instance for management. Use an instance's **Manage users** screen or **Settings > Users** to change personal assignments.
 
-Change these choices under **Settings > Modules > Discover > Discover tabs**. Hiding an unconfigured tab affects the server's users. Connecting its service restores the tab automatically, even when the service is currently offline. Removing that service makes the saved hide preference relevant again.
+On a new installation, administrators see all discovery options before any instance is configured. Unconfigured tabs offer **Set up** and **Hide this tab**. You can also change these choices under **Settings > Modules > Discover > Discover tabs**. After the first instance is added, discovery follows personal assignments. Removing the last assignment or deleting every instance does not restart initial setup.
 
-Releases hides only when Movies, TV Shows, and Music are all hidden. An empty release schedule alone does not hide it.
+An assigned instance keeps its page visible even when the service is offline. Removing its last assignment hides the page for that account. With no assignments, administrators see **Manage users** in Discover to restore access.
+
+Releases includes only visible Movies, TV Shows, and Music services. It hides when none of those pages is visible; Books alone does not keep it open. An empty release schedule alone does not hide it.
+
+## Library views
+
+Open the **Library** tab in Radarr, Sonarr, Chaptarr, or Lidarr, then choose **List** or **Grid** beside the library filter controls. On narrow screens, one icon button switches to the other view; its label names the view it will open.
+
+On phones, scrolling down fades and collapses the library title and counts to make room for more items. The filter field, filter menu, sort button, and view switch stay visible. Scroll up to bring the title and counts back.
+
+Grid displays movie and series posters, author covers, or artist artwork. Phones show three columns; wider screens fit more. Titles use one line, and status badges and progress bars stay in List. Select an item to open its details. The visible item actions work with a pointer or keyboard in either view.
+
+Switching views keeps the same items in view along with your current search, status filter, and results. Each module remembers its own choice on this device, including after an app restart. The choice applies to all configured instances of that module. List is the initial default.
+
+If artwork cannot load, the item keeps its name and a placeholder icon. If the library cannot load, use **Retry** in the error message. An empty result after a successful load means no items matched; clear the search or change the status filter to broaden it.
+
+### Sort a library
+
+Select **Sort**, between the filter menu and the List / Grid control. Choose a field to sort ascending: A to Z, smallest first, or oldest first. Select the same field again to reverse the order. The active field is highlighted and shows an up or down arrow. Scroll the menu to reach all options. Opening, scrolling, or dismissing the menu keeps the page position and search bar visibility unchanged.
+
+Each module remembers its sort field and direction on this device, including after an app restart. The choice applies to all configured instances of that module. The initial order is **Alphabetical**, or **First Name** for Chaptarr, ascending. A new field always starts ascending.
+
+| Library | Sort options |
+| --- | --- |
+| Radarr | Alphabetical, Certification, Date Added, Digital Release, IMDb Rating, In Cinemas, Minimum Availability, Monitored Status, Original Language, Original Title, Path, Physical Release, Popularity, Quality Profile, Release Date, Rotten Tomatoes Rating, Runtime, Size, Studio, Tags, TMDB Rating, Trakt Rating, Year |
+| Sonarr | Alphabetical, Date Added, Episode Completion, Episode Count, Latest Season, Monitored Status, Network, Next Airing, Original Language, Path, Previous Airing, Quality Profile, Rating, Seasons, Size, Tags, Type |
+| Chaptarr | First Name, Audiobook Metadata Profile, Audiobook Quality Profile, Book Completion, Books, Date Added, eBook Metadata Profile, eBook Quality Profile, Last Book, Last Name, Next Book, Path, Size, Status |
+| Lidarr | Alphabetical, Albums, Date Added, Last Album, Metadata Profile, Monitored Status, Next Album, Path, Quality Profile, Size, Tags, Track Completion, Track Count, Type |
+
+Sorting changes the order in both List and Grid and returns to the top of the results. It keeps the current search and status filter. Switching layouts retains the sort order.
+
+Profile and tag sorts use names. Chaptarr's audiobook and eBook profile options are separate. Completion compares the share of obtainable items already held; Episode Count and Track Count compare the total the service knows about. Book Completion counts available books, so an audiobook split into many files does not inflate it. Latest Season compares the highest season number, excluding Specials.
+
+Missing values stay last in both directions. Equal values sort by name, then by the service's record ID, so separate records remain visible. First Name uses the author's supplied name order; Last Name uses Chaptarr's supplied last-name-first value. Authors without that value stay last.
+
+If profile names or tags cannot load, the library remains available. Selecting a sort that needs those labels shows a message explaining the temporary alphabetical order. Select **Retry** to reload the labels, or choose another sort. Refresh the library to pick up profile or tag changes made in the service.
+
+### Library actions
+
+As an administrator, open an item's three-dot menu in List or Grid, or long-press the item. The same actions are available from its detail page:
+
+- **Automatic search** asks the service to find downloads for that movie or the monitored items in the selected series, author, or artist.
+- **Interactive search** lets you choose a release. Sonarr first asks for a season, Chaptarr for a book and format, and Lidarr for an album.
+- **Edit** opens the item's settings. Author and artist editors include quality and metadata profiles and tags. Chaptarr keeps eBook and audiobook settings separate; only compatible profiles appear.
+- **Monitor / Unmonitor** pauses or resumes the movie, series, or artist without changing individual season, episode, or album selections. Chaptarr's **Manage monitoring** opens separate eBook and audiobook controls, including monitoring for newly added titles. Older Chaptarr versions that do not expose those controls say to manage monitoring in Chaptarr.
+- **Refresh metadata** queues a provider refresh. The provider may also scan files according to its settings. **Rescan files** queues a scan scoped to this item's files.
+- **Remove…** asks for confirmation. Files stay on disk unless you select **Also delete files from disk**.
+
+A queued search, refresh, or scan is not a completion message. Refresh the library after the provider finishes. If an action fails, the message identifies the failure; check that the selected instance is reachable before trying again.
 
 ## Setup checklist
 
@@ -24,6 +72,10 @@ Skipping does not configure the feature, grant a user access, or change Discover
 ## Needs attention
 
 Administrators can keep Approvals, Issues, Agent fixes, and Profile approvals pinned, or show them only when relevant work exists. These preferences are local to the device.
+
+On desktop, choosing a queue keeps **Needs attention** expanded. Select **Needs attention** again to collapse it. On mobile, the group resets when the navigation drawer closes.
+
+The displayed entry is highlighted in the menu. **Issues** stays highlighted in issue threads, and **Agent fixes** stays highlighted on run details. The highlight follows the current page when using Back or opening a direct link.
 
 The group's badge reflects its actionable entries. Quietly observed issues can remain accessible without increasing the actionable count. Settings always offers a way to reopen a hidden queue.
 

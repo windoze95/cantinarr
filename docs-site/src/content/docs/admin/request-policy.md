@@ -13,6 +13,20 @@ You can require approval for new requests globally or per user. Pending approval
 
 Review the exact title, target library, seasons or book formats, and selected quality before approving. A delivery outage is separate from approval. Approved requests can wait for service recovery without re-entering the approval queue.
 
+## Request history
+
+Open **Approvals > History** to see saved requests from everyone on the server, including requests accepted without manual approval. If Approvals is hidden in the navigation menu, open **Settings > Approvals**, then choose **History**.
+
+Search by title or filter by requester, media type, and decision. The list starts with the newest saved request; **Load older requests** reads the next page. Shared book requests also appear when filtering by a subscriber.
+
+Select a row to see the target library, requested seasons or book formats, recorded reviewer and decision date, and any denial reason. Older or automatic requests can have no reviewer or decision date recorded. A missing value is shown explicitly.
+
+An approval records a decision, not proof that a file is available now. Choose **View title** to check current availability in the requested library. Historical books or albums without a usable identity or library have no title link. Removed files do not erase decisions, but this screen cannot recover request records already deleted from the server.
+
+If history cannot load, use **Retry**. A refresh failure keeps the last successful results visible with a warning. An older server without this endpoint prompts you to update it.
+
+For Radarr, Sonarr, Chaptarr, and Lidarr libraries with requester tagging enabled when a request was submitted, each row also shows tagging status. Open the row to inspect a failure or use **Retry tag**. This retries only the tag and preserves the request's decision and delivery. Refresh History to check completion. **Tag applied** is a saved receipt, not a live check of tags in the library. Shared book requests show each requester and format separately. Sonarr tags the series, Lidarr tags the artist, and Chaptarr tags the author for the requested format, so those tags also cover other content under that parent. Enable **Tag requests with requester** in the instance editor; existing tags remain and old requests are not backfilled.
+
 ## Season and quality choices
 
 Choose whether users may select TV seasons and quality profiles. If choice is disabled, the configured defaults apply. Quality profiles come from the relevant library manager; their names and behavior are not universal between instances.
@@ -45,6 +59,6 @@ Cancelling a saved request does not mean an imported file was removed. Deleting 
 
 ## Review notifications and navigation
 
-Phone categories can notify administrators about requests needing review. Discord can post those requests to one configured channel. Automatically approved request alerts are a separate option.
+Phone categories can notify administrators about requests needing review. Discord can post selected request events to a channel or thread, including decisions and availability. Automatically approved request alerts are a separate option. Users can opt in to personal mentions.
 
 The **Needs attention** navigation group can hide an empty queue. Open it from Settings when needed, or change its device-local visibility choice. A hidden navigation entry does not disable approvals.

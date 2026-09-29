@@ -34,6 +34,7 @@ class SeasonTable extends StatefulWidget {
   /// Called after a season request is accepted, so the caller can nudge
   /// stale-by-design surfaces (the shell's search-chip snapshot).
   final VoidCallback? onRequested;
+  final Future<bool> Function()? confirmDestination;
 
   /// Exact episode files currently present in Sonarr, grouped per season.
   /// A season with multiple files opens a picker so one browser gesture starts
@@ -49,6 +50,7 @@ class SeasonTable extends StatefulWidget {
     this.tvdbId,
     this.canRequest = true,
     this.onRequested,
+    this.confirmDestination,
     this.downloadInstanceId,
     this.downloadChoicesBySeason =
         const <int, List<MediaDownloadChoice>>{},
@@ -62,6 +64,7 @@ class _SeasonTableState extends State<SeasonTable> {
   /// Only actionable seasons belong to the selection, never accepted work.
   final Set<int> _selected = {};
   bool _submitting = false;
+  bool _confirming = false;
   String? _selectionInstanceId;
 
   @override
@@ -185,9 +188,18 @@ class _SeasonTableState extends State<SeasonTable> {
     if (_selected.isEmpty) return;
     final seasons = _selected.toList()..sort();
     final notifier = widget.notifier;
-    final instanceId = notifier.instanceId;
-    setState(() => _submitting = true);
+    setState(() {
+      _submitting = true;
+      _confirming = widget.confirmDestination != null;
+    });
     try {
+      if (widget.confirmDestination != null && !await widget.confirmDestination!()) return;
+      if (!mounted || notifier != widget.notifier) return;
+      setState(() => _confirming = false);
+      // The destination's refreshed status may cover or block these seasons.
+      seasons.retainWhere(_canRequestSeason);
+      if (seasons.isEmpty || !notifier.state.hasStatus) return;
+      final instanceId = notifier.instanceId;
       final accepted = await notifier.request(
         title: widget.title,
         tvdbId: widget.tvdbId,
@@ -209,7 +221,12 @@ class _SeasonTableState extends State<SeasonTable> {
       widget.onRequested?.call();
       setState(() => _selected.clear());
     } finally {
-      if (mounted) setState(() => _submitting = false);
+      if (mounted) {
+        setState(() {
+          _submitting = false;
+          _confirming = false;
+        });
+      }
     }
   }
 
@@ -273,7 +290,7 @@ class _SeasonTableState extends State<SeasonTable> {
                     onPressed: (_selected.isEmpty || _busy)
                         ? null
                         : _submit,
-                    icon: _busy
+                    icon: _busy && !_confirming
                         ? const SizedBox(
                             width: 16,
                             height: 16,

@@ -1,14 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/storage/library_sort_preferences.dart';
+import '../../../core/widgets/library_sort_menu.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../core/network/library_settings_service.dart';
+import '../../../core/widgets/library_actions.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/storage/library_view_preferences.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/library_command_header.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../data/lidarr_api_service.dart';
 import '../data/lidarr_models.dart';
+import '../data/lidarr_image.dart';
 import '../logic/lidarr_library_provider.dart';
+import 'artist_actions.dart';
 import 'lidarr_artist_list.dart';
 import 'lidarr_artist_screen.dart';
 
@@ -28,6 +35,10 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
   @override
   void initState() {
     super.initState();
+    // Listen before the first frame so preference restoration cannot race the
+    // instance notifier's creation. Its initial selection is also read below.
+    ref.listenManual(librarySortProvider('lidarr'), (_, selection) =>
+        _notifier?.sorting.setSelection(selection));
     WidgetsBinding.instance.addPostFrameCallback((_) => _initNotifier());
   }
 
@@ -41,34 +52,43 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
       backendDio: backendDio,
       instanceId: activeInstance.id,
     );
+    _notifier?.dispose();
     _notifier = LidarrLibraryNotifier(service);
+    _notifier!.sorting.setSelection(ref.read(librarySortProvider('lidarr')));
     _notifier!.loadArtists();
     setState(() {});
   }
 
   @override
   void dispose() {
+    _notifier?.dispose();
     _searchController.dispose();
     super.dispose();
   }
 
-  Future<void> _triggerAutomaticSearch(LidarrArtist artist) async {
-    try {
-      await _notifier!.searchForArtist(artist.id);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Artist search started')));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to start search: $e')));
-    }
-  }
-
-  void _openArtist(LidarrArtist artist) {
+  void _showActions(LidarrArtist artist, LibraryAction action) {
     final instanceId = ref.read(instanceProvider).activeLidarrInstance?.id;
     if (instanceId == null) return;
-    Navigator.of(context, rootNavigator: true).push(
+    final notifier = _notifier;
+    final dio = ref.read(backendClientProvider);
+    void reload() {
+      if (mounted && identical(_notifier, notifier)) {
+        notifier?.loadArtists();
+      }
+    }
+    showArtistActions(context,
+      service: LidarrApiService(backendDio: dio, instanceId: instanceId),
+      settings: LibrarySettingsService(dio: dio, instanceId: instanceId,
+        kind: LibrarySettingsKind.artist, id: artist.id),
+      instanceId: instanceId, artist: artist, selectedAction: action,
+      onChanged: reload, onRemoved: reload);
+  }
+
+  Future<void> _openArtist(LidarrArtist artist) async {
+    final instanceId = ref.read(instanceProvider).activeLidarrInstance?.id;
+    if (instanceId == null) return;
+    final notifier = _notifier;
+    await Navigator.of(context, rootNavigator: true).push(
       AmbientPageRoute(
         builder: (_) => LidarrArtistScreen(
           instanceId: instanceId,
@@ -77,6 +97,7 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
         ),
       ),
     );
+    if (mounted && identical(_notifier, notifier)) notifier?.loadArtists();
   }
 
   @override
@@ -90,6 +111,10 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
           child: CircularProgressIndicator(color: AppTheme.accent));
     }
 
+    final sort = ref.watch(librarySortProvider('lidarr'));
+    final viewMode = ref.watch(libraryViewModeProvider('lidarr'));
+    final instanceId = ref.watch(instanceProvider).activeLidarrInstance?.id;
+
     return ListenableBuilder(
       listenable: _notifier!,
       builder: (context, _) {
@@ -97,9 +122,15 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
         final instanceName =
             ref.watch(instanceProvider).activeLidarrInstance?.name ?? 'Lidarr';
 
-        return Column(
-          children: [
-            LibraryCommandHeader(
+        return LibraryCommandLayout(
+          key: ValueKey('lidarr-$instanceId'),
+          headerBuilder: (collapsed) => LibraryCommandHeader(
+              collapsed: collapsed,
+              sort: LibrarySortMenu(module: 'lidarr', selection: sort,
+                onSelected: (field) => ref.read(librarySortProvider('lidarr').notifier).select(field)),
+              viewMode: viewMode,
+              onViewModeChanged: (value) => ref
+                  .read(libraryViewModeProvider('lidarr').notifier).set(value),
               title: 'Artist library',
               subtitle: '$instanceName  /  Lidarr',
               stats: [
@@ -148,6 +179,10 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
                     .toList(),
               ),
             ),
+          children: [
+            if (_notifier!.sorting.notice != null)
+              ErrorBanner(message: _notifier!.sorting.notice!, maxLines: null,
+                onRetry: _notifier!.sorting.canRetry ? _notifier!.sorting.refresh : null),
             if (state.error != null)
               ErrorBanner(
                 message: state.error!,
@@ -157,15 +192,22 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
               child: state.isLoading && state.artists.isEmpty
                   ? const Center(
                       child: CircularProgressIndicator(color: AppTheme.accent))
-                  : RefreshIndicator(
-                      onRefresh: _notifier!.loadArtists,
-                      color: AppTheme.accent,
-                      child: LidarrArtistList(
-                        artists: state.filtered,
-                        onTap: _openArtist,
-                        onSearch: _triggerAutomaticSearch,
-                      ),
-                    ),
+                  : state.error != null && state.artists.isEmpty
+                      ? const SizedBox.shrink()
+                      : RefreshIndicator(
+                          onRefresh: _notifier!.loadArtists,
+                          color: AppTheme.accent,
+                          child: LidarrArtistList(
+                            viewMode: viewMode,
+                            scrollKey: 'lidarr-$instanceId-${_notifier!.sorting.effectiveSelection.key}',
+                            imageSourceFor: (item) => instanceId == null
+                                ? null
+                                : lidarrImageSource(ref, item.portraitUrl, instanceId),
+                            artists: state.filtered,
+                            onTap: _openArtist,
+                            onAction: _showActions,
+                          ),
+                        ),
             ),
           ],
         );

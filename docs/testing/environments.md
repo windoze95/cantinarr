@@ -20,8 +20,8 @@ keys, and the Plex account link (a Plex instance) are all entered through the ad
 runtime and stored AES-256-GCM encrypted in the SQLite database
 (`service_instances` rows and the settings KV). Environment variables only
 tune boot and deployment (port, public URL, push gateway, passkey
-origins); the full table lives in the root
-[README](../../README.md#configuration), and none are required to boot —
+origins); the full table lives in the
+[configuration reference](../configuration.md#environment-variables), and none are required to boot —
 the JWT secret and encryption key auto-generate on first start.
 
 ## Self-hostable with no account

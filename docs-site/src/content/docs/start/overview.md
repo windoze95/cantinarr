@@ -9,6 +9,8 @@ Cantinarr gives your household one place to discover movies, shows, books, and m
 
 You run the Cantinarr server yourself. The web app comes with it. The iPhone and Android apps connect to that same server.
 
+With an optional AI provider, Cantinarr's AI agent can find media, make requests, and help administrators manage and troubleshoot connected services. Open [AI Assistant](/use/assistant/) to use it through chat. Available actions follow your service access, permissions, and enabled tools. The [remediation agent](/admin/remediation/) investigates persistent download problems under the administrator's repair approval rules.
+
 ## The parts of your setup
 
 | Part | What it does | Examples |

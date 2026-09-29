@@ -91,6 +91,9 @@ func (s *Service) createMovieRequest(r *resolvedRequest, approval bool) (*Create
 		if _, err = tx.Exec(`INSERT INTO request_dispatch(request_id,format,state,code) VALUES (?,'',?,?)`, id, state, code); err != nil {
 			return nil, err
 		}
+		if err = captureRequesterTag(tx, id); err != nil {
+			return nil, err
+		}
 	} else {
 		// Revisited legacy approvals retain their gate and pinned destination.
 		if _, err = tx.Exec(`UPDATE request_log SET instance_id=COALESCE(instance_id,?) WHERE id=?`, sqlNullStr(r.instanceID), id); err != nil {
@@ -124,11 +127,7 @@ func (s *Service) createMovieRequest(r *resolvedRequest, approval bool) (*Create
 
 func (s *Service) dispatchMovie(ctx context.Context, id int64, token string, r *resolvedRequest) {
 	r.beforeMutation = func() error {
-		actor := r.userID
-		if r.actorID != 0 && s.userIsAdmin(r.actorID) {
-			actor = r.actorID
-		}
-		if _, _, err := s.resolveRadarr(actor, r.instanceID); err != nil {
+		if _, _, err := s.resolveRadarr(r.userID, r.instanceID); err != nil {
 			return err
 		}
 		if err := s.checkContentPolicy(r.userID, s.userIsAdmin(r.userID), "movie", r.tmdbID); err != nil {

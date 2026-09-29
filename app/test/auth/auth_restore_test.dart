@@ -120,6 +120,82 @@ void main() {
   });
 
   test(
+      'initial setup survives offline restore and ends permanently on config refresh',
+      () async {
+    final storage = snapshotStorage();
+    final snapshot = jsonDecode(storage[StorageKeys.sessionConnection]!)
+        as Map<String, dynamic>;
+    snapshot['initial_instance_setup'] = true;
+    snapshot['instance_assignments'] = true;
+    storage[StorageKeys.sessionConnection] = jsonEncode(snapshot);
+    final fake = _FakeAuthService(
+        refreshResult: freshResp,
+        config: const ServerConfig(
+          serverName: 'Home', services: AvailableServices(),
+          instanceAssignments: true,
+          // The last instance has been removed; this is no longer first setup.
+          initialInstanceSetup: false,
+        ));
+    final container = makeContainer(storage, fake);
+    final optimistic = await container.read(authProvider.future);
+    expect(optimistic.connection!.initialInstanceSetup, isTrue);
+    expect(optimistic.connection!.instanceAssignments, isTrue);
+    await _pumpUntil(
+        () => !container.read(authProvider).valueOrNull!.isReconnecting);
+    expect(
+        container
+            .read(authProvider)
+            .requireValue
+            .connection!
+            .initialInstanceSetup,
+        isFalse);
+    expect(
+        jsonDecode(
+            storage[StorageKeys.sessionConnection]!)['initial_instance_setup'],
+        isFalse);
+    await container.read(authProvider.notifier).refreshConfig();
+    expect(
+        container
+            .read(authProvider)
+            .requireValue
+            .connection!
+            .initialInstanceSetup,
+        isFalse);
+    expect(ServerConfig.fromJson({}).initialInstanceSetup, isFalse);
+    expect(
+        ServerConfig.fromJson({'initial_instance_setup': true})
+            .initialInstanceSetup,
+        isTrue);
+  });
+
+  test('4K badges follow the server through restore, refresh and persistence',
+      () async {
+    final storage = snapshotStorage();
+    final snapshot = jsonDecode(storage[StorageKeys.sessionConnection]!)
+        as Map<String, dynamic>;
+    snapshot['cover_4k_badges'] = true;
+    storage[StorageKeys.sessionConnection] = jsonEncode(snapshot);
+    // An admin has since turned them off.
+    final fake = _FakeAuthService(refreshResult: freshResp, config: config);
+    final container = makeContainer(storage, fake);
+    final optimistic = await container.read(authProvider.future);
+    expect(optimistic.connection!.cover4KBadges, isTrue);
+    await _pumpUntil(
+        () => !container.read(authProvider).valueOrNull!.isReconnecting);
+    expect(container.read(authProvider).requireValue.connection!.cover4KBadges,
+        isFalse);
+    expect(jsonDecode(storage[StorageKeys.sessionConnection]!)['cover_4k_badges'],
+        isFalse);
+    fake.config = const ServerConfig(
+        serverName: 'Home', services: AvailableServices(), cover4KBadges: true);
+    await container.read(authProvider.notifier).refreshConfig();
+    expect(container.read(authProvider).requireValue.connection!.cover4KBadges,
+        isTrue);
+    expect(jsonDecode(storage[StorageKeys.sessionConnection]!)['cover_4k_badges'],
+        isTrue);
+  });
+
+  test(
       'configuration refreshes defer during setup, including an in-flight read',
       () async {
     final fake = _FakeAuthService(refreshResult: freshResp, config: config);

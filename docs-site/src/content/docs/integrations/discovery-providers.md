@@ -15,6 +15,8 @@ Trakt can provide a trending source and assist TV identity bridging. Configure i
 
 **Only show English-language titles** affects movie and TV discovery and recommendation rows. It starts on. Ordinary search still finds titles in other languages, subject to account content policy.
 
+**Show 4K badges** marks movie and show covers whose library copy is 4K, for everyone on the server. It starts off. See [4K on covers](/use/status/#4k-on-covers) for how a title qualifies.
+
 Streaming-service filters depend on the selected region. Catalog streaming information is not proof of access to your self-hosted library or to a commercial subscription.
 
 ## Books and Hardcover

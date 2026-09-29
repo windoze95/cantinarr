@@ -28,7 +28,7 @@ Task guides live under `src/content/docs/`. The writing guide is [Maintain these
 
 | Source | Published material |
 | --- | --- |
-| Root README | Environment variable table |
+| `docs/configuration.md` | Environment variable table |
 | Server README | API groups and architecture contracts, including MCP tools |
 | App README | Screen behavior and navigation |
 | Settings search registry | Complete searchable-settings catalog |

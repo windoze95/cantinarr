@@ -1,150 +1,86 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/storage/library_view_preferences.dart';
+import '../../../core/widgets/library_collection.dart';
 import '../../../core/widgets/cached_image.dart';
+import '../../../core/widgets/library_actions.dart';
 import '../data/chaptarr_models.dart';
 
-/// List of Chaptarr authors with explicit row actions and progress indicators.
-/// Mirrors [SonarrSeriesList] adapted to the author-centric book library.
+/// Library tiles share their popup and long-press actions.
 class ChaptarrAuthorList extends StatelessWidget {
   final List<ChaptarrAuthor> authors;
   final void Function(ChaptarrAuthor) onTap;
-  final void Function(ChaptarrAuthor)? onSearch;
-  final void Function(ChaptarrAuthor, {bool deleteFiles})? onDelete;
+  final void Function(ChaptarrAuthor, LibraryAction)? onAction;
   final bool embedded;
+  final LibraryViewMode viewMode;
+  final String scrollKey;
+  final ImageSource? Function(ChaptarrAuthor)? imageSourceFor;
 
   const ChaptarrAuthorList({
     super.key,
     required this.authors,
     required this.onTap,
-    this.onSearch,
-    this.onDelete,
+    this.onAction,
     this.embedded = false,
+    this.viewMode = LibraryViewMode.list,
+    this.scrollKey = 'chaptarr-library',
+    this.imageSourceFor,
   });
 
   @override
-  Widget build(BuildContext context) {
-    if (authors.isEmpty) {
-      return const Center(
-        child: Text('No authors found',
-            style: TextStyle(color: AppTheme.textSecondary)),
+  Widget build(BuildContext context) => LibraryCollection(
+    viewMode: viewMode, scrollKey: scrollKey, embedded: embedded,
+    emptyMessage: 'No authors found', itemCount: authors.length,
+    itemBuilder: (context, index) {
+      final author = authors[index];
+      return _AuthorTile(
+        key: ValueKey(author.id), grid: viewMode == LibraryViewMode.grid,
+        author: author,
+        onTap: () => onTap(author),
+        onAction: onAction == null ? null : (action) => onAction!(author, action),
+        image: imageSourceFor == null
+            ? (url: author.coverUrl ?? '', headers: null) : imageSourceFor!(author),
       );
-    }
-
-    return ListView.separated(
-      shrinkWrap: embedded,
-      physics: embedded ? const NeverScrollableScrollPhysics() : null,
-      itemCount: authors.length,
-      separatorBuilder: (_, __) =>
-          const Divider(color: AppTheme.border, height: 1),
-      itemBuilder: (context, index) {
-        final author = authors[index];
-        return _AuthorTile(
-          author: author,
-          onTap: () => onTap(author),
-          onSearch: onSearch != null ? () => onSearch!(author) : null,
-          onDelete: onDelete == null
-              ? null
-              : () async {
-                  final deleteFiles =
-                      await _confirmDelete(context, author.authorName);
-                  if (deleteFiles == null) return;
-                  onDelete!(author, deleteFiles: deleteFiles);
-                },
-        );
-      },
-    );
-  }
-
-  /// Delete confirmation with an opt-in "also delete files" choice.
-  /// Resolves to the delete-files flag, or null when cancelled.
-  Future<bool?> _confirmDelete(BuildContext context, String name) {
-    var deleteFiles = false;
-    return showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setState) => AlertDialog(
-          backgroundColor: AppTheme.surface,
-          title: const Text('Delete Author'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Remove "$name" from Chaptarr?'),
-              const SizedBox(height: 8),
-              CheckboxListTile(
-                value: deleteFiles,
-                onChanged: (v) => setState(() => deleteFiles = v ?? false),
-                title: const Text('Also delete files from disk',
-                    style: TextStyle(fontSize: 14)),
-                contentPadding: EdgeInsets.zero,
-                controlAffinity: ListTileControlAffinity.leading,
-                activeColor: AppTheme.error,
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel')),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, deleteFiles),
-              style: TextButton.styleFrom(foregroundColor: AppTheme.error),
-              child: const Text('Delete'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+    },
+  );
 }
 
 class _AuthorTile extends StatelessWidget {
+  final bool grid;
   final ChaptarrAuthor author;
   final VoidCallback onTap;
-  final VoidCallback? onSearch;
-  final VoidCallback? onDelete;
-
-  const _AuthorTile({
-    required this.author,
-    required this.onTap,
-    this.onSearch,
-    this.onDelete,
-  });
+  final ValueChanged<LibraryAction>? onAction;
+  final ImageSource? image;
+  const _AuthorTile({super.key, required this.grid, required this.author,
+    required this.onTap, this.onAction, this.image});
 
   @override
   Widget build(BuildContext context) {
     final stats = author.statistics;
     final percent = author.percentComplete;
 
-    return ListTile(
+    return LibraryItem(
+      grid: grid,
+      name: author.authorName,
       onTap: onTap,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      leading: ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        child: SizedBox(
-          width: 45,
-          height: 67,
-          child: CachedImage(
-            url: author.coverUrl,
-            fit: BoxFit.cover,
-            icon: Icons.person,
-          ),
-        ),
+      onLongPress: onAction == null ? null : () => showLibraryActionMenu(
+        context, title: author.authorName, actions: libraryActions('author'), onSelected: onAction!),
+      artwork: CachedImage(
+        url: image?.url,
+        headers: image?.headers,
+        fit: BoxFit.cover,
+        icon: Icons.person,
       ),
-      title: Text(
-        author.authorName,
-        style: const TextStyle(
-            color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: Column(
+      details: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SizedBox(height: 4),
-          Row(
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Container(
+              if (!grid) Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                 decoration: BoxDecoration(
                   color: _statusColor.withValues(alpha: 0.15),
@@ -160,7 +96,6 @@ class _AuthorTile extends StatelessWidget {
                 ),
               ),
               if (stats != null) ...[
-                const SizedBox(width: 6),
                 Text(
                   author.bookCountLabel,
                   style: const TextStyle(
@@ -169,7 +104,7 @@ class _AuthorTile extends StatelessWidget {
               ],
             ],
           ),
-          if (stats != null && stats.bookCount > 0) ...[
+          if (!grid && stats != null && stats.bookCount > 0) ...[
             const SizedBox(height: 6),
             ClipRRect(
               borderRadius: BorderRadius.circular(3),
@@ -183,50 +118,8 @@ class _AuthorTile extends StatelessWidget {
           ],
         ],
       ),
-      trailing: onSearch != null || onDelete != null
-          ? PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert, color: AppTheme.textSecondary),
-              color: AppTheme.surfaceVariant,
-              tooltip: 'Actions for ${author.authorName}',
-              onSelected: (value) {
-                switch (value) {
-                  case 'search':
-                    onSearch?.call();
-                  case 'remove':
-                    onDelete?.call();
-                }
-              },
-              itemBuilder: (_) => [
-                if (onSearch != null)
-                  const PopupMenuItem(
-                    value: 'search',
-                    child: Row(
-                      children: [
-                        Icon(Icons.search,
-                            size: 18, color: AppTheme.textSecondary),
-                        SizedBox(width: 10),
-                        Text('Find books automatically'),
-                      ],
-                    ),
-                  ),
-                if (onSearch != null && onDelete != null)
-                  const PopupMenuDivider(),
-                if (onDelete != null)
-                  const PopupMenuItem(
-                    value: 'remove',
-                    child: Row(
-                      children: [
-                        Icon(Icons.delete_outline,
-                            size: 18, color: AppTheme.error),
-                        SizedBox(width: 10),
-                        Text('Remove…',
-                            style: TextStyle(color: AppTheme.error)),
-                      ],
-                    ),
-                  ),
-              ],
-            )
-          : null,
+      actions: onAction == null ? null : LibraryActionMenu(
+        title: author.authorName, actions: libraryActions('author'), onSelected: onAction!),
     );
   }
 

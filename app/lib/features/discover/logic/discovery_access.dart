@@ -52,13 +52,32 @@ class DiscoveryAccess {
   const DiscoveryAccess(this.user, this.connection, this.instances);
 
   bool get isAdmin => user?.isAdmin ?? false;
-  bool isVisible(String mediaType) =>
-      !(connection?.hiddenDiscoverTabs?.contains(mediaType) ?? false) &&
-      switch (mediaType) {
-        'book' => isAdmin || (connection?.services.chaptarr ?? false),
-        'music' => isAdmin || (connection?.services.lidarr ?? false),
-        _ => true,
-      };
+  bool get initialSetup =>
+      isAdmin && (connection?.initialInstanceSetup ?? false);
+  bool get requiresAssignments =>
+      (connection?.instanceAssignments ?? false) && !initialSetup;
+
+  bool isVisible(String mediaType) {
+    if (connection?.hiddenDiscoverTabs?.contains(mediaType) ?? false) {
+      return false;
+    }
+    if (initialSetup) return true;
+    if (requiresAssignments) {
+      final serviceType = discoverCatalogs
+          .where((tab) => tab.mediaType == mediaType)
+          .firstOrNull
+          ?.serviceType;
+      return connection!.instances
+          .any((i) => i.serviceType == serviceType && i.assigned == true);
+    }
+    // Preserve older servers' navigation until they advertise assignments.
+    return switch (mediaType) {
+      'book' => isAdmin || (connection?.services.chaptarr ?? false),
+      'music' => isAdmin || (connection?.services.lidarr ?? false),
+      _ => true,
+    };
+  }
+
   bool get showBooks => isVisible('book');
   bool get showMusic => isVisible('music');
   bool get showReleases => isVisible('movie') || isVisible('tv') || showMusic;
@@ -109,11 +128,12 @@ class DiscoveryAccess {
 
   /// Catalog/status state must never survive a change of account or access.
   String get scope {
-    final ids =
-        connection?.instances.map((i) => '${i.serviceType}:${i.id}').toList() ??
-            <String>[];
+    final ids = connection?.instances
+            .map((i) => '${i.serviceType}:${i.id}:${i.assigned}')
+            .toList() ??
+        <String>[];
     ids.sort();
-    return '${connection?.serverUrl}|${user?.id}|${user?.role}|${user?.child}|${user?.permissions.join(',')}|${connection?.adminCatalogBrowsing}|${ids.join(',')}|${connection?.hiddenDiscoverTabs?.join(',')}';
+    return '${connection?.serverUrl}|${user?.id}|${user?.role}|${user?.child}|${user?.permissions.join(',')}|${connection?.adminCatalogBrowsing}|${connection?.instanceAssignments}|${connection?.initialInstanceSetup}|${ids.join(',')}|${connection?.hiddenDiscoverTabs?.join(',')}';
   }
 }
 

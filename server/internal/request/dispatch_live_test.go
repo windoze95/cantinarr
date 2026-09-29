@@ -85,6 +85,14 @@ func TestLiveDisposableCatalogDelivery(t *testing.T) {
 				t.Fatal(err)
 			}
 			uid, _ := result.LastInsertId()
+			if grants, x := store.ListUserGrants(uid); x != nil {
+				t.Fatal(x)
+			} else {
+				grants[serviceType] = append(grants[serviceType], inst.ID)
+				if x = store.SetUserGrants(uid, grants); x != nil {
+					t.Fatal(x)
+				}
+			}
 			if err = store.SetUserDefault(uid, serviceType, inst.ID); err != nil {
 				t.Fatal(err)
 			}

@@ -433,6 +433,10 @@ func reqCreateMusic(w http.ResponseWriter, u *DemoUser, body *reqCreateBody) {
 		writeErr(w, errStatus, errMsg)
 		return
 	}
+	if !userAssignedInstance(u, inst.ID) {
+		writeErr(w, http.StatusForbidden, "lidarr instance is not available to you")
+		return
+	}
 	pol := reqEffectivePolicy(u)
 	album, found := albumByForeignID(foreignID)
 	canonical, aliased := lidCanonicalForeignID(foreignID)

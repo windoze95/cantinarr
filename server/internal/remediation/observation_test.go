@@ -95,6 +95,9 @@ func setupObservationServiceWithState(t *testing.T, fileState *testFileState) (*
 			t.Fatal(err)
 		}
 	}
+	if err := store.SetUserGrants(reporterID, map[string][]string{"radarr": {"radarr-observe"}, "sonarr": {"sonarr-observe"}}); err != nil {
+		t.Fatal(err)
+	}
 	notifier := &fakeNotifier{}
 	return NewService(database, instance.NewRegistry(store), nil, notifier), notifier, reporterID
 }
