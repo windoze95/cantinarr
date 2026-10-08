@@ -1,6 +1,6 @@
 ---
 title: Web and phone apps
-description: Install the beta apps, connect to the right server, and switch between devices.
+description: Install the phone apps, connect to the right server, and switch between devices.
 sidebar:
   order: 6
 ---
@@ -13,9 +13,9 @@ If someone runs Cantinarr for you, ask them for a connection link or the Cantina
 | --- | --- |
 | Browser | Open your server's address; the web app is included |
 | iPhone or iPad | Join the [public TestFlight beta](https://testflight.apple.com/join/bCPDwCsD) |
-| Android | Join the [Google Play open beta](https://play.google.com/apps/testing/codes.julian.cantinarr) |
+| Android | Install the [Android app on Google Play](https://play.google.com/store/apps/details?id=codes.julian.cantinarr) |
 
-The phone apps are beta distribution channels. A new upload can take time to process and reach testers. See [updates](/install/updates/) for the difference between server and app versions.
+Android is available on Google Play without beta enrollment. iOS is in App Store review; the iPhone and iPad app remains available through TestFlight. A TestFlight upload can take time to process and reach testers. See [updates](/install/updates/) for the difference between server and app versions.
 
 ## Connect the phone app
 
