@@ -347,6 +347,15 @@ after the transition. Production releases remain a separate decision.
 
 Listing copy, graphics, and screenshots are code, managed with fastlane's layouts:
 
+Mobile build notes come from the exact source checkout selected for that upload. Update
+Android `changelogs/default.txt` and iOS `app/ios/fastlane/what_to_test.txt` when the build's
+user-visible behavior changes. The publishing workflow validates nonempty notes and store
+character limits before building the binary. Version headings come from the actual build,
+so keep handwritten version headings out of these source files. Play candidates carry
+readable notes through promotion to production; TestFlight adds the actual build number. Owner-only
+previews append their reviewed PR and commit identity after the meaningful notes. Production
+and public beta notes do not replace the changelog with internal channel metadata.
+
 - Play: `app/android/fastlane/metadata/android/en-US/` — `title.txt` (30 chars max),
   `short_description.txt` (80), `full_description.txt` (4000), `changelogs/default.txt`
   ("what's new", rides along with every AAB upload), `images/icon.png` (512×512),

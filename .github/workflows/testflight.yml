@@ -209,6 +209,20 @@ jobs:
           </plist>
           EOF
 
+      - name: Prepare this build's test notes
+        env:
+          BUILD_CHANNEL: ${{ needs.source.outputs.channel }}
+          PREVIEW_PR: ${{ inputs.preview_pr }}
+          BUILD_SHA: ${{ needs.source.outputs.sha }}
+          APP_VERSION: ${{ steps.build_number.outputs.version }}
+          APP_BUILD_NUMBER: ${{ steps.build_number.outputs.build_number }}
+        run: |
+          python3 ../.release-policy/scripts/mobile_release_notes.py \
+            --platform ios --source-root .. \
+            --version "$APP_VERSION" --build "$APP_BUILD_NUMBER" \
+            --channel "$BUILD_CHANNEL" --pr "$PREVIEW_PR" --sha "$BUILD_SHA" \
+            --output "$RUNNER_TEMP/testflight-notes.txt"
+
       - name: Build IPA
         run: |
           flutter build ipa --no-pub \
@@ -224,12 +238,12 @@ jobs:
         id: upload
         if: steps.publish.outputs.enabled == 'true'
         env:
-          BUILD_TEST_NOTES: ${{ format('{0} | PR {1} | commit {2}', needs.source.outputs.channel, inputs.preview_pr || 'merged', needs.source.outputs.sha) }}
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_API_KEY_B64: ${{ secrets.APP_STORE_CONNECT_API_KEY_B64 }}
         run: |
           cd ios
+          export BUILD_TEST_NOTES="$(cat "$RUNNER_TEMP/testflight-notes.txt")"
           fastlane beta
 
       - name: Record uploaded build identity
