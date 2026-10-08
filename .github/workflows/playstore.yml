@@ -203,6 +203,21 @@ jobs:
           storeFile=../upload-keystore.jks
           EOF
 
+      - name: Prepare this build's release notes
+        if: github.event_name != 'pull_request'
+        env:
+          BUILD_CHANNEL: ${{ needs.source.outputs.channel }}
+          PREVIEW_PR: ${{ inputs.preview_pr }}
+          BUILD_SHA: ${{ needs.source.outputs.sha }}
+          APP_VERSION: ${{ steps.build_number.outputs.version }}
+          APP_BUILD_NUMBER: ${{ steps.build_number.outputs.build_number }}
+        run: |
+          python3 ../.release-policy/scripts/mobile_release_notes.py \
+            --platform android --source-root .. \
+            --version "$APP_VERSION" --build "$APP_BUILD_NUMBER" \
+            --channel "$BUILD_CHANNEL" --pr "$PREVIEW_PR" --sha "$BUILD_SHA" \
+            --output "android/fastlane/metadata/android/en-US/changelogs/${APP_BUILD_NUMBER}.txt"
+
       - name: Build AAB
         run: |
           flutter build appbundle --no-pub \
@@ -228,14 +243,12 @@ jobs:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ github.event_name != 'pull_request' && secrets.PLAY_SERVICE_ACCOUNT_JSON || '' }}
           PLAY_TRACK: ${{ needs.source.outputs.channel == 'preview' && 'internal' || needs.source.outputs.channel == 'candidate' && 'both' || inputs.track || 'both' }}
           PLAY_OWNER_CANDIDATE: ${{ needs.source.outputs.channel == 'candidate' }}
-          BUILD_TEST_NOTES: ${{ format('{0} | PR {1} | commit {2}', needs.source.outputs.channel, inputs.preview_pr || 'merged', needs.source.outputs.sha) }}
           PLAY_VERSION_CODE: ${{ steps.build_number.outputs.build_number }}
           PLAY_RELEASE_STATUS: ${{ inputs.release_status || 'completed' }}
         run: |
           printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
           export PLAY_JSON_KEY_PATH="$RUNNER_TEMP/play-service-account.json"
           cd android
-          printf '%s\n' "$BUILD_TEST_NOTES" > "fastlane/metadata/android/en-US/changelogs/${PLAY_VERSION_CODE}.txt"
           fastlane beta
 
       - name: Record uploaded build identity
