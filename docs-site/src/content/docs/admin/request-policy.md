@@ -31,6 +31,8 @@ For Radarr, Sonarr, Chaptarr, and Lidarr libraries with requester tagging enable
 
 Choose whether users may select TV seasons and quality profiles. If choice is disabled, the configured defaults apply. Quality profiles come from the relevant library manager; their names and behavior are not universal between instances.
 
+In **Request Defaults > Quality**, **Default Radarr quality** and **Default Sonarr quality** list profiles from the server's default instance of each service, or its first configured instance when no default is selected. These lists load even when **Let users choose quality** is off. **Server default** leaves selection automatic: a new title without a valid configured profile uses the first profile returned by its target instance.
+
 TV specials are a separate scope. For a series whose TMDB and TVDB season organization differs, correct the identity mapping before approving the wrong season. See [TV matches](/admin/tv-matches/).
 
 ## Rolling allowances
