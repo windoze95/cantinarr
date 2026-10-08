@@ -15,7 +15,7 @@
 
 <p align="center">
   <a href="https://testflight.apple.com/join/bCPDwCsD"><img src="https://img.shields.io/badge/TestFlight-iOS%20beta-0D96F6?style=for-the-badge&amp;logo=apple&amp;logoColor=white" alt="iPhone and iPad beta on TestFlight"></a>
-  <a href="https://play.google.com/apps/testing/codes.julian.cantinarr"><img src="https://img.shields.io/badge/Google_Play-Android%20beta-414141?style=for-the-badge&amp;logo=googleplay&amp;logoColor=white" alt="Android beta on Google Play"></a>
+  <a href="https://play.google.com/store/apps/details?id=codes.julian.cantinarr"><img src="https://img.shields.io/badge/Google_Play-Android-414141?style=for-the-badge&amp;logo=googleplay&amp;logoColor=white" alt="Android on Google Play"></a>
 </p>
 
 <p align="center">
@@ -50,10 +50,10 @@ Cantinarr lets your household and friends browse and request movies, TV shows, e
 
 Run the server with [Docker](https://docs.cantinarr.com/install/docker/), [Unraid](https://docs.cantinarr.com/install/platforms/), or a [Linux binary](https://docs.cantinarr.com/install/linux/), then follow the [setup guide](https://docs.cantinarr.com/start/quickstart/) to connect your services and invite your household.
 
-The web app is included. Mobile apps connect to your server and are available in beta:
+The web app is included. Mobile apps connect to your server. Android is available on Google Play; iOS is in App Store review and remains available through TestFlight:
 
 - **iPhone and iPad:** [TestFlight](https://testflight.apple.com/join/bCPDwCsD)
-- **Android:** [Google Play](https://play.google.com/apps/testing/codes.julian.cantinarr)
+- **Android:** [Google Play](https://play.google.com/store/apps/details?id=codes.julian.cantinarr)
 
 ## Documentation
 
