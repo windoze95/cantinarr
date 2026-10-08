@@ -7,7 +7,8 @@ import '../theme/app_theme.dart';
 import 'app_sheet.dart';
 
 const _iosBetaUrl = 'https://testflight.apple.com/join/bCPDwCsD';
-const _androidBetaUrl = 'https://cantinarr.com/#android-beta';
+const _androidStoreUrl =
+    'https://play.google.com/store/apps/details?id=codes.julian.cantinarr';
 
 const _promptShownKey = 'phone_apps_prompt_shown';
 
@@ -78,8 +79,8 @@ class PhoneAppsSheet extends StatelessWidget {
           _AppLinkTile(
             icon: Icons.android,
             title: 'Android',
-            subtitle: 'Join the beta at cantinarr.com',
-            url: _androidBetaUrl,
+            subtitle: 'Download on Google Play',
+            url: _androidStoreUrl,
           ),
         ],
       ),

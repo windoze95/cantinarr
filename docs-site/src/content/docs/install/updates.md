@@ -50,7 +50,7 @@ For native Linux installations, stop the service, replace the server and bundled
 
 ## Update the phone app
 
-Use TestFlight on iPhone and iPad, or Google Play's beta channel on Android. An uploaded build can still be processing or waiting for distribution before it appears on your device.
+Update Android from [Google Play](https://play.google.com/store/apps/details?id=codes.julian.cantinarr); beta enrollment is not required. Use TestFlight on iPhone and iPad while iOS is in App Store review. A TestFlight build can still be processing or waiting for distribution before it appears on your device.
 
 Version compatibility notices are advisory. They tell you when one side is older than the other side supports. Update the indicated component and check again. The app-wide update banner is not the server's update mechanism.
 
