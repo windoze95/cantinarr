@@ -37,6 +37,24 @@ dispatch. Public TestFlight and Play opt-in links stay the same.
 
 ## Release procedure
 
+### Server-only patch while a phone build awaits review
+
+Keep the submitted phone version/build, original stable tag, and archived candidate receipts
+unchanged. Start the server patch from that stable tag and backport only its fixes; do not
+pull unrelated main development into the patch or bump the native marketing version.
+
+Once the previous server release is promoted and backmerged, its temporary freeze can be
+replaced by the new server patch freeze. Update the new `release/X.Y.Z` ref and delete the
+previous temporary release ref in one atomic Git push so mobile publishing never resumes
+between freezes and two candidate owners never coexist. Verify the expected old ref before
+the push and the single active freeze afterward. The submitted phone build remains identified
+by its immutable source tag and archived receipt, rather than the temporary branch name.
+
+Run exact-source CI, build and test the new server candidate, and record only `server_run`.
+Identify the unchanged phone versions/builds and the compatibility checks actually performed
+in the verification notes. Do not dispatch phone builds, listings, or store submission workflows
+for a web/server-only correction. Promote a new patch tag after validation; never move the old tag.
+
 ### 1. Prepare and freeze
 
 For a coordinated launch, merge preparation changes through normal CI with the current app
@@ -336,7 +354,11 @@ If the track is paused, choose **Resume track** and send its activation from Pub
 for review too. Confirm the track is **Active** and the release is available before advertising
 the beta; a paused track does not deliver installs or updates.
 
-The public opt-in link is <https://play.google.com/apps/testing/codes.julian.cantinarr>. Open
+The production download is <https://play.google.com/store/apps/details?id=codes.julian.cantinarr>.
+Use that destination for normal installation links and prompts. Beta enrollment is optional
+and belongs in tester instructions, not the production acquisition flow.
+
+The tester opt-in link is <https://play.google.com/apps/testing/codes.julian.cantinarr>. Open
 testers join there without an email-list or Google Group invitation. Eligible public-beta-owner
 builds go to both open and closed testing automatically. Keep the existing **alpha** track
 active during the transition: existing closed testers continue receiving the same builds
