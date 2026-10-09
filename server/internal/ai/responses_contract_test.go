@@ -29,46 +29,50 @@ func writeResponsesOutput(w http.ResponseWriter, output string) {
 }
 
 func TestOpenAIResponsesValidationRetainsExactModelAndRequestContract(t *testing.T) {
-	requests := make(chan providerRequest, 2)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests <- captureProviderRequest(r)
-		writeResponsesOutput(w, responsesTextOutput)
-	}))
-	t.Cleanup(server.Close)
-	t.Setenv("OPENAI_BASE_URL", server.URL+"/v1")
-	service := NewOpenAIService("contract-secret", "gpt-6.1-sol", "", "none", nil)
-	tools := mcp.NewToolServer(nil, nil, nil, nil).GetToolsForRole(auth.RoleAdmin)
-	result, err := service.NextTurn(context.Background(), validationProbeParams(tools))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Usage.InputTokens != 7 || result.Usage.CacheReadTokens != 2 || result.StopReason != StopReasonEndTurn {
-		t.Fatalf("response result=%#v", result)
-	}
-	req := <-requests
-	if req.path != "/v1/responses" || req.body["model"] != "gpt-6.1-sol" || req.body["store"] != false || req.body["stream"] != true {
-		t.Fatalf("wrong Responses request: %#v", req)
-	}
-	if req.header.Get("Authorization") != "Bearer contract-secret" || req.header.Get("x-grok-model-override") != "" {
-		t.Fatal("OpenAI Responses used the wrong auth/header contract")
-	}
-	if req.body["tool_choice"] != "none" || len(req.body["tools"].([]any)) == 0 {
-		t.Fatalf("validation omitted the disabled tool catalog: %#v", req.body)
-	}
-	if req.body["reasoning"].(map[string]any)["effort"] != "low" || int(req.body["max_output_tokens"].(float64)) < openAIValidationReasoningMaxTokens {
-		t.Fatalf("invalid reasoning probe contract: %#v", req.body)
-	}
-	if _, exists := req.body["max_completion_tokens"]; exists {
-		t.Fatal("Responses request contains Chat Completions token parameter")
-	}
-	if _, exists := req.body["reasoning_effort"]; exists {
-		t.Fatal("Responses request contains Chat Completions reasoning parameter")
-	}
-	if err := validateAPIKeyProfile(t, credentials.AIProviderOpenAI, "gpt-6.1-sol"); err != nil {
-		t.Fatalf("save-time validation: %v", err)
-	}
-	if req := <-requests; req.path != "/v1/responses" || req.body["model"] != "gpt-6.1-sol" {
-		t.Fatalf("save-time validation changed model or endpoint: %#v", req)
+	for _, model := range []string{"gpt-6-astra", "gpt-6.1-sol"} {
+		t.Run(model, func(t *testing.T) {
+			requests := make(chan providerRequest, 2)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests <- captureProviderRequest(r)
+				writeResponsesOutput(w, responsesTextOutput)
+			}))
+			t.Cleanup(server.Close)
+			t.Setenv("OPENAI_BASE_URL", server.URL+"/v1")
+			service := NewOpenAIService("contract-secret", model, "", "none", nil)
+			tools := mcp.NewToolServer(nil, nil, nil, nil).GetToolsForRole(auth.RoleAdmin)
+			result, err := service.NextTurn(context.Background(), validationProbeParams(tools))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Usage.InputTokens != 7 || result.Usage.CacheReadTokens != 2 || result.StopReason != StopReasonEndTurn {
+				t.Fatalf("response result=%#v", result)
+			}
+			req := <-requests
+			if req.path != "/v1/responses" || req.body["model"] != model || req.body["store"] != false || req.body["stream"] != true {
+				t.Fatalf("wrong Responses request: %#v", req)
+			}
+			if req.header.Get("Authorization") != "Bearer contract-secret" || req.header.Get("x-grok-model-override") != "" {
+				t.Fatal("OpenAI Responses used the wrong auth/header contract")
+			}
+			if req.body["tool_choice"] != "none" || len(req.body["tools"].([]any)) == 0 {
+				t.Fatalf("validation omitted the disabled tool catalog: %#v", req.body)
+			}
+			if req.body["reasoning"].(map[string]any)["effort"] != "low" || int(req.body["max_output_tokens"].(float64)) < openAIValidationReasoningMaxTokens {
+				t.Fatalf("invalid reasoning probe contract: %#v", req.body)
+			}
+			if _, exists := req.body["max_completion_tokens"]; exists {
+				t.Fatal("Responses request contains Chat Completions token parameter")
+			}
+			if _, exists := req.body["reasoning_effort"]; exists {
+				t.Fatal("Responses request contains Chat Completions reasoning parameter")
+			}
+			if err := validateAPIKeyProfile(t, credentials.AIProviderOpenAI, model); err != nil {
+				t.Fatalf("save-time validation: %v", err)
+			}
+			if req := <-requests; req.path != "/v1/responses" || req.body["model"] != model {
+				t.Fatalf("save-time validation changed model or endpoint: %#v", req)
+			}
+		})
 	}
 }
 
@@ -119,34 +123,38 @@ func TestOpenAIResponsesReplaysReasoningPhaseAndToolResults(t *testing.T) {
 }
 
 func TestOpenAIResponsesChatUsesSavedSelectionAndStreamsText(t *testing.T) {
-	requests := make(chan providerRequest, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests <- captureProviderRequest(r)
-		writeResponsesOutput(w, responsesTextOutput)
-	}))
-	t.Cleanup(server.Close)
-	t.Setenv("OPENAI_BASE_URL", server.URL+"/v1")
-	h, registry, _, userID := newResolverTestHandler(t)
-	h.toolServer = mcp.NewToolServer(nil, nil, nil, nil)
-	h.conversations = newConversationStore()
-	if err := registry.SetUserAIConfig(userID, credentials.AIProviderOpenAI, "gpt-6.1-sol"); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.SetUserAICredential(userID, credentials.AIProviderOpenAI, "contract-secret"); err != nil {
-		t.Fatal(err)
-	}
-	recorder := postChat(t, h, userID)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "OK") {
-		t.Fatalf("chat=%d %s", recorder.Code, recorder.Body.String())
-	}
-	for _, frame := range chatSSEFrames(t, recorder.Body.String()) {
-		if frame["error"] != nil {
-			t.Fatalf("chat returned error: %s", frame["error"])
-		}
-	}
-	req := <-requests
-	if req.path != "/v1/responses" || req.body["model"] != "gpt-6.1-sol" {
-		t.Fatalf("chat request=%#v", req)
+	for _, model := range []string{"gpt-6-astra", "gpt-6.1-sol"} {
+		t.Run(model, func(t *testing.T) {
+			requests := make(chan providerRequest, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests <- captureProviderRequest(r)
+				writeResponsesOutput(w, responsesTextOutput)
+			}))
+			t.Cleanup(server.Close)
+			t.Setenv("OPENAI_BASE_URL", server.URL+"/v1")
+			h, registry, _, userID := newResolverTestHandler(t)
+			h.toolServer = mcp.NewToolServer(nil, nil, nil, nil)
+			h.conversations = newConversationStore()
+			if err := registry.SetUserAIConfig(userID, credentials.AIProviderOpenAI, model); err != nil {
+				t.Fatal(err)
+			}
+			if err := registry.SetUserAICredential(userID, credentials.AIProviderOpenAI, "contract-secret"); err != nil {
+				t.Fatal(err)
+			}
+			recorder := postChat(t, h, userID)
+			if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "OK") {
+				t.Fatalf("chat=%d %s", recorder.Code, recorder.Body.String())
+			}
+			for _, frame := range chatSSEFrames(t, recorder.Body.String()) {
+				if frame["error"] != nil {
+					t.Fatalf("chat returned error: %s", frame["error"])
+				}
+			}
+			req := <-requests
+			if req.path != "/v1/responses" || req.body["model"] != model {
+				t.Fatalf("chat request=%#v", req)
+			}
+		})
 	}
 }
 

@@ -164,17 +164,30 @@ func TestCodexAppHelperProcess(t *testing.T) {
 					continue
 				}
 				if slices.Contains(os.Args, "--fake-token-limit") {
+					outputTokens := int64(12)
+					if value, err := strconv.ParseInt(fakeArg("--fake-output-tokens="), 10, 64); err == nil {
+						outputTokens = value
+					}
 					send(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{
 						"threadId": "thread-1", "turnId": "turn-1",
 						"tokenUsage": map[string]any{
-							"last":  map[string]any{"inputTokens": 21, "cachedInputTokens": 5, "outputTokens": 12, "reasoningOutputTokens": 3, "totalTokens": 33},
-							"total": map[string]any{"inputTokens": 21, "cachedInputTokens": 5, "outputTokens": 12, "reasoningOutputTokens": 3, "totalTokens": 33},
+							"last":  map[string]any{"inputTokens": 21, "cachedInputTokens": 5, "outputTokens": outputTokens, "reasoningOutputTokens": 3, "totalTokens": outputTokens + 21},
+							"total": map[string]any{"inputTokens": 21, "cachedInputTokens": 5, "outputTokens": outputTokens, "reasoningOutputTokens": 3, "totalTokens": outputTokens + 21},
 						},
 					}})
 					continue
 				}
 				if slices.Contains(os.Args, "--fake-token-after-interrupt") {
 					continue
+				}
+				if slices.Contains(os.Args, "--fake-probe-reasoning") {
+					send(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{
+						"threadId": "thread-1", "turnId": "turn-1",
+						"tokenUsage": map[string]any{"last": map[string]any{"inputTokens": 18, "outputTokens": 512, "reasoningOutputTokens": 512, "totalTokens": 530}},
+					}})
+					// Give the client time to process hidden reasoning before the
+					// visible answer, as a real reasoning model can do.
+					time.Sleep(200 * time.Millisecond)
 				}
 				if slices.Contains(os.Args, "--fake-token-usage") {
 					send(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{
@@ -540,7 +553,7 @@ func TestAutonomousTurnWithNoToolsReturnsText(t *testing.T) {
 }
 
 func TestProbeAccountUsesExactModelWithoutExecutingTools(t *testing.T) {
-	for _, model := range []string{"gpt-5.6-luna", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"} {
+	for _, model := range []string{"gpt-5.6-luna", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "custom-model"} {
 		t.Run(model, func(t *testing.T) {
 			manager, _, _, runtimeDir, logPath := fakeManager(t)
 			if err := manager.saveAccount(
@@ -551,6 +564,7 @@ func TestProbeAccountUsesExactModelWithoutExecutingTools(t *testing.T) {
 				t.Fatal(err)
 			}
 			executed := false
+			manager.args = append(manager.args, "--fake-probe-reasoning")
 			manager.toolCallObserver = func(mcp.CallContext) { executed = true }
 			if err := manager.ProbeAccount(context.Background(), SharedAccount(), model); err != nil {
 				t.Fatalf("probe account: %v", err)
@@ -577,8 +591,33 @@ func TestProbeAccountUsesExactModelWithoutExecutingTools(t *testing.T) {
 			if !ok || len(tools) != 0 {
 				t.Fatalf("probe dynamic tools=%#v, want empty", params["dynamicTools"])
 			}
+			turn := requestByMethod(t, received, "turn/start")
+			turnParams := turn["params"].(map[string]any)
+			if model == "custom-model" {
+				if _, present := turnParams["effort"]; present {
+					t.Fatal("custom Codex selector received an assumed effort")
+				}
+			} else if turnParams["effort"] != "low" {
+				t.Fatalf("probe effort=%v, want low", turnParams["effort"])
+			}
+			for _, message := range received {
+				if message["method"] == "turn/interrupt" {
+					t.Fatal("probe interrupted while the model was still reasoning")
+				}
+			}
 			assertRuntimeEmpty(t, runtimeDir)
 		})
+	}
+}
+
+func TestProbeAccountRejectsAnOutputLimitedPartialAnswer(t *testing.T) {
+	manager, _, _, _, _ := fakeManager(t)
+	if err := manager.saveAccount(SharedAccount(), []byte(`{"tokens":{"access_token":"shared-secret"}}`), AccountStatus{Connected: true}); err != nil {
+		t.Fatal(err)
+	}
+	manager.args = append(manager.args, "--fake-token-limit", "--fake-output-tokens=16000")
+	if err := manager.ProbeAccount(context.Background(), SharedAccount(), "gpt-6.1-sol"); !errors.Is(err, ErrProvider) {
+		t.Fatalf("output-limited probe=%v, want provider failure", err)
 	}
 }
 

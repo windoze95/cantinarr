@@ -599,10 +599,11 @@ func openAIChatToolsRequireNoReasoning(model openai.ChatModel) bool {
 }
 
 func openAIResponsesToolsRequired(model openai.ChatModel) bool {
-	// OpenAI documents GPT-6.1 Sol for Chat Completions without tools; its
-	// function calling is supported through Responses instead. Cantinarr's
-	// public API adapter routes this model to Responses for every turn.
-	return openAIBaseModelName(model) == "gpt-6.1-sol"
+	// OpenAI's reasoning guide requires Responses for function calling with
+	// GPT-6 Astra and GPT-6.1 Sol. The model pages' independent lists of
+	// endpoints and features do not imply every endpoint supports every feature.
+	name := openAIBaseModelName(model)
+	return name == "gpt-6-astra" || name == "gpt-6.1-sol"
 }
 
 func openAIBaseModelName(model openai.ChatModel) string {

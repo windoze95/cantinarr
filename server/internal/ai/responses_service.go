@@ -59,7 +59,7 @@ func NewGrokOAuthService(token, model, conversationID string, toolServer *mcp.To
 
 func (s *openAIService) responsesAdapter() *responsesService {
 	effort := shared.ReasoningEffort(s.reasoningEffort)
-	// GPT-6.1 Sol cannot disable reasoning. Preserve the saved profile pin,
+	// GPT-6 Astra and GPT-6.1 Sol cannot disable reasoning. Preserve the saved pin,
 	// but use its lowest supported effort for an inherited none/minimal pin.
 	if effort == "none" || effort == "minimal" {
 		effort = shared.ReasoningEffortLow

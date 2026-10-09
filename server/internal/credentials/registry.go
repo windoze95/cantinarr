@@ -180,7 +180,7 @@ var AIProviders = []AIProviderOption{
 			{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Description: "Flagship model for complex professional work", SupportsReasoningEffort: true},
 			{ID: "gpt-5.6-terra", Label: "GPT-5.6 Terra", Description: "Balances intelligence and cost", SupportsReasoningEffort: true},
 			{ID: "gpt-5.6-luna", Label: "GPT-5.6 Luna", Description: "Cost-sensitive, high-volume model", SupportsReasoningEffort: true},
-			{ID: "gpt-6-astra", Label: "GPT-6 Astra", Description: "Flagship reasoning model with Chat Completions tool calling"},
+			{ID: "gpt-6-astra", Label: "GPT-6 Astra", Description: "Flagship reasoning model for demanding work"},
 			{ID: "gpt-6-sol", Label: "GPT-6 Sol", Description: "Chat Completions tool calling requires reasoning effort none"},
 			{ID: "gpt-6-luna", Label: "GPT-6 Luna", Description: "Chat Completions tool calling requires reasoning effort none"},
 			{ID: "gpt-6.1-sol", Label: "GPT-6.1 Sol", Description: "Uses Responses for reasoning and tool calling"},

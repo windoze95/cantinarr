@@ -13,7 +13,7 @@ cannot promise access for every credential.
 | Settings provider | Public API model IDs in the catalog | Request family used by Cantinarr | Notes |
 | --- | --- | --- | --- |
 | Anthropic | `claude-opus-5-5`, `claude-fable-5-1`, `claude-sonnet-5-5`, `claude-haiku-5-5` | Anthropic Messages API (`/v1/messages`, streaming) | Current API IDs from Anthropic's model overview. All support tool use and adaptive thinking; Opus 5.5, Fable 5.1, and Sonnet 5.5 reject thinking disabled; their validation probes use low effort with a bounded reasoning budget. |
-| OpenAI | `gpt-4.1-mini`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol` | OpenAI Chat Completions; GPT-6.1 Sol uses Responses (both streaming) | These are public API IDs confirmed by OpenAI's API model pages, independently of matching Codex OAuth selectors. GPT-4.1 mini remains first/default as the supported lower-cost option. On the official `api.openai.com` endpoint, GPT-6 Astra supports Chat Completions function calling. GPT-6 Sol and Luna require `reasoning_effort: none` for Chat Completions function calling; Cantinarr sends `none` even when profile settings use automatic reasoning. GPT-6.1 Sol uses Responses for validation, chat, and autonomous turns because its Chat Completions endpoint does not support tool calling. A configured OpenAI-compatible base URL keeps its own model and parameter behavior. |
+| OpenAI | `gpt-4.1-mini`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol` | OpenAI Chat Completions; GPT-6 Astra and GPT-6.1 Sol use Responses (both streaming) | These are public API IDs confirmed by OpenAI's API model pages, independently of matching Codex OAuth selectors. GPT-4.1 mini remains first/default as the supported lower-cost option. On the official `api.openai.com` endpoint, GPT-6 Sol and Luna require `reasoning_effort: none` for Chat Completions function calling; Cantinarr sends `none` even when profile settings use automatic reasoning. GPT-6 Astra and GPT-6.1 Sol use Responses for validation, chat, and autonomous turns because their Chat Completions endpoints do not support tool calling. A configured OpenAI-compatible base URL keeps its own model and parameter behavior. |
 | Google Gemini | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3.1-pro-preview` | Gemini `streamGenerateContent` / `GenerateContent` | The list uses exact model endpoint names; current Flash models support function calling. Validation uses each model's documented Low or Minimal thinking level with a bounded output budget. Gemini 3.1 Pro is explicitly marked preview. Gemini 2.5 is omitted from recommendations because Google now limits its API to accounts that used it previously, while documenting that existing access continues. |
 | xAI Grok | `grok-4.7`, `grok-4.6`, `grok-4.5` | Public xAI Chat Completions (`/v1/chat/completions`, streaming) | Exact public API model IDs; function calling is supported. Cantinarr sends no `reasoning_effort` parameter to Grok. xAI marks Chat Completions as legacy, but documents it as an available API family; this adapter remains on that compatible endpoint. |
 
@@ -34,12 +34,17 @@ cannot promise access for every credential.
   unknown, retired, or inaccessible model is reported as unavailable when the
   upstream returns a model-specific error; unrelated invalid requests remain
   generic validation errors.
-- GPT-6.1 Sol uses the official OpenAI Responses endpoint with the exact
+- GPT-6 Astra and GPT-6.1 Sol use the official OpenAI Responses endpoint with the exact
   selected API model ID. Requests use `store: false` and replay encrypted
   reasoning, assistant phase, function calls, and tool results between turns.
-  Its save probe uses low reasoning and a sufficient output budget; inherited
-  None/Minimal pins also use Low for this model without rewriting settings.
-  The separate Codex OAuth selection uses the Codex app-server.
+  Their save probes use low reasoning and a sufficient output budget; inherited
+  None/Minimal pins also use Low for these models without rewriting settings.
+  The separate Codex OAuth selection uses the Codex app-server. Its probes
+  use low effort for documented selectors and a 16,000-token observed output
+  ceiling, since the former 256-token cutoff could interrupt reasoning before
+  any visible answer. The existing timeout also bounds the check; app-server
+  usage notifications provide an observed ceiling rather than a hard request
+  token limit.
 - GPT-6 endpoint-specific request constraints apply only when the OpenAI
   provider targets `api.openai.com`. A custom OpenAI-compatible URL retains
   its own model behavior, including configured reasoning effort.
@@ -53,6 +58,7 @@ All sources below were checked on 2026-10-09.
 
 - Anthropic: [model overview and exact API IDs](https://platform.claude.com/docs/en/models/overview), [Messages API](https://platform.claude.com/docs/en/api/messages/create), [per-model thinking configuration](https://platform.claude.com/docs/en/build-with-claude/thinking).
 - OpenAI API: [GPT-6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna), [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol), [GPT-5.6 Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol), [GPT-5.6 Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra), [GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna), [GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5), [GPT-5.4 mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini), and [GPT-4.1 mini](https://developers.openai.com/api/docs/models/gpt-4.1-mini). The separate [Codex model catalog](https://developers.openai.com/codex/models) lists the Codex model selections and account/rollout caveat. The [Codex app-server OAuth integration](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server) documents passing a selected model in `thread/start` and notes that the bundled `model/list` catalog is not an entitlement check.
+- Codex protocol: [app-server turn effort and token usage](https://developers.openai.com/codex/app-server).
 - OpenAI Responses: [reasoning and stateless continuation](https://developers.openai.com/api/docs/guides/reasoning), [function calling](https://developers.openai.com/api/docs/guides/function-calling), [streaming](https://developers.openai.com/api/docs/guides/streaming-responses).
 - Google: [Gemini API model catalog](https://ai.google.dev/gemini-api/docs/models), [streaming text generation](https://ai.google.dev/gemini-api/docs/generate-content/text-generation), [function calling](https://ai.google.dev/gemini-api/docs/function-calling), [GenerateContent thinking controls](https://ai.google.dev/gemini-api/docs/generate-content/thinking).
 - xAI public API: [Grok 4.7](https://docs.x.ai/developers/models/grok-4.7), [Grok 4.6](https://docs.x.ai/developers/models/grok-4.6), [Grok 4.5](https://docs.x.ai/developers/models/grok-4.5), [legacy Chat Completions](https://docs.x.ai/developers/model-capabilities/legacy/chat-completions).

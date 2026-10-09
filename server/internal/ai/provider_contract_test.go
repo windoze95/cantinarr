@@ -390,7 +390,7 @@ func TestOpenAILowCostDefaultOmitsUnsupportedReasoningEffort(t *testing.T) {
 }
 
 func TestOpenAIPublicCatalogModelsSerializeToChatCompletions(t *testing.T) {
-	for _, model := range []string{"gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"} {
+	for _, model := range []string{"gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-sol", "gpt-6-luna"} {
 		t.Run(model, func(t *testing.T) {
 			requests := make(chan providerRequest, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
