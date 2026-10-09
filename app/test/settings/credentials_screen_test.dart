@@ -100,7 +100,7 @@ void main() {
     expect(adapter.lastUpdate, {
       'openai_key': 'synthetic-shared-key',
       'ai_provider': 'openai',
-      'ai_model': 'gpt-4.1-mini',
+      'ai_model': 'gpt-5.5',
     });
   });
 
