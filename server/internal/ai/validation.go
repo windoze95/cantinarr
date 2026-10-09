@@ -43,6 +43,7 @@ const (
 	AIValidationFailureQuota             AIValidationFailureKind = "quota_or_rate_limit"
 	AIValidationFailureTemporary         AIValidationFailureKind = "temporary_upstream"
 	AIValidationFailureInvalidResponse   AIValidationFailureKind = "invalid_response"
+	AIValidationFailureUpgradeRequired   AIValidationFailureKind = "provider_upgrade_required"
 )
 
 // AIValidationFailure retains the provider error for server-side inspection
@@ -112,6 +113,8 @@ func aiValidationFailureDetail(kind AIValidationFailureKind) string {
 		return "The provider quota or rate limit was reached. Check billing and quota, or try again later."
 	case AIValidationFailureTemporary:
 		return "The AI provider is temporarily unavailable. Try again shortly."
+	case AIValidationFailureUpgradeRequired:
+		return "The provider requires a newer client protocol. Update Cantinarr and try again."
 	default:
 		return "The selected AI provider and model did not return a usable test response."
 	}
@@ -149,6 +152,8 @@ func classifyAIValidationFailure(err error) AIValidationFailureKind {
 		return AIValidationFailureUnsupportedModel
 	case status == http.StatusTooManyRequests:
 		return AIValidationFailureQuota
+	case status == http.StatusUpgradeRequired:
+		return AIValidationFailureUpgradeRequired
 	case status == http.StatusRequestTimeout || status == http.StatusConflict || status >= http.StatusInternalServerError:
 		return AIValidationFailureTemporary
 	}

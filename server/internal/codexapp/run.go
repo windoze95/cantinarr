@@ -111,6 +111,7 @@ type turnCompleteParams struct {
 		} `json:"items"`
 		Error *struct {
 			CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
+			Message        string          `json:"message,omitempty"`
 		} `json:"error"`
 	} `json:"turn"`
 }

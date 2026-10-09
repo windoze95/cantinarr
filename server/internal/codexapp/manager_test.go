@@ -636,6 +636,7 @@ func TestUnavailableCodexModelErrorsKeepSafeClassification(t *testing.T) {
 		complete := turnCompleteParams{}
 		complete.Turn.Error = &struct {
 			CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
+			Message        string          `json:"message,omitempty"`
 		}{CodexErrorInfo: info}
 		if !errors.Is(safeTurnError(complete), ErrModelUnavailable) {
 			t.Errorf("safeTurnError(%s) did not preserve model-unavailable category", info)
@@ -643,6 +644,40 @@ func TestUnavailableCodexModelErrorsKeepSafeClassification(t *testing.T) {
 	}
 	if !errors.Is(contextOrClassified(context.Background(), ErrModelUnavailable), ErrModelUnavailable) {
 		t.Fatal("contextOrClassified collapsed model-unavailable error")
+	}
+}
+
+func TestCompletedTurnClassifiesMessageBeforeDiscardingUpstreamDetails(t *testing.T) {
+	for _, tc := range []struct {
+		name, message, want string
+	}{
+		{"unavailable", "The model is not supported for this account", `"modelUnavailable"`},
+		{"payload", "Invalid tool schema", `"providerError"`},
+		{"quota", "usage_limit exceeded", `"usageLimitExceeded"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params, err := json.Marshal(map[string]any{"turn": map[string]any{
+				"id": "turn-1", "status": "failed",
+				"error": map[string]any{"codexErrorInfo": "other", "message": tc.message + "; access_token=private-test-token"},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			compact, ok := compactNotification("turn/completed", params)
+			if !ok {
+				t.Fatal("completion was discarded")
+			}
+			var complete turnCompleteParams
+			if err := json.Unmarshal(compact, &complete); err != nil {
+				t.Fatal(err)
+			}
+			if complete.Turn.Error == nil || string(complete.Turn.Error.CodexErrorInfo) != tc.want {
+				t.Fatalf("wrong error classification: %s", compact)
+			}
+			if complete.Turn.Error.Message != "" || strings.Contains(string(compact), "private-test-token") || strings.Contains(string(compact), tc.message) {
+				t.Fatal("compacted notification retained raw upstream details")
+			}
+		})
 	}
 }
 

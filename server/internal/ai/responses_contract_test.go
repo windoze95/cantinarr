@@ -51,7 +51,7 @@ func TestOpenAIResponsesValidationRetainsExactModelAndRequestContract(t *testing
 			if req.path != "/v1/responses" || req.body["model"] != model || req.body["store"] != false || req.body["stream"] != true {
 				t.Fatalf("wrong Responses request: %#v", req)
 			}
-			if req.header.Get("Authorization") != "Bearer contract-secret" || req.header.Get("x-grok-model-override") != "" {
+			if req.header.Get("Authorization") != "Bearer contract-secret" || req.header.Get("x-grok-model-override") != "" || req.header.Get("x-grok-client-version") != "" {
 				t.Fatal("OpenAI Responses used the wrong auth/header contract")
 			}
 			if req.body["tool_choice"] != "none" || len(req.body["tools"].([]any)) == 0 {

@@ -650,7 +650,12 @@ func compactNotification(method string, params json.RawMessage) (json.RawMessage
 		return nil, false
 	}
 	if complete.Turn.Error != nil {
-		complete.Turn.Error.CodexErrorInfo = compactTurnError(complete.Turn.Error.CodexErrorInfo)
+		// App-server commonly uses the generic `other` code and puts the
+		// actionable model/access failure in message. Classify and redact it
+		// before dropping it from the notification sent to the run loop.
+		detail, _ := json.Marshal(complete.Turn.Error)
+		complete.Turn.Error.CodexErrorInfo = compactTurnError(detail)
+		complete.Turn.Error.Message = ""
 	}
 	totalText := 0
 	for _, item := range complete.Turn.Items {
@@ -745,6 +750,7 @@ func codexModelUnavailableError(text string) bool {
 		"model unavailable",
 		"model does not exist",
 		"model is not available",
+		"model is not supported",
 		"deprecated model",
 		"model access denied",
 		"no access to this model",

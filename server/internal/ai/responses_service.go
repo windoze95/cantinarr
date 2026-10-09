@@ -31,6 +31,11 @@ type responsesService struct {
 	reasoningEffort shared.ReasoningEffort
 }
 
+// Grok Build's proxy gates the client protocol with x-grok-client-version.
+// This is the compatible protocol floor reported by the proxy on 2026-10-09,
+// not Cantinarr's product version. Keep the separate client identity explicit.
+const grokOAuthProtocolVersion = "1.0.13"
+
 func NewGrokOAuthService(token, model, conversationID string, toolServer *mcp.ToolServer) *responsesService {
 	if strings.TrimSpace(model) == "" {
 		model = "grok-4.6"
@@ -183,6 +188,7 @@ func (s *responsesService) responseTurn(
 	var requestOptions []openaioption.RequestOption
 	if s.grokOAuth {
 		requestOptions = []openaioption.RequestOption{
+			openaioption.WithHeader("x-grok-client-version", grokOAuthProtocolVersion),
 			openaioption.WithHeader("x-grok-conv-id", s.convID),
 			openaioption.WithHeader("x-grok-req-id", uuid.NewString()),
 			openaioption.WithHeader("x-grok-model-override", string(s.model)),

@@ -64,7 +64,7 @@ Optional server env vars for deployment tuning:
 | `CANTINARR_ENCRYPTION_KEY` | auto-generated key file | Base64 32-byte key for secrets-at-rest (default: `/config/encryption.key`) |
 | `CANTINARR_AI_PROVIDER` | `codex` | Fallback provider for the included server AI profile when none is saved in the admin UI (`anthropic`, `openai`, `gemini`, `grok`, `codex`, `grok_oauth`, or `local_openai`). Local AI also needs a saved endpoint and an explicit model |
 | `CANTINARR_AI_MODEL` | provider default | Fallback model for the included server AI profile when none is saved in the admin UI |
-| `CANTINARR_CODEX_BIN` | auto-discovered | Optional path to `codex-app-server` or the full `codex` CLI; container images bundle the tested 0.144.3 app-server at `/usr/local/bin/codex-app-server` |
+| `CANTINARR_CODEX_BIN` | auto-discovered | Optional path to `codex-app-server` or the full `codex` CLI; container images bundle the tested 0.162.0 app-server at `/usr/local/bin/codex-app-server` |
 | `CANTINARR_CODEX_RUNTIME_DIR` | `/dev/shm/cantinarr-codex` | Absolute Linux tmpfs/ramfs directory used for server-owned, ephemeral per-session Codex state; if it already exists, it must be owned by the server user with mode `0700` |
 | `CANTINARR_MEDIA_ROOTS` | unset | Comma-separated absolute paths forming the outer filesystem allowlist for completed-media downloads. Empty disables file downloads. Mount libraries read-only inside these Cantinarr-visible roots, then map each arr-reported prefix to a path beneath them in that instance's settings; `/` is refused |
 | `CANTINARR_PUSH_GATEWAY_URL` | unset | Push gateway origin -- setting it enables push notifications (auto-enrolls on first start). The community relay is `https://push.cantinarr.com`; its former name `https://push.julian.codes` is still accepted and rewritten to the new one at start (same gateway, same enrollment) |
@@ -88,7 +88,7 @@ disposable private lab: setting it to `true` compiles deterministic Maestro
 labels into the Flutter web bundle. Official production images keep the
 default and preserve normal browser accessibility semantics.
 
-OpenAI (OAuth) source deployments use Codex app-server and are supported only on Linux; non-Linux hosts report this provider unavailable even when a Codex binary is installed. The runtime directory's parent must exist, and the directory must be on tmpfs or ramfs; not persistent storage. Give each concurrently running Cantinarr process its own runtime directory; startup removes stale `session-*` entries from that dedicated root. The official container uses its private Docker `/dev/shm` tmpfs. Use the tested Codex 0.144.3 release or a protocol-compatible build.
+OpenAI (OAuth) source deployments use Codex app-server and are supported only on Linux; non-Linux hosts report this provider unavailable even when a Codex binary is installed. The runtime directory's parent must exist, and the directory must be on tmpfs or ramfs; not persistent storage. Give each concurrently running Cantinarr process its own runtime directory; startup removes stale `session-*` entries from that dedicated root. The official container uses its private Docker `/dev/shm` tmpfs. Use the tested Codex 0.162.0 release or a protocol-compatible build.
 
 ## Passkeys and device sessions
 

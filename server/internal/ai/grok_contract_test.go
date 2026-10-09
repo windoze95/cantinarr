@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 )
@@ -86,6 +87,9 @@ func TestGrokOAuthValidationUsesLiveBearerToken(t *testing.T) {
 	if req.header.Get("x-grok-model-override") != "grok-4.6" || req.header.Get("x-grok-conv-id") == "" || req.header.Get("x-grok-session-id") == "" {
 		t.Fatalf("missing Grok Build request context headers: %#v", req.header)
 	}
+	if req.header.Get("x-grok-client-version") != "1.0.13" || req.header.Get("x-grok-client-identifier") != "cantinarr" {
+		t.Fatal("Grok OAuth omitted proxy version metadata or lost its Cantinarr identity")
+	}
 	if req.body["model"] != "grok-4.6" || req.body["stream"] != true || req.body["store"] != false {
 		t.Fatalf("Grok OAuth Responses payload has wrong model/stream/store: %#v", req.body)
 	}
@@ -150,6 +154,55 @@ func TestGrokOAuthSerializesFunctionCallHistoryForResponses(t *testing.T) {
 		if !strings.Contains(string(inputJSON), field) {
 			t.Fatalf("Responses history missing %s: %s", field, inputJSON)
 		}
+	}
+}
+
+func TestGrokOAuthVersionGateForBothModelsAndExecutionPaths(t *testing.T) {
+	for _, model := range []string{"grok-4.6", "grok-4.5"} {
+		for _, interactive := range []bool{false, true} {
+			t.Run(model+map[bool]string{false: "/next-turn", true: "/chat"}[interactive], func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Header.Get("x-grok-client-version") != "1.0.13" {
+						w.WriteHeader(http.StatusUpgradeRequired)
+						_, _ = io.WriteString(w, `{"error":{"message":"Your Grok CLI version (none) is outdated"}}`)
+						return
+					}
+					if r.URL.Path != "/v1/responses" || r.Header.Get("x-grok-model-override") != model || r.Header.Get("x-grok-client-identifier") != "cantinarr" {
+						t.Error("wrong OAuth endpoint, model, or client identity")
+					}
+					writeGrokOAuthTextSSE(w)
+				}))
+				t.Cleanup(server.Close)
+				t.Setenv("GROK_OAUTH_BASE_URL", server.URL+"/v1")
+				service := NewGrokOAuthService("contract-secret", model, "", mcp.NewToolServer(nil, nil, nil, nil))
+				var err error
+				if interactive {
+					_, err = service.SendMessage(context.Background(), transcript{textTranscriptMessage(agentRoleUser, "Say OK")}, ChatContext{UserID: 1, Role: auth.RoleAdmin}, StreamCallbacks{})
+				} else {
+					_, err = service.NextTurn(context.Background(), validationProbeParams(nil))
+				}
+				if err != nil {
+					t.Fatalf("OAuth request failed proxy version gate: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestGrokOAuthVersionGateFailureIsActionableAndSafe(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUpgradeRequired)
+		_, _ = io.WriteString(w, `{"error":{"message":"Upgrade client; access_token=private-test-token"}}`)
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("GROK_OAUTH_BASE_URL", server.URL+"/v1")
+	_, err := NewGrokOAuthService("contract-secret", "grok-4.6", "", nil).NextTurn(context.Background(), validationProbeParams(nil))
+	if err == nil || classifyAIValidationFailure(err) != AIValidationFailureUpgradeRequired {
+		t.Fatalf("version rejection was misclassified: %v", err)
+	}
+	message := AIValidationUserMessage(newAIValidationFailure(err))
+	if !strings.Contains(message, "Update Cantinarr") || strings.Contains(message, "private-test-token") || !strings.Contains(message, "Nothing was saved") {
+		t.Fatalf("unsafe or unhelpful upgrade message: %q", message)
 	}
 }
 
