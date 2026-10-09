@@ -224,6 +224,9 @@ func (s *responsesService) responseTurn(
 	if !gotResponse {
 		return openAIMessage{}, Usage{}, "", fmt.Errorf("provider responses stream: response ended without a terminal event")
 	}
+	if response.Status != responses.ResponseStatusCompleted && response.Status != responses.ResponseStatusIncomplete {
+		return openAIMessage{}, Usage{}, "", errors.New("provider responses: unexpected terminal status")
+	}
 
 	message := openAIMessage{Role: agentRoleAssistant, Content: response.OutputText()}
 	if s.openAI {
@@ -266,6 +269,9 @@ func (s *responsesService) responseTurn(
 		InputTokens:     response.Usage.InputTokens,
 		OutputTokens:    response.Usage.OutputTokens,
 		CacheReadTokens: response.Usage.InputTokensDetails.CachedTokens,
+	}
+	if message.Refusal != "" {
+		return openAIMessage{}, usage, "", errors.New("provider responses: model refused the response")
 	}
 	stop := StopReasonEndTurn
 	if len(message.ToolCalls) > 0 {

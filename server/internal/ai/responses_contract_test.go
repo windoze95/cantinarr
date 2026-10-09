@@ -212,3 +212,14 @@ func TestResponsesRejectsIncompleteToolCalls(t *testing.T) {
 		})
 	}
 }
+
+func TestResponsesRejectsRefusalEvenWithVisibleText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeResponsesOutput(w, `[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Sorry","annotations":[]},{"type":"refusal","refusal":"Cannot answer"}]}]`)
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("OPENAI_BASE_URL", server.URL+"/v1")
+	if _, err := NewOpenAIService("secret", "gpt-6.1-sol", "", "", nil).NextTurn(context.Background(), validationProbeParams(nil)); err == nil {
+		t.Fatal("refusal passed validation")
+	}
+}

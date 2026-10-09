@@ -69,7 +69,7 @@ func NewOpenAIService(apiKey, model, baseURL, reasoningEffort string, toolServer
 	// reasoning_effort. Keep any saved pin intact in settings and omit it from
 	// this model's requests; users can switch to a reasoning-capable model to
 	// apply the pin again.
-	if openAIModelReasoningCapability(openai.ChatModel(model)) == openAIReasoningUnsupported {
+	if publicModelContract && openAIModelReasoningCapability(openai.ChatModel(model)) == openAIReasoningUnsupported {
 		reasoningEffort = ""
 	}
 	service := newOpenAIService(apiKey, model, baseURL, reasoningEffort, toolServer, newHostedProviderHTTPClient(httpProviderStreamTimeout))

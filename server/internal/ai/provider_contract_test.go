@@ -369,7 +369,8 @@ func TestOpenAILowCostDefaultOmitsUnsupportedReasoningEffort(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	service := NewOpenAIService("secret", "", server.URL+"/v1", "high", nil)
+	t.Setenv("OPENAI_BASE_URL", server.URL+"/v1")
+	service := NewOpenAIService("secret", "", "", "high", nil)
 	if got := string(service.model); got != "gpt-4.1-mini" {
 		t.Fatalf("empty OpenAI model default = %q, want low-cost supported gpt-4.1-mini", got)
 	}
@@ -1620,5 +1621,12 @@ func TestGPT6AstraNormalizesInheritedUnsupportedEffort(t *testing.T) {
 		if service.reasoningEffort != openai.ReasoningEffortLow {
 			t.Fatalf("pin=%s effective=%s", pin, service.reasoningEffort)
 		}
+	}
+}
+
+func TestCustomOpenAIEndpointKeepsKnownModelEffortPin(t *testing.T) {
+	service := NewOpenAIService("secret", "gpt-4.1-mini", "https://custom.example/v1", "high", nil)
+	if service.publicOpenAIModelContract || service.reasoningEffort != openai.ReasoningEffortHigh {
+		t.Fatal("custom endpoint lost its configured reasoning effort")
 	}
 }
