@@ -990,6 +990,20 @@ class _IssueSummaryCard extends StatelessWidget {
                 fontSize: 13,
                 fontWeight: FontWeight.w600),
           ),
+          if (issue.source == 'system' &&
+              issue.settingsPath == '/settings/credentials')
+            TextButton.icon(
+              onPressed: () => context.push('/settings/credentials'),
+              icon: const Icon(Icons.settings_outlined),
+              label: const Text('Review provider settings'),
+            ),
+          if (issue.source == 'system' &&
+              issue.settingsPath == '/settings/ai')
+            TextButton.icon(
+              onPressed: () => context.push('/settings/ai'),
+              icon: const Icon(Icons.person_outline),
+              label: const Text('Open AI Access for your own account'),
+            ),
           if (issue.status.isTerminal) ...[
             const SizedBox(height: 6),
             Text(

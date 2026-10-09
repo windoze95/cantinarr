@@ -6,6 +6,21 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('fallback is off for older servers and personal writes are explicit',
+      () async {
+    expect(AiProviderConfig.fromJson(const {}).modelFallbackEnabled, isFalse);
+    final adapter = _AiSettingsAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
+      ..httpClientAdapter = adapter;
+    await AiSettingsService(backendDio: dio).usePersonal(
+        provider: 'openai', model: 'retired', modelFallbackEnabled: true);
+    expect(adapter.requests.single.$3, {
+      'provider': 'openai',
+      'model': 'retired',
+      'model_fallback_enabled': true
+    });
+  });
+
   test('parses the server-advertised default selection', () {
     final settings = AiSettings.fromJson(const {
       'providers': [],

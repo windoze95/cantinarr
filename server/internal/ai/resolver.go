@@ -16,12 +16,13 @@ const (
 )
 
 type resolvedAI struct {
-	Available bool
-	Source    string
-	Provider  string
-	Model     string
-	Reason    string
-	APIKey    string
+	ModelFallbackEnabled bool
+	Available            bool
+	Source               string
+	Provider             string
+	Model                string
+	Reason               string
+	APIKey               string
 	// BaseURL carries the shared openai endpoint override. Personal
 	// resolutions never set it, and it must never be serialized into
 	// non-admin payloads (settings/available responses, SSE frames).
@@ -40,10 +41,11 @@ func (h *Handler) resolveAI(ctx context.Context, userID int64) resolvedAI {
 	personal, selected, err := h.creds.LoadUserAIProfile(ctx, userID)
 	if selected {
 		resolved := resolvedAI{
-			Source:   aiSourcePersonal,
-			Provider: personal.Config.Provider,
-			Model:    personal.Config.Model,
-			Account:  codexapp.PersonalAccount(userID),
+			Source:               aiSourcePersonal,
+			Provider:             personal.Config.Provider,
+			Model:                personal.Config.Model,
+			ModelFallbackEnabled: personal.Config.ModelFallbackEnabled,
+			Account:              codexapp.PersonalAccount(userID),
 		}
 		if err != nil {
 			resolved.Reason = "storage_error"
@@ -103,13 +105,14 @@ func (h *Handler) resolveAI(ctx context.Context, userID int64) resolvedAI {
 		return resolvedAI{Source: aiSourceNone, Reason: "shared_access_disabled"}
 	}
 	resolved := resolvedAI{
-		Source:          aiSourceShared,
-		Provider:        shared.Config.Provider,
-		Model:           shared.Config.Model,
-		BaseURL:         shared.BaseURL,
-		ReasoningEffort: shared.ReasoningEffort,
-		UseProxy:        shared.UseProxy,
-		Account:         codexapp.SharedAccount(),
+		Source:               aiSourceShared,
+		Provider:             shared.Config.Provider,
+		Model:                shared.Config.Model,
+		ModelFallbackEnabled: shared.Config.ModelFallbackEnabled,
+		BaseURL:              shared.BaseURL,
+		ReasoningEffort:      shared.ReasoningEffort,
+		UseProxy:             shared.UseProxy,
+		Account:              codexapp.SharedAccount(),
 	}
 	if err != nil {
 		resolved.Reason = "storage_error"
@@ -171,13 +174,14 @@ func (h *Handler) resolveAIForUser(userID int64) resolvedAI {
 func (h *Handler) resolveSharedAI(ctx context.Context) resolvedAI {
 	shared, err := h.creds.LoadSharedAIProfile(ctx)
 	resolved := resolvedAI{
-		Source:          aiSourceShared,
-		Provider:        shared.Config.Provider,
-		Model:           shared.Config.Model,
-		BaseURL:         shared.BaseURL,
-		ReasoningEffort: shared.ReasoningEffort,
-		UseProxy:        shared.UseProxy,
-		Account:         codexapp.SharedAccount(),
+		Source:               aiSourceShared,
+		Provider:             shared.Config.Provider,
+		Model:                shared.Config.Model,
+		ModelFallbackEnabled: shared.Config.ModelFallbackEnabled,
+		BaseURL:              shared.BaseURL,
+		ReasoningEffort:      shared.ReasoningEffort,
+		UseProxy:             shared.UseProxy,
+		Account:              codexapp.SharedAccount(),
 	}
 	if err != nil {
 		resolved.Reason = "storage_error"

@@ -11,6 +11,43 @@ import 'package:go_router/go_router.dart';
 import 'package:cantinarr/core/widgets/cached_image.dart';
 
 void main() {
+  testWidgets('model change notice links to personal AI settings',
+      (tester) async {
+    final router = GoRouter(routes: [
+      GoRoute(
+          path: '/',
+          builder: (_, __) => Scaffold(
+                  body: ChatBubble(
+                      message: ChatMessage(
+                id: 'fallback',
+                role: ChatRole.assistant,
+                content: 'Hello',
+                timestamp: DateTime(2026),
+                modelFallback: const ModelFallbackNotice(
+                    selectedModel: 'retired',
+                    replacementModel: 'recommended',
+                    reason: 'Model unavailable',
+                    recommendationSource: 'Cantinarr recommendation',
+                    differences: 'Cost may change',
+                    source: 'personal'),
+              )))),
+      GoRoute(
+          path: '/settings/ai',
+          builder: (_, __) =>
+              const Scaffold(body: Text('Personal settings destination'))),
+    ]);
+    addTearDown(router.dispose);
+    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Selected: retired'), findsOneWidget);
+    expect(find.textContaining('Replacement attempt: recommended'),
+        findsOneWidget);
+    expect(find.textContaining('Model unavailable'), findsOneWidget);
+    await tester.tap(find.text('Review personal AI settings'));
+    await tester.pumpAndSettle();
+    expect(find.text('Personal settings destination'), findsOneWidget);
+  });
+
   testWidgets(
       'music result artwork uses the authenticated selected-instance proxy',
       (tester) async {

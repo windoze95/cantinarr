@@ -25,6 +25,7 @@ class AiProviderOption {
   /// carry it; the flag exists for the admin screen.
   final bool sharedOnly;
   final List<AiModelOption> models;
+  final AiModelRecommendation? modelFallback;
 
   const AiProviderOption({
     required this.id,
@@ -36,6 +37,7 @@ class AiProviderOption {
     this.supportsProxyOptIn = false,
     this.sharedOnly = false,
     required this.models,
+    this.modelFallback,
   });
 
   bool get usesOAuth => authType != 'api_key';
@@ -52,6 +54,10 @@ class AiProviderOption {
             json['supports_reasoning_effort'] as bool? ?? false,
         supportsProxyOptIn: json['supports_proxy_opt_in'] as bool? ?? false,
         sharedOnly: json['shared_only'] as bool? ?? false,
+        modelFallback: json['model_fallback'] is Map<String, dynamic>
+            ? AiModelRecommendation.fromJson(
+                json['model_fallback'] as Map<String, dynamic>)
+            : null,
         models: ((json['models'] as List?) ?? const [])
             .whereType<Map<String, dynamic>>()
             .map(AiModelOption.fromJson)
@@ -77,5 +83,19 @@ class AiModelOption {
         label: json['label'] as String? ?? json['id'] as String? ?? '',
         description: json['description'] as String? ?? '',
         supportsReasoningEffort: json['supports_reasoning_effort'] as bool?,
+      );
+}
+
+class AiModelRecommendation {
+  final String model;
+  final String source;
+  final String description;
+  const AiModelRecommendation(
+      {required this.model, required this.source, required this.description});
+  factory AiModelRecommendation.fromJson(Map<String, dynamic> json) =>
+      AiModelRecommendation(
+        model: json['model'] as String? ?? '',
+        source: json['source'] as String? ?? '',
+        description: json['description'] as String? ?? '',
       );
 }

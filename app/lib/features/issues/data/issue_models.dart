@@ -168,6 +168,7 @@ class Issue {
   final bool canConfirmFixed;
   final bool canReopen;
   final bool isPrevention;
+  final String settingsPath;
 
   const Issue({
     required this.id,
@@ -193,6 +194,7 @@ class Issue {
     required this.canConfirmFixed,
     this.canReopen = false,
     this.isPrevention = false,
+    this.settingsPath = '',
   });
 
   bool get isTv => mediaType == 'tv';
@@ -229,6 +231,7 @@ class Issue {
   factory Issue.fromJson(Map<String, dynamic> json) => Issue(
         id: json['id'] as int? ?? 0,
         source: json['source'] as String? ?? 'user',
+        settingsPath: json['settings_path'] as String? ?? '',
         status: IssueStatus.fromValue(json['status'] as String?),
         category: json['category'] == null
             ? null

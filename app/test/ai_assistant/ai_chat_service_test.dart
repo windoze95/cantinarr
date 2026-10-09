@@ -8,6 +8,28 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('parses model fallback separately from assistant text', () async {
+    final bytes = utf8.encode('data: ${jsonEncode({
+          'model_fallback': {
+            'selected_model': 'retired',
+            'replacement_model': 'recommended',
+            'reason': 'Model unavailable',
+            'recommendation_source': 'Cantinarr recommendation',
+            'differences': 'Cost and latency may change',
+            'source': 'personal',
+          }
+        })}\n\ndata: [DONE]\n\n');
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = _SseAdapter(chunks: [Uint8List.fromList(bytes)]);
+    final events = await AiChatService(backendDio: dio)
+        .sendMessage(messages: const []).toList();
+    final notice = (events.single as ModelFallbackEvent).notice;
+    expect(notice.selectedModel, 'retired');
+    expect(notice.replacementModel, 'recommended');
+    expect(notice.reason, 'Model unavailable');
+    expect(events.whereType<TextChunkEvent>(), isEmpty);
+  });
+
   test('parses a structured configuration-change SSE receipt', () async {
     final adapter = _SseAdapter();
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))

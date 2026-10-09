@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
@@ -29,6 +30,7 @@ type Handler struct {
 	conversations       *conversationStore
 	validationProbe     func(context.Context, credentials.AIProfile, codexapp.AccountRef) error
 	healthIssueSink     SharedAIHealthIssueSink
+	modelFallbackSink   ModelFallbackSink
 	authorizePermission auth.PermissionAuthorizer
 	settingsMu          sync.Mutex
 	admissionOnce       sync.Once
@@ -171,17 +173,22 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	var activityStarted atomic.Bool
 	callbacks := StreamCallbacks{
 		OnText: func(text string) {
+			activityStarted.Store(true)
 			emit(map[string]string{"text": text})
 		},
 		OnToolStart: func(name, label string) {
+			activityStarted.Store(true)
 			emit(map[string]any{"tool_start": map[string]string{"name": name, "label": label}})
 		},
 		OnToolEnd: func(name string, ok bool) {
+			activityStarted.Store(true)
 			emit(map[string]any{"tool_end": map[string]any{"name": name, "ok": ok}})
 		},
 		OnToolResult: func(toolName string, structuredData any) {
+			activityStarted.Store(true)
 			switch toolName {
 			case "display_media":
 				emit(map[string]any{"media_results": structuredData})
@@ -251,79 +258,89 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	var finalHistory transcript
-	switch aiConfig.Provider {
-	case credentials.AIProviderAnthropic:
-		service := NewService(apiKey, aiConfig.Model, h.toolServer)
-		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
-	case credentials.AIProviderOpenAI:
-		// resolved.BaseURL/ReasoningEffort are empty for personal profiles:
-		// only the shared profile can carry the admin overrides.
-		service := NewOpenAIService(apiKey, aiConfig.Model, resolved.BaseURL, resolved.ReasoningEffort, h.toolServer)
-		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
-	case credentials.AIProviderLocalOpenAI:
-		// Shared-only by construction: personal selections of the local
-		// provider are rejected at the settings boundary.
-		service := NewLocalOpenAIService(apiKey, aiConfig.Model, resolved.BaseURL, resolved.ReasoningEffort, resolved.UseProxy, h.toolServer)
-		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
-	case credentials.AIProviderGemini:
-		service := NewGeminiService(apiKey, aiConfig.Model, h.toolServer)
-		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
-	case credentials.AIProviderGrok:
-		service := NewGrokService(apiKey, aiConfig.Model, h.toolServer)
-		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
-	case credentials.AIProviderGrokOAuth:
-		// The bearer token is resolved per turn so a rotated or refreshed
-		// authorization is always the one that reaches Grok Build's OAuth proxy.
-		var token string
-		token, err = h.grok.AccessToken(r.Context(), grokAccountFor(resolved.Account))
-		if err == nil {
-			service := NewGrokOAuthService(token, aiConfig.Model, chatCtx.ConversationID, h.toolServer)
+	run := func(model string) error {
+		aiConfig.Model = model
+		switch aiConfig.Provider {
+		case credentials.AIProviderAnthropic:
+			service := NewService(apiKey, aiConfig.Model, h.toolServer)
 			finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
-		}
-	case credentials.AIProviderCodex:
-		model := aiConfig.Model
-		if model == "default" {
-			model = ""
-		}
-		runCodex := func(prompt string, historyItems []json.RawMessage) error {
-			return h.codex.RunWithAccountSessionProvenance(
-				r.Context(),
-				resolved.Account,
-				claims.UserID,
-				claims.DeviceID,
-				claims.Role,
-				model,
-				systemPrompt,
-				dynamicContext(chatCtx),
-				prompt,
-				historyItems,
-				mcp.CallContext{
-					Origin:            mcp.OriginInteractiveChat,
-					TrustedUserText:   chatCtx.TrustedUserText,
-					InteractiveTurnID: chatCtx.InteractiveTurnID,
-				},
-				codexapp.Callbacks{
-					OnText: func(value string) {
-						codexBuilder.Text(value)
-						callbacks.OnText(value)
+		case credentials.AIProviderOpenAI:
+			// resolved.BaseURL/ReasoningEffort are empty for personal profiles:
+			// only the shared profile can carry the admin overrides.
+			service := NewOpenAIService(apiKey, aiConfig.Model, resolved.BaseURL, resolved.ReasoningEffort, h.toolServer)
+			finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
+		case credentials.AIProviderLocalOpenAI:
+			// Shared-only by construction: personal selections of the local
+			// provider are rejected at the settings boundary.
+			service := NewLocalOpenAIService(apiKey, aiConfig.Model, resolved.BaseURL, resolved.ReasoningEffort, resolved.UseProxy, h.toolServer)
+			finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
+		case credentials.AIProviderGemini:
+			service := NewGeminiService(apiKey, aiConfig.Model, h.toolServer)
+			finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
+		case credentials.AIProviderGrok:
+			service := NewGrokService(apiKey, aiConfig.Model, h.toolServer)
+			finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
+		case credentials.AIProviderGrokOAuth:
+			// The bearer token is resolved per turn so a rotated or refreshed
+			// authorization is always the one that reaches Grok Build's OAuth proxy.
+			var token string
+			token, err = h.grok.AccessToken(r.Context(), grokAccountFor(resolved.Account))
+			if err == nil {
+				service := NewGrokOAuthService(token, aiConfig.Model, chatCtx.ConversationID, h.toolServer)
+				finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
+			}
+		case credentials.AIProviderCodex:
+			model := aiConfig.Model
+			if model == "default" {
+				model = ""
+			}
+			runCodex := func(prompt string, historyItems []json.RawMessage) error {
+				return h.codex.RunWithAccountSessionProvenance(
+					r.Context(),
+					resolved.Account,
+					claims.UserID,
+					claims.DeviceID,
+					claims.Role,
+					model,
+					systemPrompt,
+					dynamicContext(chatCtx),
+					prompt,
+					historyItems,
+					mcp.CallContext{
+						Origin:            mcp.OriginInteractiveChat,
+						TrustedUserText:   chatCtx.TrustedUserText,
+						InteractiveTurnID: chatCtx.InteractiveTurnID,
 					},
-					OnToolStart: func(name string) {
-						if callbacks.OnToolStart != nil {
-							callbacks.OnToolStart(name, toolLabel(name))
-						}
+					codexapp.Callbacks{
+						OnText: func(value string) {
+							codexBuilder.Text(value)
+							callbacks.OnText(value)
+						},
+						OnToolStart: func(name string) {
+							if callbacks.OnToolStart != nil {
+								callbacks.OnToolStart(name, toolLabel(name))
+							}
+						},
+						OnToolEnd:    callbacks.OnToolEnd,
+						OnToolResult: callbacks.OnToolResult,
+						OnToolRecord: codexBuilder.ToolRecord,
 					},
-					OnToolEnd:    callbacks.OnToolEnd,
-					OnToolResult: callbacks.OnToolResult,
-					OnToolRecord: codexBuilder.ToolRecord,
-				},
-			)
+				)
+			}
+			err = runCodexConversation(history, runCodex)
+			if err == nil {
+				finalHistory = append(cloneTranscript(history), codexBuilder.Finish()...)
+			}
+		default:
+			err = fmt.Errorf("unsupported AI provider: %s", aiConfig.Provider)
 		}
-		err = runCodexConversation(history, runCodex)
-		if err == nil {
-			finalHistory = append(cloneTranscript(history), codexBuilder.Finish()...)
-		}
-	default:
-		err = fmt.Errorf("unsupported AI provider: %s", aiConfig.Provider)
+		return err
+	}
+	err = run(resolved.Model)
+	if !activityStarted.Load() {
+		_, err = h.retryUnavailableModel(r.Context(), resolved, "chat", err, func(event ModelFallback) {
+			emit(map[string]any{"model_fallback": event})
+		}, run)
 	}
 	if err != nil {
 		// Drop stored state rather than persist a possibly poisoned transcript;
@@ -341,6 +358,10 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 			if mapped := grokClientError(err, resolved.Source); mapped != "" {
 				clientError = mapped
 			}
+		}
+		var fallbackErr *modelFallbackError
+		if errors.As(err, &fallbackErr) {
+			clientError = fallbackErr.Error()
 		}
 		emit(map[string]string{"error": clientError})
 	} else {

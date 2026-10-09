@@ -10,6 +10,14 @@ The server also runs one small shared-model health turn every 24 hours by defaul
 
 Included AI is an explicit per-user entitlement for new accounts; the initial admin starts enabled. Upgrades preserve the previous global-provider behavior for existing users so access does not disappear, after which the admin can revoke or grant it from **Settings > Users**. Enabling an OpenAI OAuth-backed grant shows the shared-account allowance and cost warning before it is applied.
 
+### Recommended model fallback
+
+**Fall back to the recommended model** is off by default for each personal/shared profile. The shared preference is the plaintext `settings.ai_model_fallback_enabled` value (`true`/`false`); personal settings store `user_ai_settings.model_fallback_enabled`. The shared switch also covers a separate remediation-model override, using the current shared provider and credential. Changing provider resets an omitted opt-in to off.
+
+On a confirmed model-unavailable response, Cantinarr attempts one compatible replacement without changing the saved selection or provider/account/endpoint/billing source. Codex reads the linked account's `model/list` upgrade/default metadata. Other hosted integrations use labeled, maintained Cantinarr recommendations; local endpoints have none. Cost, latency, and capabilities may change. Chat reports the replacement attempt and reason; an admin-only system issue records the outcome, known differences, and a settings link, deduplicated across repeated requests and restarts. Pricing differences are not estimated.
+
+Fallback does not handle credentials, quota/rate limits, outages, or unrelated errors. Interactive retries stop once output or tool activity has begun. Remediation retries individual model calls and retains executed tool results. A preference-only save can enable fallback after retirement; new selections, credential changes, and daily health probes still test the exact selected model. See the [AI provider guide](https://docs.cantinarr.com/admin/ai/) for settings steps and failure handling.
+
 ## Service settings
 
 | Setting | Where | Description |

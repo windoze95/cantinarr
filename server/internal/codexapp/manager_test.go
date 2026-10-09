@@ -116,6 +116,17 @@ func TestCodexAppHelperProcess(t *testing.T) {
 		case "account/logout":
 			_ = os.Remove(filepath.Join(os.Getenv("CODEX_HOME"), "auth.json"))
 			send(map[string]any{"id": id, "result": map[string]any{}})
+		case "model/list":
+			params, _ := message["params"].(map[string]any)
+			if params["cursor"] == "next" {
+				send(map[string]any{"id": id, "result": map[string]any{"data": []any{
+					map[string]any{"id": "replacement", "model": "replacement", "inputModalities": []string{"text"}, "isDefault": true},
+				}, "nextCursor": nil}})
+			} else {
+				send(map[string]any{"id": id, "result": map[string]any{"data": []any{
+					map[string]any{"id": "old", "model": "old", "hidden": true, "upgrade": "replacement"},
+				}, "nextCursor": "next"}})
+			}
 		case "thread/start":
 			send(map[string]any{"id": id, "result": map[string]any{"thread": map[string]any{"id": "thread-1"}}})
 		case "thread/inject_items":
