@@ -83,10 +83,26 @@ void main() {
                   'label': 'GPT-5.6 Luna',
                   'supports_reasoning_effort': true,
                 },
-                {'id': 'gpt-6-astra', 'label': 'GPT-6 Astra'},
-                {'id': 'gpt-6-sol', 'label': 'GPT-6 Sol'},
-                {'id': 'gpt-6-luna', 'label': 'GPT-6 Luna'},
-                {'id': 'gpt-6.1-sol', 'label': 'GPT-6.1 Sol'},
+                {
+                  'id': 'gpt-6-astra',
+                  'label': 'GPT-6 Astra',
+                  'supports_reasoning_effort': false,
+                },
+                {
+                  'id': 'gpt-6-sol',
+                  'label': 'GPT-6 Sol',
+                  'supports_reasoning_effort': false,
+                },
+                {
+                  'id': 'gpt-6-luna',
+                  'label': 'GPT-6 Luna',
+                  'supports_reasoning_effort': false,
+                },
+                {
+                  'id': 'gpt-6.1-sol',
+                  'label': 'GPT-6.1 Sol',
+                  'supports_reasoning_effort': false,
+                },
               ],
             },
           ],
@@ -112,8 +128,14 @@ void main() {
         isFalse,
       );
       expect(
-        status.ai.providers.single.models.last.supportsReasoningEffort,
+        status.ai.providers.single.models
+            .singleWhere((model) => model.id == 'gpt-5.4-mini')
+            .supportsReasoningEffort,
         isTrue,
+      );
+      expect(
+        status.ai.providers.single.models.last.supportsReasoningEffort,
+        isFalse,
       );
       expect(status.ai.healthCheckEnabled, isFalse);
       expect(status.ai.healthCheckIntervalHours, 24);
