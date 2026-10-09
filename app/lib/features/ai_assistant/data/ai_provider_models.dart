@@ -63,16 +63,19 @@ class AiModelOption {
   final String id;
   final String label;
   final String description;
+  final bool? supportsReasoningEffort;
 
   const AiModelOption({
     required this.id,
     required this.label,
     required this.description,
+    this.supportsReasoningEffort,
   });
 
   factory AiModelOption.fromJson(Map<String, dynamic> json) => AiModelOption(
         id: json['id'] as String? ?? '',
         label: json['label'] as String? ?? json['id'] as String? ?? '',
         description: json['description'] as String? ?? '',
+        supportsReasoningEffort: json['supports_reasoning_effort'] as bool?,
       );
 }

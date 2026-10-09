@@ -47,6 +47,16 @@ type openAIService struct {
 // as internet-bound and rides the admin's outbound proxy; NewLocalOpenAIService
 // is the twin that defaults to direct.
 func NewOpenAIService(apiKey, model, baseURL, reasoningEffort string, toolServer *mcp.ToolServer) *openAIService {
+	if strings.TrimSpace(model) == "" {
+		model = "gpt-4.1-mini"
+	}
+	// GPT-4.1 is a supported low-cost chat model, but does not accept
+	// reasoning_effort. Keep any saved pin intact in settings and omit it from
+	// this model's requests; users can switch to a reasoning-capable model to
+	// apply the pin again.
+	if openAIModelReasoningCapability(openai.ChatModel(model)) == openAIReasoningUnsupported {
+		reasoningEffort = ""
+	}
 	return newOpenAIService(apiKey, model, baseURL, reasoningEffort, toolServer, newHostedProviderHTTPClient(httpProviderStreamTimeout))
 }
 

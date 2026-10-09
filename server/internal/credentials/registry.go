@@ -115,9 +115,10 @@ const (
 
 // AIModelOption describes one selectable chat model for the admin UI.
 type AIModelOption struct {
-	ID          string `json:"id"`
-	Label       string `json:"label"`
-	Description string `json:"description,omitempty"`
+	ID                      string `json:"id"`
+	Label                   string `json:"label"`
+	Description             string `json:"description,omitempty"`
+	SupportsReasoningEffort bool   `json:"supports_reasoning_effort"`
 }
 
 // AIProviderOption describes a supported AI provider and its default models.
@@ -173,9 +174,9 @@ var AIProviders = []AIProviderOption{
 		CredentialKey:           KeyOpenAIKey,
 		SupportsReasoningEffort: true,
 		Models: []AIModelOption{
-			{ID: "gpt-5.5", Label: "GPT-5.5", Description: "Flagship model for complex work"},
-			{ID: "gpt-5.4-mini", Label: "GPT-5.4 mini", Description: "Faster, lower-cost model with reasoning and tool calling"},
-			{ID: "gpt-4.1-mini", Label: "GPT-4.1 mini", Description: "Efficient non-reasoning model with tool calling"},
+			{ID: "gpt-4.1-mini", Label: "GPT-4.1 mini", Description: "Low-cost, efficient model with tool calling; no reasoning controls"},
+			{ID: "gpt-5.4-mini", Label: "GPT-5.4 mini", Description: "Faster, lower-cost reasoning model with tool calling", SupportsReasoningEffort: true},
+			{ID: "gpt-5.5", Label: "GPT-5.5", Description: "Flagship model for complex work", SupportsReasoningEffort: true},
 		},
 	},
 	{

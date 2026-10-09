@@ -59,8 +59,14 @@ void main() {
               'supports_reasoning_effort': true,
               'models': [
                 {
+                  'id': 'gpt-4.1-mini',
+                  'label': 'GPT-4.1 mini',
+                  'supports_reasoning_effort': false,
+                },
+                {
                   'id': 'gpt-5.4-mini',
                   'label': 'GPT-5.4 mini',
+                  'supports_reasoning_effort': true,
                 },
               ],
             },
@@ -82,6 +88,14 @@ void main() {
       expect(status.ai.localOpenaiReasoningEffort, 'none');
       expect(status.ai.providers.single.credentialKey, 'openai_key');
       expect(status.ai.providers.single.supportsReasoningEffort, isTrue);
+      expect(
+        status.ai.providers.single.models.first.supportsReasoningEffort,
+        isFalse,
+      );
+      expect(
+        status.ai.providers.single.models.last.supportsReasoningEffort,
+        isTrue,
+      );
       expect(status.ai.healthCheckEnabled, isFalse);
       expect(status.ai.healthCheckIntervalHours, 24);
       expect(status.ai.healthLastCheckedAt, isNotNull);

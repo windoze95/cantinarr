@@ -354,6 +354,33 @@ func TestOpenAIValidationProviderContract(t *testing.T) {
 	}
 }
 
+func TestOpenAILowCostDefaultOmitsUnsupportedReasoningEffort(t *testing.T) {
+	requests := make(chan providerRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- captureProviderRequest(r)
+		writeOpenAITextSSE(w)
+	}))
+	t.Cleanup(server.Close)
+
+	service := NewOpenAIService("secret", "", server.URL+"/v1", "high", nil)
+	if got := string(service.model); got != "gpt-4.1-mini" {
+		t.Fatalf("empty OpenAI model default = %q, want low-cost supported gpt-4.1-mini", got)
+	}
+	if service.reasoningEffort != "" {
+		t.Fatalf("gpt-4.1-mini kept unsupported reasoning effort %q", service.reasoningEffort)
+	}
+	if _, err := service.NextTurn(context.Background(), validationProbeParams(nil)); err != nil {
+		t.Fatalf("gpt-4.1-mini validation turn: %v", err)
+	}
+	req := <-requests
+	if got := req.body["model"]; got != "gpt-4.1-mini" {
+		t.Fatalf("model=%v, want gpt-4.1-mini", got)
+	}
+	if _, found := req.body["reasoning_effort"]; found {
+		t.Fatalf("non-reasoning default received reasoning_effort: %#v", req.body["reasoning_effort"])
+	}
+}
+
 func TestOpenAIExplicitBaseURLOverridesEnvSeam(t *testing.T) {
 	// The admin-configured shared base URL must win over the SDK's implicit
 	// OPENAI_BASE_URL env default, and an empty configured value must leave

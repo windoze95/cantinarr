@@ -100,7 +100,7 @@ void main() {
     expect(adapter.lastUpdate, {
       'openai_key': 'synthetic-shared-key',
       'ai_provider': 'openai',
-      'ai_model': 'gpt-5.5',
+      'ai_model': 'gpt-4.1-mini',
     });
   });
 
@@ -208,11 +208,12 @@ void main() {
 
 
   testWidgets(
-      'hides the reasoning effort control when the server does not advertise it',
+      'hides the reasoning effort control for a model that does not support it',
       (tester) async {
     final adapter = _CredentialsAdapter(
       provider: 'openai',
       model: 'gpt-4.1-mini',
+      openAiSupportsReasoningEffort: true,
     );
     await _pumpCredentials(tester, adapter);
 
@@ -224,7 +225,7 @@ void main() {
       (tester) async {
     final adapter = _CredentialsAdapter(
       provider: 'openai',
-      model: 'gpt-4.1-mini',
+      model: 'gpt-5.4-mini',
       openAiSupportsReasoningEffort: true,
       openAiReasoningEffort: 'low',
     );
@@ -239,7 +240,7 @@ void main() {
   testWidgets('saves only a changed reasoning effort', (tester) async {
     final adapter = _CredentialsAdapter(
       provider: 'openai',
-      model: 'gpt-4.1-mini',
+      model: 'gpt-5.4-mini',
       openAiSupportsReasoningEffort: true,
       openAiReasoningEffort: '',
     );
@@ -265,7 +266,7 @@ void main() {
   testWidgets('switching back to Auto saves an empty effort', (tester) async {
     final adapter = _CredentialsAdapter(
       provider: 'openai',
-      model: 'gpt-4.1-mini',
+      model: 'gpt-5.4-mini',
       openAiSupportsReasoningEffort: true,
       openAiReasoningEffort: 'medium',
     );
@@ -290,7 +291,7 @@ void main() {
   testWidgets('an untouched reasoning effort is not a change', (tester) async {
     final adapter = _CredentialsAdapter(
       provider: 'openai',
-      model: 'gpt-4.1-mini',
+      model: 'gpt-5.4-mini',
       openAiSupportsReasoningEffort: true,
       openAiReasoningEffort: 'low',
     );
@@ -572,9 +573,21 @@ class _CredentialsAdapter implements HttpClientAdapter {
               if (openAiSupportsReasoningEffort)
                 'supports_reasoning_effort': true,
               'models': [
-                {'id': 'gpt-5.5', 'label': 'GPT-5.5'},
-                {'id': 'gpt-5.4-mini', 'label': 'GPT-5.4 mini'},
-                {'id': 'gpt-4.1-mini', 'label': 'GPT-4.1 mini'},
+                {
+                  'id': 'gpt-4.1-mini',
+                  'label': 'GPT-4.1 mini',
+                  'supports_reasoning_effort': false,
+                },
+                {
+                  'id': 'gpt-5.4-mini',
+                  'label': 'GPT-5.4 mini',
+                  'supports_reasoning_effort': true,
+                },
+                {
+                  'id': 'gpt-5.5',
+                  'label': 'GPT-5.5',
+                  'supports_reasoning_effort': true,
+                },
               ],
             },
             {

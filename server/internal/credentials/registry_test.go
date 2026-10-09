@@ -154,7 +154,7 @@ func TestGrokProviderMetadata(t *testing.T) {
 func TestProviderCatalogIDsAndDefaultsAreCurrentAndAuthSpecific(t *testing.T) {
 	want := map[string][]string{
 		AIProviderAnthropic:   {"claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5"},
-		AIProviderOpenAI:      {"gpt-5.5", "gpt-5.4-mini", "gpt-4.1-mini"},
+		AIProviderOpenAI:      {"gpt-4.1-mini", "gpt-5.4-mini", "gpt-5.5"},
 		AIProviderGemini:      {"gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview"},
 		AIProviderGrok:        {"grok-4.7", "grok-4.6", "grok-4.5"},
 		AIProviderGrokOAuth:   {"grok-4.6", "grok-4.5"},
@@ -175,6 +175,15 @@ func TestProviderCatalogIDsAndDefaultsAreCurrentAndAuthSpecific(t *testing.T) {
 	}
 	if got := DefaultSharedAIModel; got != "gpt-5.6-luna" {
 		t.Fatalf("shared OAuth default = %q, want supported Codex OAuth tier", got)
+	}
+	if got := DefaultAIModel(AIProviderOpenAI); got != "gpt-4.1-mini" {
+		t.Fatalf("OpenAI API default = %q, want the supported low-cost model", got)
+	}
+	for _, model := range aiProviderForTest(t, AIProviderOpenAI).Models {
+		want := model.ID != "gpt-4.1-mini"
+		if model.SupportsReasoningEffort != want {
+			t.Errorf("%s reasoning effort support = %t, want %t", model.ID, model.SupportsReasoningEffort, want)
+		}
 	}
 }
 
