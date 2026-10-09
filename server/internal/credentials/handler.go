@@ -420,7 +420,7 @@ func (h *Handler) effectiveEndpointSettings(w http.ResponseWriter, body map[stri
 		settings.effortSet = true
 		settings.effort = strings.ToLower(strings.TrimSpace(value))
 		if !IsValidAIReasoningEffort(settings.effort) {
-			writeJSONError(w, effortKey+" must be one of none, minimal, low, medium, high, or empty for auto", http.StatusBadRequest)
+			writeJSONError(w, effortKey+" must be one of none, minimal, low, medium, high, xhigh, or empty for auto", http.StatusBadRequest)
 			return settings, false
 		}
 	}
