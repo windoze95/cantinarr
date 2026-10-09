@@ -214,6 +214,22 @@ func TestGrokOAuthVersionGateFailureIsActionableAndSafe(t *testing.T) {
 
 func writeGrokOAuthTextSSE(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/event-stream")
+	// Comment-only keepalives carry no JSON event and must not become an
+	// unexpected-end-of-JSON failure.
+	_, _ = io.WriteString(w, ": keepalive\n\n\nevent: ping\ndata: \n\n")
 	_, _ = io.WriteString(w, `data: {"type":"response.output_text.delta","delta":"OK"}`+"\n\n")
 	_, _ = io.WriteString(w, `data: {"type":"response.completed","response":{"id":"resp_test","object":"response","status":"completed","model":"grok-4.6","output":[{"id":"msg_test","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"OK","annotations":[]}]}],"usage":{"input_tokens":7,"input_tokens_details":{"cached_tokens":0},"output_tokens":1,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":8}}}`+"\n\n")
+}
+
+func TestGrokOAuthStreamStillRejectsMalformedNonemptyData(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, ": keepalive\n\ndata: {broken\n\n")
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("GROK_OAUTH_BASE_URL", server.URL+"/v1")
+	_, err := NewGrokOAuthService("contract-secret", "grok-4.6", "", nil).NextTurn(context.Background(), validationProbeParams(nil))
+	if err == nil {
+		t.Fatal("malformed nonempty JSON was silently ignored")
+	}
 }

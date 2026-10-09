@@ -66,6 +66,8 @@ cannot promise access for every credential.
   July 0.144.3 catalog had no GPT-6 metadata. Updating the runtime
   supplies current model capabilities while retaining the isolated app-server
   boundary, existing OAuth credentials, and exact selected model.
+- Grok OAuth ignores SSE comment/empty keepalive events before JSON decoding.
+  Nonempty malformed JSON and missing terminal responses still fail the turn.
 
 ## Live validation evidence
 
@@ -85,6 +87,14 @@ The local compatible provider was not configured in that environment.
 Failed saves preserved the prior configuration, and the original shared
 provider/model and container image were restored through the Unraid GUI.
 
+The updated preview at head `a9cc659dff3bd2e3d2305b37ccc3a8c0340a578d`,
+merge checkout `8f4bae085a058b526002a44469117d9424a22c8e`, passed all eight
+Codex choices between 17:45 and 17:52 UTC, including all four GPT-6 choices
+and the previously timed-out GPT-5.6 Terra. Grok OAuth passed the client-version
+gate but failed stream decoding with `unexpected end of JSON input`. Empty
+SSE events reproduce that error in the SDK; the parser correction has mock
+coverage and awaits live revalidation.
+
 ## Official sources
 
 All sources below were checked on 2026-10-09.
@@ -97,3 +107,4 @@ All sources below were checked on 2026-10-09.
 - Google: [Gemini API model catalog](https://ai.google.dev/gemini-api/docs/models), [streaming text generation](https://ai.google.dev/gemini-api/docs/generate-content/text-generation), [function calling](https://ai.google.dev/gemini-api/docs/function-calling), [GenerateContent thinking controls](https://ai.google.dev/gemini-api/docs/generate-content/thinking).
 - xAI public API: [Grok 4.7](https://docs.x.ai/developers/models/grok-4.7), [Grok 4.6](https://docs.x.ai/developers/models/grok-4.6), [Grok 4.5](https://docs.x.ai/developers/models/grok-4.5), [legacy Chat Completions](https://docs.x.ai/developers/model-capabilities/legacy/chat-completions).
 - xAI OAuth / Grok Build: [official model settings](https://docs.x.ai/build/settings), [enterprise endpoint/auth guidance](https://docs.x.ai/build/enterprise), [Grok Build OAuth model catalog](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-models/default_models.json), [Responses request implementation](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-sampler/src/client.rs), [official proxy URL constant](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-env/src/lib.rs).
+- Stream framing: [WHATWG SSE interpretation and keepalive comments](https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation).

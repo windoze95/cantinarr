@@ -1,10 +1,12 @@
 package ai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -12,6 +14,7 @@ import (
 	openai "github.com/openai/openai-go/v3"
 	openaioption "github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
+	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 
@@ -204,7 +207,22 @@ func (s *responsesService) responseTurn(
 			openaioption.WithHeader("x-grok-client-identifier", "cantinarr"),
 		}
 	}
-	stream := s.client.Responses.NewStreaming(ctx, params, requestOptions...)
+	var stream *ssestream.Stream[responses.ResponseStreamEventUnion]
+	if s.grokOAuth {
+		// SSE comments/keepalives carry no JSON event. The SDK's generic
+		// Responses stream tries to decode their empty data, so preserve its
+		// request/auth/error handling and filter only empty SSE events.
+		var raw *http.Response
+		requestOptions = append(requestOptions, openaioption.WithJSONSet("stream", true))
+		err := s.client.Post(ctx, "responses", params, &raw, requestOptions...)
+		var decoder ssestream.Decoder
+		if raw != nil && raw.Body != nil {
+			decoder = &grokOAuthEventDecoder{Decoder: ssestream.NewDecoder(raw)}
+		}
+		stream = ssestream.NewStream[responses.ResponseStreamEventUnion](decoder, err)
+	} else {
+		stream = s.client.Responses.NewStreaming(ctx, params, requestOptions...)
+	}
 	defer stream.Close()
 
 	var response responses.Response
@@ -301,6 +319,19 @@ func (s *responsesService) responseTurn(
 type responsesStreamError struct {
 	Code    string
 	Message string
+}
+
+type grokOAuthEventDecoder struct {
+	ssestream.Decoder
+}
+
+func (d *grokOAuthEventDecoder) Next() bool {
+	for d.Decoder.Next() {
+		if len(bytes.TrimSpace(d.Decoder.Event().Data)) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *responsesStreamError) Error() string {
