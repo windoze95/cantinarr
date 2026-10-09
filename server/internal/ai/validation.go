@@ -135,6 +135,11 @@ func classifyAIValidationFailure(err error) AIValidationFailureKind {
 		return AIValidationFailureTemporary
 	}
 	status := providerErrorStatus(err)
+	if status == http.StatusBadRequest || status == http.StatusUnprocessableEntity {
+		if isUnavailableModelError(err) {
+			return AIValidationFailureUnsupportedModel
+		}
+	}
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return AIValidationFailureInvalidCredential
@@ -153,6 +158,54 @@ func classifyAIValidationFailure(err error) AIValidationFailureKind {
 		return AIValidationFailureTemporary
 	}
 	return AIValidationFailureInvalidResponse
+}
+
+// isUnavailableModelError only interprets narrowly model-specific 400/422
+// errors. Other invalid requests remain generic so a broken payload or tool
+// schema is not misreported as an access-tier problem.
+func isUnavailableModelError(err error) bool {
+	var markers []string
+	var openaiErr *openai.Error
+	if errors.As(err, &openaiErr) {
+		markers = append(markers, openaiErr.Code, openaiErr.Param, openaiErr.Message, openaiErr.Type)
+	}
+	var anthropicErr *anthropic.Error
+	if errors.As(err, &anthropicErr) {
+		markers = append(markers, string(anthropicErr.Type()), anthropicErr.RawJSON())
+	}
+	var geminiErr genai.APIError
+	if errors.As(err, &geminiErr) {
+		markers = append(markers, geminiErr.Status, geminiErr.Message, fmt.Sprint(geminiErr.Details))
+	}
+	if len(markers) == 0 {
+		return false
+	}
+	marker := strings.ToLower(strings.Join(markers, " "))
+	if strings.Contains(marker, "model") &&
+		(strings.Contains(marker, "not found") || strings.Contains(marker, "not available") || strings.Contains(marker, "deprecated")) {
+		return true
+	}
+	for _, phrase := range []string{
+		"model_not_found",
+		"model_not_available",
+		"unsupported_model",
+		"unknown model",
+		"model not found",
+		"model does not exist",
+		"model is not found",
+		"model is not available",
+		"model unavailable",
+		"unsupported model",
+		"deprecated model",
+		"model is deprecated",
+		"model has been deprecated",
+		"model retired",
+	} {
+		if strings.Contains(marker, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func providerErrorStatus(err error) int {
@@ -294,8 +347,10 @@ func (h *Handler) validateAIProfile(ctx context.Context, profile credentials.AIP
 		runner = NewLocalOpenAIService(apiKey, profile.Config.Model, profile.BaseURL, profile.ReasoningEffort, profile.UseProxy, h.toolServer)
 	case credentials.AIProviderGemini:
 		runner = NewGeminiService(apiKey, profile.Config.Model, h.toolServer)
-	case credentials.AIProviderGrok, credentials.AIProviderGrokOAuth:
+	case credentials.AIProviderGrok:
 		runner = NewGrokService(apiKey, profile.Config.Model, h.toolServer)
+	case credentials.AIProviderGrokOAuth:
+		runner = NewGrokOAuthService(apiKey, profile.Config.Model, "", h.toolServer)
 	default:
 		return ErrAIValidation
 	}

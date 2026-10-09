@@ -177,7 +177,7 @@ func TestLiveAPIKeyInteractiveChat(t *testing.T) {
 		model    string
 		key      string
 	}{
-		{credentials.AIProviderAnthropic, "claude-haiku-4-5", os.Getenv("ANTHROPIC_API_KEY")},
+		{credentials.AIProviderAnthropic, "claude-haiku-5-5", os.Getenv("ANTHROPIC_API_KEY")},
 		{credentials.AIProviderOpenAI, "gpt-4.1-mini", os.Getenv("OPENAI_API_KEY")},
 		{credentials.AIProviderGemini, "gemini-3.1-flash-lite", os.Getenv("GEMINI_API_KEY")},
 	}

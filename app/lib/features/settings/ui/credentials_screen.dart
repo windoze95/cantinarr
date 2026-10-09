@@ -69,7 +69,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   bool _localUseProxy = false;
   final _localKeyController = TextEditingController();
   String _selectedProvider = 'anthropic';
-  String _selectedModel = 'claude-opus-4-8';
+  String _selectedModel = 'claude-opus-5-5';
   bool _healthCheckEnabled = true;
   bool _isSaving = false;
   bool _isTestingAI = false;

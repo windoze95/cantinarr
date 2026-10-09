@@ -57,6 +57,7 @@ These affect development or source builds. They are separate from [runtime deplo
 | `CODEX_VERSION` | Docker build argument for the bundled helper version. Keep it aligned with the checksums and tested protocol; it is not a runtime upgrade switch |
 | `TARGETARCH` | BuildKit's target architecture, used to select the matching helper artifact |
 | `XAI_BASE_URL` | Test-only endpoint override used by the Go provider contract tests. Leave it unset in deployments; configure self-hosted models through the Local AI provider in Settings |
+| `GROK_OAUTH_BASE_URL` | Test-only endpoint override used by the Grok Build OAuth contract tests. Leave it unset in deployments; the provider uses xAI's Grok Build proxy |
 | `CANTINARR_CODEX_APP_SERVER_SMOKE_BINARY` | Test-only path enabling the real pinned helper protocol smoke in CI |
 
 Provider credentials and personal overrides are configured through Cantinarr's supported settings. Do not copy test endpoint overrides into production examples.

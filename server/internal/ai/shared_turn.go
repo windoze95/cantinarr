@@ -129,7 +129,7 @@ func (r *grokOAuthTurnRunner) NextTurn(ctx context.Context, p TurnParams) (TurnR
 	if err != nil {
 		return TurnResult{}, fmt.Errorf("grok oauth turn: %w", err)
 	}
-	return NewGrokService(token, r.model, r.toolServer).NextTurn(ctx, p)
+	return NewGrokOAuthService(token, r.model, "", r.toolServer).NextTurn(ctx, p)
 }
 
 type codexAutonomousTurnRunner struct {

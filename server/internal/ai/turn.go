@@ -215,9 +215,9 @@ const anthropicValidationReasoningMaxTokens = 16000
 func anthropicNextTurnParams(model anthropic.Model, p TurnParams) anthropic.MessageNewParams {
 	maxTurnTokens := turnMaxTokens(p)
 	if p.DisableReasoning && anthropicAlwaysUsesAdaptiveThinking(model) && maxTurnTokens < anthropicValidationReasoningMaxTokens {
-		// Fable's adaptive thinking cannot be disabled. Give the readiness probe a
-		// bounded allowance large enough that hidden reasoning cannot crowd out its
-		// one-word visible response.
+		// Opus and Fable adaptive thinking cannot be disabled. Give the
+		// readiness probe a bounded allowance large enough that hidden reasoning
+		// cannot crowd out its one-word visible response.
 		maxTurnTokens = anthropicValidationReasoningMaxTokens
 	}
 	params := anthropic.MessageNewParams{
@@ -268,7 +268,8 @@ func (s *Service) NextTurn(ctx context.Context, p TurnParams) (TurnResult, error
 }
 
 func anthropicAlwaysUsesAdaptiveThinking(model anthropic.Model) bool {
-	return strings.Contains(string(model), "fable-5")
+	m := string(model)
+	return strings.HasPrefix(m, "claude-fable-5-") || strings.HasPrefix(m, "claude-opus-5-")
 }
 
 func anthropicTurnMessages(history Transcript) []anthropic.MessageParam {

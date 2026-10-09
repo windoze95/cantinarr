@@ -130,7 +130,7 @@ if environment_page:
     deployment_names = set()
     # Some values are read by credentials/secrets rather than config.Load.
     # Include constants passed to os.Getenv as well as direct literal reads.
-    test_only_names = {'XAI_BASE_URL'}
+    test_only_names = {'XAI_BASE_URL', 'GROK_OAUTH_BASE_URL'}
     development = ''.join(pages['/contributing/development/'].content)
     for file in (ROOT / 'server').rglob('*.go'):
         if file.name.endswith('_test.go'):

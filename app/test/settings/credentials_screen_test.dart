@@ -538,7 +538,12 @@ class _CredentialsAdapter implements HttpClientAdapter {
         'ai': {
           'config': {
             'provider': provider,
-            'model': model ?? (provider == 'grok_oauth' ? 'grok-4.6' : 'gpt-5.4'),
+            'model': model ??
+                (provider == 'grok_oauth'
+                    ? 'grok-4.6'
+                    : provider == 'codex'
+                        ? 'default'
+                        : 'gpt-5.5'),
           },
           if (openAiReasoningEffort != null)
             'openai_reasoning_effort': openAiReasoningEffort,
@@ -553,7 +558,10 @@ class _CredentialsAdapter implements HttpClientAdapter {
               'auth_type': 'user_oauth',
               'credential_key': '',
               'models': [
-                {'id': 'gpt-5.4', 'label': 'GPT-5.4'},
+                {'id': 'default', 'label': 'OpenAI recommended'},
+                {'id': 'gpt-5.6-sol', 'label': 'GPT-5.6 Sol'},
+                {'id': 'gpt-5.6-terra', 'label': 'GPT-5.6 Terra'},
+                {'id': 'gpt-5.6-luna', 'label': 'GPT-5.6 Luna'},
               ],
             },
             {
@@ -564,6 +572,8 @@ class _CredentialsAdapter implements HttpClientAdapter {
               if (openAiSupportsReasoningEffort)
                 'supports_reasoning_effort': true,
               'models': [
+                {'id': 'gpt-5.5', 'label': 'GPT-5.5'},
+                {'id': 'gpt-5.4-mini', 'label': 'GPT-5.4 mini'},
                 {'id': 'gpt-4.1-mini', 'label': 'GPT-4.1 mini'},
               ],
             },
@@ -573,7 +583,9 @@ class _CredentialsAdapter implements HttpClientAdapter {
               'auth_type': 'api_key',
               'credential_key': 'grok_key',
               'models': [
+                {'id': 'grok-4.7', 'label': 'Grok 4.7'},
                 {'id': 'grok-4.6', 'label': 'Grok 4.6'},
+                {'id': 'grok-4.5', 'label': 'Grok 4.5'},
               ],
             },
             {
@@ -582,7 +594,8 @@ class _CredentialsAdapter implements HttpClientAdapter {
               'auth_type': 'user_oauth',
               'credential_key': '',
               'models': [
-                {'id': 'grok-4.6', 'label': 'Grok 4.6'},
+                {'id': 'grok-4.6', 'label': 'Grok Build 4.6'},
+                {'id': 'grok-4.5', 'label': 'Grok Build 4.5'},
               ],
             },
             if (includeLocalProvider)

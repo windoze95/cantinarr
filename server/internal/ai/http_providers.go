@@ -60,7 +60,7 @@ func NewLocalOpenAIService(apiKey, model, baseURL, reasoningEffort string, usePr
 
 func newOpenAIService(apiKey, model, baseURL, reasoningEffort string, toolServer *mcp.ToolServer, client *http.Client) *openAIService {
 	if model == "" {
-		model = "gpt-5.6-sol"
+		model = "gpt-5.5"
 	}
 	options := []openaioption.RequestOption{
 		openaioption.WithAPIKey(apiKey),
@@ -95,7 +95,7 @@ func localOpenAICredential(key string) string {
 // XAI_BASE_URL exists for tests, mirroring the other providers' seams.
 func NewGrokService(credential, model string, toolServer *mcp.ToolServer) *openAIService {
 	if model == "" {
-		model = "grok-4.6"
+		model = "grok-4.7"
 	}
 	baseURL := strings.TrimSpace(os.Getenv("XAI_BASE_URL"))
 	if baseURL == "" {
@@ -460,7 +460,7 @@ type geminiService struct {
 
 func NewGeminiService(apiKey, model string, toolServer *mcp.ToolServer) *geminiService {
 	if model == "" {
-		model = "gemini-3.5-flash"
+		model = "gemini-3.8-flash"
 	}
 	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
 		APIKey:     apiKey,

@@ -96,7 +96,7 @@ void main() {
       expect(status.isConfigured('anthropic_key'), true);
       expect(status.tmdbUsingBuiltin, isFalse);
       expect(status.ai.provider, 'anthropic');
-      expect(status.ai.model, 'claude-opus-4-8');
+      expect(status.ai.model, 'claude-opus-5-5');
       expect(status.ai.openaiReasoningEffort, isEmpty);
       expect(status.ai.localOpenaiBaseUrl, isEmpty);
       expect(status.ai.localOpenaiReasoningEffort, isEmpty);

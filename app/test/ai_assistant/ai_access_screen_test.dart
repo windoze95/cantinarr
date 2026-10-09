@@ -249,8 +249,8 @@ const _providers = [
     credentialKey: 'anthropic_key',
     models: [
       AiModelOption(
-        id: 'claude-sonnet-4-6',
-        label: 'Claude Sonnet 4.6',
+        id: 'claude-sonnet-5-5',
+        label: 'Claude Sonnet 5.5',
         description: '',
       ),
     ],
@@ -261,8 +261,8 @@ const _providers = [
     credentialKey: 'gemini_key',
     models: [
       AiModelOption(
-        id: 'gemini-2.5-flash',
-        label: 'Gemini 2.5 Flash',
+        id: 'gemini-3.8-flash',
+        label: 'Gemini 3.8 Flash',
         description: '',
       ),
     ],
@@ -273,8 +273,8 @@ const _providers = [
     credentialKey: 'grok_key',
     models: [
       AiModelOption(
-        id: 'grok-4.6',
-        label: 'Grok 4.6',
+        id: 'grok-4.7',
+        label: 'Grok 4.7',
         description: '',
       ),
     ],
@@ -305,7 +305,7 @@ const _providers = [
     models: [
       AiModelOption(
         id: 'grok-4.6',
-        label: 'Grok 4.6',
+        label: 'Grok Build 4.6',
         description: '',
       ),
     ],

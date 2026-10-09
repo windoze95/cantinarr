@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
@@ -51,7 +52,7 @@ func validateAPIKeyProfile(t *testing.T, provider, model string) error {
 func writeAnthropicTextSSE(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	_, _ = io.WriteString(w, "event: message_start\n")
-	_, _ = io.WriteString(w, `data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","model":"claude-opus-4-8","content":[],"stop_reason":null,"usage":{"input_tokens":7,"output_tokens":0}}}`+"\n\n")
+	_, _ = io.WriteString(w, `data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","model":"claude-opus-5-5","content":[],"stop_reason":null,"usage":{"input_tokens":7,"output_tokens":0}}}`+"\n\n")
 	_, _ = io.WriteString(w, "event: content_block_start\n")
 	_, _ = io.WriteString(w, `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"OK"}}`+"\n\n")
 	_, _ = io.WriteString(w, "event: content_block_stop\n")
@@ -94,7 +95,7 @@ func writeGeminiTextSSE(w http.ResponseWriter) {
 func writeAnthropicToolSSE(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	_, _ = io.WriteString(w, "event: message_start\n")
-	_, _ = io.WriteString(w, `data: {"type":"message_start","message":{"id":"msg_tool","type":"message","role":"assistant","model":"claude-opus-4-8","content":[],"stop_reason":null,"usage":{"input_tokens":7,"output_tokens":0}}}`+"\n\n")
+	_, _ = io.WriteString(w, `data: {"type":"message_start","message":{"id":"msg_tool","type":"message","role":"assistant","model":"claude-opus-5-5","content":[],"stop_reason":null,"usage":{"input_tokens":7,"output_tokens":0}}}`+"\n\n")
 	_, _ = io.WriteString(w, "event: content_block_start\n")
 	_, _ = io.WriteString(w, `data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"search_movies","input":{}}}`+"\n\n")
 	_, _ = io.WriteString(w, "event: content_block_stop\n")
@@ -160,7 +161,7 @@ func TestInteractiveAuthorizationRevocationStopsProviderLoops(t *testing.T) {
 		t.Setenv("ANTHROPIC_BASE_URL", server.URL)
 		var starts []string
 		var ends []bool
-		finalHistory, err := NewService("secret", "claude-opus-4-8", revokedInteractiveToolServer()).SendMessage(
+		finalHistory, err := NewService("secret", "claude-opus-5-5", revokedInteractiveToolServer()).SendMessage(
 			context.Background(), history, chatCtx, StreamCallbacks{
 				OnToolStart: func(name, _ string) { starts = append(starts, name) },
 				OnToolEnd:   func(_ string, ok bool) { ends = append(ends, ok) },
@@ -238,7 +239,7 @@ func TestAnthropicValidationProviderContract(t *testing.T) {
 	t.Cleanup(server.Close)
 	t.Setenv("ANTHROPIC_BASE_URL", server.URL)
 
-	if err := validateAPIKeyProfile(t, credentials.AIProviderAnthropic, "claude-opus-4-8"); err != nil {
+	if err := validateAPIKeyProfile(t, credentials.AIProviderAnthropic, "claude-sonnet-5-5"); err != nil {
 		t.Fatalf("validate Anthropic profile: %v", err)
 	}
 	req := <-requests
@@ -274,7 +275,7 @@ func TestAnthropicFableValidationUsesAlwaysAdaptiveContract(t *testing.T) {
 	t.Cleanup(server.Close)
 	t.Setenv("ANTHROPIC_BASE_URL", server.URL)
 
-	if err := validateAPIKeyProfile(t, credentials.AIProviderAnthropic, "claude-fable-5"); err != nil {
+	if err := validateAPIKeyProfile(t, credentials.AIProviderAnthropic, "claude-fable-5-1"); err != nil {
 		t.Fatalf("validate Anthropic Fable profile: %v", err)
 	}
 	req := <-requests
@@ -283,6 +284,31 @@ func TestAnthropicFableValidationUsesAlwaysAdaptiveContract(t *testing.T) {
 	}
 	if got := int(req.body["max_tokens"].(float64)); got != anthropicValidationReasoningMaxTokens {
 		t.Fatalf("max_tokens=%d, want %d", got, anthropicValidationReasoningMaxTokens)
+	}
+}
+
+func TestAnthropicCurrentCatalogThinkingCapabilities(t *testing.T) {
+	tests := []struct {
+		model    string
+		adaptive bool
+		alwaysOn bool
+	}{
+		{model: "claude-opus-5-5", adaptive: true, alwaysOn: true},
+		{model: "claude-fable-5-1", adaptive: true, alwaysOn: true},
+		{model: "claude-sonnet-5-5", adaptive: true},
+		{model: "claude-haiku-5-5", adaptive: true},
+		{model: "claude-opus-4-8"},
+	}
+	for _, test := range tests {
+		t.Run(test.model, func(t *testing.T) {
+			model := anthropic.Model(test.model)
+			if got := supportsAnthropicAdaptiveThinking(model); got != test.adaptive {
+				t.Fatalf("supports adaptive thinking = %t, want %t", got, test.adaptive)
+			}
+			if got := anthropicAlwaysUsesAdaptiveThinking(model); got != test.alwaysOn {
+				t.Fatalf("adaptive thinking always on = %t, want %t", got, test.alwaysOn)
+			}
+		})
 	}
 }
 
@@ -528,7 +554,7 @@ func validationProbeParams(tools []mcp.Tool) TurnParams {
 
 func TestAnthropicValidationProbeSendsToolsWithoutToolCalls(t *testing.T) {
 	adminTools := mcp.NewToolServer(nil, nil, nil, nil).GetToolsForRole(auth.RoleAdmin)
-	body, err := json.Marshal(anthropicNextTurnParams("claude-sonnet-5", validationProbeParams(adminTools)))
+	body, err := json.Marshal(anthropicNextTurnParams("claude-sonnet-5-5", validationProbeParams(adminTools)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -544,7 +570,7 @@ func TestAnthropicValidationProbeSendsToolsWithoutToolCalls(t *testing.T) {
 	}
 
 	// The remediation single-turn shape is unchanged: tools offered, choice free.
-	body, err = json.Marshal(anthropicNextTurnParams("claude-sonnet-5", TurnParams{Tools: adminTools}))
+	body, err = json.Marshal(anthropicNextTurnParams("claude-sonnet-5-5", TurnParams{Tools: adminTools}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1184,7 +1210,7 @@ func TestProviderContinuationStateIsReplayed(t *testing.T) {
 		t.Cleanup(server.Close)
 		t.Setenv("ANTHROPIC_BASE_URL", server.URL)
 
-		_, err := NewService("secret", "claude-opus-4-8", nil).NextTurn(context.Background(), TurnParams{
+		_, err := NewService("secret", "claude-opus-5-5", nil).NextTurn(context.Background(), TurnParams{
 			History: Transcript{
 				{Role: RoleUser, Content: []TranscriptBlock{{Type: BlockText, Text: "look it up"}}},
 				{Role: RoleAssistant, Content: []TranscriptBlock{
@@ -1302,6 +1328,49 @@ func TestValidationFailureClassificationIsSanitized(t *testing.T) {
 				t.Fatalf("validation error leaked provider body: %q / %q", message, failure)
 			}
 		})
+	}
+}
+
+func TestUnknownOrDeprecatedModel400IsActionableAndSanitized(t *testing.T) {
+	tests := []struct {
+		name string
+		err  *openai.Error
+		want AIValidationFailureKind
+	}{
+		{name: "unknown model code", err: &openai.Error{StatusCode: http.StatusBadRequest, Code: "model_not_found", Param: "model", Message: "secret model id"}, want: AIValidationFailureUnsupportedModel},
+		{name: "deprecated model text", err: &openai.Error{StatusCode: http.StatusUnprocessableEntity, Code: "invalid_request_error", Message: "This model is deprecated for this account"}, want: AIValidationFailureUnsupportedModel},
+		{name: "unrelated bad request", err: &openai.Error{StatusCode: http.StatusBadRequest, Code: "invalid_request_error", Param: "tools", Message: "tool schema invalid"}, want: AIValidationFailureInvalidResponse},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			failure := newAIValidationFailure(test.err)
+			var typed *AIValidationFailure
+			if !errors.As(failure, &typed) || typed.Kind != test.want {
+				t.Fatalf("failure kind = %#v, want %s", typed, test.want)
+			}
+			message := AIValidationUserMessage(failure)
+			if test.want == AIValidationFailureUnsupportedModel {
+				if !strings.Contains(message, "unavailable") {
+					t.Fatalf("message = %q, want unavailable-model guidance", message)
+				}
+			}
+			if strings.Contains(message, "secret model id") || strings.Contains(message, "tool schema invalid") {
+				t.Fatalf("user-facing message leaked upstream details: %q", message)
+			}
+		})
+	}
+
+	geminiFailure := newAIValidationFailure(genai.APIError{
+		Code:    http.StatusBadRequest,
+		Status:  "INVALID_ARGUMENT",
+		Message: "Model gemini-retired is not available for this API key",
+	})
+	var typed *AIValidationFailure
+	if !errors.As(geminiFailure, &typed) || typed.Kind != AIValidationFailureUnsupportedModel {
+		t.Fatalf("Gemini model failure kind = %#v, want unsupported model", typed)
+	}
+	if message := AIValidationUserMessage(geminiFailure); !strings.Contains(message, "unavailable") || strings.Contains(message, "gemini-retired") {
+		t.Fatalf("Gemini validation message is not clear and sanitized: %q", message)
 	}
 }
 

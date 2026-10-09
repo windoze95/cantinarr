@@ -241,6 +241,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		convID = newConversationID()
 		history = transcriptFromClient(req.Messages)
 	}
+	chatCtx.ConversationID = convID
 	if len(history) == 0 {
 		http.Error(w, `{"error":"no usable messages in request"}`, http.StatusBadRequest)
 		return
@@ -272,11 +273,11 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
 	case credentials.AIProviderGrokOAuth:
 		// The bearer token is resolved per turn so a rotated or refreshed
-		// authorization is always the one that reaches api.x.ai.
+		// authorization is always the one that reaches Grok Build's OAuth proxy.
 		var token string
 		token, err = h.grok.AccessToken(r.Context(), grokAccountFor(resolved.Account))
 		if err == nil {
-			service := NewGrokService(token, aiConfig.Model, h.toolServer)
+			service := NewGrokOAuthService(token, aiConfig.Model, chatCtx.ConversationID, h.toolServer)
 			finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
 		}
 	case credentials.AIProviderCodex:
