@@ -574,6 +574,14 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 			return nil
 		}
 
+		if res.ModelFallback != nil && model != res.ModelFallback.ReplacementModel {
+			fallback := res.ModelFallback
+			model = fallback.ReplacementModel
+			st.seq++
+			r.persistStep(st.runID, issue.ID, st.seq, "system", "", "", "",
+				fmt.Sprintf("AI model fallback: selected %s; using %s. %s %s", fallback.SelectedModel, fallback.ReplacementModel, fallback.Reason, fallback.RecommendationSource), false)
+		}
+
 		// Keep provider-reported token usage for diagnostics without converting it
 		// into a monetary estimate.
 		r.bumpRunUsage(st.runID, res.Usage, st.stepCount)

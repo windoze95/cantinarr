@@ -25,9 +25,10 @@ const (
 var errAISettingsAuthorizationUnavailable = errors.New("AI settings authorization is unavailable")
 
 type updatePersonalAISettingsRequest struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
-	APIKey   string `json:"api_key,omitempty"`
+	Provider             string `json:"provider"`
+	Model                string `json:"model"`
+	APIKey               string `json:"api_key,omitempty"`
+	ModelFallbackEnabled *bool  `json:"model_fallback_enabled,omitempty"`
 }
 
 type updatePersonalAICredentialRequest struct {
@@ -95,7 +96,19 @@ func (h *Handler) UpdateAISettings(w http.ResponseWriter, r *http.Request) {
 		}
 		profile.APIKey, profile.CredentialPresent = key, found
 	}
-	if err := h.ValidatePersonalAISettings(r.Context(), claims.UserID, profile); err != nil {
+	// A preference-only edit remains possible after the saved model retires.
+	// New selections and credential changes still prove the exact model.
+	current, found, loadErr := h.creds.GetUserAIConfig(claims.UserID)
+	if loadErr != nil {
+		writeAISettingsError(w, http.StatusInternalServerError, "failed to load personal AI settings")
+		return
+	}
+	preferenceOnly := found && current.Provider == req.Provider && current.Model == req.Model && req.APIKey == "" && req.ModelFallbackEnabled != nil
+	var validationErr error
+	if !preferenceOnly {
+		validationErr = h.ValidatePersonalAISettings(r.Context(), claims.UserID, profile)
+	}
+	if err := validationErr; err != nil {
 		log.Printf("personal AI validation failed user_id=%d provider=%q: %s", claims.UserID, req.Provider, AIValidationDiagnostic(err))
 		writeAISettingsError(w, http.StatusUnprocessableEntity, AIValidationUserMessage(err))
 		return
@@ -103,7 +116,11 @@ func (h *Handler) UpdateAISettings(w http.ResponseWriter, r *http.Request) {
 	if !h.reauthorizePersonalAIWrite(w, r, claims) {
 		return
 	}
-	if err := h.creds.SetUserAIProfile(claims.UserID, req.Provider, req.Model, req.APIKey); err != nil {
+	var fallback []bool
+	if req.ModelFallbackEnabled != nil {
+		fallback = []bool{*req.ModelFallbackEnabled}
+	}
+	if err := h.creds.SetUserAIProfile(claims.UserID, req.Provider, req.Model, req.APIKey, fallback...); err != nil {
 		writeAISettingsError(w, http.StatusInternalServerError, "failed to save personal AI settings")
 		return
 	}

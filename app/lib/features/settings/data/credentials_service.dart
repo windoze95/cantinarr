@@ -50,6 +50,7 @@ class CredentialsStatus {
 class AiCredentialConfig {
   final String provider;
   final String model;
+  final bool modelFallbackEnabled;
 
   /// Admin-pinned reasoning effort for the shared openai provider. Empty
   /// means auto. Older servers never send it.
@@ -78,6 +79,7 @@ class AiCredentialConfig {
   const AiCredentialConfig({
     required this.provider,
     required this.model,
+    this.modelFallbackEnabled = false,
     this.openaiReasoningEffort = '',
     this.localOpenaiBaseUrl = '',
     this.localOpenaiReasoningEffort = '',
@@ -110,6 +112,7 @@ class AiCredentialConfig {
 
     return AiCredentialConfig(
       provider: selectedProvider,
+      modelFallbackEnabled: config['model_fallback_enabled'] as bool? ?? false,
       model: config['model'] as String? ??
           (selected?.models.isNotEmpty == true
               ? selected!.models.first.id

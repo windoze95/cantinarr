@@ -8,6 +8,33 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('shows fallback before output without adding it to assistant history',
+      () async {
+    final service = _ControlledAiChatService();
+    final notifier = AiChatNotifier(chatService: service);
+    addTearDown(notifier.dispose);
+    final send = notifier.sendMessage('hello');
+    await pumpEventQueue();
+    service.events.add(ModelFallbackEvent(const ModelFallbackNotice(
+      selectedModel: 'retired',
+      replacementModel: 'recommended',
+      reason: 'unavailable',
+      recommendationSource: 'Cantinarr',
+      differences: 'Costs may change',
+      source: 'personal',
+    )));
+    await pumpEventQueue();
+    expect(
+        notifier.state.messages.last.modelFallback?.selectedModel, 'retired');
+    expect(notifier.state.messages.last.content, isEmpty);
+    service.events.add(TextChunkEvent('Hello'));
+    await service.events.close();
+    await send;
+    expect(notifier.state.messages.last.toApiMessage()['content'], 'Hello');
+    expect(notifier.state.messages.last.modelFallback?.replacementModel,
+        'recommended');
+  });
+
   test('shows safe guidance when an assistant response times out', () async {
     final notifier = AiChatNotifier(
       chatService: _FailingAiChatService(

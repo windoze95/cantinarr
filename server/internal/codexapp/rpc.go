@@ -739,6 +739,13 @@ func compactTurnError(raw json.RawMessage) json.RawMessage {
 
 func codexModelUnavailableError(text string) bool {
 	text = strings.ToLower(text)
+	// This category can authorize a paid replacement attempt. Tool/schema,
+	// quota, authentication, and transient errors cannot prove retirement.
+	for _, excluded := range []string{"api key", "api_key", "credential", "quota", "rate_limit", "rate limit", "overload", "temporarily", "tool", "parameter", "endpoint", "route", "schema"} {
+		if strings.Contains(text, excluded) {
+			return false
+		}
+	}
 	for _, marker := range []string{
 		"model_not_found",
 		"model_not_available",

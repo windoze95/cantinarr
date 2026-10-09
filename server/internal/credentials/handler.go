@@ -134,6 +134,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	valid[KeyAIProvider] = true
 	valid[KeyAIModel] = true
+	valid[KeyAIModelFallbackEnabled] = true
 	valid[KeyAIHealthCheckEnabled] = true
 	valid[KeyOpenAIReasoningEffort] = true
 	valid[KeyLocalOpenAIBaseURL] = true
@@ -178,6 +179,17 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		candidate = AIConfig{Provider: provider, Model: model}
 	}
 
+	fallbackEnabled := current.ModelFallbackEnabled && candidate.Provider == current.Provider
+	fallbackValue, fallbackSet := body[KeyAIModelFallbackEnabled]
+	if fallbackSet {
+		parsed, err := strconv.ParseBool(strings.TrimSpace(fallbackValue))
+		if err != nil {
+			writeJSONError(w, "ai_model_fallback_enabled must be true or false", http.StatusBadRequest)
+			return
+		}
+		fallbackEnabled = parsed
+	}
+	candidate.ModelFallbackEnabled = fallbackEnabled
 	healthEnabled := h.registry.AIHealthCheckEnabled()
 	healthValue, healthSet := body[KeyAIHealthCheckEnabled]
 	if healthSet {
@@ -298,11 +310,12 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if len(profiles) > 0 && !h.reauthorizeSharedAIWrite(w, r) {
+	if (len(profiles) > 0 || fallbackSet) && !h.reauthorizeSharedAIWrite(w, r) {
 		return
 	}
 
 	plainWrites := []plainSettingWrite{
+		{key: KeyAIModelFallbackEnabled, value: strconv.FormatBool(fallbackEnabled), set: fallbackSet || providerSet},
 		{key: KeyOpenAIReasoningEffort, value: openaiEndpoint.effort, set: openaiEndpoint.effortSet},
 		{key: KeyLocalOpenAIBaseURL, value: localEndpoint.baseURL, set: localEndpoint.baseURLSet},
 		{key: KeyLocalOpenAIReasoningEffort, value: localEndpoint.effort, set: localEndpoint.effortSet},

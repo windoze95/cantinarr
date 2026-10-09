@@ -639,7 +639,9 @@ func (s *Service) GetIssue(issueID int64) (*Issue, error) {
 		        i.detail, i.occurrences, i.read, i.resolution, i.resolution_kind,
 		        i.created_at, i.updated_at, i.closed_at,
 		        i.instance_id, i.download_id, i.arr_queue_id, i.author_id, i.book_id,
-		        COALESCE(i.dedupe_key, '') LIKE 'system:prevention:%'
+		        COALESCE(i.dedupe_key, '') LIKE 'system:prevention:%',
+                 CASE WHEN i.source = 'system' AND i.dedupe_key GLOB 'system:ai-model-fallback:shared:*' THEN '/settings/credentials'
+                      WHEN i.source = 'system' AND i.dedupe_key GLOB 'system:ai-model-fallback:personal:*' THEN '/settings/ai' ELSE '' END
 		 FROM issues i LEFT JOIN users u ON u.id = i.reporter_id
 		 WHERE i.id = ?`,
 		issueID,
@@ -1025,7 +1027,9 @@ func (s *Service) ListIssuesForReporter(reporterID int64) ([]Issue, error) {
 	                 i.detail, i.occurrences, i.read, i.resolution, i.resolution_kind,
 	                 i.created_at, i.updated_at, i.closed_at,
 	                 i.instance_id, i.download_id, i.arr_queue_id, i.author_id, i.book_id,
-	                 COALESCE(i.dedupe_key, '') LIKE 'system:prevention:%'
+	                 COALESCE(i.dedupe_key, '') LIKE 'system:prevention:%',
+                 CASE WHEN i.source = 'system' AND i.dedupe_key GLOB 'system:ai-model-fallback:shared:*' THEN '/settings/credentials'
+                      WHEN i.source = 'system' AND i.dedupe_key GLOB 'system:ai-model-fallback:personal:*' THEN '/settings/ai' ELSE '' END
 	          FROM issues i LEFT JOIN users u ON u.id = i.reporter_id
 	          WHERE i.reporter_id = ? ORDER BY i.updated_at DESC, i.id DESC`, reporterID)
 	if err != nil {
@@ -1079,7 +1083,9 @@ func (s *Service) ListIssues(status string, closedLimit int) ([]Issue, int64, er
 	                 i.detail, i.occurrences, i.read, i.resolution, i.resolution_kind,
 	                 i.created_at, i.updated_at, i.closed_at,
 	                 i.instance_id, i.download_id, i.arr_queue_id, i.author_id, i.book_id,
-	                 COALESCE(i.dedupe_key, '') LIKE 'system:prevention:%'
+	                 COALESCE(i.dedupe_key, '') LIKE 'system:prevention:%',
+                 CASE WHEN i.source = 'system' AND i.dedupe_key GLOB 'system:ai-model-fallback:shared:*' THEN '/settings/credentials'
+                      WHEN i.source = 'system' AND i.dedupe_key GLOB 'system:ai-model-fallback:personal:*' THEN '/settings/ai' ELSE '' END
 	          FROM issues i LEFT JOIN users u ON u.id = i.reporter_id`
 	const order = " ORDER BY i.updated_at DESC, i.id DESC"
 
@@ -1193,7 +1199,7 @@ func scanIssue(row rowScanner) (*Issue, error) {
 		&iss.TmdbID, &tvdbID, &iss.MediaType, &iss.Title, &iss.SeasonNumber, &iss.EpisodeNumber,
 		&iss.Detail, &iss.Occurrences, &iss.Read, &resolution, &resolutionKind,
 		&iss.CreatedAt, &iss.UpdatedAt, &closedAt, &instanceID, &downloadID, &arrQueueID, &authorID, &bookID,
-		&iss.IsPrevention,
+		&iss.IsPrevention, &iss.SettingsPath,
 	); err != nil {
 		return nil, err
 	}

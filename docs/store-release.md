@@ -35,6 +35,18 @@ ownership, and unreadable ownership state still fail the publishing check.
 After deleting the release branch, main publishing resumes on its next relevant push or manual
 dispatch. Public TestFlight and Play opt-in links stay the same.
 
+## Docker build dependencies
+
+The Docker image workflow configures Google's public Docker Hub cache,
+[`mirror.gcr.io`](https://docs.cloud.google.com/artifact-registry/docs/pull-cached-dockerhub-images),
+for both the Docker daemon and BuildKit. The daemon uses it when starting BuildKit and QEMU;
+BuildKit uses it for Dockerfile base images. Image references stay canonical, and cache misses
+fall back to Docker Hub. GHCR pulls and publishing use GHCR directly.
+
+If a run fails pulling an image, check which step failed. A failure in **Set up Docker Buildx**
+or **Set up QEMU** uses the daemon's `registry-mirrors` configuration; a failure during a build
+uses `buildkitd-config-inline`. Both are configured in `.github/workflows/docker.yml`.
+
 ## Release procedure
 
 ### Server-only patch while a phone build awaits review

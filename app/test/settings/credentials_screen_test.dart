@@ -11,6 +11,28 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('shared fallback is off and saves only its preference',
+      (tester) async {
+    final adapter = _CredentialsAdapter(
+        provider: 'openai', model: 'retired', includeModelFallback: true);
+    await _pumpCredentials(tester, adapter);
+    final toggle = find.widgetWithText(
+        SwitchListTile, 'Fall back to the recommended model');
+    await tester.scrollUntilVisible(toggle, 200,
+        scrollable: find.byType(Scrollable).first);
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+    expect(find.textContaining('separate remediation model override'),
+        findsOneWidget);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await tester.scrollUntilVisible(save, 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(adapter.lastUpdate, {'ai_model_fallback_enabled': 'true'});
+  });
+
   testWidgets('Codex provider is described as shared included access',
       (tester) async {
     final adapter = _CredentialsAdapter();
@@ -494,6 +516,7 @@ Future<void> _pumpCredentials(
 class _CredentialsAdapter implements HttpClientAdapter {
   _CredentialsAdapter({
     this.provider = 'codex',
+    this.includeModelFallback = false,
     this.model,
     this.openAiSupportsReasoningEffort = false,
     this.openAiReasoningEffort,
@@ -505,6 +528,7 @@ class _CredentialsAdapter implements HttpClientAdapter {
   });
 
   final String provider;
+  final bool includeModelFallback;
   final String? model;
   final bool openAiSupportsReasoningEffort;
   final String? openAiReasoningEffort;
@@ -574,6 +598,12 @@ class _CredentialsAdapter implements HttpClientAdapter {
               'label': 'OpenAI',
               'auth_type': 'api_key',
               'credential_key': 'openai_key',
+              if (includeModelFallback)
+                'model_fallback': {
+                  'model': 'gpt-4.1-mini',
+                  'source': 'Cantinarr recommendation',
+                  'description': 'Cost, latency, and capabilities may change.'
+                },
               if (openAiSupportsReasoningEffort)
                 'supports_reasoning_effort': true,
               'models': [

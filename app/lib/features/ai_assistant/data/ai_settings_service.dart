@@ -19,8 +19,12 @@ AiAccessSource _accessSource(String? value) => switch (value) {
 class AiProviderConfig {
   final String provider;
   final String model;
+  final bool modelFallbackEnabled;
 
-  const AiProviderConfig({required this.provider, required this.model});
+  const AiProviderConfig(
+      {required this.provider,
+      required this.model,
+      this.modelFallbackEnabled = false});
 
   bool get isEmpty => provider.isEmpty;
 
@@ -28,6 +32,7 @@ class AiProviderConfig {
       AiProviderConfig(
         provider: json['provider'] as String? ?? '',
         model: json['model'] as String? ?? '',
+        modelFallbackEnabled: json['model_fallback_enabled'] as bool? ?? false,
       );
 }
 
@@ -193,8 +198,11 @@ class AiSettingsService {
     required String provider,
     required String model,
     String? apiKey,
+    bool? modelFallbackEnabled,
   }) async {
-    final data = <String, String>{'provider': provider, 'model': model};
+    final data = <String, dynamic>{'provider': provider, 'model': model};
+    if (modelFallbackEnabled != null)
+      data['model_fallback_enabled'] = modelFallbackEnabled;
     if (apiKey != null && apiKey.trim().isNotEmpty) {
       data['api_key'] = apiKey.trim();
     }

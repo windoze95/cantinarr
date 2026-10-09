@@ -30,6 +30,22 @@ Selecting a provider, saving a key, changing a model, or completing OAuth must p
 
 A validation failure can mean invalid credentials, unavailable model access, quota exhaustion, rate limiting, or a temporary provider outage. Read the category shown. Repeating OAuth is not a useful response to every model-access failure.
 
+## Fall back when a model becomes unavailable
+
+**Fall back to the recommended model** is off by default. Enable it under **Settings > AI Access** for your personal profile, or **Settings > Providers & Credentials** for the shared profile, then save. You can change this preference after a saved model has retired without testing that retired model again. New model and credential selections still require a successful test.
+
+The saved model stays selected. If the provider confirms that it is unavailable, Cantinarr can try one recommended replacement using the same provider, endpoint, account, and billing source. Cost, latency, and capabilities may change. The setting does not move personal usage to included access or local usage to a hosted provider.
+
+- **OpenAI (OAuth):** uses the linked account's Codex model catalog, preferring a compatible recommended upgrade and otherwise its recommended default. **OpenAI recommended** remains a separate selection. A catalog recommendation does not guarantee account access.
+- **Hosted API keys and xAI Grok OAuth:** use the explicitly labeled **Cantinarr recommendation** shown beside the switch. These are maintained choices for that integration, not the newest model in an availability list.
+- **Local (OpenAI-compatible):** has no standard recommendation metadata. Choose a replacement manually; the fallback control is unavailable.
+
+Chat shows the selected model, replacement attempt, reason, and known capability differences. Administrators receive a system issue with the same details and a provider-settings link; push follows their issue notification preference. Repeated requests using the same profile and replacement do not create more notifications, including after the issue is dismissed or the server restarts. Personal notifications identify the owning user; only that user can edit their personal provider in AI Access.
+
+Invalid credentials, quota or rate limits, temporary outages, unrelated request errors, and a missing API route do not trigger fallback. Chat cannot restart after text or tool activity has begun. If the replacement also fails, or no compatible recommendation is available, the error asks you to review AI settings. Cantinarr does not try a second replacement or rewrite your saved model.
+
+The shared preference also covers a separate **AI Remediation** model override, within its bound provider. Remediation retries only the failed model call, preserving earlier tool results. Its run history records the model change. Save-time probes and daily health tests continue to check the selected model itself.
+
 ## Grant included access
 
 Use **Settings > Users** to grant the shared provider to individual people. The initial administrator starts enabled. New invited users do not automatically receive it. Upgraded installations can preserve older access behavior for existing accounts.

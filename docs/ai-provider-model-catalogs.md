@@ -69,6 +69,12 @@ cannot promise access for every credential.
 - Grok OAuth ignores SSE comment/empty keepalive events before JSON decoding.
   Nonempty malformed JSON and missing terminal responses still fail the turn.
 
+## Runtime fallback recommendations
+
+The default-off fallback preference preserves saved model IDs. Codex reads the linked account's paginated `model/list`, preferring the selected model's `upgrade` target when present and compatible, otherwise one visible `isDefault` text-capable model. Missing, ambiguous, hidden, or identical candidates are not substitutes. The catalog is not an entitlement check; the replacement must complete the actual tool-bearing request.
+
+The other integrations use explicit Cantinarr recommendations maintained in `server/internal/credentials/model_recommendations.go`: Anthropic `claude-sonnet-5-5`, OpenAI API `gpt-4.1-mini`, Gemini `gemini-3.8-flash`, xAI API `grok-4.7`, and Grok Build OAuth `grok-4.6`. These entries use the endpoint/tool contracts documented above. OpenAI GPT-4.1 mini omits reasoning controls. A local or custom OpenAI-compatible endpoint has no assumed hosted recommendation. Recommendations make no account-access or price-difference promises and never come from sorting model IDs. See [OpenAI's model/list protocol](https://learn.chatgpt.com/docs/app-server#list-models-modellist) for the default and upgrade fields; the standard [Models API](https://developers.openai.com/api/reference/resources/models/methods/list) does not supply a recommended default.
+
 ## Live validation evidence
 
 On 2026-10-09, the normal settings Save test on the PR preview built from

@@ -5,3 +5,5 @@ Please test upgrading with your sign-in retained, browsing and requesting media,
 When reporting an issue, include your device, iOS version, and Cantinarr server version.
 
 AI provider choices now use current model IDs and the matching API or OAuth endpoint. Check saving your selected provider/model and an AI conversation with tool lookups.
+
+Optional model fallback keeps your saved choice and can try one recommended model when it becomes unavailable. Check the personal/shared setting, the model-change notice in chat, and the administrator notification.

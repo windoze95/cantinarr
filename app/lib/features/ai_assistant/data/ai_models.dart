@@ -21,6 +21,7 @@ class ChatMessage {
 
   /// When set, the message is rendered with an inline error state.
   final String? errorText;
+  final ModelFallbackNotice? modelFallback;
 
   /// Display-only messages (welcome text, synthetic notices) are never
   /// sent back to the server as part of the conversation transcript.
@@ -37,6 +38,7 @@ class ChatMessage {
     this.isStreaming = false,
     this.toolActivity = const [],
     this.errorText,
+    this.modelFallback,
     this.excludeFromHistory = false,
   });
 
@@ -48,6 +50,7 @@ class ChatMessage {
     bool? isStreaming,
     List<ToolActivity>? toolActivity,
     String? errorText,
+    ModelFallbackNotice? modelFallback,
     bool? excludeFromHistory,
   }) =>
       ChatMessage(
@@ -61,6 +64,7 @@ class ChatMessage {
         isStreaming: isStreaming ?? this.isStreaming,
         toolActivity: toolActivity ?? this.toolActivity,
         errorText: errorText ?? this.errorText,
+        modelFallback: modelFallback ?? this.modelFallback,
         excludeFromHistory: excludeFromHistory ?? this.excludeFromHistory,
       );
 
@@ -190,4 +194,38 @@ class ToolEndEvent extends ChatStreamEvent {
 class StreamErrorEvent extends ChatStreamEvent {
   final String message;
   StreamErrorEvent(this.message);
+}
+
+/// Server-authored model selection notice, kept out of assistant history.
+class ModelFallbackNotice {
+  final String status;
+  final String selectedModel;
+  final String replacementModel;
+  final String reason;
+  final String recommendationSource;
+  final String differences;
+  final String source;
+  const ModelFallbackNotice(
+      {this.status = 'attempting',
+      required this.selectedModel,
+      required this.replacementModel,
+      required this.reason,
+      required this.recommendationSource,
+      required this.differences,
+      required this.source});
+  factory ModelFallbackNotice.fromJson(Map<String, dynamic> json) =>
+      ModelFallbackNotice(
+        status: json['status'] as String? ?? 'attempting',
+        selectedModel: json['selected_model'] as String? ?? '',
+        replacementModel: json['replacement_model'] as String? ?? '',
+        reason: json['reason'] as String? ?? '',
+        recommendationSource: json['recommendation_source'] as String? ?? '',
+        differences: json['differences'] as String? ?? '',
+        source: json['source'] as String? ?? '',
+      );
+}
+
+class ModelFallbackEvent extends ChatStreamEvent {
+  final ModelFallbackNotice notice;
+  ModelFallbackEvent(this.notice);
 }
