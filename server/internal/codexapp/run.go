@@ -724,6 +724,9 @@ func contextOrClassified(ctx context.Context, err error) error {
 	if errors.Is(err, ErrUsageLimit) {
 		return ErrUsageLimit
 	}
+	if errors.Is(err, ErrModelUnavailable) {
+		return ErrModelUnavailable
+	}
 	return ErrProvider
 }
 
@@ -805,6 +808,8 @@ func safeTurnError(complete turnCompleteParams) error {
 	switch {
 	case strings.Contains(info, "usageLimitExceeded"), strings.Contains(info, "usage_limit"):
 		return ErrUsageLimit
+	case strings.Contains(info, "modelUnavailable"):
+		return ErrModelUnavailable
 	case strings.Contains(info, "unauthorized"):
 		return ErrNotConnected
 	default:

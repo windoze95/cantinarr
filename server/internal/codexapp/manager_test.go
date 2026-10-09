@@ -540,42 +540,71 @@ func TestAutonomousTurnWithNoToolsReturnsText(t *testing.T) {
 }
 
 func TestProbeAccountUsesExactModelWithoutExecutingTools(t *testing.T) {
-	manager, _, _, runtimeDir, logPath := fakeManager(t)
-	if err := manager.saveAccount(
-		SharedAccount(),
-		[]byte(`{"tokens":{"access_token":"shared-secret"}}`),
-		AccountStatus{Connected: true},
-	); err != nil {
-		t.Fatal(err)
+	for _, model := range []string{"gpt-5.6-luna", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"} {
+		t.Run(model, func(t *testing.T) {
+			manager, _, _, runtimeDir, logPath := fakeManager(t)
+			if err := manager.saveAccount(
+				SharedAccount(),
+				[]byte(`{"tokens":{"access_token":"shared-secret"}}`),
+				AccountStatus{Connected: true},
+			); err != nil {
+				t.Fatal(err)
+			}
+			executed := false
+			manager.toolCallObserver = func(mcp.CallContext) { executed = true }
+			if err := manager.ProbeAccount(context.Background(), SharedAccount(), model); err != nil {
+				t.Fatalf("probe account: %v", err)
+			}
+			if executed {
+				t.Fatal("provider probe executed a Cantinarr tool")
+			}
+			var received []map[string]any
+			for _, entry := range readFakeLog(t, logPath) {
+				if entry.Kind != "received" {
+					continue
+				}
+				var message map[string]any
+				if json.Unmarshal(entry.Value, &message) == nil {
+					received = append(received, message)
+				}
+			}
+			thread := requestByMethod(t, received, "thread/start")
+			params, _ := thread["params"].(map[string]any)
+			if params["model"] != model {
+				t.Fatalf("probe model=%v, want exact Codex selector %q", params["model"], model)
+			}
+			tools, ok := params["dynamicTools"].([]any)
+			if !ok || len(tools) != 0 {
+				t.Fatalf("probe dynamic tools=%#v, want empty", params["dynamicTools"])
+			}
+			assertRuntimeEmpty(t, runtimeDir)
+		})
 	}
-	executed := false
-	manager.toolCallObserver = func(mcp.CallContext) { executed = true }
-	if err := manager.ProbeAccount(context.Background(), SharedAccount(), "gpt-5.6-luna"); err != nil {
-		t.Fatalf("probe account: %v", err)
-	}
-	if executed {
-		t.Fatal("provider probe executed a Cantinarr tool")
-	}
-	var received []map[string]any
-	for _, entry := range readFakeLog(t, logPath) {
-		if entry.Kind != "received" {
-			continue
+}
+
+func TestUnavailableCodexModelErrorsKeepSafeClassification(t *testing.T) {
+	for _, detail := range []string{
+		`{"code":"model_not_found","message":"model is unavailable for this account"}`,
+		`{"message":"You do not have access to this model"}`,
+	} {
+		if !errors.Is(classifyRPCError(&rpcErrorBody{Code: -32602, Message: detail}), ErrModelUnavailable) {
+			t.Errorf("classifyRPCError(%q) did not preserve model-unavailable category", detail)
 		}
-		var message map[string]any
-		if json.Unmarshal(entry.Value, &message) == nil {
-			received = append(received, message)
+		info := compactTurnError(json.RawMessage(detail))
+		if string(info) != `"modelUnavailable"` {
+			t.Errorf("compactTurnError(%q)=%s, want sanitized modelUnavailable marker", detail, info)
+		}
+		complete := turnCompleteParams{}
+		complete.Turn.Error = &struct {
+			CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
+		}{CodexErrorInfo: info}
+		if !errors.Is(safeTurnError(complete), ErrModelUnavailable) {
+			t.Errorf("safeTurnError(%s) did not preserve model-unavailable category", info)
 		}
 	}
-	thread := requestByMethod(t, received, "thread/start")
-	params, _ := thread["params"].(map[string]any)
-	if params["model"] != "gpt-5.6-luna" {
-		t.Fatalf("probe model=%v", params["model"])
+	if !errors.Is(contextOrClassified(context.Background(), ErrModelUnavailable), ErrModelUnavailable) {
+		t.Fatal("contextOrClassified collapsed model-unavailable error")
 	}
-	tools, ok := params["dynamicTools"].([]any)
-	if !ok || len(tools) != 0 {
-		t.Fatalf("probe dynamic tools=%#v, want empty", params["dynamicTools"])
-	}
-	assertRuntimeEmpty(t, runtimeDir)
 }
 
 func TestSharedAutonomousTurnInterruptsAtReportedOutputLimit(t *testing.T) {

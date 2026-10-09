@@ -180,6 +180,10 @@ var AIProviders = []AIProviderOption{
 			{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Description: "Flagship model for complex professional work", SupportsReasoningEffort: true},
 			{ID: "gpt-5.6-terra", Label: "GPT-5.6 Terra", Description: "Balances intelligence and cost", SupportsReasoningEffort: true},
 			{ID: "gpt-5.6-luna", Label: "GPT-5.6 Luna", Description: "Cost-sensitive, high-volume model", SupportsReasoningEffort: true},
+			{ID: "gpt-6-astra", Label: "GPT-6 Astra", Description: "Flagship reasoning model with Chat Completions tool calling"},
+			{ID: "gpt-6-sol", Label: "GPT-6 Sol", Description: "Chat Completions tool calling requires reasoning effort none"},
+			{ID: "gpt-6-luna", Label: "GPT-6 Luna", Description: "Chat Completions tool calling requires reasoning effort none"},
+			{ID: "gpt-6.1-sol", Label: "GPT-6.1 Sol", Description: "Uses Responses for reasoning and tool calling"},
 		},
 	},
 	{
@@ -210,6 +214,10 @@ var AIProviders = []AIProviderOption{
 		AuthType: AIAuthTypeUserOAuth,
 		Models: []AIModelOption{
 			{ID: "default", Label: "OpenAI recommended", Description: "Uses the current model recommended by Codex"},
+			{ID: "gpt-6-astra", Label: "GPT-6 Astra", Description: "Codex model for demanding work; availability depends on account and rollout"},
+			{ID: "gpt-6.1-sol", Label: "GPT-6.1 Sol", Description: "Codex model for complex work; availability depends on account and rollout"},
+			{ID: "gpt-6-sol", Label: "GPT-6 Sol", Description: "Codex model for complex coding; availability depends on account and rollout"},
+			{ID: "gpt-6-luna", Label: "GPT-6 Luna", Description: "Codex model for focused, repeatable work; availability depends on account and rollout"},
 			{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Description: "Highest-quality GPT-5.6 model for complex work"},
 			{ID: "gpt-5.6-terra", Label: "GPT-5.6 Terra", Description: "Pragmatic GPT-5.6 model for everyday work"},
 			{ID: "gpt-5.6-luna", Label: "GPT-5.6 Luna", Description: "Fast GPT-5.6 model for clear, repeatable work"},

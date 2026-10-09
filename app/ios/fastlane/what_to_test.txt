@@ -3,3 +3,5 @@ Browse and request movies, TV, books, and music from your self-hosted Cantinarr 
 Please test upgrading with your sign-in retained, browsing and requesting media, passkey sign-in, Cantinarr connect links, and push notifications. With a v1.0 server, administrators should also check Request Defaults quality-profile lists and OpenAI OAuth model choices.
 
 When reporting an issue, include your device, iOS version, and Cantinarr server version.
+
+AI provider choices now use current model IDs and the matching API or OAuth endpoint. Check saving your selected provider/model and an AI conversation with tool lookups.

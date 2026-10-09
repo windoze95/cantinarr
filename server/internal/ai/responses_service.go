@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -17,17 +18,20 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 )
 
-// grokOAuthService calls Grok Build's Responses proxy with the OAuth session
-// token. It deliberately does not use api.x.ai or the public API-key service.
-type grokOAuthService struct {
-	client     openai.Client
-	model      shared.ResponsesModel
-	toolServer *mcp.ToolServer
-	convID     string
-	sessionID  string
+// responsesService shares the Responses wire protocol while keeping each
+// provider's endpoint, authentication, headers, and reasoning contract separate.
+type responsesService struct {
+	client          openai.Client
+	model           shared.ResponsesModel
+	toolServer      *mcp.ToolServer
+	convID          string
+	sessionID       string
+	grokOAuth       bool
+	openAI          bool
+	reasoningEffort shared.ReasoningEffort
 }
 
-func NewGrokOAuthService(token, model, conversationID string, toolServer *mcp.ToolServer) *grokOAuthService {
+func NewGrokOAuthService(token, model, conversationID string, toolServer *mcp.ToolServer) *responsesService {
 	if strings.TrimSpace(model) == "" {
 		model = "grok-4.6"
 	}
@@ -38,7 +42,7 @@ func NewGrokOAuthService(token, model, conversationID string, toolServer *mcp.To
 	if strings.TrimSpace(conversationID) == "" {
 		conversationID = uuid.NewString()
 	}
-	return &grokOAuthService{
+	return &responsesService{
 		client: openai.NewClient(
 			openaioption.WithAPIKey(token),
 			openaioption.WithBaseURL(baseURL),
@@ -46,15 +50,26 @@ func NewGrokOAuthService(token, model, conversationID string, toolServer *mcp.To
 			openaioption.WithRequestTimeout(httpProviderStreamTimeout),
 		),
 		model:      shared.ResponsesModel(model),
+		grokOAuth:  true,
 		toolServer: toolServer,
 		convID:     conversationID,
 		sessionID:  uuid.NewString(),
 	}
 }
 
-func (s *grokOAuthService) SendMessage(ctx context.Context, history transcript, chatCtx ChatContext, cb StreamCallbacks) (transcript, error) {
+func (s *openAIService) responsesAdapter() *responsesService {
+	effort := shared.ReasoningEffort(s.reasoningEffort)
+	// GPT-6.1 Sol cannot disable reasoning. Preserve the saved profile pin,
+	// but use its lowest supported effort for an inherited none/minimal pin.
+	if effort == "none" || effort == "minimal" {
+		effort = shared.ReasoningEffortLow
+	}
+	return &responsesService{client: s.client, model: shared.ResponsesModel(s.model), toolServer: s.toolServer, openAI: true, reasoningEffort: effort}
+}
+
+func (s *responsesService) SendMessage(ctx context.Context, history transcript, chatCtx ChatContext, cb StreamCallbacks) (transcript, error) {
 	finalHistory := cloneTranscript(history)
-	items := grokOAuthInputItems(history)
+	items := s.inputItems(history)
 	tools := s.responseTools(s.toolServer.GetToolsForRole(chatCtx.Role))
 	watch := &carouselWatch{}
 	instructions := systemPrompt + "\n\n" + dynamicContext(chatCtx)
@@ -65,7 +80,7 @@ func (s *grokOAuthService) SendMessage(ctx context.Context, history transcript, 
 			return finalHistory, err
 		}
 		if strings.TrimSpace(message.Refusal) != "" {
-			return finalHistory, fmt.Errorf("grok oauth responses: model refused the response")
+			return finalHistory, fmt.Errorf("provider responses: model refused the response")
 		}
 		if len(message.ToolCalls) == 0 {
 			if stop == StopReasonMaxOut && cb.OnText != nil {
@@ -75,7 +90,7 @@ func (s *grokOAuthService) SendMessage(ctx context.Context, history transcript, 
 				finalHistory = append(finalHistory, openAIMessageToTranscript(message))
 			}
 			if iteration < maxToolIterations-2 && watch.shouldNudge(message.Content) {
-				items = append(items, grokOAuthAssistantItems(message)...)
+				items = append(items, s.inputItems(transcript{openAIMessageToTranscript(message)})...)
 				nudge := watch.markNudged()
 				items = append(items, responses.ResponseInputItemParamOfMessage(nudge, responses.EasyInputMessageRoleUser))
 				finalHistory = append(finalHistory, textTranscriptMessage(agentRoleUser, nudge))
@@ -85,13 +100,13 @@ func (s *grokOAuthService) SendMessage(ctx context.Context, history transcript, 
 			return finalHistory, nil
 		}
 		if stop != StopReasonToolUse {
-			return finalHistory, fmt.Errorf("grok oauth responses: unexpected output with function calls")
+			return finalHistory, fmt.Errorf("provider responses: unexpected output with function calls")
 		}
 		if s.toolServer == nil {
-			return finalHistory, fmt.Errorf("grok oauth responses: model requested tools but no tool server is configured")
+			return finalHistory, fmt.Errorf("provider responses: model requested tools but no tool server is configured")
 		}
 
-		items = append(items, grokOAuthAssistantItems(message)...)
+		items = append(items, s.inputItems(transcript{openAIMessageToTranscript(message)})...)
 		finalHistory = append(finalHistory, openAIMessageToTranscript(message))
 		var toolResultBlocks []transcriptBlock
 		for _, toolCall := range message.ToolCalls {
@@ -103,21 +118,28 @@ func (s *grokOAuthService) SendMessage(ctx context.Context, history transcript, 
 			toolResultBlocks = append(toolResultBlocks, transcriptBlock)
 		}
 		if len(toolResultBlocks) == 0 {
-			return finalHistory, fmt.Errorf("grok oauth responses: model requested tool use but sent no complete function calls")
+			return finalHistory, fmt.Errorf("provider responses: model requested tool use but sent no complete function calls")
 		}
 		finalHistory = append(finalHistory, transcriptMessage{Role: agentRoleUser, Content: toolResultBlocks})
 	}
-	return finalHistory, fmt.Errorf("grok oauth responses: agent loop exceeded %d iterations", maxToolIterations)
+	return finalHistory, fmt.Errorf("provider responses: agent loop exceeded %d iterations", maxToolIterations)
 }
 
-func (s *grokOAuthService) NextTurn(ctx context.Context, p TurnParams) (TurnResult, error) {
+func (s *responsesService) NextTurn(ctx context.Context, p TurnParams) (TurnResult, error) {
 	maxTokens := int64(turnMaxTokens(p))
-	message, usage, stop, err := s.responseTurn(ctx, p.System, grokOAuthInputItems(p.History.toPrivate()), s.responseTools(p.Tools), p.ForceNoTools, maxTokens, StreamCallbacks{})
+	probe := *s
+	if s.openAI && p.DisableReasoning {
+		probe.reasoningEffort = shared.ReasoningEffortLow
+		if maxTokens < openAIValidationReasoningMaxTokens {
+			maxTokens = openAIValidationReasoningMaxTokens
+		}
+	}
+	message, usage, stop, err := probe.responseTurn(ctx, p.System, s.inputItems(p.History.toPrivate()), s.responseTools(p.Tools), p.ForceNoTools, maxTokens, StreamCallbacks{})
 	if err != nil {
 		return TurnResult{}, err
 	}
 	if strings.TrimSpace(message.Content) == "" && len(message.ToolCalls) == 0 {
-		return TurnResult{}, fmt.Errorf("grok oauth responses: response contained no text or function calls")
+		return TurnResult{}, fmt.Errorf("provider responses: response contained no text or function calls")
 	}
 	return TurnResult{
 		Message:    exportMessage(openAIMessageToTranscript(message)),
@@ -126,7 +148,7 @@ func (s *grokOAuthService) NextTurn(ctx context.Context, p TurnParams) (TurnResu
 	}, nil
 }
 
-func (s *grokOAuthService) responseTurn(
+func (s *responsesService) responseTurn(
 	ctx context.Context,
 	instructions string,
 	items responses.ResponseInputParam,
@@ -146,6 +168,10 @@ func (s *grokOAuthService) responseTurn(
 		MaxOutputTokens: param.NewOpt(maxTokens),
 		Store:           param.NewOpt(false),
 	}
+	if s.openAI {
+		params.Reasoning.Effort = s.reasoningEffort
+		params.Include = []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent}
+	}
 	if len(tools) > 0 {
 		choice := responses.ToolChoiceOptionsAuto
 		if forceNoTools {
@@ -154,20 +180,23 @@ func (s *grokOAuthService) responseTurn(
 		params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{OfToolChoiceMode: param.NewOpt(choice)}
 	}
 
-	requestID := uuid.NewString()
-	stream := s.client.Responses.NewStreaming(ctx, params,
-		openaioption.WithHeader("x-grok-conv-id", s.convID),
-		openaioption.WithHeader("x-grok-req-id", requestID),
-		openaioption.WithHeader("x-grok-model-override", string(s.model)),
-		openaioption.WithHeader("x-grok-session-id", s.sessionID),
-		openaioption.WithHeader("x-grok-agent-id", "cantinarr"),
-		openaioption.WithHeader("x-grok-client-identifier", "cantinarr"),
-	)
+	var requestOptions []openaioption.RequestOption
+	if s.grokOAuth {
+		requestOptions = []openaioption.RequestOption{
+			openaioption.WithHeader("x-grok-conv-id", s.convID),
+			openaioption.WithHeader("x-grok-req-id", uuid.NewString()),
+			openaioption.WithHeader("x-grok-model-override", string(s.model)),
+			openaioption.WithHeader("x-grok-session-id", s.sessionID),
+			openaioption.WithHeader("x-grok-agent-id", "cantinarr"),
+			openaioption.WithHeader("x-grok-client-identifier", "cantinarr"),
+		}
+	}
+	stream := s.client.Responses.NewStreaming(ctx, params, requestOptions...)
 	defer stream.Close()
 
 	var response responses.Response
 	var gotResponse bool
-	var failure string
+	var failure *responsesStreamError
 	for stream.Next() {
 		event := stream.Current()
 		switch event.Type {
@@ -179,30 +208,50 @@ func (s *grokOAuthService) responseTurn(
 			response = event.Response
 			gotResponse = true
 		case "response.failed", "error":
-			failure = strings.TrimSpace(event.Message)
-			if failure == "" {
-				failure = strings.TrimSpace(event.Code)
+			failure = &responsesStreamError{Code: strings.TrimSpace(event.Code), Message: strings.TrimSpace(event.Message)}
+			if event.Type == "response.failed" {
+				failure.Code = string(event.Response.Error.Code)
+				failure.Message = event.Response.Error.Message
 			}
 		}
 	}
 	if err := stream.Err(); err != nil {
-		return openAIMessage{}, Usage{}, "", fmt.Errorf("grok oauth responses stream: %w", err)
+		return openAIMessage{}, Usage{}, "", fmt.Errorf("provider responses stream: %w", err)
 	}
-	if failure != "" {
-		return openAIMessage{}, Usage{}, "", fmt.Errorf("grok oauth responses stream: %s", failure)
+	if failure != nil {
+		return openAIMessage{}, Usage{}, "", failure
 	}
 	if !gotResponse {
-		return openAIMessage{}, Usage{}, "", fmt.Errorf("grok oauth responses stream: response ended without a terminal event")
+		return openAIMessage{}, Usage{}, "", fmt.Errorf("provider responses stream: response ended without a terminal event")
 	}
 
 	message := openAIMessage{Role: agentRoleAssistant, Content: response.OutputText()}
+	if s.openAI {
+		// Stateless reasoning turns must replay all output items, including
+		// encrypted reasoning and assistant phase, alongside tool results.
+		output := make([]json.RawMessage, 0, len(response.Output))
+		for _, item := range response.Output {
+			output = append(output, json.RawMessage(item.RawJSON()))
+		}
+		message.ResponsesOutput, _ = json.Marshal(output)
+	}
 	for _, item := range response.Output {
+		if item.Type == "message" {
+			for _, content := range item.AsMessage().Content {
+				if content.Type == "refusal" {
+					message.Refusal += content.Refusal
+				}
+			}
+		}
 		if item.Type != "function_call" {
 			continue
 		}
 		call := item.AsFunctionCall()
 		if strings.TrimSpace(call.Name) == "" || strings.TrimSpace(call.CallID) == "" {
-			return openAIMessage{}, Usage{}, "", fmt.Errorf("grok oauth responses: function call omitted name or call ID")
+			return openAIMessage{}, Usage{}, "", fmt.Errorf("provider responses: function call omitted name or call ID")
+		}
+		if response.Status != responses.ResponseStatusCompleted || (call.Status != "" && call.Status != "completed") || !json.Valid([]byte(call.Arguments)) {
+			return openAIMessage{}, Usage{}, "", fmt.Errorf("provider responses: incomplete function call")
 		}
 		message.ToolCalls = append(message.ToolCalls, openAIToolCall{
 			ID:   call.CallID,
@@ -225,12 +274,69 @@ func (s *grokOAuthService) responseTurn(
 		stop = StopReasonMaxOut
 	}
 	if message.Content == "" && len(message.ToolCalls) == 0 {
-		return openAIMessage{}, Usage{}, "", errors.New("grok oauth responses: response contained no text or function calls")
+		return openAIMessage{}, Usage{}, "", errors.New("provider responses: response contained no text or function calls")
 	}
 	return message, usage, stop, nil
 }
 
-func (s *grokOAuthService) responseTools(tools []mcp.Tool) []responses.ToolUnionParam {
+type responsesStreamError struct {
+	Code    string
+	Message string
+}
+
+func (e *responsesStreamError) Error() string {
+	return "provider responses stream failed: " + e.Code + ": " + e.Message
+}
+
+func (s *responsesService) inputItems(history transcript) responses.ResponseInputParam {
+	if !s.openAI {
+		return grokOAuthInputItems(history)
+	}
+	var items responses.ResponseInputParam
+	for _, message := range history {
+		var output []json.RawMessage
+		for _, block := range message.Content {
+			if block.Type == blockTypeOpenAIResponsesOutput && json.Unmarshal([]byte(block.Data), &output) == nil && len(output) > 0 {
+				break
+			}
+		}
+		if len(output) == 0 {
+			items = append(items, grokOAuthInputItems(transcript{message})...)
+			continue
+		}
+		// Sanitization can remove an orphaned tool call. Its opaque copy must
+		// not reintroduce that call into a later provider request.
+		calls := make(map[string]string)
+		for _, block := range message.Content {
+			if block.Type == blockTypeToolUse {
+				calls[block.ID] = block.Name
+			}
+		}
+		for _, raw := range output {
+			var item struct {
+				Type   string `json:"type"`
+				CallID string `json:"call_id"`
+				Name   string `json:"name"`
+			}
+			if json.Unmarshal(raw, &item) != nil {
+				continue
+			}
+			switch item.Type {
+			case "reasoning", "message":
+			case "function_call":
+				if calls[item.CallID] != item.Name || item.Name == "" {
+					continue
+				}
+			default:
+				continue
+			}
+			items = append(items, param.Override[responses.ResponseInputItemUnionParam](raw))
+		}
+	}
+	return items
+}
+
+func (s *responsesService) responseTools(tools []mcp.Tool) []responses.ToolUnionParam {
 	if len(tools) == 0 {
 		return nil
 	}
@@ -280,15 +386,4 @@ func grokOAuthInputItems(history transcript) responses.ResponseInputParam {
 	return items
 }
 
-func grokOAuthAssistantItems(message openAIMessage) responses.ResponseInputParam {
-	items := make(responses.ResponseInputParam, 0, len(message.ToolCalls)+1)
-	if message.Content != "" {
-		items = append(items, responses.ResponseInputItemParamOfMessage(message.Content, responses.EasyInputMessageRoleAssistant))
-	}
-	for _, call := range message.ToolCalls {
-		items = append(items, responses.ResponseInputItemParamOfFunctionCall(call.Function.Arguments, call.ID, call.Function.Name))
-	}
-	return items
-}
-
-var _ TurnRunner = (*grokOAuthService)(nil)
+var _ TurnRunner = (*responsesService)(nil)

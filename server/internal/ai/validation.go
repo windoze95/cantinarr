@@ -107,7 +107,7 @@ func aiValidationFailureDetail(kind AIValidationFailureKind) string {
 	case AIValidationFailureInvalidCredential:
 		return "The provider credential or account connection was rejected. Check or reconnect the provider credential."
 	case AIValidationFailureUnsupportedModel:
-		return "The selected model is unavailable for this API credential. Choose another model or check provider access."
+		return "The selected model is unavailable for this provider account. Choose a model available to the account or check model access."
 	case AIValidationFailureQuota:
 		return "The provider quota or rate limit was reached. Check billing and quota, or try again later."
 	case AIValidationFailureTemporary:
@@ -125,6 +125,8 @@ func classifyAIValidationFailure(err error) AIValidationFailureKind {
 	switch {
 	case errors.Is(err, codexapp.ErrNotConnected):
 		return AIValidationFailureInvalidCredential
+	case errors.Is(err, codexapp.ErrModelUnavailable):
+		return AIValidationFailureUnsupportedModel
 	case errors.Is(err, codexapp.ErrUsageLimit):
 		return AIValidationFailureQuota
 	case errors.Is(err, codexapp.ErrBusy), errors.Is(err, codexapp.ErrUnavailable):
@@ -165,6 +167,10 @@ func classifyAIValidationFailure(err error) AIValidationFailureKind {
 // schema is not misreported as an access-tier problem.
 func isUnavailableModelError(err error) bool {
 	var markers []string
+	var responsesErr *responsesStreamError
+	if errors.As(err, &responsesErr) {
+		markers = append(markers, responsesErr.Code, responsesErr.Message)
+	}
 	var openaiErr *openai.Error
 	if errors.As(err, &openaiErr) {
 		markers = append(markers, openaiErr.Code, openaiErr.Param, openaiErr.Message, openaiErr.Type)
@@ -209,6 +215,21 @@ func isUnavailableModelError(err error) bool {
 }
 
 func providerErrorStatus(err error) int {
+	var responsesErr *responsesStreamError
+	if errors.As(err, &responsesErr) {
+		switch strings.ToLower(responsesErr.Code) {
+		case "rate_limit_exceeded", "rate_limit_reached", "insufficient_quota":
+			return http.StatusTooManyRequests
+		case "server_error", "internal_error":
+			return http.StatusInternalServerError
+		case "invalid_api_key", "authentication_error":
+			return http.StatusUnauthorized
+		case "model_not_found":
+			return http.StatusNotFound
+		default:
+			return http.StatusBadRequest
+		}
+	}
 	var openAIErr *openai.Error
 	if errors.As(err, &openAIErr) {
 		return openAIErr.StatusCode

@@ -560,6 +560,10 @@ class _CredentialsAdapter implements HttpClientAdapter {
               'credential_key': '',
               'models': [
                 {'id': 'default', 'label': 'OpenAI recommended'},
+                {'id': 'gpt-6-astra', 'label': 'GPT-6 Astra'},
+                {'id': 'gpt-6.1-sol', 'label': 'GPT-6.1 Sol'},
+                {'id': 'gpt-6-sol', 'label': 'GPT-6 Sol'},
+                {'id': 'gpt-6-luna', 'label': 'GPT-6 Luna'},
                 {'id': 'gpt-5.6-sol', 'label': 'GPT-5.6 Sol'},
                 {'id': 'gpt-5.6-terra', 'label': 'GPT-5.6 Terra'},
                 {'id': 'gpt-5.6-luna', 'label': 'GPT-5.6 Luna'},
@@ -603,6 +607,10 @@ class _CredentialsAdapter implements HttpClientAdapter {
                   'label': 'GPT-5.6 Luna',
                   'supports_reasoning_effort': true,
                 },
+                {'id': 'gpt-6-astra', 'label': 'GPT-6 Astra'},
+                {'id': 'gpt-6-sol', 'label': 'GPT-6 Sol'},
+                {'id': 'gpt-6-luna', 'label': 'GPT-6 Luna'},
+                {'id': 'gpt-6.1-sol', 'label': 'GPT-6.1 Sol'},
               ],
             },
             {

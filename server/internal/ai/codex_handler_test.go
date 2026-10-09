@@ -200,6 +200,10 @@ func TestCodexClientErrorMapsToolBudgetAndTimeout(t *testing.T) {
 		source string
 		want   string
 	}{
+		{"unavailable model shared", codexapp.ErrModelUnavailable, aiSourceShared,
+			"The included Codex model is unavailable for the linked account. Ask an admin to check model access in Settings."},
+		{"unavailable model personal", codexapp.ErrModelUnavailable, aiSourcePersonal,
+			"Your selected Codex model is unavailable for the linked account. Check model access in Settings."},
 		{"tool budget shared", codexapp.ErrToolBudget, aiSourceShared,
 			"The AI needed more lookups than one question allows and had to stop. Try again, or split the question into smaller parts."},
 		{"tool budget personal", codexapp.ErrToolBudget, aiSourcePersonal,

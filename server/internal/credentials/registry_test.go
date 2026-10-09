@@ -41,7 +41,7 @@ func TestAIProviderMetadataIncludesAuthType(t *testing.T) {
 	if codex.CredentialKey != "" {
 		t.Fatalf("Codex credential_key = %q, want empty", codex.CredentialKey)
 	}
-	wantCodexModels := []string{"default", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+	wantCodexModels := []string{"default", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
 	if len(codex.Models) != len(wantCodexModels) {
 		t.Fatalf("Codex models = %+v", codex.Models)
 	}
@@ -154,20 +154,17 @@ func TestGrokProviderMetadata(t *testing.T) {
 func TestProviderCatalogIDsAndDefaultsAreCurrentAndAuthSpecific(t *testing.T) {
 	want := map[string][]string{
 		AIProviderAnthropic:   {"claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5"},
-		AIProviderOpenAI:      {"gpt-4.1-mini", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"},
+		AIProviderOpenAI:      {"gpt-4.1-mini", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"},
 		AIProviderGemini:      {"gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview"},
 		AIProviderGrok:        {"grok-4.7", "grok-4.6", "grok-4.5"},
 		AIProviderGrokOAuth:   {"grok-4.6", "grok-4.5"},
-		AIProviderCodex:       {"default", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"},
+		AIProviderCodex:       {"default", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"},
 		AIProviderLocalOpenAI: {},
 	}
 	for _, provider := range AIProviders {
 		got := modelIDs(provider.Models)
 		if expected, exists := want[provider.ID]; exists && !equalStrings(got, expected) {
 			t.Errorf("%s models = %v, want %v", provider.ID, got, expected)
-		}
-		if strings.Contains(strings.ToLower(strings.Join(got, " ")), "gpt-6") {
-			t.Errorf("%s exposes a GPT-6 option Julian reported failing in Cantinarr: %v", provider.ID, got)
 		}
 		if len(got) > 0 && DefaultAIModel(provider.ID) != got[0] {
 			t.Errorf("%s default model = %q, want first supported model %q", provider.ID, DefaultAIModel(provider.ID), got[0])
@@ -180,7 +177,7 @@ func TestProviderCatalogIDsAndDefaultsAreCurrentAndAuthSpecific(t *testing.T) {
 		t.Fatalf("OpenAI API default = %q, want the supported low-cost model", got)
 	}
 	for _, model := range aiProviderForTest(t, AIProviderOpenAI).Models {
-		want := model.ID != "gpt-4.1-mini"
+		want := strings.HasPrefix(model.ID, "gpt-5")
 		if model.SupportsReasoningEffort != want {
 			t.Errorf("%s reasoning effort support = %t, want %t", model.ID, model.SupportsReasoningEffort, want)
 		}

@@ -252,11 +252,14 @@ func TestAnthropicValidationProviderContract(t *testing.T) {
 	if got := req.header.Get("Authorization"); got != "" {
 		t.Fatalf("unexpected Authorization header %q", got)
 	}
-	if got := int(req.body["max_tokens"].(float64)); got != aiValidationMaxTokens {
-		t.Fatalf("max_tokens=%d, want %d", got, aiValidationMaxTokens)
+	if got := int(req.body["max_tokens"].(float64)); got != anthropicValidationReasoningMaxTokens {
+		t.Fatalf("max_tokens=%d, want %d", got, anthropicValidationReasoningMaxTokens)
 	}
-	if got := req.body["thinking"].(map[string]any)["type"]; got != "disabled" {
-		t.Fatalf("thinking.type=%v, want disabled", got)
+	if _, found := req.body["thinking"]; found {
+		t.Fatal("Sonnet 5.5 must not receive thinking disabled")
+	}
+	if got := req.body["output_config"].(map[string]any)["effort"]; got != "low" {
+		t.Fatalf("effort=%v, want low", got)
 	}
 	if got := req.body["tool_choice"].(map[string]any)["type"]; got != "none" {
 		t.Fatalf("tool_choice.type=%v, want none", got)
@@ -295,9 +298,13 @@ func TestAnthropicCurrentCatalogThinkingCapabilities(t *testing.T) {
 	}{
 		{model: "claude-opus-5-5", adaptive: true, alwaysOn: true},
 		{model: "claude-fable-5-1", adaptive: true, alwaysOn: true},
-		{model: "claude-sonnet-5-5", adaptive: true},
+		{model: "claude-sonnet-5-5", adaptive: true, alwaysOn: true},
 		{model: "claude-haiku-5-5", adaptive: true},
-		{model: "claude-opus-4-8"},
+		{model: "claude-opus-4-8", adaptive: true},
+		{model: "claude-sonnet-4-6", adaptive: true},
+		{model: "claude-opus-4-5"},
+		{model: "claude-fable-5", adaptive: true, alwaysOn: true},
+		{model: "claude-opus-5", adaptive: true},
 	}
 	for _, test := range tests {
 		t.Run(test.model, func(t *testing.T) {
@@ -305,7 +312,7 @@ func TestAnthropicCurrentCatalogThinkingCapabilities(t *testing.T) {
 			if got := supportsAnthropicAdaptiveThinking(model); got != test.adaptive {
 				t.Fatalf("supports adaptive thinking = %t, want %t", got, test.adaptive)
 			}
-			if got := anthropicAlwaysUsesAdaptiveThinking(model); got != test.alwaysOn {
+			if got := anthropicCannotDisableThinking(model); got != test.alwaysOn {
 				t.Fatalf("adaptive thinking always on = %t, want %t", got, test.alwaysOn)
 			}
 		})
@@ -382,7 +389,7 @@ func TestOpenAILowCostDefaultOmitsUnsupportedReasoningEffort(t *testing.T) {
 }
 
 func TestOpenAIPublicCatalogModelsSerializeToChatCompletions(t *testing.T) {
-	for _, model := range []string{"gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+	for _, model := range []string{"gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"} {
 		t.Run(model, func(t *testing.T) {
 			requests := make(chan providerRequest, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -392,7 +399,10 @@ func TestOpenAIPublicCatalogModelsSerializeToChatCompletions(t *testing.T) {
 			t.Cleanup(server.Close)
 
 			service := NewOpenAIService("secret", model, server.URL+"/v1", "", nil)
-			if _, err := service.NextTurn(context.Background(), validationProbeParams(nil)); err != nil {
+			// The mock endpoint exercises the official public OpenAI wire contract.
+			service.publicOpenAIModelContract = true
+			adminTools := mcp.NewToolServer(nil, nil, nil, nil).GetToolsForRole(auth.RoleAdmin)
+			if _, err := service.NextTurn(context.Background(), validationProbeParams(adminTools)); err != nil {
 				t.Fatalf("validation turn: %v", err)
 			}
 			req := <-requests
@@ -401,6 +411,15 @@ func TestOpenAIPublicCatalogModelsSerializeToChatCompletions(t *testing.T) {
 			}
 			if got := req.body["model"]; got != model {
 				t.Fatalf("model=%v, want exact API ID %q", got, model)
+			}
+			tools, ok := req.body["tools"].([]any)
+			if !ok || len(tools) == 0 {
+				t.Fatalf("tools=%#v, want the app's function catalog", req.body["tools"])
+			}
+			if model == "gpt-6-sol" || model == "gpt-6-luna" {
+				if got := req.body["reasoning_effort"]; got != "none" {
+					t.Fatalf("reasoning_effort=%v, want none for Chat Completions tool calling", got)
+				}
 			}
 		})
 	}
@@ -672,7 +691,7 @@ func TestOpenAIValidationProbeSendsToolsWithoutToolCalls(t *testing.T) {
 
 func TestGeminiValidationProbeSendsToolsWithoutToolCalls(t *testing.T) {
 	adminTools := mcp.NewToolServer(nil, nil, nil, nil).GetToolsForRole(auth.RoleAdmin)
-	config := geminiNextTurnConfig(validationProbeParams(adminTools))
+	config := geminiNextTurnConfig("gemini-3.8-flash", validationProbeParams(adminTools))
 	if len(config.Tools) == 0 {
 		t.Fatal("validation probe omitted tools")
 	}
@@ -682,7 +701,7 @@ func TestGeminiValidationProbeSendsToolsWithoutToolCalls(t *testing.T) {
 	}
 
 	// The remediation single-turn shape is unchanged: tools offered, calling free.
-	free := geminiNextTurnConfig(TurnParams{Tools: adminTools})
+	free := geminiNextTurnConfig("gemini-3.8-flash", TurnParams{Tools: adminTools})
 	if free.ToolConfig != nil {
 		t.Fatalf("tool-enabled turn must not constrain function calling, got %#v", free.ToolConfig)
 	}
@@ -723,6 +742,98 @@ func TestOpenAIValidationOmitsUnsupportedReasoningField(t *testing.T) {
 	}
 }
 
+func TestOpenAIModelConstraintsDoNotOverrideLocalCompatibleEndpoint(t *testing.T) {
+	t.Run("custom public-provider base URL keeps endpoint-selected model behavior", func(t *testing.T) {
+		requests := make(chan providerRequest, 1)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests <- captureProviderRequest(r)
+			writeOpenAITextSSE(w)
+		}))
+		t.Cleanup(server.Close)
+
+		service := NewOpenAIService("secret", "gpt-6-sol", server.URL+"/v1", "high", mcp.NewToolServer(nil, nil, nil, nil))
+		if service.publicOpenAIModelContract || service.reasoningEffort != openai.ReasoningEffortHigh {
+			t.Fatalf("custom endpoint contract=%t effort=%q; want custom semantics and preserved high effort", service.publicOpenAIModelContract, service.reasoningEffort)
+		}
+		_, err := service.SendMessage(context.Background(), transcript{textTranscriptMessage(agentRoleUser, "hello")}, ChatContext{UserID: 1, Role: auth.RoleUser}, StreamCallbacks{})
+		if err != nil {
+			t.Fatalf("custom OpenAI-compatible chat: %v", err)
+		}
+		if got := (<-requests).body["reasoning_effort"]; got != "high" {
+			t.Fatalf("custom endpoint reasoning_effort=%v, want preserved configured value high", got)
+		}
+	})
+
+	t.Run("local GPT-6 Sol keeps configured reasoning effort", func(t *testing.T) {
+		requests := make(chan providerRequest, 1)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests <- captureProviderRequest(r)
+			writeOpenAITextSSE(w)
+		}))
+		t.Cleanup(server.Close)
+
+		service := NewLocalOpenAIService("secret", "gpt-6-sol", server.URL+"/v1", "high", false, mcp.NewToolServer(nil, nil, nil, nil))
+		if service.publicOpenAIModelContract || service.reasoningEffort != openai.ReasoningEffortHigh {
+			t.Fatalf("local service contract=%t effort=%q; want local semantics and preserved high effort", service.publicOpenAIModelContract, service.reasoningEffort)
+		}
+		_, err := service.SendMessage(context.Background(), transcript{textTranscriptMessage(agentRoleUser, "hello")}, ChatContext{UserID: 1, Role: auth.RoleUser}, StreamCallbacks{})
+		if err != nil {
+			t.Fatalf("local compatible chat: %v", err)
+		}
+		if got := (<-requests).body["reasoning_effort"]; got != "high" {
+			t.Fatalf("local reasoning_effort=%v, want preserved configured value high", got)
+		}
+	})
+
+	t.Run("local GPT-6.1 selector keeps Chat Completions", func(t *testing.T) {
+		requests := make(chan providerRequest, 1)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests <- captureProviderRequest(r)
+			writeOpenAITextSSE(w)
+		}))
+		t.Cleanup(server.Close)
+		toolServer := mcp.NewToolServer(nil, nil, nil, nil)
+		tools := toolServer.GetToolsForRole(auth.RoleAdmin)
+		if len(tools) == 0 {
+			t.Fatal("expected a non-empty tool catalog")
+		}
+		service := NewLocalOpenAIService("secret", "gpt-6.1-sol", server.URL+"/v1", "", false, toolServer)
+		if _, err := service.NextTurn(context.Background(), validationProbeParams(tools)); err != nil {
+			t.Fatalf("local compatible endpoint was rejected by OpenAI API constraint: %v", err)
+		}
+		body := (<-requests).body
+		if got := body["model"]; got != "gpt-6.1-sol" {
+			t.Fatalf("local model=%v, want unchanged custom model ID", got)
+		}
+		if got, ok := body["tools"].([]any); !ok || len(got) == 0 {
+			t.Fatalf("local request tools=%#v, want configured tool catalog", body["tools"])
+		}
+	})
+}
+
+func TestOpenAIModelContractOnlyAppliesToOfficialEndpoint(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", "")
+	tests := []struct {
+		name    string
+		baseURL string
+		want    bool
+	}{
+		{name: "default official API", want: true},
+		{name: "explicit official API", baseURL: "https://api.openai.com/v1", want: true},
+		{name: "custom compatible proxy", baseURL: "https://proxy.example/v1", want: false},
+		{name: "lookalike hostname", baseURL: "https://api.openai.com.attacker.example/v1", want: false},
+		{name: "insecure official hostname", baseURL: "http://api.openai.com/v1", want: false},
+		{name: "localhost contract test", baseURL: "http://127.0.0.1:1234/v1", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := usesOpenAIAPICatalogSemantics(test.baseURL); got != test.want {
+				t.Fatalf("usesOpenAIAPICatalogSemantics(%q)=%t, want %t", test.baseURL, got, test.want)
+			}
+		})
+	}
+}
+
 func TestOpenAIValidationReasoningCapabilityMatrix(t *testing.T) {
 	tests := []struct {
 		model        string
@@ -733,6 +844,9 @@ func TestOpenAIValidationReasoningCapabilityMatrix(t *testing.T) {
 		{model: "gpt-5.6-sol", wantEfforts: []string{"none", "low", "", ""}, wantFirstMax: aiValidationMaxTokens},
 		{model: "gpt-5.6-terra", wantEfforts: []string{"none", "low", "", ""}, wantFirstMax: aiValidationMaxTokens},
 		{model: "gpt-5.6-luna", wantEfforts: []string{"none", "low", "", ""}, wantFirstMax: aiValidationMaxTokens},
+		{model: "gpt-6-astra", wantEfforts: []string{"low", "", ""}, wantFirstMax: openAIValidationReasoningMaxTokens},
+		{model: "gpt-6-sol", wantEfforts: []string{"none"}, wantFirstMax: aiValidationMaxTokens},
+		{model: "gpt-6-luna", wantEfforts: []string{"none"}, wantFirstMax: aiValidationMaxTokens},
 		{model: "gpt-5", wantEfforts: []string{"minimal", "low", "", ""}, wantFirstMax: openAIValidationReasoningMaxTokens},
 		{model: "gpt-5-2025-08-07", wantEfforts: []string{"minimal", "low", "", ""}, wantFirstMax: openAIValidationReasoningMaxTokens},
 		{model: "o3", wantEfforts: []string{"low", "", ""}, wantFirstMax: openAIValidationReasoningMaxTokens},
@@ -1436,6 +1550,7 @@ func TestCodexValidationFailureClassification(t *testing.T) {
 	}{
 		{err: codexapp.ErrNotConnected, kind: AIValidationFailureInvalidCredential},
 		{err: codexapp.ErrUsageLimit, kind: AIValidationFailureQuota},
+		{err: codexapp.ErrModelUnavailable, kind: AIValidationFailureUnsupportedModel},
 		{err: codexapp.ErrBusy, kind: AIValidationFailureTemporary},
 		{err: codexapp.ErrUnavailable, kind: AIValidationFailureTemporary},
 	}
@@ -1443,6 +1558,10 @@ func TestCodexValidationFailureClassification(t *testing.T) {
 		if got := classifyAIValidationFailure(test.err); got != test.kind {
 			t.Errorf("classify(%v)=%s, want %s", test.err, got, test.kind)
 		}
+	}
+	message := AIValidationUserMessage(newAIValidationFailure(codexapp.ErrModelUnavailable))
+	if !strings.Contains(message, "provider account") || !strings.Contains(message, "Nothing was saved") {
+		t.Fatalf("Codex unavailable-model message = %q, want account-specific, no-save guidance", message)
 	}
 }
 
@@ -1458,5 +1577,48 @@ func TestAIValidationSafeDiagnosticRetainsStatusButRedactsCredentials(t *testing
 	}
 	if strings.Contains(diagnostic, "diagnostic-secret") {
 		t.Fatalf("diagnostic leaked credential: %q", diagnostic)
+	}
+}
+
+func TestCurrentGeminiCatalogValidationContracts(t *testing.T) {
+	for _, provider := range credentials.AIProviders {
+		if provider.ID != credentials.AIProviderGemini {
+			continue
+		}
+		for _, model := range provider.Models {
+			t.Run(model.ID, func(t *testing.T) {
+				requests := make(chan providerRequest, 1)
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					requests <- captureProviderRequest(r)
+					writeGeminiTextSSE(w)
+				}))
+				t.Cleanup(server.Close)
+				t.Setenv("GOOGLE_GEMINI_BASE_URL", server.URL)
+				if err := validateAPIKeyProfile(t, credentials.AIProviderGemini, model.ID); err != nil {
+					t.Fatal(err)
+				}
+				req := <-requests
+				if req.path != "/v1beta/models/"+model.ID+":streamGenerateContent" {
+					t.Fatalf("path=%s", req.path)
+				}
+				config := req.body["generationConfig"].(map[string]any)
+				want := "MINIMAL"
+				if model.ID == "gemini-3.8-flash" || model.ID == "gemini-3.7-flash" || model.ID == "gemini-3.1-pro-preview" {
+					want = "LOW"
+				}
+				if config["thinkingConfig"].(map[string]any)["thinkingLevel"] != want || config["maxOutputTokens"] != float64(httpProviderMaxOutputTokens) {
+					t.Fatalf("unsupported probe config: %#v", config)
+				}
+			})
+		}
+	}
+}
+
+func TestGPT6AstraNormalizesInheritedUnsupportedEffort(t *testing.T) {
+	for _, pin := range []string{"none", "minimal"} {
+		service := NewOpenAIService("secret", "gpt-6-astra", "", pin, nil)
+		if service.reasoningEffort != openai.ReasoningEffortLow {
+			t.Fatalf("pin=%s effective=%s", pin, service.reasoningEffort)
+		}
 	}
 }

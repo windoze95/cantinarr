@@ -199,11 +199,18 @@ func (s *Service) SendMessage(ctx context.Context, history transcript, chatCtx C
 }
 
 func supportsAnthropicAdaptiveThinking(model anthropic.Model) bool {
-	m := string(model)
-	return strings.HasPrefix(m, "claude-opus-5-") ||
-		strings.HasPrefix(m, "claude-fable-5-") ||
-		strings.HasPrefix(m, "claude-sonnet-5-") ||
-		strings.HasPrefix(m, "claude-haiku-5-")
+	// Preserve documented legacy selections without applying adaptive thinking
+	// to older 4.5 models that reject it.
+	return matchesAnthropicModel(model, "claude-opus-5", "claude-fable-5", "claude-sonnet-5", "claude-haiku-5-5", "claude-mythos-5", "claude-mythos-preview", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6")
+}
+
+func matchesAnthropicModel(model anthropic.Model, names ...string) bool {
+	for _, name := range names {
+		if string(model) == name || strings.HasPrefix(string(model), name+"-") {
+			return true
+		}
+	}
+	return false
 }
 
 // streamOne sends a single streaming request and returns the accumulated message.

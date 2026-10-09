@@ -427,6 +427,11 @@ func grokClientError(err error, source string) string {
 
 func codexClientError(err error, source string) string {
 	switch {
+	case errors.Is(err, codexapp.ErrModelUnavailable):
+		if source == aiSourceShared {
+			return "The included Codex model is unavailable for the linked account. Ask an admin to check model access in Settings."
+		}
+		return "Your selected Codex model is unavailable for the linked account. Check model access in Settings."
 	case errors.Is(err, codexapp.ErrNotConnected):
 		if source == aiSourceShared {
 			return "The included OpenAI OAuth connection expired. Ask an admin to reconnect it."

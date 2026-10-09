@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -29,6 +30,11 @@ type openAIService struct {
 	client     openai.Client
 	model      openai.ChatModel
 	toolServer *mcp.ToolServer
+	// publicOpenAIModelContract enables endpoint-specific constraints from
+	// OpenAI's public API catalog. OpenAI-compatible local models may use the
+	// same model string with different capabilities, so their adapter leaves
+	// this false.
+	publicOpenAIModelContract bool
 	// reasoningEffort is the admin-pinned shared reasoning_effort. Empty
 	// means auto: interactive turns send no effort field and NextTurn keeps
 	// its adaptive ladder. Grok services always leave it empty (the Grok
@@ -50,6 +56,15 @@ func NewOpenAIService(apiKey, model, baseURL, reasoningEffort string, toolServer
 	if strings.TrimSpace(model) == "" {
 		model = "gpt-4.1-mini"
 	}
+	publicModelContract := usesOpenAIAPICatalogSemantics(baseURL)
+	if publicModelContract && openAIChatToolsRequireNoReasoning(openai.ChatModel(model)) {
+		// Keep any profile-level pin in storage, but do not send it to these
+		// models because Chat Completions tool calling requires `none`.
+		reasoningEffort = string(openai.ReasoningEffortNone)
+	}
+	if publicModelContract && openAIBaseModelName(openai.ChatModel(model)) == "gpt-6-astra" && (reasoningEffort == "none" || reasoningEffort == "minimal") {
+		reasoningEffort = string(openai.ReasoningEffortLow)
+	}
 	// GPT-4.1 is a supported low-cost chat model, but does not accept
 	// reasoning_effort. Keep any saved pin intact in settings and omit it from
 	// this model's requests; users can switch to a reasoning-capable model to
@@ -57,7 +72,18 @@ func NewOpenAIService(apiKey, model, baseURL, reasoningEffort string, toolServer
 	if openAIModelReasoningCapability(openai.ChatModel(model)) == openAIReasoningUnsupported {
 		reasoningEffort = ""
 	}
-	return newOpenAIService(apiKey, model, baseURL, reasoningEffort, toolServer, newHostedProviderHTTPClient(httpProviderStreamTimeout))
+	service := newOpenAIService(apiKey, model, baseURL, reasoningEffort, toolServer, newHostedProviderHTTPClient(httpProviderStreamTimeout))
+	service.publicOpenAIModelContract = publicModelContract
+	return service
+}
+
+func usesOpenAIAPICatalogSemantics(baseURL string) bool {
+	endpoint := strings.TrimSpace(baseURL)
+	if endpoint == "" {
+		return true // The public provider uses api.openai.com; SDK env overrides are test seams.
+	}
+	parsed, err := url.Parse(endpoint)
+	return err == nil && strings.EqualFold(parsed.Scheme, "https") && strings.EqualFold(parsed.Hostname(), "api.openai.com")
 }
 
 // NewLocalOpenAIService is NewOpenAIService for the Local (OpenAI-compatible)
@@ -100,8 +126,8 @@ func localOpenAICredential(key string) string {
 }
 
 // NewGrokService builds a chat service against xAI's OpenAI-compatible API.
-// credential is either a console.x.ai API key or a subscription OAuth bearer
-// token — the wire format is identical. The base URL is pinned to api.x.ai;
+// credential is a console.x.ai API key. Subscription OAuth uses the separate
+// Grok Build Responses adapter. The base URL is pinned to api.x.ai;
 // XAI_BASE_URL exists for tests, mirroring the other providers' seams.
 func NewGrokService(credential, model string, toolServer *mcp.ToolServer) *openAIService {
 	if model == "" {
@@ -124,6 +150,9 @@ func NewGrokService(credential, model string, toolServer *mcp.ToolServer) *openA
 }
 
 func (s *openAIService) SendMessage(ctx context.Context, history transcript, chatCtx ChatContext, cb StreamCallbacks) (transcript, error) {
+	if s.publicOpenAIModelContract && openAIResponsesToolsRequired(s.model) {
+		return s.responsesAdapter().SendMessage(ctx, history, chatCtx, cb)
+	}
 	messages := []openai.ChatCompletionMessageParamUnion{
 		openai.SystemMessage(systemPrompt + "\n\n" + dynamicContext(chatCtx)),
 	}
@@ -305,11 +334,12 @@ func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCa
 }
 
 type openAIMessage struct {
-	Role       string
-	Content    string
-	Refusal    string
-	ToolCalls  []openAIToolCall
-	ToolCallID string
+	Role            string
+	Content         string
+	Refusal         string
+	ToolCalls       []openAIToolCall
+	ToolCallID      string
+	ResponsesOutput json.RawMessage
 }
 
 type openAIToolCall struct {
@@ -421,6 +451,9 @@ func openAIMessageFromSDK(message openai.ChatCompletionMessage) openAIMessage {
 
 func openAIMessageToTranscript(message openAIMessage) transcriptMessage {
 	out := transcriptMessage{Role: agentRoleAssistant}
+	if len(message.ResponsesOutput) > 0 {
+		out.Content = append(out.Content, transcriptBlock{Type: blockTypeOpenAIResponsesOutput, Data: string(message.ResponsesOutput)})
+	}
 	if message.Content != "" {
 		out.Content = append(out.Content, transcriptBlock{Type: blockTypeText, Text: message.Content})
 	}

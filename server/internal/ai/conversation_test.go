@@ -70,6 +70,10 @@ func TestSanitizeTranscriptDropsOversizedOpaqueTurnAndOrphanedResults(t *testing
 			},
 		},
 		{
+			name:  "OpenAI Responses continuation",
+			block: transcriptBlock{Type: blockTypeOpenAIResponsesOutput, Data: strings.Repeat("r", maxStoredOpaqueBlockBytes+1)},
+		},
+		{
 			name: "Gemini signed thought text",
 			block: transcriptBlock{
 				Type: blockTypeGeminiThought, Text: strings.Repeat("g", maxStoredOpaqueBlockBytes+1), ThoughtSignature: []byte("signed"),

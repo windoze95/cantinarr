@@ -507,6 +507,10 @@ class _StubAdapter implements HttpClientAdapter {
             'credential_key': 'openai_key',
             'models': [
               {'id': 'gpt-5.4-mini', 'label': 'GPT-5.4 mini'},
+              {'id': 'gpt-6-astra', 'label': 'GPT-6 Astra'},
+              {'id': 'gpt-6-sol', 'label': 'GPT-6 Sol'},
+              {'id': 'gpt-6-luna', 'label': 'GPT-6 Luna'},
+              {'id': 'gpt-6.1-sol', 'label': 'GPT-6.1 Sol'},
             ],
           },
           {
@@ -523,6 +527,10 @@ class _StubAdapter implements HttpClientAdapter {
             'credential_key': '',
             'auth_type': 'user_oauth',
             'models': [
+              {'id': 'gpt-6-astra', 'label': 'GPT-6 Astra'},
+              {'id': 'gpt-6.1-sol', 'label': 'GPT-6.1 Sol'},
+              {'id': 'gpt-6-sol', 'label': 'GPT-6 Sol'},
+              {'id': 'gpt-6-luna', 'label': 'GPT-6 Luna'},
               {'id': 'gpt-5.6-luna', 'label': 'GPT-5.6 Luna'},
             ],
           },
