@@ -20,9 +20,9 @@ The app supports hosted API-key providers, supported OAuth subscription connecti
 | xAI Grok (OAuth) | The supported xAI subscription account link | The connected account's subscription allowance |
 | Local (OpenAI-compatible) | The server's final base URL and model ID, with an optional token | Your configured model server |
 
-**OpenAI (OAuth)** offers GPT-6.1 Sol, GPT-6 Astra, GPT-6 Sol, and GPT-6 Luna alongside **OpenAI recommended** and the GPT-5.6 choices. These choices also appear in the remediation model picker when the shared provider is OpenAI OAuth. Access depends on the connected account and its model rollout; saving tests the exact selection before activation.
+**OpenAI (OAuth)** offers **OpenAI recommended**, GPT-6 Astra, GPT-6.1 Sol, GPT-6 Sol and Luna, and GPT-5.6 Sol, Terra, and Luna Codex selectors. These choices also appear in the remediation model picker when the shared provider is OpenAI OAuth. These choices use the linked ChatGPT account through Codex. The separate API-key provider uses independently documented API IDs and chooses the endpoint required for tool calling, including Responses for GPT-6 Astra and GPT-6.1 Sol. Access depends on the selected account, so every selection must pass the response test.
 
-The OpenAI API-key provider has a separate model catalog. GPT-6.1 Sol and GPT-6 Astra require the Responses API for tool use, while Cantinarr's API-key adapter uses Chat Completions. Use OpenAI OAuth for these models.
+The OpenAI API-key provider has a separate model catalog of public API IDs supported by Cantinarr's Chat Completions adapter. Do not select Codex or ChatGPT product names as API model IDs.
 
 ## Save and test
 

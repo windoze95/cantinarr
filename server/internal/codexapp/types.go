@@ -167,6 +167,7 @@ const (
 	CodeLoginInProgress  Code = "login_in_progress"
 	CodeAlreadyConnected Code = "already_connected"
 	CodeUsageLimit       Code = "usage_limit"
+	CodeModelUnavailable Code = "model_unavailable"
 	CodeProvider         Code = "provider_error"
 	CodeStorage          Code = "storage_error"
 	CodeInvalidInput     Code = "invalid_input"
@@ -197,6 +198,7 @@ var (
 	ErrLoginInProgress  = &Error{Code: CodeLoginInProgress, message: "a device login is already in progress"}
 	ErrAlreadyConnected = &Error{Code: CodeAlreadyConnected, message: "a ChatGPT account is already connected"}
 	ErrUsageLimit       = &Error{Code: CodeUsageLimit, message: "ChatGPT usage limit reached"}
+	ErrModelUnavailable = &Error{Code: CodeModelUnavailable, message: "selected Codex model is unavailable for this account"}
 	ErrProvider         = &Error{Code: CodeProvider, message: "Codex app-server request failed"}
 	ErrStorage          = &Error{Code: CodeStorage, message: "Codex account storage failed"}
 	ErrInvalidInput     = &Error{Code: CodeInvalidInput, message: "invalid Codex request"}

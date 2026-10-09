@@ -450,6 +450,8 @@ func classifyRPCError(rpcErr *rpcErrorBody) error {
 		strings.Contains(text, "usage_limit"),
 		strings.Contains(text, "rate_limit_reached"):
 		return ErrUsageLimit
+	case codexModelUnavailableError(text):
+		return ErrModelUnavailable
 	default:
 		// The classified error deliberately carries no detail, so this is the
 		// only record of what the app-server actually rejected.
@@ -648,7 +650,12 @@ func compactNotification(method string, params json.RawMessage) (json.RawMessage
 		return nil, false
 	}
 	if complete.Turn.Error != nil {
-		complete.Turn.Error.CodexErrorInfo = compactTurnError(complete.Turn.Error.CodexErrorInfo)
+		// App-server commonly uses the generic `other` code and puts the
+		// actionable model/access failure in message. Classify and redact it
+		// before dropping it from the notification sent to the run loop.
+		detail, _ := json.Marshal(complete.Turn.Error)
+		complete.Turn.Error.CodexErrorInfo = compactTurnError(detail)
+		complete.Turn.Error.Message = ""
 	}
 	totalText := 0
 	for _, item := range complete.Turn.Items {
@@ -719,12 +726,42 @@ func compactTurnError(raw json.RawMessage) json.RawMessage {
 		return json.RawMessage(`"usageLimitExceeded"`)
 	case strings.Contains(text, "unauthorized"), strings.Contains(text, "authentication_required"):
 		return json.RawMessage(`"unauthorized"`)
+	case codexModelUnavailableError(text):
+		log.Printf("codexapp: turn failed because the selected model is unavailable: %s", boundedLogText(secrets.RedactText(string(raw))))
+		return json.RawMessage(`"modelUnavailable"`)
 	default:
 		// The raw upstream detail is collapsed to "providerError" from here on,
 		// so log it now or lose it — turn failures are otherwise undiagnosable.
 		log.Printf("codexapp: turn failed upstream: %s", boundedLogText(secrets.RedactText(string(raw))))
 		return json.RawMessage(`"providerError"`)
 	}
+}
+
+func codexModelUnavailableError(text string) bool {
+	text = strings.ToLower(text)
+	for _, marker := range []string{
+		"model_not_found",
+		"model_not_available",
+		"model_unavailable",
+		"unsupported_model",
+		"unknown model",
+		"model not found",
+		"model not available",
+		"model unavailable",
+		"model does not exist",
+		"model is not available",
+		"model is not supported",
+		"deprecated model",
+		"model access denied",
+		"no access to this model",
+		"do not have access to this model",
+		"not entitled to model",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *appSession) handleServerRequest(message rpcEnvelope) {

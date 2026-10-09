@@ -226,7 +226,7 @@ func TestSharedAIProfileCarriesLocalEndpointOnlyForLocalProvider(t *testing.T) {
 	if err := registry.SetCredential(KeyOpenAIKey, "hosted-secret"); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.SetAIConfig(AIProviderOpenAI, "gpt-5.6-sol"); err != nil {
+	if err := registry.SetAIConfig(AIProviderOpenAI, "gpt-5.5"); err != nil {
 		t.Fatal(err)
 	}
 	shared, err = registry.LoadSharedAIProfile(context.Background())

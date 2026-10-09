@@ -63,7 +63,7 @@ const (
 // reasoning efforts, lowest first. "none" maps to think-free turns on
 // OpenAI-compatible servers (llama.cpp, vLLM, Ollama translate it), the rest
 // trade latency for deliberation.
-var AIReasoningEfforts = []string{"none", "minimal", "low", "medium", "high"}
+var AIReasoningEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
 
 // IsValidAIReasoningEffort reports whether value may be stored under
 // KeyOpenAIReasoningEffort. Empty is valid and means auto.
@@ -104,8 +104,8 @@ const (
 	DefaultAIProvider = AIProviderCodex
 
 	// DefaultSharedAIModel pairs with that zero-config default: the fast
-	// GPT-5.6 tier, so an untouched install doesn't spend the admin's ChatGPT
-	// meter on heavyweight turns nobody chose.
+	// GPT-5.6 Codex OAuth tier, so an untouched install doesn't spend the
+	// admin's ChatGPT meter on heavyweight turns nobody chose.
 	DefaultSharedAIModel = "gpt-5.6-luna"
 
 	// AIHealthCheckInterval deliberately keeps the default background cost to
@@ -115,9 +115,10 @@ const (
 
 // AIModelOption describes one selectable chat model for the admin UI.
 type AIModelOption struct {
-	ID          string `json:"id"`
-	Label       string `json:"label"`
-	Description string `json:"description,omitempty"`
+	ID                      string `json:"id"`
+	Label                   string `json:"label"`
+	Description             string `json:"description,omitempty"`
+	SupportsReasoningEffort bool   `json:"supports_reasoning_effort"`
 }
 
 // AIProviderOption describes a supported AI provider and its default models.
@@ -160,11 +161,10 @@ var AIProviders = []AIProviderOption{
 		AuthType:      AIAuthTypeAPIKey,
 		CredentialKey: KeyAnthropicKey,
 		Models: []AIModelOption{
-			{ID: "claude-opus-4-8", Label: "Claude Opus 4.8", Description: "Most capable Claude Opus-tier model"},
-			{ID: "claude-fable-5", Label: "Claude Fable 5", Description: "Highest-capability Claude model"},
-			{ID: "claude-sonnet-5", Label: "Claude Sonnet 5", Description: "Latest balanced Claude model"},
-			{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Description: "Balanced speed and intelligence"},
-			{ID: "claude-haiku-4-5", Label: "Claude Haiku 4.5", Description: "Fastest, lowest-cost Claude option"},
+			{ID: "claude-opus-5-5", Label: "Claude Opus 5.5", Description: "Long-running agentic coding and knowledge work"},
+			{ID: "claude-fable-5-1", Label: "Claude Fable 5.1", Description: "Demanding reasoning and long-horizon agentic work"},
+			{ID: "claude-sonnet-5-5", Label: "Claude Sonnet 5.5", Description: "Balanced speed and intelligence"},
+			{ID: "claude-haiku-5-5", Label: "Claude Haiku 5.5", Description: "Fast, latency-sensitive work"},
 		},
 	},
 	{
@@ -174,11 +174,16 @@ var AIProviders = []AIProviderOption{
 		CredentialKey:           KeyOpenAIKey,
 		SupportsReasoningEffort: true,
 		Models: []AIModelOption{
-			{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Description: "Frontier model for complex work"},
-			{ID: "gpt-5.6-terra", Label: "GPT-5.6 Terra", Description: "Balances intelligence and cost"},
-			{ID: "gpt-5.6-luna", Label: "GPT-5.6 Luna", Description: "Fast model for high-volume work"},
-			{ID: "gpt-5.5", Label: "GPT-5.5", Description: "Previous-generation flagship"},
-			{ID: "gpt-4.1-mini", Label: "GPT-4.1 mini", Description: "Low-cost older model"},
+			{ID: "gpt-4.1-mini", Label: "GPT-4.1 mini", Description: "Low-cost, efficient model with tool calling; no reasoning controls"},
+			{ID: "gpt-5.4-mini", Label: "GPT-5.4 mini", Description: "Faster, lower-cost reasoning model with tool calling", SupportsReasoningEffort: true},
+			{ID: "gpt-5.5", Label: "GPT-5.5", Description: "Flagship model for complex work", SupportsReasoningEffort: true},
+			{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Description: "Flagship model for complex professional work", SupportsReasoningEffort: true},
+			{ID: "gpt-5.6-terra", Label: "GPT-5.6 Terra", Description: "Balances intelligence and cost", SupportsReasoningEffort: true},
+			{ID: "gpt-5.6-luna", Label: "GPT-5.6 Luna", Description: "Cost-sensitive, high-volume model", SupportsReasoningEffort: true},
+			{ID: "gpt-6-astra", Label: "GPT-6 Astra", Description: "Flagship reasoning model for demanding work"},
+			{ID: "gpt-6-sol", Label: "GPT-6 Sol", Description: "Chat Completions tool calling requires reasoning effort none"},
+			{ID: "gpt-6-luna", Label: "GPT-6 Luna", Description: "Chat Completions tool calling requires reasoning effort none"},
+			{ID: "gpt-6.1-sol", Label: "GPT-6.1 Sol", Description: "Uses Responses for reasoning and tool calling"},
 		},
 	},
 	{
@@ -187,12 +192,13 @@ var AIProviders = []AIProviderOption{
 		AuthType:      AIAuthTypeAPIKey,
 		CredentialKey: KeyGeminiKey,
 		Models: []AIModelOption{
-			{ID: "gemini-3.5-flash", Label: "Gemini 3.5 Flash", Description: "Current stable Gemini Flash model"},
-			{ID: "gemini-3.1-flash-lite", Label: "Gemini 3.1 Flash-Lite", Description: "Current stable low-cost Gemini model"},
-			{ID: "gemini-3.1-pro-preview", Label: "Gemini 3.1 Pro Preview", Description: "Preview model optimized for agentic and coding workflows"},
-			{ID: "gemini-3.1-pro-preview-customtools", Label: "Gemini 3.1 Pro Preview Custom Tools", Description: "Gemini 3.1 Pro endpoint tuned for custom tool-heavy workflows"},
-			{ID: "gemini-2.5-pro", Label: "Gemini 2.5 Pro", Description: "Advanced reasoning and coding"},
-			{ID: "gemini-2.5-flash", Label: "Gemini 2.5 Flash", Description: "Low-latency reasoning"},
+			{ID: "gemini-3.8-flash", Label: "Gemini 3.8 Flash", Description: "Current stable model for general chat and tool use"},
+			{ID: "gemini-3.7-flash", Label: "Gemini 3.7 Flash", Description: "Previous-generation stable model for coding and agentic workflows"},
+			{ID: "gemini-3.6-flash", Label: "Gemini 3.6 Flash", Description: "Stable general-purpose model"},
+			{ID: "gemini-3.5-flash", Label: "Gemini 3.5 Flash", Description: "Stable model for general chat and tool use"},
+			{ID: "gemini-3.5-flash-lite", Label: "Gemini 3.5 Flash-Lite", Description: "Lower-cost, high-throughput stable model"},
+			{ID: "gemini-3.1-flash-lite", Label: "Gemini 3.1 Flash-Lite", Description: "Lower-cost stable model"},
+			{ID: "gemini-3.1-pro-preview", Label: "Gemini 3.1 Pro Preview", Description: "Preview model for advanced reasoning and coding"},
 		},
 	},
 	{
@@ -208,10 +214,10 @@ var AIProviders = []AIProviderOption{
 		AuthType: AIAuthTypeUserOAuth,
 		Models: []AIModelOption{
 			{ID: "default", Label: "OpenAI recommended", Description: "Uses the current model recommended by Codex"},
-			{ID: "gpt-6.1-sol", Label: "GPT-6.1 Sol", Description: "Near-Astra capability at a lower cost"},
-			{ID: "gpt-6-astra", Label: "GPT-6 Astra", Description: "Highest-capability model for complex work"},
-			{ID: "gpt-6-sol", Label: "GPT-6 Sol", Description: "Previous Sol model for complex work"},
-			{ID: "gpt-6-luna", Label: "GPT-6 Luna", Description: "Fast model for focused, repeatable work"},
+			{ID: "gpt-6-astra", Label: "GPT-6 Astra", Description: "Codex model for demanding work; availability depends on account and rollout"},
+			{ID: "gpt-6.1-sol", Label: "GPT-6.1 Sol", Description: "Codex model for complex work; availability depends on account and rollout"},
+			{ID: "gpt-6-sol", Label: "GPT-6 Sol", Description: "Codex model for complex coding; availability depends on account and rollout"},
+			{ID: "gpt-6-luna", Label: "GPT-6 Luna", Description: "Codex model for focused, repeatable work; availability depends on account and rollout"},
 			{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Description: "Highest-quality GPT-5.6 model for complex work"},
 			{ID: "gpt-5.6-terra", Label: "GPT-5.6 Terra", Description: "Pragmatic GPT-5.6 model for everyday work"},
 			{ID: "gpt-5.6-luna", Label: "GPT-5.6 Luna", Description: "Fast GPT-5.6 model for clear, repeatable work"},
@@ -221,7 +227,7 @@ var AIProviders = []AIProviderOption{
 		ID:       AIProviderGrokOAuth,
 		Label:    "xAI Grok (OAuth)",
 		AuthType: AIAuthTypeUserOAuth,
-		Models:   grokModels,
+		Models:   grokOAuthModels,
 	},
 	{
 		ID:                      AIProviderLocalOpenAI,
@@ -238,12 +244,18 @@ var AIProviders = []AIProviderOption{
 	},
 }
 
-// grokModels is shared by both xAI providers: the API key and the
-// subscription OAuth paths serve the same OpenAI-compatible model catalog.
+// grokModels lists public xAI API model IDs accepted by the API-key path.
 var grokModels = []AIModelOption{
-	{ID: "grok-4.6", Label: "Grok 4.6", Description: "Latest flagship xAI model"},
-	{ID: "grok-4.5", Label: "Grok 4.5", Description: "Previous-generation flagship model"},
-	{ID: "grok-4.3", Label: "Grok 4.3", Description: "Affordable model with a 1M-token context"},
+	{ID: "grok-4.7", Label: "Grok 4.7", Description: "Current xAI API flagship with function calling"},
+	{ID: "grok-4.6", Label: "Grok 4.6", Description: "Previous-generation xAI API flagship with function calling"},
+	{ID: "grok-4.5", Label: "Grok 4.5", Description: "Previous-generation xAI API model with function calling"},
+}
+
+// grokOAuthModels are the Grok Build CLI's OAuth model choices, not public
+// xAI API IDs. Grok Build routes these over its Responses proxy.
+var grokOAuthModels = []AIModelOption{
+	{ID: "grok-4.6", Label: "Grok Build 4.6", Description: "Grok Build OAuth model"},
+	{ID: "grok-4.5", Label: "Grok Build 4.5", Description: "Previous Grok Build OAuth model"},
 }
 
 func isSecretKey(key string) bool {

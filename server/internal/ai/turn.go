@@ -54,6 +54,7 @@ const (
 	BlockAnthropicThinking         = blockTypeAnthropicThinking
 	BlockAnthropicRedactedThinking = blockTypeAnthropicRedactedThinking
 	BlockGeminiThought             = blockTypeGeminiThought
+	BlockOpenAIResponsesOutput     = blockTypeOpenAIResponsesOutput
 )
 
 // TranscriptBlock is one provider-neutral content block in the exported
@@ -214,10 +215,10 @@ const anthropicValidationReasoningMaxTokens = 16000
 // assert the exact wire shape (tool payload + tool_choice) without a network.
 func anthropicNextTurnParams(model anthropic.Model, p TurnParams) anthropic.MessageNewParams {
 	maxTurnTokens := turnMaxTokens(p)
-	if p.DisableReasoning && anthropicAlwaysUsesAdaptiveThinking(model) && maxTurnTokens < anthropicValidationReasoningMaxTokens {
-		// Fable's adaptive thinking cannot be disabled. Give the readiness probe a
-		// bounded allowance large enough that hidden reasoning cannot crowd out its
-		// one-word visible response.
+	if p.DisableReasoning && anthropicCannotDisableThinking(model) && maxTurnTokens < anthropicValidationReasoningMaxTokens {
+		// These models reject thinking disabled. Give the
+		// readiness probe a bounded allowance large enough that hidden reasoning
+		// cannot crowd out its one-word visible response.
 		maxTurnTokens = anthropicValidationReasoningMaxTokens
 	}
 	params := anthropic.MessageNewParams{
@@ -236,7 +237,9 @@ func anthropicNextTurnParams(model anthropic.Model, p TurnParams) anthropic.Mess
 		// forbids calls, matching the interactive loop's final iteration.
 		params.ToolChoice = anthropic.ToolChoiceUnionParam{OfNone: &anthropic.ToolChoiceNoneParam{}}
 	}
-	if p.DisableReasoning && supportsAnthropicAdaptiveThinking(model) && !anthropicAlwaysUsesAdaptiveThinking(model) {
+	if p.DisableReasoning && anthropicCannotDisableThinking(model) {
+		params.OutputConfig.Effort = anthropic.OutputConfigEffortLow
+	} else if p.DisableReasoning && supportsAnthropicAdaptiveThinking(model) {
 		disabled := anthropic.NewThinkingConfigDisabledParam()
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &disabled}
 	} else if !p.DisableReasoning && supportsAnthropicAdaptiveThinking(model) {
@@ -267,8 +270,8 @@ func (s *Service) NextTurn(ctx context.Context, p TurnParams) (TurnResult, error
 	}, nil
 }
 
-func anthropicAlwaysUsesAdaptiveThinking(model anthropic.Model) bool {
-	return strings.Contains(string(model), "fable-5")
+func anthropicCannotDisableThinking(model anthropic.Model) bool {
+	return matchesAnthropicModel(model, "claude-fable-5", "claude-mythos-5", "claude-mythos-preview", "claude-opus-5-5", "claude-sonnet-5-5")
 }
 
 func anthropicTurnMessages(history Transcript) []anthropic.MessageParam {
@@ -388,7 +391,13 @@ type openAIReasoningAttempt struct {
 // executing nothing. It streams one completion of its own (it does NOT reuse the
 // chat loop) so the chat path stays untouched while this seam also reads usage.
 func (s *openAIService) NextTurn(ctx context.Context, p TurnParams) (TurnResult, error) {
-	attempts := openAIReasoningAttempts(s.model, p)
+	if s.publicOpenAIModelContract && openAIResponsesToolsRequired(s.model) {
+		return s.responsesAdapter().NextTurn(ctx, p)
+	}
+	attempts := openAICompatibleReasoningAttempts(s.model, p)
+	if s.publicOpenAIModelContract {
+		attempts = openAIReasoningAttempts(s.model, p)
+	}
 	// An admin-pinned effort leads the ladder so validation proves the exact
 	// configuration production turns will use; the capability-based attempts
 	// stay behind it as the rejection fallback.
@@ -500,7 +509,21 @@ func openAINextTurnParamsForAttempt(model openai.ChatModel, p TurnParams, attemp
 // as interactive chat so a tiny readiness probe cannot be consumed entirely by
 // hidden reasoning tokens.
 func openAIReasoningAttempts(model openai.ChatModel, p TurnParams) []openAIReasoningAttempt {
+	return openAIReasoningAttemptsForContract(model, p, true)
+}
+
+func openAICompatibleReasoningAttempts(model openai.ChatModel, p TurnParams) []openAIReasoningAttempt {
+	return openAIReasoningAttemptsForContract(model, p, false)
+}
+
+func openAIReasoningAttemptsForContract(model openai.ChatModel, p TurnParams, publicOpenAIModelContract bool) []openAIReasoningAttempt {
 	requested := int64(turnMaxTokens(p))
+	if publicOpenAIModelContract && openAIChatToolsRequireNoReasoning(model) {
+		// GPT-6 Sol and Luna expose function calling through Chat Completions
+		// only when reasoning_effort is explicitly none. This applies even when
+		// settings use the automatic reasoning choice.
+		return []openAIReasoningAttempt{{effort: openai.ReasoningEffortNone, maxTokens: requested}}
+	}
 	if !p.DisableReasoning {
 		return []openAIReasoningAttempt{{maxTokens: requested}}
 	}
@@ -517,7 +540,11 @@ func openAIReasoningAttempts(model openai.ChatModel, p TurnParams) []openAIReaso
 		}
 	}
 
-	switch openAIModelReasoningCapability(model) {
+	capability := openAIModelReasoningCapability(model)
+	if publicOpenAIModelContract && openAIBaseModelName(model) == "gpt-6-astra" {
+		capability = openAIReasoningLow
+	}
+	switch capability {
 	case openAIReasoningUnsupported:
 		appendAttempt("", requested)
 		return attempts
@@ -564,6 +591,19 @@ func openAIModelReasoningCapability(model openai.ChatModel) openAIReasoningCapab
 	default:
 		return openAIReasoningUnknown
 	}
+}
+
+func openAIChatToolsRequireNoReasoning(model openai.ChatModel) bool {
+	name := openAIBaseModelName(model)
+	return name == "gpt-6-sol" || name == "gpt-6-luna"
+}
+
+func openAIResponsesToolsRequired(model openai.ChatModel) bool {
+	// OpenAI's reasoning guide requires Responses for function calling with
+	// GPT-6 Astra and GPT-6.1 Sol. The model pages' independent lists of
+	// endpoints and features do not imply every endpoint supports every feature.
+	name := openAIBaseModelName(model)
+	return name == "gpt-6-astra" || name == "gpt-6.1-sol"
 }
 
 func openAIBaseModelName(model openai.ChatModel) string {
@@ -722,10 +762,27 @@ func (s *geminiService) NextTurn(ctx context.Context, p TurnParams) (TurnResult,
 
 // geminiNextTurnConfig builds the single-turn request config so contract tests
 // can assert the exact tool payload + no-call mode without a network.
-func geminiNextTurnConfig(p TurnParams) *genai.GenerateContentConfig {
+func geminiNextTurnConfig(model string, p TurnParams) *genai.GenerateContentConfig {
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: &genai.Content{Parts: []*genai.Part{genai.NewPartFromText(p.System)}},
 		MaxOutputTokens:   int32(turnMaxTokens(p)),
+	}
+	if p.DisableReasoning {
+		// Current Gemini 3 models cannot fully disable thinking. Use only the
+		// documented controls for these exact IDs and leave custom IDs untouched.
+		var level genai.ThinkingLevel
+		switch strings.TrimPrefix(model, "models/") {
+		case "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.1-pro-preview":
+			level = genai.ThinkingLevelLow
+		case "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite":
+			level = genai.ThinkingLevelMinimal
+		}
+		if level != "" {
+			config.ThinkingConfig = &genai.ThinkingConfig{ThinkingLevel: level}
+			if config.MaxOutputTokens < int32(httpProviderMaxOutputTokens) {
+				config.MaxOutputTokens = int32(httpProviderMaxOutputTokens)
+			}
+		}
 	}
 	if len(p.Tools) > 0 {
 		config.Tools = toGeminiTools(p.Tools)
@@ -745,7 +802,7 @@ func geminiNextTurnConfig(p TurnParams) *genai.GenerateContentConfig {
 // arrived but Google's terminal finish chunk did not.
 func (s *geminiService) geminiNextTurnOnce(ctx context.Context, p TurnParams) (TurnResult, error) {
 	contents := geminiTurnContents(p.History)
-	config := geminiNextTurnConfig(p)
+	config := geminiNextTurnConfig(s.model, p)
 
 	content := genai.NewContentFromParts(nil, genai.RoleModel)
 	var finishReason genai.FinishReason

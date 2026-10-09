@@ -69,7 +69,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   bool _localUseProxy = false;
   final _localKeyController = TextEditingController();
   String _selectedProvider = 'anthropic';
-  String _selectedModel = 'claude-opus-4-8';
+  String _selectedModel = 'claude-opus-5-5';
   bool _healthCheckEnabled = true;
   bool _isSaving = false;
   bool _isTestingAI = false;
@@ -318,7 +318,20 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   bool get _showOpenAiReasoningEffort {
     final provider =
         _providerFor(_selectedProvider, _status?.ai.providers ?? const []);
-    return provider?.id == 'openai' && provider!.supportsReasoningEffort;
+    if (provider == null ||
+        provider.id != 'openai' ||
+        !provider.supportsReasoningEffort) {
+      return false;
+    }
+    for (final model in provider.models) {
+      if (model.id == _selectedModel) {
+        // Older servers don't send a model-level capability; keep their
+        // provider-level behavior while honoring current catalogs' detail.
+        return model.supportsReasoningEffort ?? true;
+      }
+    }
+    // Custom/unknown OpenAI model IDs retain the existing control.
+    return true;
   }
 
   /// The local provider carries its own scoped endpoint pair.

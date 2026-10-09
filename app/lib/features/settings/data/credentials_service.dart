@@ -113,7 +113,7 @@ class AiCredentialConfig {
       model: config['model'] as String? ??
           (selected?.models.isNotEmpty == true
               ? selected!.models.first.id
-              : 'claude-opus-4-8'),
+              : 'claude-opus-5-5'),
       // Flat siblings of config in the server response: the config object is
       // shared with non-admin payloads, which never carry endpoint settings.
       openaiReasoningEffort: json['openai_reasoning_effort'] as String? ?? '',

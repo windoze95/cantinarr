@@ -498,7 +498,7 @@ class _StubAdapter implements HttpClientAdapter {
             'label': 'Anthropic',
             'credential_key': 'anthropic_key',
             'models': [
-              {'id': 'claude-sonnet-4-6', 'label': 'Claude Sonnet 4.6'},
+              {'id': 'claude-sonnet-5-5', 'label': 'Claude Sonnet 5.5'},
             ],
           },
           {
@@ -507,6 +507,10 @@ class _StubAdapter implements HttpClientAdapter {
             'credential_key': 'openai_key',
             'models': [
               {'id': 'gpt-5.4-mini', 'label': 'GPT-5.4 mini'},
+              {'id': 'gpt-6-astra', 'label': 'GPT-6 Astra'},
+              {'id': 'gpt-6-sol', 'label': 'GPT-6 Sol'},
+              {'id': 'gpt-6-luna', 'label': 'GPT-6 Luna'},
+              {'id': 'gpt-6.1-sol', 'label': 'GPT-6.1 Sol'},
             ],
           },
           {
@@ -514,7 +518,7 @@ class _StubAdapter implements HttpClientAdapter {
             'label': 'Google Gemini',
             'credential_key': 'gemini_key',
             'models': [
-              {'id': 'gemini-2.5-flash', 'label': 'Gemini 2.5 Flash'},
+              {'id': 'gemini-3.8-flash', 'label': 'Gemini 3.8 Flash'},
             ],
           },
           {
@@ -523,6 +527,10 @@ class _StubAdapter implements HttpClientAdapter {
             'credential_key': '',
             'auth_type': 'user_oauth',
             'models': [
+              {'id': 'gpt-6-astra', 'label': 'GPT-6 Astra'},
+              {'id': 'gpt-6.1-sol', 'label': 'GPT-6.1 Sol'},
+              {'id': 'gpt-6-sol', 'label': 'GPT-6 Sol'},
+              {'id': 'gpt-6-luna', 'label': 'GPT-6 Luna'},
               {'id': 'gpt-5.6-luna', 'label': 'GPT-5.6 Luna'},
             ],
           },

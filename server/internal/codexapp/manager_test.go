@@ -164,17 +164,30 @@ func TestCodexAppHelperProcess(t *testing.T) {
 					continue
 				}
 				if slices.Contains(os.Args, "--fake-token-limit") {
+					outputTokens := int64(12)
+					if value, err := strconv.ParseInt(fakeArg("--fake-output-tokens="), 10, 64); err == nil {
+						outputTokens = value
+					}
 					send(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{
 						"threadId": "thread-1", "turnId": "turn-1",
 						"tokenUsage": map[string]any{
-							"last":  map[string]any{"inputTokens": 21, "cachedInputTokens": 5, "outputTokens": 12, "reasoningOutputTokens": 3, "totalTokens": 33},
-							"total": map[string]any{"inputTokens": 21, "cachedInputTokens": 5, "outputTokens": 12, "reasoningOutputTokens": 3, "totalTokens": 33},
+							"last":  map[string]any{"inputTokens": 21, "cachedInputTokens": 5, "outputTokens": outputTokens, "reasoningOutputTokens": 3, "totalTokens": outputTokens + 21},
+							"total": map[string]any{"inputTokens": 21, "cachedInputTokens": 5, "outputTokens": outputTokens, "reasoningOutputTokens": 3, "totalTokens": outputTokens + 21},
 						},
 					}})
 					continue
 				}
 				if slices.Contains(os.Args, "--fake-token-after-interrupt") {
 					continue
+				}
+				if slices.Contains(os.Args, "--fake-probe-reasoning") {
+					send(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{
+						"threadId": "thread-1", "turnId": "turn-1",
+						"tokenUsage": map[string]any{"last": map[string]any{"inputTokens": 18, "outputTokens": 512, "reasoningOutputTokens": 512, "totalTokens": 530}},
+					}})
+					// Give the client time to process hidden reasoning before the
+					// visible answer, as a real reasoning model can do.
+					time.Sleep(200 * time.Millisecond)
 				}
 				if slices.Contains(os.Args, "--fake-token-usage") {
 					send(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{
@@ -540,42 +553,132 @@ func TestAutonomousTurnWithNoToolsReturnsText(t *testing.T) {
 }
 
 func TestProbeAccountUsesExactModelWithoutExecutingTools(t *testing.T) {
-	manager, _, _, runtimeDir, logPath := fakeManager(t)
-	if err := manager.saveAccount(
-		SharedAccount(),
-		[]byte(`{"tokens":{"access_token":"shared-secret"}}`),
-		AccountStatus{Connected: true},
-	); err != nil {
+	for _, model := range []string{"gpt-5.6-luna", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "custom-model"} {
+		t.Run(model, func(t *testing.T) {
+			manager, _, _, runtimeDir, logPath := fakeManager(t)
+			if err := manager.saveAccount(
+				SharedAccount(),
+				[]byte(`{"tokens":{"access_token":"shared-secret"}}`),
+				AccountStatus{Connected: true},
+			); err != nil {
+				t.Fatal(err)
+			}
+			executed := false
+			manager.args = append(manager.args, "--fake-probe-reasoning")
+			manager.toolCallObserver = func(mcp.CallContext) { executed = true }
+			if err := manager.ProbeAccount(context.Background(), SharedAccount(), model); err != nil {
+				t.Fatalf("probe account: %v", err)
+			}
+			if executed {
+				t.Fatal("provider probe executed a Cantinarr tool")
+			}
+			var received []map[string]any
+			for _, entry := range readFakeLog(t, logPath) {
+				if entry.Kind != "received" {
+					continue
+				}
+				var message map[string]any
+				if json.Unmarshal(entry.Value, &message) == nil {
+					received = append(received, message)
+				}
+			}
+			thread := requestByMethod(t, received, "thread/start")
+			params, _ := thread["params"].(map[string]any)
+			if params["model"] != model {
+				t.Fatalf("probe model=%v, want exact Codex selector %q", params["model"], model)
+			}
+			tools, ok := params["dynamicTools"].([]any)
+			if !ok || len(tools) != 0 {
+				t.Fatalf("probe dynamic tools=%#v, want empty", params["dynamicTools"])
+			}
+			turn := requestByMethod(t, received, "turn/start")
+			turnParams := turn["params"].(map[string]any)
+			if model == "custom-model" {
+				if _, present := turnParams["effort"]; present {
+					t.Fatal("custom Codex selector received an assumed effort")
+				}
+			} else if turnParams["effort"] != "low" {
+				t.Fatalf("probe effort=%v, want low", turnParams["effort"])
+			}
+			for _, message := range received {
+				if message["method"] == "turn/interrupt" {
+					t.Fatal("probe interrupted while the model was still reasoning")
+				}
+			}
+			assertRuntimeEmpty(t, runtimeDir)
+		})
+	}
+}
+
+func TestProbeAccountRejectsAnOutputLimitedPartialAnswer(t *testing.T) {
+	manager, _, _, _, _ := fakeManager(t)
+	if err := manager.saveAccount(SharedAccount(), []byte(`{"tokens":{"access_token":"shared-secret"}}`), AccountStatus{Connected: true}); err != nil {
 		t.Fatal(err)
 	}
-	executed := false
-	manager.toolCallObserver = func(mcp.CallContext) { executed = true }
-	if err := manager.ProbeAccount(context.Background(), SharedAccount(), "gpt-5.6-luna"); err != nil {
-		t.Fatalf("probe account: %v", err)
+	manager.args = append(manager.args, "--fake-token-limit", "--fake-output-tokens=16000")
+	if err := manager.ProbeAccount(context.Background(), SharedAccount(), "gpt-6.1-sol"); !errors.Is(err, ErrProvider) {
+		t.Fatalf("output-limited probe=%v, want provider failure", err)
 	}
-	if executed {
-		t.Fatal("provider probe executed a Cantinarr tool")
-	}
-	var received []map[string]any
-	for _, entry := range readFakeLog(t, logPath) {
-		if entry.Kind != "received" {
-			continue
+}
+
+func TestUnavailableCodexModelErrorsKeepSafeClassification(t *testing.T) {
+	for _, detail := range []string{
+		`{"code":"model_not_found","message":"model is unavailable for this account"}`,
+		`{"message":"You do not have access to this model"}`,
+	} {
+		if !errors.Is(classifyRPCError(&rpcErrorBody{Code: -32602, Message: detail}), ErrModelUnavailable) {
+			t.Errorf("classifyRPCError(%q) did not preserve model-unavailable category", detail)
 		}
-		var message map[string]any
-		if json.Unmarshal(entry.Value, &message) == nil {
-			received = append(received, message)
+		info := compactTurnError(json.RawMessage(detail))
+		if string(info) != `"modelUnavailable"` {
+			t.Errorf("compactTurnError(%q)=%s, want sanitized modelUnavailable marker", detail, info)
+		}
+		complete := turnCompleteParams{}
+		complete.Turn.Error = &struct {
+			CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
+			Message        string          `json:"message,omitempty"`
+		}{CodexErrorInfo: info}
+		if !errors.Is(safeTurnError(complete), ErrModelUnavailable) {
+			t.Errorf("safeTurnError(%s) did not preserve model-unavailable category", info)
 		}
 	}
-	thread := requestByMethod(t, received, "thread/start")
-	params, _ := thread["params"].(map[string]any)
-	if params["model"] != "gpt-5.6-luna" {
-		t.Fatalf("probe model=%v", params["model"])
+	if !errors.Is(contextOrClassified(context.Background(), ErrModelUnavailable), ErrModelUnavailable) {
+		t.Fatal("contextOrClassified collapsed model-unavailable error")
 	}
-	tools, ok := params["dynamicTools"].([]any)
-	if !ok || len(tools) != 0 {
-		t.Fatalf("probe dynamic tools=%#v, want empty", params["dynamicTools"])
+}
+
+func TestCompletedTurnClassifiesMessageBeforeDiscardingUpstreamDetails(t *testing.T) {
+	for _, tc := range []struct {
+		name, message, want string
+	}{
+		{"unavailable", "The model is not supported for this account", `"modelUnavailable"`},
+		{"payload", "Invalid tool schema", `"providerError"`},
+		{"quota", "usage_limit exceeded", `"usageLimitExceeded"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params, err := json.Marshal(map[string]any{"turn": map[string]any{
+				"id": "turn-1", "status": "failed",
+				"error": map[string]any{"codexErrorInfo": "other", "message": tc.message + "; access_token=private-test-token"},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			compact, ok := compactNotification("turn/completed", params)
+			if !ok {
+				t.Fatal("completion was discarded")
+			}
+			var complete turnCompleteParams
+			if err := json.Unmarshal(compact, &complete); err != nil {
+				t.Fatal(err)
+			}
+			if complete.Turn.Error == nil || string(complete.Turn.Error.CodexErrorInfo) != tc.want {
+				t.Fatalf("wrong error classification: %s", compact)
+			}
+			if complete.Turn.Error.Message != "" || strings.Contains(string(compact), "private-test-token") || strings.Contains(string(compact), tc.message) {
+				t.Fatal("compacted notification retained raw upstream details")
+			}
+		})
 	}
-	assertRuntimeEmpty(t, runtimeDir)
 }
 
 func TestSharedAutonomousTurnInterruptsAtReportedOutputLimit(t *testing.T) {

@@ -46,6 +46,7 @@ const (
 	blockTypeAnthropicThinking         = "anthropic_thinking"
 	blockTypeAnthropicRedactedThinking = "anthropic_redacted_thinking"
 	blockTypeGeminiThought             = "gemini_thought"
+	blockTypeOpenAIResponsesOutput     = "openai_responses_output"
 )
 
 // transcript is the provider-neutral representation used by the agent loop.

@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	defaultAnthropicModel = "claude-opus-4-8"
+	defaultAnthropicModel = "claude-opus-5-5"
 	maxTokens             = 64000
 	// maxToolIterations bounds the agent loop. On the final iteration the
 	// model is forced to answer in text (tool_choice: none) so the user
@@ -69,6 +69,7 @@ type ChatContext struct {
 	DeviceID        string
 	RequireSharedAI bool
 	Services        []string // human-readable names of configured backends
+	ConversationID  string   // server-generated conversation identifier for OAuth provider routing
 	// TrustedUserText and InteractiveTurnID come directly from the current
 	// authenticated HTTP request. They are never reconstructed from transcript
 	// history or provider/model output.
@@ -198,12 +199,18 @@ func (s *Service) SendMessage(ctx context.Context, history transcript, chatCtx C
 }
 
 func supportsAnthropicAdaptiveThinking(model anthropic.Model) bool {
-	m := string(model)
-	return strings.Contains(m, "opus-4") ||
-		strings.Contains(m, "sonnet-4") ||
-		strings.Contains(m, "sonnet-5") ||
-		strings.Contains(m, "fable-5") ||
-		strings.Contains(m, "mythos-5")
+	// Preserve documented legacy selections without applying adaptive thinking
+	// to older 4.5 models that reject it.
+	return matchesAnthropicModel(model, "claude-opus-5", "claude-fable-5", "claude-sonnet-5", "claude-haiku-5-5", "claude-mythos-5", "claude-mythos-preview", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6")
+}
+
+func matchesAnthropicModel(model anthropic.Model, names ...string) bool {
+	for _, name := range names {
+		if string(model) == name || strings.HasPrefix(string(model), name+"-") {
+			return true
+		}
+	}
+	return false
 }
 
 // streamOne sends a single streaming request and returns the accumulated message.

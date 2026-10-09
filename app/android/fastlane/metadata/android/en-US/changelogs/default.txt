@@ -1,1 +1,3 @@
 Browse and request movies, TV, books, and music from your self-hosted Cantinarr server. Follow downloads and receive notifications when requests are ready. Administrators can manage libraries, approvals, accounts, and connected services. Optional AI tools use the provider you or your administrator configure.
+
+AI provider choices now use current model IDs and the matching API or OAuth endpoint. Check saving your selected provider/model and an AI conversation with tool lookups.

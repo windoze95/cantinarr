@@ -43,6 +43,7 @@ const (
 	AIValidationFailureQuota             AIValidationFailureKind = "quota_or_rate_limit"
 	AIValidationFailureTemporary         AIValidationFailureKind = "temporary_upstream"
 	AIValidationFailureInvalidResponse   AIValidationFailureKind = "invalid_response"
+	AIValidationFailureUpgradeRequired   AIValidationFailureKind = "provider_upgrade_required"
 )
 
 // AIValidationFailure retains the provider error for server-side inspection
@@ -107,11 +108,13 @@ func aiValidationFailureDetail(kind AIValidationFailureKind) string {
 	case AIValidationFailureInvalidCredential:
 		return "The provider credential or account connection was rejected. Check or reconnect the provider credential."
 	case AIValidationFailureUnsupportedModel:
-		return "The selected model is unavailable for this API credential. Choose another model or check provider access."
+		return "The selected model is unavailable for this provider account. Choose a model available to the account or check model access."
 	case AIValidationFailureQuota:
 		return "The provider quota or rate limit was reached. Check billing and quota, or try again later."
 	case AIValidationFailureTemporary:
 		return "The AI provider is temporarily unavailable. Try again shortly."
+	case AIValidationFailureUpgradeRequired:
+		return "The provider requires a newer client protocol. Update Cantinarr and try again."
 	default:
 		return "The selected AI provider and model did not return a usable test response."
 	}
@@ -125,6 +128,8 @@ func classifyAIValidationFailure(err error) AIValidationFailureKind {
 	switch {
 	case errors.Is(err, codexapp.ErrNotConnected):
 		return AIValidationFailureInvalidCredential
+	case errors.Is(err, codexapp.ErrModelUnavailable):
+		return AIValidationFailureUnsupportedModel
 	case errors.Is(err, codexapp.ErrUsageLimit):
 		return AIValidationFailureQuota
 	case errors.Is(err, codexapp.ErrBusy), errors.Is(err, codexapp.ErrUnavailable):
@@ -135,6 +140,11 @@ func classifyAIValidationFailure(err error) AIValidationFailureKind {
 		return AIValidationFailureTemporary
 	}
 	status := providerErrorStatus(err)
+	if status == http.StatusBadRequest || status == http.StatusUnprocessableEntity {
+		if isUnavailableModelError(err) {
+			return AIValidationFailureUnsupportedModel
+		}
+	}
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return AIValidationFailureInvalidCredential
@@ -142,6 +152,8 @@ func classifyAIValidationFailure(err error) AIValidationFailureKind {
 		return AIValidationFailureUnsupportedModel
 	case status == http.StatusTooManyRequests:
 		return AIValidationFailureQuota
+	case status == http.StatusUpgradeRequired:
+		return AIValidationFailureUpgradeRequired
 	case status == http.StatusRequestTimeout || status == http.StatusConflict || status >= http.StatusInternalServerError:
 		return AIValidationFailureTemporary
 	}
@@ -155,7 +167,74 @@ func classifyAIValidationFailure(err error) AIValidationFailureKind {
 	return AIValidationFailureInvalidResponse
 }
 
+// isUnavailableModelError only interprets narrowly model-specific 400/422
+// errors. Other invalid requests remain generic so a broken payload or tool
+// schema is not misreported as an access-tier problem.
+func isUnavailableModelError(err error) bool {
+	var markers []string
+	var responsesErr *responsesStreamError
+	if errors.As(err, &responsesErr) {
+		markers = append(markers, responsesErr.Code, responsesErr.Message)
+	}
+	var openaiErr *openai.Error
+	if errors.As(err, &openaiErr) {
+		markers = append(markers, openaiErr.Code, openaiErr.Param, openaiErr.Message, openaiErr.Type)
+	}
+	var anthropicErr *anthropic.Error
+	if errors.As(err, &anthropicErr) {
+		markers = append(markers, string(anthropicErr.Type()), anthropicErr.RawJSON())
+	}
+	var geminiErr genai.APIError
+	if errors.As(err, &geminiErr) {
+		markers = append(markers, geminiErr.Status, geminiErr.Message, fmt.Sprint(geminiErr.Details))
+	}
+	if len(markers) == 0 {
+		return false
+	}
+	marker := strings.ToLower(strings.Join(markers, " "))
+	if strings.Contains(marker, "model") &&
+		(strings.Contains(marker, "not found") || strings.Contains(marker, "not available") || strings.Contains(marker, "deprecated")) {
+		return true
+	}
+	for _, phrase := range []string{
+		"model_not_found",
+		"model_not_available",
+		"unsupported_model",
+		"unknown model",
+		"model not found",
+		"model does not exist",
+		"model is not found",
+		"model is not available",
+		"model unavailable",
+		"unsupported model",
+		"deprecated model",
+		"model is deprecated",
+		"model has been deprecated",
+		"model retired",
+	} {
+		if strings.Contains(marker, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
 func providerErrorStatus(err error) int {
+	var responsesErr *responsesStreamError
+	if errors.As(err, &responsesErr) {
+		switch strings.ToLower(responsesErr.Code) {
+		case "rate_limit_exceeded", "rate_limit_reached", "insufficient_quota":
+			return http.StatusTooManyRequests
+		case "server_error", "internal_error":
+			return http.StatusInternalServerError
+		case "invalid_api_key", "authentication_error":
+			return http.StatusUnauthorized
+		case "model_not_found":
+			return http.StatusNotFound
+		default:
+			return http.StatusBadRequest
+		}
+	}
 	var openAIErr *openai.Error
 	if errors.As(err, &openAIErr) {
 		return openAIErr.StatusCode
@@ -294,8 +373,10 @@ func (h *Handler) validateAIProfile(ctx context.Context, profile credentials.AIP
 		runner = NewLocalOpenAIService(apiKey, profile.Config.Model, profile.BaseURL, profile.ReasoningEffort, profile.UseProxy, h.toolServer)
 	case credentials.AIProviderGemini:
 		runner = NewGeminiService(apiKey, profile.Config.Model, h.toolServer)
-	case credentials.AIProviderGrok, credentials.AIProviderGrokOAuth:
+	case credentials.AIProviderGrok:
 		runner = NewGrokService(apiKey, profile.Config.Model, h.toolServer)
+	case credentials.AIProviderGrokOAuth:
+		runner = NewGrokOAuthService(apiKey, profile.Config.Model, "", h.toolServer)
 	default:
 		return ErrAIValidation
 	}

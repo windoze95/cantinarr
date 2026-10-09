@@ -208,11 +208,12 @@ void main() {
 
 
   testWidgets(
-      'hides the reasoning effort control when the server does not advertise it',
+      'hides the reasoning effort control for a model that does not support it',
       (tester) async {
     final adapter = _CredentialsAdapter(
       provider: 'openai',
       model: 'gpt-4.1-mini',
+      openAiSupportsReasoningEffort: true,
     );
     await _pumpCredentials(tester, adapter);
 
@@ -224,7 +225,7 @@ void main() {
       (tester) async {
     final adapter = _CredentialsAdapter(
       provider: 'openai',
-      model: 'gpt-4.1-mini',
+      model: 'gpt-5.4-mini',
       openAiSupportsReasoningEffort: true,
       openAiReasoningEffort: 'low',
     );
@@ -239,7 +240,7 @@ void main() {
   testWidgets('saves only a changed reasoning effort', (tester) async {
     final adapter = _CredentialsAdapter(
       provider: 'openai',
-      model: 'gpt-4.1-mini',
+      model: 'gpt-5.4-mini',
       openAiSupportsReasoningEffort: true,
       openAiReasoningEffort: '',
     );
@@ -265,7 +266,7 @@ void main() {
   testWidgets('switching back to Auto saves an empty effort', (tester) async {
     final adapter = _CredentialsAdapter(
       provider: 'openai',
-      model: 'gpt-4.1-mini',
+      model: 'gpt-5.4-mini',
       openAiSupportsReasoningEffort: true,
       openAiReasoningEffort: 'medium',
     );
@@ -290,7 +291,7 @@ void main() {
   testWidgets('an untouched reasoning effort is not a change', (tester) async {
     final adapter = _CredentialsAdapter(
       provider: 'openai',
-      model: 'gpt-4.1-mini',
+      model: 'gpt-5.4-mini',
       openAiSupportsReasoningEffort: true,
       openAiReasoningEffort: 'low',
     );
@@ -538,7 +539,12 @@ class _CredentialsAdapter implements HttpClientAdapter {
         'ai': {
           'config': {
             'provider': provider,
-            'model': model ?? (provider == 'grok_oauth' ? 'grok-4.6' : 'gpt-5.4'),
+            'model': model ??
+                (provider == 'grok_oauth'
+                    ? 'grok-4.6'
+                    : provider == 'codex'
+                        ? 'default'
+                        : 'gpt-5.5'),
           },
           if (openAiReasoningEffort != null)
             'openai_reasoning_effort': openAiReasoningEffort,
@@ -553,7 +559,14 @@ class _CredentialsAdapter implements HttpClientAdapter {
               'auth_type': 'user_oauth',
               'credential_key': '',
               'models': [
-                {'id': 'gpt-5.4', 'label': 'GPT-5.4'},
+                {'id': 'default', 'label': 'OpenAI recommended'},
+                {'id': 'gpt-6-astra', 'label': 'GPT-6 Astra'},
+                {'id': 'gpt-6.1-sol', 'label': 'GPT-6.1 Sol'},
+                {'id': 'gpt-6-sol', 'label': 'GPT-6 Sol'},
+                {'id': 'gpt-6-luna', 'label': 'GPT-6 Luna'},
+                {'id': 'gpt-5.6-sol', 'label': 'GPT-5.6 Sol'},
+                {'id': 'gpt-5.6-terra', 'label': 'GPT-5.6 Terra'},
+                {'id': 'gpt-5.6-luna', 'label': 'GPT-5.6 Luna'},
               ],
             },
             {
@@ -564,7 +577,40 @@ class _CredentialsAdapter implements HttpClientAdapter {
               if (openAiSupportsReasoningEffort)
                 'supports_reasoning_effort': true,
               'models': [
-                {'id': 'gpt-4.1-mini', 'label': 'GPT-4.1 mini'},
+                {
+                  'id': 'gpt-4.1-mini',
+                  'label': 'GPT-4.1 mini',
+                  'supports_reasoning_effort': false,
+                },
+                {
+                  'id': 'gpt-5.4-mini',
+                  'label': 'GPT-5.4 mini',
+                  'supports_reasoning_effort': true,
+                },
+                {
+                  'id': 'gpt-5.5',
+                  'label': 'GPT-5.5',
+                  'supports_reasoning_effort': true,
+                },
+                {
+                  'id': 'gpt-5.6-sol',
+                  'label': 'GPT-5.6 Sol',
+                  'supports_reasoning_effort': true,
+                },
+                {
+                  'id': 'gpt-5.6-terra',
+                  'label': 'GPT-5.6 Terra',
+                  'supports_reasoning_effort': true,
+                },
+                {
+                  'id': 'gpt-5.6-luna',
+                  'label': 'GPT-5.6 Luna',
+                  'supports_reasoning_effort': true,
+                },
+                {'id': 'gpt-6-astra', 'label': 'GPT-6 Astra'},
+                {'id': 'gpt-6-sol', 'label': 'GPT-6 Sol'},
+                {'id': 'gpt-6-luna', 'label': 'GPT-6 Luna'},
+                {'id': 'gpt-6.1-sol', 'label': 'GPT-6.1 Sol'},
               ],
             },
             {
@@ -573,7 +619,9 @@ class _CredentialsAdapter implements HttpClientAdapter {
               'auth_type': 'api_key',
               'credential_key': 'grok_key',
               'models': [
+                {'id': 'grok-4.7', 'label': 'Grok 4.7'},
                 {'id': 'grok-4.6', 'label': 'Grok 4.6'},
+                {'id': 'grok-4.5', 'label': 'Grok 4.5'},
               ],
             },
             {
@@ -582,7 +630,8 @@ class _CredentialsAdapter implements HttpClientAdapter {
               'auth_type': 'user_oauth',
               'credential_key': '',
               'models': [
-                {'id': 'grok-4.6', 'label': 'Grok 4.6'},
+                {'id': 'grok-4.6', 'label': 'Grok Build 4.6'},
+                {'id': 'grok-4.5', 'label': 'Grok Build 4.5'},
               ],
             },
             if (includeLocalProvider)

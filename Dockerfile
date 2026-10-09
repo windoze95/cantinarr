@@ -30,12 +30,12 @@ RUN flutter build web --release --no-pub \
 # Pin and verify the standalone musl binary for reproducible multi-arch images.
 FROM --platform=$BUILDPLATFORM alpine:3.22 AS codex-downloader
 ARG TARGETARCH
-ARG CODEX_VERSION=0.144.3
+ARG CODEX_VERSION=0.162.0
 RUN apk add --no-cache ca-certificates curl tar
 RUN set -eux; \
     case "$TARGETARCH" in \
-      amd64) target="x86_64-unknown-linux-musl"; sha="6fa4467489ac5a0ae5bf0057d39f6d14a7f50f5fa70b8a10933888d92d1b75ab" ;; \
-      arm64) target="aarch64-unknown-linux-musl"; sha="a70aed45f237e336f266e39c036f6f9a91ec181dacddf5d21f7f6d0d34b5c654" ;; \
+      amd64) target="x86_64-unknown-linux-musl"; sha="629ef675191921f687ed1e016ba6d3dfc8c171c62fa506e3082a9db32817dc3e" ;; \
+      arm64) target="aarch64-unknown-linux-musl"; sha="9cb0f864a44aaa1f3dbdec881c04c8e1d48eb9dc8ec2af4a3fadc7ad9b78a469" ;; \
       *) echo "unsupported Codex architecture: $TARGETARCH" >&2; exit 1 ;; \
     esac; \
     archive="codex-app-server-${target}.tar.gz"; \

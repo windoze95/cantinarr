@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	openai "github.com/openai/openai-go/v3"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
@@ -56,6 +57,22 @@ func TestOpenAIInteractiveAutoOmitsReasoningEffort(t *testing.T) {
 	req := <-requests
 	if got, found := req.body["reasoning_effort"]; found {
 		t.Fatalf("reasoning_effort=%v, want omitted", got)
+	}
+}
+
+func TestGPT6SolAndLunaForceNoneForChatCompletionsToolCalling(t *testing.T) {
+	tools := toOpenAITools(mcp.NewToolServer(nil, nil, nil, nil).GetToolsForRole(auth.RoleAdmin))
+	for _, model := range []string{"gpt-6-sol", "gpt-6-luna"} {
+		t.Run(model, func(t *testing.T) {
+			service := NewOpenAIService("secret", model, "", "high", mcp.NewToolServer(nil, nil, nil, nil))
+			if service.reasoningEffort != openai.ReasoningEffortNone {
+				t.Fatalf("reasoning effort=%q, want forced none", service.reasoningEffort)
+			}
+			params := openAIInteractiveParams(service.model, nil, tools, false, service.reasoningEffort)
+			if params.Model != openai.ChatModel(model) || params.ReasoningEffort != openai.ReasoningEffortNone || len(params.Tools) == 0 {
+				t.Fatalf("interactive GPT-6 request = model %q, effort %q, tools=%d", params.Model, params.ReasoningEffort, len(params.Tools))
+			}
+		})
 	}
 }
 

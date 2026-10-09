@@ -111,6 +111,7 @@ type turnCompleteParams struct {
 		} `json:"items"`
 		Error *struct {
 			CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
+			Message        string          `json:"message,omitempty"`
 		} `json:"error"`
 	} `json:"turn"`
 }
@@ -129,6 +130,7 @@ type runBehavior struct {
 	callbacks       Callbacks
 	captured        *AutonomousTurnResult
 	maxOutput       int64
+	probeEffort     string
 	// historyItems are raw Responses API items injected into the fresh thread
 	// via thread/inject_items before the turn starts, so the model sees prior
 	// turns natively instead of a flattened text replay.
@@ -224,17 +226,31 @@ func (m *Manager) ProbeAccount(ctx context.Context, account AccountRef, model st
 		"This is a Cantinarr provider readiness check.",
 		"Reply with exactly: OK",
 		runBehavior{
-			actorKey:  actorKey,
-			captured:  &result,
-			maxOutput: 256,
+			actorKey:    actorKey,
+			captured:    &result,
+			maxOutput:   16000,
+			probeEffort: readinessProbeEffort(model),
 		})
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(result.Text) == "" {
+	if result.OutputLimitReached || strings.TrimSpace(result.Text) == "" {
 		return ErrProvider
 	}
 	return nil
+}
+
+func readinessProbeEffort(model string) string {
+	// A readiness check needs only a short answer, but reasoning tokens count
+	// toward the observed output limit too. Give documented selectors enough
+	// room to answer at low effort. Leave custom selectors' controls untouched.
+	switch model {
+	case "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna",
+		"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
+		return "low"
+	default:
+		return ""
+	}
 }
 
 // RunSharedAutonomousTurn runs one server-owned Codex turn against only the
@@ -554,13 +570,17 @@ func (m *Manager) runWithAccount(
 			ID string `json:"id"`
 		} `json:"turn"`
 	}
-	if requestErr := session.request(runCtx, "turn/start", map[string]any{
+	turnParams := map[string]any{
 		"threadId": threadStart.Thread.ID,
 		"input": []map[string]any{{
 			"type": "text",
 			"text": prompt,
 		}},
-	}, &turnStart); requestErr != nil {
+	}
+	if behavior.probeEffort != "" {
+		turnParams["effort"] = behavior.probeEffort
+	}
+	if requestErr := session.request(runCtx, "turn/start", turnParams, &turnStart); requestErr != nil {
 		return contextOrClassified(runCtx, requestErr)
 	}
 	if turnStart.Turn.ID == "" {
@@ -724,6 +744,9 @@ func contextOrClassified(ctx context.Context, err error) error {
 	if errors.Is(err, ErrUsageLimit) {
 		return ErrUsageLimit
 	}
+	if errors.Is(err, ErrModelUnavailable) {
+		return ErrModelUnavailable
+	}
 	return ErrProvider
 }
 
@@ -805,6 +828,8 @@ func safeTurnError(complete turnCompleteParams) error {
 	switch {
 	case strings.Contains(info, "usageLimitExceeded"), strings.Contains(info, "usage_limit"):
 		return ErrUsageLimit
+	case strings.Contains(info, "modelUnavailable"):
+		return ErrModelUnavailable
 	case strings.Contains(info, "unauthorized"):
 		return ErrNotConnected
 	default:

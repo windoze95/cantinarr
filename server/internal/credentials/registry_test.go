@@ -41,7 +41,7 @@ func TestAIProviderMetadataIncludesAuthType(t *testing.T) {
 	if codex.CredentialKey != "" {
 		t.Fatalf("Codex credential_key = %q, want empty", codex.CredentialKey)
 	}
-	wantCodexModels := []string{"default", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+	wantCodexModels := []string{"default", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
 	if len(codex.Models) != len(wantCodexModels) {
 		t.Fatalf("Codex models = %+v", codex.Models)
 	}
@@ -104,11 +104,11 @@ func TestAIProviderDefaultsAndInference(t *testing.T) {
 
 	tests := map[string]string{
 		"":                  "",
-		"claude-sonnet-4-6": AIProviderAnthropic,
+		"claude-sonnet-5-5": AIProviderAnthropic,
 		"gpt-5.4-mini":      AIProviderOpenAI,
 		"o3":                AIProviderOpenAI,
-		"gemini-2.5-flash":  AIProviderGemini,
-		"grok-4.6":          AIProviderGrok,
+		"gemini-3.8-flash":  AIProviderGemini,
+		"grok-4.7":          AIProviderGrok,
 		"default":           "",
 		"unknown-model":     "",
 	}
@@ -131,17 +131,13 @@ func TestGrokProviderMetadata(t *testing.T) {
 	if oauth.CredentialKey != "" {
 		t.Fatalf("grok_oauth credential_key = %q, want empty", oauth.CredentialKey)
 	}
-	// Both xAI providers serve the same catalog: the auth path is the only
-	// difference between them.
-	if len(grok.Models) == 0 || len(grok.Models) != len(oauth.Models) {
-		t.Fatalf("grok models = %d, oauth models = %d", len(grok.Models), len(oauth.Models))
+	if got, want := modelIDs(grok.Models), []string{"grok-4.7", "grok-4.6", "grok-4.5"}; !equalStrings(got, want) {
+		t.Fatalf("public API Grok models = %v, want %v", got, want)
 	}
-	for i := range grok.Models {
-		if grok.Models[i].ID != oauth.Models[i].ID {
-			t.Fatalf("model[%d]: %q != %q", i, grok.Models[i].ID, oauth.Models[i].ID)
-		}
+	if got, want := modelIDs(oauth.Models), []string{"grok-4.6", "grok-4.5"}; !equalStrings(got, want) {
+		t.Fatalf("Grok Build OAuth models = %v, want %v", got, want)
 	}
-	if got := DefaultAIModel(AIProviderGrok); got != "grok-4.6" {
+	if got := DefaultAIModel(AIProviderGrok); got != "grok-4.7" {
 		t.Fatalf("DefaultAIModel(grok) = %q", got)
 	}
 	if got := DefaultAIModel(AIProviderGrokOAuth); got != "grok-4.6" {
@@ -153,6 +149,59 @@ func TestGrokProviderMetadata(t *testing.T) {
 	if !IsOAuthAIProvider(AIProviderCodex) || IsOAuthAIProvider("unknown-provider") {
 		t.Fatal("IsOAuthAIProvider misclassifies codex or unknown providers")
 	}
+}
+
+func TestProviderCatalogIDsAndDefaultsAreCurrentAndAuthSpecific(t *testing.T) {
+	want := map[string][]string{
+		AIProviderAnthropic:   {"claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5"},
+		AIProviderOpenAI:      {"gpt-4.1-mini", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"},
+		AIProviderGemini:      {"gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview"},
+		AIProviderGrok:        {"grok-4.7", "grok-4.6", "grok-4.5"},
+		AIProviderGrokOAuth:   {"grok-4.6", "grok-4.5"},
+		AIProviderCodex:       {"default", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"},
+		AIProviderLocalOpenAI: {},
+	}
+	for _, provider := range AIProviders {
+		got := modelIDs(provider.Models)
+		if expected, exists := want[provider.ID]; exists && !equalStrings(got, expected) {
+			t.Errorf("%s models = %v, want %v", provider.ID, got, expected)
+		}
+		if len(got) > 0 && DefaultAIModel(provider.ID) != got[0] {
+			t.Errorf("%s default model = %q, want first supported model %q", provider.ID, DefaultAIModel(provider.ID), got[0])
+		}
+	}
+	if got := DefaultSharedAIModel; got != "gpt-5.6-luna" {
+		t.Fatalf("shared OAuth default = %q, want supported Codex OAuth tier", got)
+	}
+	if got := DefaultAIModel(AIProviderOpenAI); got != "gpt-4.1-mini" {
+		t.Fatalf("OpenAI API default = %q, want the supported low-cost model", got)
+	}
+	for _, model := range aiProviderForTest(t, AIProviderOpenAI).Models {
+		want := strings.HasPrefix(model.ID, "gpt-5")
+		if model.SupportsReasoningEffort != want {
+			t.Errorf("%s reasoning effort support = %t, want %t", model.ID, model.SupportsReasoningEffort, want)
+		}
+	}
+}
+
+func modelIDs(models []AIModelOption) []string {
+	ids := make([]string, 0, len(models))
+	for _, model := range models {
+		ids = append(ids, model.ID)
+	}
+	return ids
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestAIKeyCredentialKeyNeverFallsBack(t *testing.T) {

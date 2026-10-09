@@ -59,8 +59,49 @@ void main() {
               'supports_reasoning_effort': true,
               'models': [
                 {
+                  'id': 'gpt-4.1-mini',
+                  'label': 'GPT-4.1 mini',
+                  'supports_reasoning_effort': false,
+                },
+                {
                   'id': 'gpt-5.4-mini',
                   'label': 'GPT-5.4 mini',
+                  'supports_reasoning_effort': true,
+                },
+                {
+                  'id': 'gpt-5.6-sol',
+                  'label': 'GPT-5.6 Sol',
+                  'supports_reasoning_effort': true,
+                },
+                {
+                  'id': 'gpt-5.6-terra',
+                  'label': 'GPT-5.6 Terra',
+                  'supports_reasoning_effort': true,
+                },
+                {
+                  'id': 'gpt-5.6-luna',
+                  'label': 'GPT-5.6 Luna',
+                  'supports_reasoning_effort': true,
+                },
+                {
+                  'id': 'gpt-6-astra',
+                  'label': 'GPT-6 Astra',
+                  'supports_reasoning_effort': false,
+                },
+                {
+                  'id': 'gpt-6-sol',
+                  'label': 'GPT-6 Sol',
+                  'supports_reasoning_effort': false,
+                },
+                {
+                  'id': 'gpt-6-luna',
+                  'label': 'GPT-6 Luna',
+                  'supports_reasoning_effort': false,
+                },
+                {
+                  'id': 'gpt-6.1-sol',
+                  'label': 'GPT-6.1 Sol',
+                  'supports_reasoning_effort': false,
                 },
               ],
             },
@@ -82,6 +123,20 @@ void main() {
       expect(status.ai.localOpenaiReasoningEffort, 'none');
       expect(status.ai.providers.single.credentialKey, 'openai_key');
       expect(status.ai.providers.single.supportsReasoningEffort, isTrue);
+      expect(
+        status.ai.providers.single.models.first.supportsReasoningEffort,
+        isFalse,
+      );
+      expect(
+        status.ai.providers.single.models
+            .singleWhere((model) => model.id == 'gpt-5.4-mini')
+            .supportsReasoningEffort,
+        isTrue,
+      );
+      expect(
+        status.ai.providers.single.models.last.supportsReasoningEffort,
+        isFalse,
+      );
       expect(status.ai.healthCheckEnabled, isFalse);
       expect(status.ai.healthCheckIntervalHours, 24);
       expect(status.ai.healthLastCheckedAt, isNotNull);
@@ -96,7 +151,7 @@ void main() {
       expect(status.isConfigured('anthropic_key'), true);
       expect(status.tmdbUsingBuiltin, isFalse);
       expect(status.ai.provider, 'anthropic');
-      expect(status.ai.model, 'claude-opus-4-8');
+      expect(status.ai.model, 'claude-opus-5-5');
       expect(status.ai.openaiReasoningEffort, isEmpty);
       expect(status.ai.localOpenaiBaseUrl, isEmpty);
       expect(status.ai.localOpenaiReasoningEffort, isEmpty);
