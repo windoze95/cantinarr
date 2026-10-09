@@ -68,6 +68,21 @@ void main() {
                   'label': 'GPT-5.4 mini',
                   'supports_reasoning_effort': true,
                 },
+                {
+                  'id': 'gpt-5.6-sol',
+                  'label': 'GPT-5.6 Sol',
+                  'supports_reasoning_effort': true,
+                },
+                {
+                  'id': 'gpt-5.6-terra',
+                  'label': 'GPT-5.6 Terra',
+                  'supports_reasoning_effort': true,
+                },
+                {
+                  'id': 'gpt-5.6-luna',
+                  'label': 'GPT-5.6 Luna',
+                  'supports_reasoning_effort': true,
+                },
               ],
             },
           ],

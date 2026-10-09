@@ -381,6 +381,31 @@ func TestOpenAILowCostDefaultOmitsUnsupportedReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestOpenAIPublicCatalogModelsSerializeToChatCompletions(t *testing.T) {
+	for _, model := range []string{"gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		t.Run(model, func(t *testing.T) {
+			requests := make(chan providerRequest, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests <- captureProviderRequest(r)
+				writeOpenAITextSSE(w)
+			}))
+			t.Cleanup(server.Close)
+
+			service := NewOpenAIService("secret", model, server.URL+"/v1", "", nil)
+			if _, err := service.NextTurn(context.Background(), validationProbeParams(nil)); err != nil {
+				t.Fatalf("validation turn: %v", err)
+			}
+			req := <-requests
+			if req.path != "/v1/chat/completions" {
+				t.Fatalf("path=%q, want Chat Completions", req.path)
+			}
+			if got := req.body["model"]; got != model {
+				t.Fatalf("model=%v, want exact API ID %q", got, model)
+			}
+		})
+	}
+}
+
 func TestOpenAIExplicitBaseURLOverridesEnvSeam(t *testing.T) {
 	// The admin-configured shared base URL must win over the SDK's implicit
 	// OPENAI_BASE_URL env default, and an empty configured value must leave
@@ -705,6 +730,9 @@ func TestOpenAIValidationReasoningCapabilityMatrix(t *testing.T) {
 		wantFirstMax int64
 	}{
 		{model: "gpt-5.5", wantEfforts: []string{"none", "low", "", ""}, wantFirstMax: aiValidationMaxTokens},
+		{model: "gpt-5.6-sol", wantEfforts: []string{"none", "low", "", ""}, wantFirstMax: aiValidationMaxTokens},
+		{model: "gpt-5.6-terra", wantEfforts: []string{"none", "low", "", ""}, wantFirstMax: aiValidationMaxTokens},
+		{model: "gpt-5.6-luna", wantEfforts: []string{"none", "low", "", ""}, wantFirstMax: aiValidationMaxTokens},
 		{model: "gpt-5", wantEfforts: []string{"minimal", "low", "", ""}, wantFirstMax: openAIValidationReasoningMaxTokens},
 		{model: "gpt-5-2025-08-07", wantEfforts: []string{"minimal", "low", "", ""}, wantFirstMax: openAIValidationReasoningMaxTokens},
 		{model: "o3", wantEfforts: []string{"low", "", ""}, wantFirstMax: openAIValidationReasoningMaxTokens},

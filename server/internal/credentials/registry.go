@@ -177,6 +177,9 @@ var AIProviders = []AIProviderOption{
 			{ID: "gpt-4.1-mini", Label: "GPT-4.1 mini", Description: "Low-cost, efficient model with tool calling; no reasoning controls"},
 			{ID: "gpt-5.4-mini", Label: "GPT-5.4 mini", Description: "Faster, lower-cost reasoning model with tool calling", SupportsReasoningEffort: true},
 			{ID: "gpt-5.5", Label: "GPT-5.5", Description: "Flagship model for complex work", SupportsReasoningEffort: true},
+			{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Description: "Flagship model for complex professional work", SupportsReasoningEffort: true},
+			{ID: "gpt-5.6-terra", Label: "GPT-5.6 Terra", Description: "Balances intelligence and cost", SupportsReasoningEffort: true},
+			{ID: "gpt-5.6-luna", Label: "GPT-5.6 Luna", Description: "Cost-sensitive, high-volume model", SupportsReasoningEffort: true},
 		},
 	},
 	{
