@@ -76,49 +76,62 @@ func TestOpenAIResponsesValidationRetainsExactModelAndRequestContract(t *testing
 	}
 }
 
-func TestOpenAIResponsesReplaysReasoningPhaseAndToolResults(t *testing.T) {
-	requests := make(chan providerRequest, 2)
-	var count atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests <- captureProviderRequest(r)
-		if count.Add(1) == 1 {
-			writeResponsesOutput(w, responsesToolOutput)
-		} else {
-			writeResponsesOutput(w, responsesTextOutput)
-		}
-	}))
-	t.Cleanup(server.Close)
-	t.Setenv("OPENAI_BASE_URL", server.URL+"/v1")
-	service := NewOpenAIService("secret", "gpt-6.1-sol", "", "", nil)
-	p := TurnParams{System: "test", History: Transcript{{Role: RoleUser, Content: []TranscriptBlock{{Type: BlockText, Text: "find a movie"}}}}, Tools: []mcp.Tool{{Name: "search_movies", InputSchema: map[string]any{"type": "object"}}}}
-	first, err := service.NextTurn(context.Background(), p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.StopReason != StopReasonToolUse {
-		t.Fatalf("stop=%s", first.StopReason)
-	}
-	p.History = append(p.History, first.Message, TranscriptMessage{Role: RoleUser, Content: []TranscriptBlock{{Type: BlockToolResult, ToolUseID: "call_1", Name: "search_movies", Content: "Found a movie."}}})
-	if _, err := service.NextTurn(context.Background(), p); err != nil {
-		t.Fatal(err)
-	}
-	<-requests
-	req := <-requests
-	body, _ := json.Marshal(req.body["input"])
-	for _, wanted := range []string{`"encrypted_content":"opaque-state"`, `"phase":"commentary"`, `"call_id":"call_1"`, `"type":"function_call_output"`, `Found a movie.`} {
-		if !strings.Contains(string(body), wanted) {
-			t.Fatalf("replay missing %s: %s", wanted, body)
-		}
-	}
-	if strings.Count(string(body), `"type":"function_call"`) != 1 {
-		t.Fatalf("function call duplicated during replay: %s", body)
-	}
-	// Removed orphan calls must not return through the saved raw output.
-	private := first.Message.toPrivate()
-	private = stripOrphanToolUse(private, map[string]bool{})
-	items, _ := json.Marshal(service.responsesAdapter().inputItems(transcript{private}))
-	if strings.Contains(string(items), `"type":"function_call"`) {
-		t.Fatalf("orphan call restored from opaque state: %s", items)
+func TestResponsesReplaysReasoningPhaseAndToolResults(t *testing.T) {
+	for _, provider := range []string{"openai", "grok_oauth"} {
+		t.Run(provider, func(t *testing.T) {
+			requests := make(chan providerRequest, 2)
+			var count atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests <- captureProviderRequest(r)
+				if count.Add(1) == 1 {
+					writeResponsesOutput(w, responsesToolOutput)
+				} else {
+					writeResponsesOutput(w, responsesTextOutput)
+				}
+			}))
+			t.Cleanup(server.Close)
+			t.Setenv("OPENAI_BASE_URL", server.URL+"/v1")
+			t.Setenv("GROK_OAUTH_BASE_URL", server.URL+"/v1")
+			service := NewOpenAIService("secret", "gpt-6.1-sol", "", "", nil).responsesAdapter()
+			if provider == "grok_oauth" {
+				service = NewGrokOAuthService("secret", "grok-4.6", "", nil)
+			}
+			p := TurnParams{System: "test", History: Transcript{{Role: RoleUser, Content: []TranscriptBlock{{Type: BlockText, Text: "find a movie"}}}}, Tools: []mcp.Tool{{Name: "search_movies", InputSchema: map[string]any{"type": "object"}}}}
+			first, err := service.NextTurn(context.Background(), p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if first.StopReason != StopReasonToolUse {
+				t.Fatalf("stop=%s", first.StopReason)
+			}
+			p.History = append(p.History, first.Message, TranscriptMessage{Role: RoleUser, Content: []TranscriptBlock{{Type: BlockToolResult, ToolUseID: "call_1", Name: "search_movies", Content: "Found a movie."}}})
+			if _, err := service.NextTurn(context.Background(), p); err != nil {
+				t.Fatal(err)
+			}
+			initial := <-requests
+			include, _ := json.Marshal(initial.body["include"])
+			if !strings.Contains(string(include), "reasoning.encrypted_content") {
+				t.Fatal("request omitted encrypted reasoning continuation")
+			}
+			req := <-requests
+			body, _ := json.Marshal(req.body["input"])
+			for _, wanted := range []string{`"encrypted_content":"opaque-state"`, `"phase":"commentary"`, `"call_id":"call_1"`, `"type":"function_call_output"`, `Found a movie.`} {
+				if !strings.Contains(string(body), wanted) {
+					t.Fatalf("replay missing %s: %s", wanted, body)
+				}
+			}
+			if strings.Count(string(body), `"type":"function_call"`) != 1 {
+				t.Fatalf("function call duplicated during replay: %s", body)
+			}
+			// Removed orphan calls must not return through the saved raw output.
+			private := first.Message.toPrivate()
+			private = stripOrphanToolUse(private, map[string]bool{})
+			items, _ := json.Marshal(service.inputItems(transcript{private}))
+			if strings.Contains(string(items), `"type":"function_call"`) {
+				t.Fatalf("orphan call restored from opaque state: %s", items)
+			}
+
+		})
 	}
 }
 

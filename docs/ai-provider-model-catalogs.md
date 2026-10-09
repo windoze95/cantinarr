@@ -55,6 +55,11 @@ cannot promise access for every credential.
   `codexErrorInfo` says only `other`. Cantinarr classifies that message before
   discarding upstream details from the user response. HTTP 426 receives an
   explicit client-upgrade message instead of an invalid-credential diagnosis.
+- Grok OAuth uses a bounded 16,000-token validation allowance, since its
+  hidden reasoning can consume a smaller budget before visible text arrives.
+  Following the official Grok Build client, stateless Responses request
+  encrypted reasoning and replay it with function calls and results. No
+  OpenAI-specific effort parameter is sent to xAI.
 - Container builds and the CI protocol smoke test pin Codex app-server 0.162.0
   with verified archive checksums for both Linux architectures. Its official
   bundled catalog includes GPT-6 Astra, Sol, Luna, and GPT-6.1 Sol; the previous

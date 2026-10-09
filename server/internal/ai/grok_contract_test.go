@@ -96,6 +96,12 @@ func TestGrokOAuthValidationUsesLiveBearerToken(t *testing.T) {
 	if req.body["tool_choice"] != "none" {
 		t.Fatalf("validation must carry tools with tool_choice=none; payload=%#v", req.body)
 	}
+	if req.body["max_output_tokens"] != float64(openAIValidationReasoningMaxTokens) {
+		t.Fatalf("OAuth readiness probe lacks a bounded reasoning allowance: %v", req.body["max_output_tokens"])
+	}
+	if _, exists := req.body["reasoning"]; exists {
+		t.Fatal("Grok OAuth must not inherit OpenAI reasoning effort controls")
+	}
 	tools, ok := req.body["tools"].([]any)
 	if !ok || len(tools) == 0 {
 		t.Fatalf("validation must serialize the Grok Build function catalog: %#v", req.body["tools"])

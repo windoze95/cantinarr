@@ -135,6 +135,11 @@ func (s *responsesService) NextTurn(ctx context.Context, p TurnParams) (TurnResu
 	probe := *s
 	if s.openAI && p.DisableReasoning {
 		probe.reasoningEffort = shared.ReasoningEffortLow
+	}
+	if p.DisableReasoning && (s.openAI || s.grokOAuth) {
+		// Both hosted reasoning paths count hidden reasoning against output.
+		// Grok has no supported effort-disable control, so retain the bounded
+		// allowance used by the public Grok validation adapter.
 		if maxTokens < openAIValidationReasoningMaxTokens {
 			maxTokens = openAIValidationReasoningMaxTokens
 		}
@@ -175,6 +180,8 @@ func (s *responsesService) responseTurn(
 	}
 	if s.openAI {
 		params.Reasoning.Effort = s.reasoningEffort
+	}
+	if s.openAI || s.grokOAuth {
 		params.Include = []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent}
 	}
 	if len(tools) > 0 {
@@ -235,7 +242,7 @@ func (s *responsesService) responseTurn(
 	}
 
 	message := openAIMessage{Role: agentRoleAssistant, Content: response.OutputText()}
-	if s.openAI {
+	if s.openAI || s.grokOAuth {
 		// Stateless reasoning turns must replay all output items, including
 		// encrypted reasoning and assistant phase, alongside tool results.
 		output := make([]json.RawMessage, 0, len(response.Output))
@@ -301,7 +308,7 @@ func (e *responsesStreamError) Error() string {
 }
 
 func (s *responsesService) inputItems(history transcript) responses.ResponseInputParam {
-	if !s.openAI {
+	if !s.openAI && !s.grokOAuth {
 		return grokOAuthInputItems(history)
 	}
 	var items responses.ResponseInputParam
