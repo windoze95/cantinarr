@@ -201,8 +201,9 @@ class AiSettingsService {
     bool? modelFallbackEnabled,
   }) async {
     final data = <String, dynamic>{'provider': provider, 'model': model};
-    if (modelFallbackEnabled != null)
+    if (modelFallbackEnabled != null) {
       data['model_fallback_enabled'] = modelFallbackEnabled;
+    }
     if (apiKey != null && apiKey.trim().isNotEmpty) {
       data['api_key'] = apiKey.trim();
     }

@@ -71,9 +71,25 @@ cannot promise access for every credential.
 
 ## Runtime fallback recommendations
 
-The default-off fallback preference preserves saved model IDs. Codex reads the linked account's paginated `model/list`, preferring the selected model's `upgrade` target when present and compatible, otherwise one visible `isDefault` text-capable model. Missing, ambiguous, hidden, or identical candidates are not substitutes. The catalog is not an entitlement check; the replacement must complete the actual tool-bearing request.
+Fallback is off by default. Cantinarr uses only a provider-owned dynamic default or generation-independent rolling alias, resolved at request time with the same account. It does not maintain replacement model versions, sort catalogs by recency, or ask administrators to nominate a fallback model. The saved selection stays unchanged.
 
-The other integrations use explicit Cantinarr recommendations maintained in `server/internal/credentials/model_recommendations.go`: Anthropic `claude-sonnet-5-5`, OpenAI API `gpt-4.1-mini`, Gemini `gemini-3.8-flash`, xAI API `grok-4.7`, and Grok Build OAuth `grok-4.6`. These entries use the endpoint/tool contracts documented above. OpenAI GPT-4.1 mini omits reasoning controls. A local or custom OpenAI-compatible endpoint has no assumed hosted recommendation. Recommendations make no account-access or price-difference promises and never come from sorting model IDs. See [OpenAI's model/list protocol](https://learn.chatgpt.com/docs/app-server#list-models-modellist) for the default and upgrade fields; the standard [Models API](https://developers.openai.com/api/reference/resources/models/methods/list) does not supply a recommended default.
+| Integration | Provider mechanism | Runtime check |
+|---|---|---|
+| OpenAI OAuth (Codex) | Account `model/list`: selected model's `upgrade`, otherwise `isDefault` | Read the complete paginated catalog; require one visible, different, text-capable target. |
+| Gemini API | `gemini-flash-latest`, `gemini-flash-lite-latest`, or `gemini-pro-latest` for the selected text-model family | Read `models.get` for that alias with the same key and require `generateContent`. Specialized audio, image, live, and embedding models do not inherit these aliases. |
+| xAI API | Provider-managed `grok-build-latest` alias | Read the alias's language-model metadata with the same key and confirm text input/output and the alias binding. |
+| Grok Build OAuth | Account `/settings` field `default_model` | Confirm the target in the same account's `/v1/models`, visible and available with an explicit Responses backend on the existing endpoint. No bundled default or first-entry substitution. |
+| OpenAI API, Anthropic API, local compatible endpoints | No equivalent dynamic default exposed by these integrations | No fallback capability or switch; an explicit opt-in is rejected. |
+
+Missing, malformed, ambiguous, hidden, incompatible, or identical targets stop with a settings error. Catalog reads have time and size limits, reject redirects, and never adopt upstream-supplied endpoints or credentials. A recommendation is not an entitlement guarantee; the single replacement must complete the actual tool-bearing request. Rolling aliases can change cost, latency, and capabilities. Google's latest aliases may move to preview or experimental releases. An already-selected rolling alias is not retried as its own fallback.
+
+Provider contracts checked on 2026-10-12:
+
+- [OpenAI app-server `model/list`](https://learn.chatgpt.com/docs/app-server#list-models-modellist) defines recommended defaults and upgrades. The separate [OpenAI Models API](https://developers.openai.com/api/reference/resources/models/methods/list) supplies availability metadata without a recommended default.
+- [Google's latest-alias policy](https://ai.google.dev/gemini-api/docs/models#latest) and [documented Gemini aliases](https://ai.google.dev/api/interactions-api) establish the rolling targets; [model metadata](https://ai.google.dev/api/models) reports supported generation methods.
+- [xAI's alias policy](https://docs.x.ai/developers/models#model-aliases), [the `grok-build-latest` alias](https://docs.x.ai/developers/models/grok-4.5), and [language-model metadata](https://docs.x.ai/developers/rest-api-reference/inference/models) describe the public API mechanism. This alias is distinct from the OAuth default.
+- xAI's official Grok Build source defines [`default_model`](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-config/src/remote_settings.rs), the authenticated [`/settings` request](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-cloud-config/src/settings_fetch.rs), and [default-model resolution](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-shell/src/agent/remote_config/resolution.rs).
+- [Anthropic model IDs](https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions) are pinned snapshots, including newer dateless IDs. Older aliases track snapshots within a version; they are not an evergreen replacement across retired generations. The [Models API](https://platform.claude.com/docs/en/api/models/list) has no recommended-default field.
 
 ## Live validation evidence
 

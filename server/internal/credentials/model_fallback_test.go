@@ -9,7 +9,7 @@ import (
 
 func TestSharedFallbackPreferenceDefaultsOffAndCanSaveAfterRetirement(t *testing.T) {
 	h, registry := newCredentialHandlerTest(t)
-	if err := registry.SetAIConfig(AIProviderOpenAI, "retired"); err != nil {
+	if err := registry.SetAIConfig(AIProviderGrok, "retired"); err != nil {
 		t.Fatal(err)
 	}
 	if registry.GetAIConfig().ModelFallbackEnabled {
@@ -45,33 +45,30 @@ func TestSharedFallbackPreferenceDefaultsOffAndCanSaveAfterRetirement(t *testing
 	}
 }
 
-func TestRecommendationsAreExplicitCompatibleCatalogEntries(t *testing.T) {
+func TestOnlyProviderOwnedDynamicFallbacksAreAdvertised(t *testing.T) {
+	supported := map[string]bool{AIProviderCodex: true, AIProviderGemini: true, AIProviderGrok: true, AIProviderGrokOAuth: true}
 	for _, p := range AIProviders {
 		r, ok := RecommendedAIModel(p.ID)
-		if p.ModelFallback == nil {
-			t.Fatalf("missing capability for %s", p.ID)
+		if ok != supported[p.ID] || (p.ModelFallback != nil) != supported[p.ID] {
+			t.Fatalf("incorrect fallback capability for %s", p.ID)
 		}
-		if p.ID == AIProviderLocalOpenAI {
-			if ok {
-				t.Fatal("local gained hosted fallback")
+		if ok && (r.Source == "" || r.Description == "" || r.Model != "") {
+			t.Fatalf("fallback must describe provider metadata without pinning a model: %+v", r)
+		}
+	}
+}
+
+func TestSharedUnsupportedFallbackPreferenceRejected(t *testing.T) {
+	for _, provider := range []string{AIProviderAnthropic, AIProviderOpenAI, AIProviderLocalOpenAI} {
+		t.Run(provider, func(t *testing.T) {
+			h, registry := newCredentialHandlerTest(t)
+			if err := registry.SetAIConfig(provider, "retired"); err != nil {
+				t.Fatal(err)
 			}
-			continue
-		}
-		if !ok || r.Source == "" || r.Description == "" {
-			t.Fatalf("missing recommendation: %s", p.ID)
-		}
-		if p.ID == AIProviderCodex {
-			if r.Model != "" {
-				t.Fatal("Codex recommendation was pinned")
+			response := updateCredentialSettings(t, h, `{"ai_model_fallback_enabled":"true"}`)
+			if response.Code != 400 || registry.GetAIConfig().ModelFallbackEnabled {
+				t.Fatalf("unsupported provider opted in: %d", response.Code)
 			}
-			continue
-		}
-		found := false
-		for _, m := range p.Models {
-			found = found || m.ID == r.Model
-		}
-		if !found {
-			t.Fatalf("recommendation %s absent from %s contracts", r.Model, p.ID)
-		}
+		})
 	}
 }

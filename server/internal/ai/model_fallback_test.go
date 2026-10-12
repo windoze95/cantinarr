@@ -78,6 +78,9 @@ func TestChatModelFallbackPreservesSelectionAccountAndBilling(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var models, keys []string
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveFallbackMetadata(w, r) {
+					return
+				}
 				var body map[string]any
 				_ = json.NewDecoder(r.Body).Decode(&body)
 				models = append(models, body["model"].(string))
@@ -95,19 +98,19 @@ func TestChatModelFallbackPreservesSelectionAccountAndBilling(t *testing.T) {
 				writeOpenAITextSSE(w)
 			}))
 			defer upstream.Close()
-			t.Setenv("OPENAI_BASE_URL", upstream.URL+"/v1")
+			t.Setenv("XAI_BASE_URL", upstream.URL+"/v1")
 			h, registry, _, userID := newResolverTestHandler(t)
 			h.toolServer = mcp.NewToolServer(nil, nil, nil, nil)
 			h.conversations = newConversationStore()
 			sink := &fallbackRecorder{}
 			h.SetModelFallbackSink(sink)
-			if err := registry.SetCredential(credentials.KeyOpenAIKey, "shared-secret"); err != nil {
+			if err := registry.SetCredential(credentials.KeyGrokKey, "shared-secret"); err != nil {
 				t.Fatal(err)
 			}
-			if err := registry.SetAIConfig(credentials.AIProviderOpenAI, "shared-model"); err != nil {
+			if err := registry.SetAIConfig(credentials.AIProviderGrok, "shared-model"); err != nil {
 				t.Fatal(err)
 			}
-			if err := registry.SetUserAIProfile(userID, credentials.AIProviderOpenAI, "retired-model", "personal-secret", tc.enabled); err != nil {
+			if err := registry.SetUserAIProfile(userID, credentials.AIProviderGrok, "retired-model", "personal-secret", tc.enabled); err != nil {
 				t.Fatal(err)
 			}
 			response := postChat(t, h, userID)
@@ -128,14 +131,14 @@ func TestChatModelFallbackPreservesSelectionAccountAndBilling(t *testing.T) {
 				t.Fatal("upstream details leaked")
 			}
 			if tc.wantCalls == 2 {
-				if models[1] != "gpt-4.1-mini" || len(sink.events) != 1 {
+				if models[1] != "grok-build-latest" || len(sink.events) != 1 {
 					t.Fatalf("models=%v events=%+v", models, sink.events)
 				}
 				event := sink.events[0]
 				if event.Source != "personal" || event.UserID != userID || event.SettingsPath != "/settings/ai" || event.SelectedModel != "retired-model" || event.Succeeded == tc.replacementFails {
 					t.Fatalf("event=%+v", event)
 				}
-				if !strings.Contains(body, `"model_fallback"`) || !strings.Contains(body, `"replacement_model":"gpt-4.1-mini"`) {
+				if !strings.Contains(body, `"model_fallback"`) || !strings.Contains(body, `"replacement_model":"grok-build-latest"`) {
 					t.Fatalf("missing visible notice: %s", body)
 				}
 				if tc.replacementFails && !strings.Contains(body, "no further model was tried") {
@@ -151,6 +154,9 @@ func TestChatModelFallbackPreservesSelectionAccountAndBilling(t *testing.T) {
 func TestFallbackNeverReplaysAnExecutedTool(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveFallbackMetadata(w, r) {
+			return
+		}
 		if calls.Add(1) == 1 {
 			writeNudgeToolCallSSE(w, "one", "get_trending", `{"media_type":"movie"}`)
 			return
@@ -158,7 +164,7 @@ func TestFallbackNeverReplaysAnExecutedTool(t *testing.T) {
 		writeOpenAIAPIError(w, 404, "model_not_found", "model", "model unavailable")
 	}))
 	defer upstream.Close()
-	t.Setenv("OPENAI_BASE_URL", upstream.URL+"/v1")
+	t.Setenv("XAI_BASE_URL", upstream.URL+"/v1")
 	h, _, database, userID := newResolverTestHandler(t)
 	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x27}, 32))
 	if err != nil {
@@ -169,7 +175,7 @@ func TestFallbackNeverReplaysAnExecutedTool(t *testing.T) {
 	h.toolServer = mcp.NewToolServer(registry, nil, nil, nil)
 	h.conversations = newConversationStore()
 	h.toolServer.SetCallAuthorizer(func(_ context.Context, c mcp.CallContext) (string, error) { return c.Role, nil })
-	if err := registry.SetUserAIProfile(userID, credentials.AIProviderOpenAI, "old-model", "secret", true); err != nil {
+	if err := registry.SetUserAIProfile(userID, credentials.AIProviderGrok, "old-model", "secret", true); err != nil {
 		t.Fatal(err)
 	}
 	response := postChat(t, h, userID)
@@ -180,31 +186,29 @@ func TestFallbackNeverReplaysAnExecutedTool(t *testing.T) {
 
 func TestFallbackProviderAdaptersKeepTheirEndpointAndCredential(t *testing.T) {
 	for _, tc := range []struct{ provider, env, model, path, authHeader, authValue string }{
-		{credentials.AIProviderAnthropic, "ANTHROPIC_BASE_URL", "claude-sonnet-5-5", "/v1/messages", "X-Api-Key", "personal-secret"},
-		{credentials.AIProviderGemini, "GOOGLE_GEMINI_BASE_URL", "gemini-3.8-flash", "/v1beta/models/gemini-3.8-flash:streamGenerateContent", "X-Goog-Api-Key", "personal-secret"},
-		{credentials.AIProviderGrok, "XAI_BASE_URL", "grok-4.7", "/v1/chat/completions", "Authorization", "Bearer personal-secret"},
-		{credentials.AIProviderGrokOAuth, "GROK_OAUTH_BASE_URL", "grok-4.6", "/v1/responses", "Authorization", "Bearer grok-bearer-token"},
+		{credentials.AIProviderGemini, "GOOGLE_GEMINI_BASE_URL", "gemini-flash-latest", "/v1beta/models/gemini-flash-latest:streamGenerateContent", "X-Goog-Api-Key", "personal-secret"},
+		{credentials.AIProviderGrok, "XAI_BASE_URL", "grok-build-latest", "/v1/chat/completions", "Authorization", "Bearer personal-secret"},
+		{credentials.AIProviderGrokOAuth, "GROK_OAUTH_BASE_URL", "provider-default", "/v1/responses", "Authorization", "Bearer grok-bearer-token"},
 	} {
 		t.Run(tc.provider, func(t *testing.T) {
 			var requests []providerRequest
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveFallbackMetadata(w, r) {
+					return
+				}
 				requests = append(requests, captureProviderRequest(r))
 				if len(requests) == 1 {
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusNotFound)
 					switch tc.provider {
-					case credentials.AIProviderAnthropic:
-						_, _ = w.Write([]byte(`{"type":"error","error":{"type":"not_found_error","message":"model: retired-model"}}`))
 					case credentials.AIProviderGemini:
-						_, _ = w.Write([]byte(`{"error":{"code":404,"message":"models/retired-model is not found for API version v1beta","status":"NOT_FOUND"}}`))
+						_, _ = w.Write([]byte(`{"error":{"code":404,"message":"models/gemini-2.0-flash-001 is not found for API version v1beta","status":"NOT_FOUND"}}`))
 					default:
 						_, _ = w.Write([]byte(`{"error":{"code":"model_not_found","message":"retired-model unavailable","type":"invalid_request_error"}}`))
 					}
 					return
 				}
 				switch tc.provider {
-				case credentials.AIProviderAnthropic:
-					writeAnthropicTextSSE(w)
 				case credentials.AIProviderGemini:
 					writeGeminiTextSSE(w)
 				case credentials.AIProviderGrokOAuth:
@@ -228,7 +232,11 @@ func TestFallbackProviderAdaptersKeepTheirEndpointAndCredential(t *testing.T) {
 				linkPersonalGrok(t, manager, now, userID)
 				key = ""
 			}
-			if err := registry.SetUserAIProfile(userID, tc.provider, "retired-model", key, true); err != nil {
+			selected := "retired-model"
+			if tc.provider == credentials.AIProviderGemini {
+				selected = "gemini-2.0-flash-001"
+			}
+			if err := registry.SetUserAIProfile(userID, tc.provider, selected, key, true); err != nil {
 				t.Fatal(err)
 			}
 			response := postChat(t, h, userID)
@@ -253,24 +261,36 @@ func TestFallbackProviderAdaptersKeepTheirEndpointAndCredential(t *testing.T) {
 func TestFallbackNoRecommendationAndSameRecommendationFailClearly(t *testing.T) {
 	for _, r := range []resolvedAI{
 		{Provider: credentials.AIProviderLocalOpenAI, Model: "old", BaseURL: "http://local.internal"},
+		{Provider: credentials.AIProviderAnthropic, Model: "old"},
+		{Provider: credentials.AIProviderOpenAI, Model: "old"},
 		{Provider: credentials.AIProviderOpenAI, Model: "old", BaseURL: "https://custom.example/v1"},
-		{Provider: credentials.AIProviderOpenAI, Model: "gpt-4.1-mini"},
+		{Provider: credentials.AIProviderGrok, Model: "grok-build-latest"},
+		{Provider: credentials.AIProviderGemini, Model: "models/gemini-pro-latest"},
 	} {
 		r.ModelFallbackEnabled = true
 		r.Source = aiSourceShared
 		h := &Handler{}
 		called := false
-		_, err := h.retryUnavailableModel(context.Background(), r, "chat", &openai.Error{StatusCode: 404, Code: "model_not_found"}, nil, func(string) error { called = true; return nil })
+		original := &openai.Error{StatusCode: 404, Code: "model_not_found"}
+		_, err := h.retryUnavailableModel(context.Background(), r, "chat", original, nil, func(string) error { called = true; return nil })
 		var safe *modelFallbackError
-		if called || !errors.As(err, &safe) || strings.Contains(err.Error(), "internal") {
+		_, supported := credentials.RecommendedAIModel(r.Provider)
+		if called || (supported && (!errors.As(err, &safe) || strings.Contains(err.Error(), "internal"))) || (!supported && err != original) {
 			t.Fatalf("called=%t err=%v", called, err)
 		}
 	}
 }
 
 func TestFallbackEventIdentityAndSafeDisplay(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !serveFallbackMetadata(w, r) {
+			t.Error("unexpected inference request")
+		}
+	}))
+	defer upstream.Close()
+	t.Setenv("XAI_BASE_URL", upstream.URL+"/v1")
 	h := &Handler{}
-	profile := resolvedAI{ModelFallbackEnabled: true, Provider: credentials.AIProviderOpenAI, Source: aiSourcePersonal,
+	profile := resolvedAI{ModelFallbackEnabled: true, Provider: credentials.AIProviderGrok, Source: aiSourcePersonal,
 		Account: codexapp.PersonalAccount(7), Model: "retired-private-secret\nmodel", APIKey: "private-secret"}
 	unavailable := &openai.Error{StatusCode: 404, Code: "model_not_found", Message: "opaque upstream secret"}
 	run := func(string) error { return nil }
@@ -293,7 +313,7 @@ func TestFallbackEventIdentityAndSafeDisplay(t *testing.T) {
 	}
 }
 
-func TestOpenAIResponsesModelRetirementFallback(t *testing.T) {
+func TestOpenAIResponsesHasNoInventedFallback(t *testing.T) {
 	var paths []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
@@ -313,7 +333,7 @@ func TestOpenAIResponsesModelRetirementFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := postChat(t, h, userID)
-	if !reflect.DeepEqual(paths, []string{"/v1/responses", "/v1/chat/completions"}) || !strings.Contains(response.Body.String(), `"status":"used"`) {
+	if !reflect.DeepEqual(paths, []string{"/v1/responses"}) || strings.Contains(response.Body.String(), `"model_fallback"`) {
 		t.Fatalf("paths=%v body=%s", paths, response.Body.String())
 	}
 }
@@ -344,6 +364,9 @@ func TestCodexChatFallbackUsesAccountUpgradeAndPreservesSelection(t *testing.T) 
 func TestAutonomousFallbackUsesSharedOverrideAndRetainsExecutedHistory(t *testing.T) {
 	var models []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveFallbackMetadata(w, r) {
+			return
+		}
 		req := captureProviderRequest(r)
 		models = append(models, req.body["model"].(string))
 		if r.Header.Get("Authorization") != "Bearer shared-secret" {
@@ -360,13 +383,13 @@ func TestAutonomousFallbackUsesSharedOverrideAndRetainsExecutedHistory(t *testin
 		writeOpenAITextSSE(w)
 	}))
 	defer upstream.Close()
-	t.Setenv("OPENAI_BASE_URL", upstream.URL+"/v1")
+	t.Setenv("XAI_BASE_URL", upstream.URL+"/v1")
 	h, registry, _, userID := newResolverTestHandler(t)
 	h.toolServer = mcp.NewToolServer(nil, nil, nil, nil)
-	if err := registry.SetAIConfig(credentials.AIProviderOpenAI, "shared-model"); err != nil {
+	if err := registry.SetAIConfig(credentials.AIProviderGrok, "shared-model"); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.SetCredential(credentials.KeyOpenAIKey, "shared-secret"); err != nil {
+	if err := registry.SetCredential(credentials.KeyGrokKey, "shared-secret"); err != nil {
 		t.Fatal(err)
 	}
 	if err := registry.SetSetting(credentials.KeyAIModelFallbackEnabled, "true"); err != nil {
@@ -375,7 +398,7 @@ func TestAutonomousFallbackUsesSharedOverrideAndRetainsExecutedHistory(t *testin
 	if err := registry.SetUserAIProfile(userID, credentials.AIProviderGemini, "personal-model", "personal-secret", false); err != nil {
 		t.Fatal(err)
 	}
-	turn, err := h.ResolveSharedAutonomousTurn(context.Background(), AutonomousModelOverride{Provider: credentials.AIProviderOpenAI, Model: "retired-override"})
+	turn, err := h.ResolveSharedAutonomousTurn(context.Background(), AutonomousModelOverride{Provider: credentials.AIProviderGrok, Model: "retired-override"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,14 +412,14 @@ func TestAutonomousFallbackUsesSharedOverrideAndRetainsExecutedHistory(t *testin
 			t.Fatalf("result=%+v", res)
 		}
 	}
-	if !reflect.DeepEqual(models, []string{"retired-override", "gpt-4.1-mini", "gpt-4.1-mini"}) {
+	if !reflect.DeepEqual(models, []string{"retired-override", "grok-build-latest", "grok-build-latest"}) {
 		t.Fatalf("models=%v", models)
 	}
 }
 
 func TestPersonalFallbackPreferenceOnlySaveAfterRetirement(t *testing.T) {
 	h, registry, _, userID := newResolverTestHandler(t)
-	if err := registry.SetUserAIProfile(userID, credentials.AIProviderOpenAI, "retired", "secret"); err != nil {
+	if err := registry.SetUserAIProfile(userID, credentials.AIProviderGrok, "retired", "secret"); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
@@ -411,7 +434,7 @@ func TestPersonalFallbackPreferenceOnlySaveAfterRetirement(t *testing.T) {
 		h.UpdateAISettings(w, r)
 		return w
 	}
-	w := update(`{"provider":"openai","model":"retired","model_fallback_enabled":true}`)
+	w := update(`{"provider":"grok","model":"retired","model_fallback_enabled":true}`)
 	if w.Code != 200 || calls != 0 {
 		t.Fatalf("status=%d calls=%d body=%s", w.Code, calls, w.Body.String())
 	}
@@ -419,7 +442,7 @@ func TestPersonalFallbackPreferenceOnlySaveAfterRetirement(t *testing.T) {
 	if !resolved.ModelFallbackEnabled || resolved.Model != "retired" {
 		t.Fatalf("resolved=%+v", resolved)
 	}
-	w = update(`{"provider":"openai","model":"new-model","model_fallback_enabled":true}`)
+	w = update(`{"provider":"grok","model":"new-model","model_fallback_enabled":true}`)
 	if w.Code != 422 || calls != 1 {
 		t.Fatalf("new model bypassed validation: %d calls=%d", w.Code, calls)
 	}

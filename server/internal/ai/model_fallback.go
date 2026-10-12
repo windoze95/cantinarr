@@ -119,18 +119,25 @@ func confirmedModelUnavailable(err error, selected string) bool {
 
 func (h *Handler) fallbackRecommendation(ctx context.Context, r resolvedAI) (credentials.ModelRecommendation, error) {
 	recommendation, ok := credentials.RecommendedAIModel(r.Provider)
-	if !ok || (r.Provider == credentials.AIProviderOpenAI && !usesOpenAIAPICatalogSemantics(r.BaseURL)) {
+	if !ok {
 		return recommendation, &modelFallbackError{"The selected model is unavailable and this endpoint has no compatible recommendation. Choose a replacement in AI settings."}
 	}
-	if r.Provider == credentials.AIProviderCodex {
+	var err error
+	switch r.Provider {
+	case credentials.AIProviderCodex:
 		if h.codex == nil {
 			return recommendation, &modelFallbackError{"The selected model is unavailable and the OpenAI recommendation could not be read. Check AI settings."}
 		}
-		model, source, err := h.codex.RecommendedModel(ctx, r.Account, r.Model)
-		if err != nil {
-			return recommendation, &modelFallbackError{"The selected model is unavailable and no compatible OpenAI recommendation could be confirmed. Check AI settings."}
-		}
-		recommendation.Model, recommendation.Source = model, source
+		recommendation.Model, recommendation.Source, err = h.codex.RecommendedModel(ctx, r.Account, r.Model)
+	case credentials.AIProviderGemini:
+		recommendation.Model, err = geminiFallbackModel(ctx, r)
+	case credentials.AIProviderGrok:
+		recommendation.Model, err = grokFallbackModel(ctx, r)
+	case credentials.AIProviderGrokOAuth:
+		recommendation.Model, err = h.grokOAuthFallbackModel(ctx, r)
+	}
+	if err != nil {
+		return recommendation, &modelFallbackError{"The selected model is unavailable and no compatible provider recommendation could be confirmed. Check AI settings."}
 	}
 	if recommendation.Model == "" || recommendation.Model == r.Model {
 		return recommendation, &modelFallbackError{"The selected model is unavailable and there is no different compatible recommended model. Choose a replacement in AI settings."}
@@ -142,7 +149,8 @@ func (h *Handler) fallbackRecommendation(ctx context.Context, r resolvedAI) (cre
 // profile snapshot. Chat calls this only before output/tool execution. A
 // TurnRunner can call it for one model request because it never executes tools.
 func (h *Handler) retryUnavailableModel(ctx context.Context, r resolvedAI, scope string, original error, notify func(ModelFallback), run func(string) error) (*ModelFallback, error) {
-	if original == nil || !r.ModelFallbackEnabled || ctx.Err() != nil || !confirmedModelUnavailable(original, r.Model) {
+	_, supported := credentials.RecommendedAIModel(r.Provider)
+	if original == nil || !r.ModelFallbackEnabled || !supported || ctx.Err() != nil || !confirmedModelUnavailable(original, r.Model) {
 		return nil, original
 	}
 	recommendation, err := h.fallbackRecommendation(ctx, r)

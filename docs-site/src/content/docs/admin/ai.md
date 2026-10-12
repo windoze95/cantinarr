@@ -32,13 +32,17 @@ A validation failure can mean invalid credentials, unavailable model access, quo
 
 ## Fall back when a model becomes unavailable
 
-**Fall back to the recommended model** is off by default. Enable it under **Settings > AI Access** for your personal profile, or **Settings > Providers & Credentials** for the shared profile, then save. You can change this preference after a saved model has retired without testing that retired model again. New model and credential selections still require a successful test.
+**Use the provider’s fallback model** is off by default. Enable it under **Settings > AI Access** for your personal profile, or **Settings > Providers & Credentials** for the shared profile, then save. You can change this preference after a saved model has retired without testing that retired model again. New model and credential selections still require a successful test.
 
 The saved model stays selected. If the provider confirms that it is unavailable, Cantinarr can try one recommended replacement using the same provider, endpoint, account, and billing source. Cost, latency, and capabilities may change. The setting does not move personal usage to included access or local usage to a hosted provider.
 
 - **OpenAI (OAuth):** uses the linked account's Codex model catalog, preferring a compatible recommended upgrade and otherwise its recommended default. **OpenAI recommended** remains a separate selection. A catalog recommendation does not guarantee account access.
-- **Hosted API keys and xAI Grok OAuth:** use the explicitly labeled **Cantinarr recommendation** shown beside the switch. These are maintained choices for that integration, not the newest model in an availability list.
-- **Local (OpenAI-compatible):** has no standard recommendation metadata. Choose a replacement manually; the fallback control is unavailable.
+- **Google Gemini:** uses Google's rolling latest alias for the selected Flash, Flash-Lite, or Pro text-model family. Google can move this alias to a stable, preview, or experimental release.
+- **xAI Grok API:** uses xAI's rolling `grok-build-latest` alias after confirming its availability and text support.
+- **xAI Grok (OAuth):** reads the linked account's remote default and confirms that it supports the existing connection.
+- **OpenAI API, Anthropic, and Local (OpenAI-compatible):** do not expose an equivalent dynamic default through these integrations. The switch is hidden. Choose another model and save if your selection becomes unavailable.
+
+These targets are supplied by the provider. There is no fallback model to enter or keep updated. A provider can still withdraw a target or deny access; fallback cannot guarantee a successful request.
 
 Chat shows the selected model, replacement attempt, reason, and known capability differences. Administrators receive a system issue with the same details and a provider-settings link; push follows their issue notification preference. Repeated requests using the same profile and replacement do not create more notifications, including after the issue is dismissed or the server restarts. Personal notifications identify the owning user; only that user can edit their personal provider in AI Access.
 

@@ -27,7 +27,7 @@ void main() {
                     selectedModel: 'retired',
                     replacementModel: 'recommended',
                     reason: 'Model unavailable',
-                    recommendationSource: 'Cantinarr recommendation',
+                    recommendationSource: 'OpenAI recommended default',
                     differences: 'Cost may change',
                     source: 'personal'),
               )))),

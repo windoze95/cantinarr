@@ -189,6 +189,13 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		fallbackEnabled = parsed
 	}
+	if _, supported := RecommendedAIModel(candidate.Provider); !supported {
+		if fallbackSet && fallbackEnabled {
+			writeJSONError(w, "This provider does not supply a dynamic fallback model.", http.StatusBadRequest)
+			return
+		}
+		fallbackEnabled = false
+	}
 	candidate.ModelFallbackEnabled = fallbackEnabled
 	healthEnabled := h.registry.AIHealthCheckEnabled()
 	healthValue, healthSet := body[KeyAIHealthCheckEnabled]

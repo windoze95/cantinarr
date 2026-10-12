@@ -21,17 +21,16 @@ class ModelFallbackSetting extends StatelessWidget {
   Widget build(BuildContext context) {
     final recommendation = provider?.modelFallback;
     if (recommendation == null) return const SizedBox.shrink();
-    final supported = provider?.id != 'local_openai';
     return SwitchListTile.adaptive(
       contentPadding: EdgeInsets.zero,
-      title: const Text('Fall back to the recommended model'),
+      title: const Text('Use the provider’s fallback model'),
       value: enabled,
-      onChanged: supported ? onChanged : null,
+      onChanged: onChanged,
       subtitle: Text(
         '${recommendation.source}'
         '${recommendation.model.isEmpty ? '' : ': ${recommendation.model}'}. '
         '${recommendation.description}'
-        '${supported ? ' One replacement attempt only when the selected model is unavailable. Your saved selection, account, provider, and billing source stay the same. Administrators receive a notification with the model change.' : ''}'
+        ' One replacement attempt only when the selected model is unavailable. Your saved selection, account, provider, and billing source stay the same. Administrators receive a notification with the model change.'
         '${shared ? ' This shared preference also applies to a separate remediation model override.' : ''}',
       ),
     );

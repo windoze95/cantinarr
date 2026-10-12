@@ -104,6 +104,10 @@ func (h *Handler) UpdateAISettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	preferenceOnly := found && current.Provider == req.Provider && current.Model == req.Model && req.APIKey == "" && req.ModelFallbackEnabled != nil
+	if _, supported := credentials.RecommendedAIModel(req.Provider); req.ModelFallbackEnabled != nil && *req.ModelFallbackEnabled && !supported {
+		writeAISettingsError(w, http.StatusBadRequest, "This provider does not supply a dynamic fallback model.")
+		return
+	}
 	var validationErr error
 	if !preferenceOnly {
 		validationErr = h.ValidatePersonalAISettings(r.Context(), claims.UserID, profile)

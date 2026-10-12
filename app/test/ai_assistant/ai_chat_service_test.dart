@@ -14,7 +14,7 @@ void main() {
             'selected_model': 'retired',
             'replacement_model': 'recommended',
             'reason': 'Model unavailable',
-            'recommendation_source': 'Cantinarr recommendation',
+            'recommendation_source': 'OpenAI recommended default',
             'differences': 'Cost and latency may change',
             'source': 'personal',
           }

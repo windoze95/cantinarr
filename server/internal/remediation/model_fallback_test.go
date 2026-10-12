@@ -10,7 +10,7 @@ import (
 
 func TestModelFallbackNotificationDurableDedupeAndSettingsLink(t *testing.T) {
 	svc, notifier, userID := setupTestService(t)
-	event := ai.ModelFallback{EventKey: strings.Repeat("a", 64), Source: "shared", Scope: "remediation_override", Provider: "openai", SelectedModel: "retired-model", ReplacementModel: "gpt-4.1-mini", Reason: "The provider reported the selected model unavailable.", RecommendationSource: "Cantinarr recommendation", Differences: "No reasoning controls; pricing differences are not available.", SettingsPath: "/settings/credentials", Succeeded: true}
+	event := ai.ModelFallback{EventKey: strings.Repeat("a", 64), Source: "shared", Scope: "remediation_override", Provider: "codex", SelectedModel: "retired-model", ReplacementModel: "provider-default", Reason: "The provider reported the selected model unavailable.", RecommendationSource: "OpenAI recommended default", Differences: "No reasoning controls; pricing differences are not available.", SettingsPath: "/settings/credentials", Succeeded: true}
 	for i := 0; i < 3; i++ {
 		if err := svc.RecordModelFallback(event); err != nil {
 			t.Fatal(err)
@@ -21,7 +21,7 @@ func TestModelFallbackNotificationDurableDedupeAndSettingsLink(t *testing.T) {
 		t.Fatalf("issues=%+v err=%v", issues, err)
 	}
 	issue := issues[0]
-	for _, want := range []string{"retired-model", "gpt-4.1-mini", "unavailable", "Cantinarr recommendation", "pricing differences"} {
+	for _, want := range []string{"retired-model", "provider-default", "unavailable", "OpenAI recommended default", "pricing differences"} {
 		if !strings.Contains(issue.Detail, want) {
 			t.Fatalf("missing %s in %s", want, issue.Detail)
 		}

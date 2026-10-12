@@ -14,10 +14,10 @@ void main() {
   testWidgets('shared fallback is off and saves only its preference',
       (tester) async {
     final adapter = _CredentialsAdapter(
-        provider: 'openai', model: 'retired', includeModelFallback: true);
+        provider: 'grok', model: 'retired', includeModelFallback: true);
     await _pumpCredentials(tester, adapter);
     final toggle = find.widgetWithText(
-        SwitchListTile, 'Fall back to the recommended model');
+        SwitchListTile, 'Use the provider’s fallback model');
     await tester.scrollUntilVisible(toggle, 200,
         scrollable: find.byType(Scrollable).first);
     expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
@@ -598,12 +598,6 @@ class _CredentialsAdapter implements HttpClientAdapter {
               'label': 'OpenAI',
               'auth_type': 'api_key',
               'credential_key': 'openai_key',
-              if (includeModelFallback)
-                'model_fallback': {
-                  'model': 'gpt-4.1-mini',
-                  'source': 'Cantinarr recommendation',
-                  'description': 'Cost, latency, and capabilities may change.'
-                },
               if (openAiSupportsReasoningEffort)
                 'supports_reasoning_effort': true,
               'models': [
@@ -648,6 +642,12 @@ class _CredentialsAdapter implements HttpClientAdapter {
               'label': 'xAI Grok',
               'auth_type': 'api_key',
               'credential_key': 'grok_key',
+              if (includeModelFallback)
+                'model_fallback': {
+                  'model': '',
+                  'source': 'xAI latest alias',
+                  'description': 'Cost, latency, and capabilities may change.'
+                },
               'models': [
                 {'id': 'grok-4.7', 'label': 'Grok 4.7'},
                 {'id': 'grok-4.6', 'label': 'Grok 4.6'},

@@ -14,10 +14,10 @@ void main() {
       'personal fallback opt-in saves without switching to included access',
       (tester) async {
     final service = _FakeAiSettingsService(
-        _personal(provider: 'openai', configured: true, model: 'retired'));
+        _personal(provider: 'grok', configured: true, model: 'retired'));
     await _pump(tester, service);
     final toggle = find.widgetWithText(
-        SwitchListTile, 'Fall back to the recommended model');
+        SwitchListTile, 'Use the provider’s fallback model');
     await tester.ensureVisible(toggle);
     expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
     await tester.tap(toggle);
@@ -27,7 +27,7 @@ void main() {
     await tester.tap(save);
     await tester.pumpAndSettle();
     expect(service.lastFallback, isTrue);
-    expect(service.personalSelections.single, ('openai', 'retired'));
+    expect(service.personalSelections.single, ('grok', 'retired'));
     expect(service.includedCalls, 0);
   });
 
@@ -259,10 +259,6 @@ const _providers = [
     id: 'openai',
     label: 'OpenAI',
     credentialKey: 'openai_key',
-    modelFallback: AiModelRecommendation(
-        model: 'gpt-4.1-mini',
-        source: 'Cantinarr recommendation',
-        description: 'Cost, latency, and capabilities may change.'),
     models: [
       AiModelOption(
         id: 'gpt-5.4-mini',
@@ -299,6 +295,10 @@ const _providers = [
     id: 'grok',
     label: 'xAI Grok',
     credentialKey: 'grok_key',
+    modelFallback: AiModelRecommendation(
+        model: '',
+        source: 'xAI latest alias',
+        description: 'Cost, latency, and capabilities may change.'),
     models: [
       AiModelOption(
         id: 'grok-4.7',
@@ -501,6 +501,7 @@ AiSettings _personal({
           'openai': provider == 'openai' && configured,
           'anthropic': provider == 'anthropic' && configured,
           'gemini': provider == 'gemini' && configured,
+          'grok': provider == 'grok' && configured,
           'codex': provider == 'codex' && configured,
         },
       ),
