@@ -174,7 +174,6 @@ func TestGrokOAuthRejectsMissingAmbiguousOrIncompatibleDefaults(t *testing.T) {
 		`[{"id":"chosen","api_backend":"chat_completions"}]`,
 		`[{"id":"chosen","api_backend":"responses","hidden":true}]`,
 		`[{"id":"chosen","api_backend":"responses","_meta":{"hidden":true}}]`,
-		`[{"id":"chosen","api_backend":"responses","supportedInApi":false}]`,
 		`[{"id":"chosen","api_backend":"responses","base_url":"https://other-provider.example/v1"}]`,
 		`[{"id":"chosen","model":"retired","api_backend":"responses"}]`,
 		`[{"id":"chosen","api_backend":"responses"},{"id":"chosen","api_backend":"responses"}]`,
@@ -185,6 +184,20 @@ func TestGrokOAuthRejectsMissingAmbiguousOrIncompatibleDefaults(t *testing.T) {
 		}
 		if got, err := selectGrokDefault(models, "chosen", "retired", "https://cli-chat-proxy.grok.com/v1"); err == nil || got != "" {
 			t.Fatalf("body=%s model=%q err=%v", body, got, err)
+		}
+	}
+}
+
+func TestGrokOAuthDefaultCanBeSubscriptionOnly(t *testing.T) {
+	for _, restriction := range []string{`"supportedInApi":false`, `"supported_in_api":false`, `"_meta":{"supportedInApi":false}`} {
+		var models []grokRecommendedModel
+		body := `[{"id":"chosen","api_backend":"responses",` + restriction + `}]`
+		if err := json.Unmarshal([]byte(body), &models); err != nil {
+			t.Fatal(err)
+		}
+		got, err := selectGrokDefault(models, "chosen", "retired", "https://cli-chat-proxy.grok.com/v1")
+		if err != nil || got != "chosen" {
+			t.Fatalf("OAuth-only default rejected: %q %v", got, err)
 		}
 	}
 }

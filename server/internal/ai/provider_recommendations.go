@@ -128,19 +128,17 @@ func (h *Handler) grokOAuthFallbackModel(ctx context.Context, r resolvedAI) (str
 }
 
 type grokRecommendedModel struct {
-	ID          string                `json:"id"`
-	Model       string                `json:"model"`
-	ModelID     string                `json:"modelId"`
-	Hidden      bool                  `json:"hidden"`
-	Supported   *bool                 `json:"supportedInApi"`
-	SupportedV2 *bool                 `json:"supported_in_api"`
-	Backend     string                `json:"apiBackend"`
-	BackendV2   string                `json:"api_backend"`
-	BaseURL     string                `json:"baseUrl"`
-	BaseURLV2   string                `json:"base_url"`
-	APIBaseURL  string                `json:"apiBaseUrl"`
-	APIBaseV2   string                `json:"api_base_url"`
-	Meta        *grokRecommendedModel `json:"_meta"`
+	ID         string                `json:"id"`
+	Model      string                `json:"model"`
+	ModelID    string                `json:"modelId"`
+	Hidden     bool                  `json:"hidden"`
+	Backend    string                `json:"apiBackend"`
+	BackendV2  string                `json:"api_backend"`
+	BaseURL    string                `json:"baseUrl"`
+	BaseURLV2  string                `json:"base_url"`
+	APIBaseURL string                `json:"apiBaseUrl"`
+	APIBaseV2  string                `json:"api_base_url"`
+	Meta       *grokRecommendedModel `json:"_meta"`
 }
 
 func selectGrokDefault(models []grokRecommendedModel, recommended, selected, base string) (string, error) {
@@ -166,9 +164,11 @@ func selectGrokDefault(models []grokRecommendedModel, recommended, selected, bas
 		if backend == "" {
 			backend = m.BackendV2
 		}
-		incompatible := m.Hidden || (m.Supported != nil && !*m.Supported) || (m.SupportedV2 != nil && !*m.SupportedV2)
+		// supported_in_api is an API-key restriction in Grok Build's catalog:
+		// false means OAuth-only, not unavailable to this linked account.
+		incompatible := m.Hidden
 		if m.Meta != nil {
-			incompatible = incompatible || m.Meta.Hidden || (m.Meta.Supported != nil && !*m.Meta.Supported) || (m.Meta.SupportedV2 != nil && !*m.Meta.SupportedV2)
+			incompatible = incompatible || m.Meta.Hidden
 		}
 		for _, endpoint := range []string{m.BaseURL, m.BaseURLV2, m.APIBaseURL, m.APIBaseV2} {
 			if endpoint != "" && strings.TrimRight(endpoint, "/") != base {
