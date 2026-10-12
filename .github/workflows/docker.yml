@@ -89,6 +89,15 @@ jobs:
             echo "version=$(git describe --tags --always --match 'v[0-9]*')" >> "$GITHUB_OUTPUT"
           fi
 
+      # The daemon pulls BuildKit and QEMU before BuildKit's own registry
+      # configuration exists. Configure both layers so Docker Hub rate limits
+      # or authentication timeouts do not defeat cached public images.
+      - name: Set up Docker with a registry mirror
+        uses: docker/setup-docker-action@v4
+        with:
+          daemon-config: |
+            {"registry-mirrors": ["https://mirror.gcr.io"]}
+
       # Every published channel — `edge` on main pushes as much as version
       # tags — is multi-arch, so arm64 deployments track the same updates as
       # amd64 ones. Only pr-N preview images stay amd64-only: they exist to be
@@ -100,6 +109,10 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -385,7 +398,16 @@ jobs:
       artifact_id: ${{ steps.receipt.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Docker with a registry mirror
+        uses: docker/setup-docker-action@v4
+        with:
+          daemon-config: |
+            {"registry-mirrors": ["https://mirror.gcr.io"]}
       - uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io

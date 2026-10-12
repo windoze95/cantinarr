@@ -53,12 +53,12 @@ func (r *Registry) LoadUserAIProfile(ctx context.Context, userID int64) (profile
 	defer tx.Rollback()
 	var stored sql.NullString
 	err = tx.QueryRow(`
-		SELECT s.provider, s.model, c.credential_blob
+		SELECT s.provider, s.model, s.model_fallback_enabled, c.credential_blob
 		FROM user_ai_settings s
 		LEFT JOIN user_ai_credentials c
 			ON c.user_id = s.user_id AND c.provider = s.provider
 		WHERE s.user_id = ?`, userID).
-		Scan(&profile.Config.Provider, &profile.Config.Model, &stored)
+		Scan(&profile.Config.Provider, &profile.Config.Model, &profile.Config.ModelFallbackEnabled, &stored)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AIProfile{}, false, nil
 	}
@@ -164,7 +164,11 @@ func (r *Registry) loadSharedAIProfileTx(tx *sql.Tx) (AIProfile, error) {
 	if model == "" {
 		model = DefaultAIModel(provider)
 	}
-	profile := AIProfile{Config: AIConfig{Provider: provider, Model: model}}
+	fallback, _, err := settingTx(tx, KeyAIModelFallbackEnabled)
+	if err != nil {
+		return AIProfile{}, err
+	}
+	profile := AIProfile{Config: AIConfig{Provider: provider, Model: model, ModelFallbackEnabled: fallback == "true"}}
 	// Endpoint/effort settings are provider-scoped so hosted openai and the
 	// local provider never fight over one slot. Reads fail closed: an
 	// unreadable override must not silently reroute shared traffic.
@@ -235,8 +239,8 @@ func (r *Registry) GetUserAIConfig(userID int64) (cfg AIConfig, found bool, err 
 	if r == nil || r.db == nil || userID <= 0 {
 		return AIConfig{}, false, ErrAIStorage
 	}
-	err = r.db.QueryRow(`SELECT provider, model FROM user_ai_settings WHERE user_id = ?`, userID).
-		Scan(&cfg.Provider, &cfg.Model)
+	err = r.db.QueryRow(`SELECT provider, model, model_fallback_enabled FROM user_ai_settings WHERE user_id = ?`, userID).
+		Scan(&cfg.Provider, &cfg.Model, &cfg.ModelFallbackEnabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AIConfig{}, false, nil
 	}
@@ -265,6 +269,7 @@ func (r *Registry) SetUserAIConfig(userID int64, provider, model string) error {
 		INSERT INTO user_ai_settings (user_id, provider, model, updated_at)
 		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(user_id) DO UPDATE SET
+			model_fallback_enabled = CASE WHEN user_ai_settings.provider = excluded.provider THEN user_ai_settings.model_fallback_enabled ELSE 0 END,
 			provider = excluded.provider,
 			model = excluded.model,
 			updated_at = CURRENT_TIMESTAMP`, userID, provider, model)
@@ -273,7 +278,7 @@ func (r *Registry) SetUserAIConfig(userID int64, provider, model string) error {
 
 // SetUserAIProfile atomically stores an optional replacement API key and the
 // personal provider/model that was already proven by a save-time test turn.
-func (r *Registry) SetUserAIProfile(userID int64, provider, model, apiKey string) error {
+func (r *Registry) SetUserAIProfile(userID int64, provider, model, apiKey string, fallback ...bool) error {
 	provider = strings.TrimSpace(provider)
 	model = strings.TrimSpace(model)
 	apiKey = strings.TrimSpace(apiKey)
@@ -312,13 +317,25 @@ func (r *Registry) SetUserAIProfile(userID int64, provider, model, apiKey string
 			return err
 		}
 	}
+	enabled := false
+	if len(fallback) > 0 {
+		enabled = fallback[0]
+	} else {
+		var previousProvider string
+		err := tx.QueryRow("SELECT provider, model_fallback_enabled FROM user_ai_settings WHERE user_id = ?", userID).Scan(&previousProvider, &enabled)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		enabled = enabled && previousProvider == provider
+	}
 	if _, err := tx.Exec(`
-		INSERT INTO user_ai_settings (user_id, provider, model, updated_at)
-		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+		INSERT INTO user_ai_settings (user_id, provider, model, model_fallback_enabled, updated_at)
+		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(user_id) DO UPDATE SET
 			provider = excluded.provider,
 			model = excluded.model,
-			updated_at = CURRENT_TIMESTAMP`, userID, provider, model); err != nil {
+			model_fallback_enabled = excluded.model_fallback_enabled,
+			updated_at = CURRENT_TIMESTAMP`, userID, provider, model, enabled); err != nil {
 		return err
 	}
 	return tx.Commit()

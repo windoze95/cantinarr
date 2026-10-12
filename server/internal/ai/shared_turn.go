@@ -58,32 +58,44 @@ func (h *Handler) ResolveSharedAutonomousTurn(ctx context.Context, override Auto
 		model = strings.TrimSpace(override.Model)
 	}
 
-	var runner TurnRunner
-	switch resolved.Provider {
-	case credentials.AIProviderAnthropic:
-		runner = NewService(resolved.APIKey, model, h.toolServer)
-	case credentials.AIProviderOpenAI:
-		runner = NewOpenAIService(resolved.APIKey, model, resolved.BaseURL, resolved.ReasoningEffort, h.toolServer)
-	case credentials.AIProviderLocalOpenAI:
-		runner = NewLocalOpenAIService(resolved.APIKey, model, resolved.BaseURL, resolved.ReasoningEffort, resolved.UseProxy, h.toolServer)
-	case credentials.AIProviderGemini:
-		runner = NewGeminiService(resolved.APIKey, model, h.toolServer)
-	case credentials.AIProviderGrok:
-		runner = NewGrokService(resolved.APIKey, model, h.toolServer)
-	case credentials.AIProviderGrokOAuth:
-		runner = &grokOAuthTurnRunner{
-			manager:    h.grok,
-			model:      model,
-			toolServer: h.toolServer,
+	build := func(model string) TurnRunner {
+		var runner TurnRunner
+		switch resolved.Provider {
+		case credentials.AIProviderAnthropic:
+			runner = NewService(resolved.APIKey, model, h.toolServer)
+		case credentials.AIProviderOpenAI:
+			runner = NewOpenAIService(resolved.APIKey, model, resolved.BaseURL, resolved.ReasoningEffort, h.toolServer)
+		case credentials.AIProviderLocalOpenAI:
+			runner = NewLocalOpenAIService(resolved.APIKey, model, resolved.BaseURL, resolved.ReasoningEffort, resolved.UseProxy, h.toolServer)
+		case credentials.AIProviderGemini:
+			runner = NewGeminiService(resolved.APIKey, model, h.toolServer)
+		case credentials.AIProviderGrok:
+			runner = NewGrokService(resolved.APIKey, model, h.toolServer)
+		case credentials.AIProviderGrokOAuth:
+			runner = &grokOAuthTurnRunner{
+				manager:    h.grok,
+				model:      model,
+				toolServer: h.toolServer,
+			}
+		case credentials.AIProviderCodex:
+			runner = &codexAutonomousTurnRunner{
+				manager: h.codex,
+				model:   model,
+			}
 		}
-	case credentials.AIProviderCodex:
-		runner = &codexAutonomousTurnRunner{
-			manager: h.codex,
-			model:   model,
-		}
-	default:
-		return AutonomousTurn{Provider: resolved.Provider, Model: model},
-			fmt.Errorf("unsupported shared AI provider: %s", resolved.Provider)
+		return runner
+	}
+	runner := build(model)
+	if runner == nil {
+		return AutonomousTurn{}, fmt.Errorf("unsupported shared AI provider: %s", resolved.Provider)
+	}
+	resolved.Model = model
+	scope := "remediation"
+	if override.Provider == resolved.Provider && strings.TrimSpace(override.Model) != "" {
+		scope = "remediation_override"
+	}
+	if resolved.ModelFallbackEnabled {
+		runner = &fallbackTurnRunner{handler: h, resolved: resolved, scope: scope, delegate: runner, build: build}
 	}
 	return AutonomousTurn{
 		Runner: &admittedAutonomousTurnRunner{

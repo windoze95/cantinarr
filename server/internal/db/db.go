@@ -576,6 +576,7 @@ CREATE TABLE IF NOT EXISTS user_ai_settings (
     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
+    model_fallback_enabled BOOLEAN NOT NULL DEFAULT 0,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -666,6 +667,10 @@ CREATE TABLE IF NOT EXISTS issues (
 -- idempotency guarantee for auto-dispatch.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_open_dedupe
     ON issues(dedupe_key) WHERE dedupe_key IS NOT NULL AND closed_at IS NULL;
+-- A model fallback is a notification event, not a recurrent incident. Closing
+-- it must not allow another copy of that same event on the next AI request.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_model_fallback_dedupe
+    ON issues(dedupe_key) WHERE dedupe_key GLOB 'system:ai-model-fallback:*';
 CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
 -- The admin list reads open issues in full and the most recent slice of closed
 -- ones. Closed history is the half that grows without bound, so both halves are
@@ -1065,6 +1070,7 @@ func Open(dbPath string) (*sql.DB, error) {
 	// are ignored). Backfill statements run only when the column is first added
 	// so they execute exactly once per database.
 	migrations := []schemaMigration{
+		{alter: "ALTER TABLE user_ai_settings ADD COLUMN model_fallback_enabled BOOLEAN NOT NULL DEFAULT 0"},
 		{alter: "ALTER TABLE service_instances ADD COLUMN auto_add_users BOOLEAN NOT NULL DEFAULT 0"},
 		{alter: "ALTER TABLE service_instances ADD COLUMN tag_requests BOOLEAN NOT NULL DEFAULT 0"},
 		{alter: "ALTER TABLE request_dispatch ADD COLUMN delivery_started_at INTEGER NOT NULL DEFAULT 0"},

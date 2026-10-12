@@ -124,6 +124,7 @@ type TurnParams struct {
 
 // TurnResult is the outcome of one model turn.
 type TurnResult struct {
+	ModelFallback *ModelFallback
 	// Message is the assistant turn (text + tool_use blocks). It never contains
 	// tool_result blocks: the provider does not execute tools here.
 	Message TranscriptMessage

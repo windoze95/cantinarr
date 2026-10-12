@@ -192,6 +192,7 @@ class AiChatNotifier extends ChangeNotifier {
     final cancelToken = CancelToken();
     _activeCancelToken = cancelToken;
     String? errorText;
+    ModelFallbackNotice? modelFallback;
 
     void upsertResponse({required bool streaming}) {
       // A clearChat (or newer turn) since this stream started owns the
@@ -209,6 +210,7 @@ class AiChatNotifier extends ChangeNotifier {
         toolActivity: List.unmodifiable(toolActivity),
         isStreaming: streaming,
         errorText: errorText,
+        modelFallback: modelFallback,
         // A failed message with no text carries nothing worth re-sending.
         excludeFromHistory: errorText != null && buffer.isEmpty,
       );
@@ -249,6 +251,8 @@ class AiChatNotifier extends ChangeNotifier {
               toolActivity[idx] =
                   toolActivity[idx].copyWith(done: true, ok: ok);
             }
+          case ModelFallbackEvent(:final notice):
+            modelFallback = notice;
           case StreamErrorEvent(:final message):
             errorText = message;
         }
@@ -262,6 +266,7 @@ class AiChatNotifier extends ChangeNotifier {
         if (buffer.isNotEmpty ||
             mediaItems.isNotEmpty ||
             configurationChanges.isNotEmpty ||
+            modelFallback != null ||
             toolActivity.isNotEmpty) {
           upsertResponse(streaming: true);
         }

@@ -10,6 +10,27 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
+  testWidgets(
+      'personal fallback opt-in saves without switching to included access',
+      (tester) async {
+    final service = _FakeAiSettingsService(
+        _personal(provider: 'grok', configured: true, model: 'retired'));
+    await _pump(tester, service);
+    final toggle = find.widgetWithText(
+        SwitchListTile, 'Use the provider’s fallback model');
+    await tester.ensureVisible(toggle);
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    final save = find.text('Save personal AI settings');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(service.lastFallback, isTrue);
+    expect(service.personalSelections.single, ('grok', 'retired'));
+    expect(service.includedCalls, 0);
+  });
+
   testWidgets('broken personal selection is explicit and never falls back',
       (tester) async {
     final service = _FakeAiSettingsService(_personalBroken());
@@ -205,6 +226,7 @@ class _FakeAiSettingsService extends AiSettingsService {
 
   AiSettings current;
   int includedCalls = 0;
+  bool? lastFallback;
   final savedKeys = <(String, String)>[];
   final personalSelections = <(String, String)>[];
 
@@ -216,7 +238,9 @@ class _FakeAiSettingsService extends AiSettingsService {
     required String provider,
     required String model,
     String? apiKey,
+    bool? modelFallbackEnabled,
   }) async {
+    lastFallback = modelFallbackEnabled;
     if (apiKey != null) savedKeys.add((provider, apiKey));
     personalSelections.add((provider, model));
     current = _personal(provider: provider, configured: true, model: model);
@@ -271,6 +295,10 @@ const _providers = [
     id: 'grok',
     label: 'xAI Grok',
     credentialKey: 'grok_key',
+    modelFallback: AiModelRecommendation(
+        model: '',
+        source: 'xAI latest alias',
+        description: 'Cost, latency, and capabilities may change.'),
     models: [
       AiModelOption(
         id: 'grok-4.7',
@@ -473,6 +501,7 @@ AiSettings _personal({
           'openai': provider == 'openai' && configured,
           'anthropic': provider == 'anthropic' && configured,
           'gemini': provider == 'gemini' && configured,
+          'grok': provider == 'grok' && configured,
           'codex': provider == 'codex' && configured,
         },
       ),

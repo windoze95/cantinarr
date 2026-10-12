@@ -44,12 +44,14 @@ func TestCodexChatBudgetHelperProcess(t *testing.T) {
 		}}
 	}
 	forever := slices.Contains(os.Args, "--fake-flood-forever")
+	fallback := slices.Contains(os.Args, "--fake-model-fallback")
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64<<10), 4<<20)
 	for scanner.Scan() {
 		var message struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
+			Params map[string]any  `json:"params"`
 			Result struct {
 				Success      bool `json:"success"`
 				ContentItems []struct {
@@ -68,11 +70,29 @@ func TestCodexChatBudgetHelperProcess(t *testing.T) {
 		case "initialize":
 			send(map[string]any{"id": id, "result": map[string]any{"codexHome": os.Getenv("CODEX_HOME")}})
 		case "thread/start":
+			if fallback && message.Params["model"] == "retired-model" {
+				send(map[string]any{"id": id, "error": map[string]any{"code": -32602, "message": "model_not_found: retired-model is not available"}})
+				continue
+			}
 			send(map[string]any{"id": id, "result": map[string]any{"thread": map[string]any{"id": "thread-1"}}})
+		case "model/list":
+			send(map[string]any{"id": id, "result": map[string]any{"data": []any{
+				map[string]any{"id": "retired-model", "model": "retired-model", "hidden": true, "upgrade": "recommended-model"},
+				map[string]any{"id": "recommended-model", "model": "recommended-model", "inputModalities": []string{"text"}},
+			}, "nextCursor": nil}})
 		case "thread/inject_items":
 			send(map[string]any{"id": id, "result": map[string]any{}})
 		case "turn/start":
 			send(map[string]any{"id": id, "result": map[string]any{"turn": map[string]any{"id": "turn-1", "status": "inProgress", "items": []any{}}}})
+			if fallback {
+				send(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{
+					"threadId": "thread-1", "turnId": "turn-1", "itemId": "message-1", "delta": "answer from replacement",
+				}})
+				send(map[string]any{"method": "turn/completed", "params": map[string]any{
+					"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "status": "completed", "items": []any{}},
+				}})
+				continue
+			}
 			send(toolCall(1))
 		case "turn/interrupt":
 			send(map[string]any{"id": id, "result": map[string]any{}})

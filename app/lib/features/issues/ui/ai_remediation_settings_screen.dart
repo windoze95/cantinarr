@@ -454,6 +454,7 @@ class _AiRemediationSettingsScreenState
             child: Text(
               'Uses the shared ${_providerOption(_credentials!)?.label ?? _credentials!.ai.provider} '
               'provider and credential from Admin > Providers & Credentials. '
+              'The shared model fallback preference also applies to this override. '
               'The assistant model there is ${_credentials!.ai.model}. You can '
               'choose a different model below for remediation only.',
               style: const TextStyle(

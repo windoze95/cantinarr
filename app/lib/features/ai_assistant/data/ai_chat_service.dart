@@ -109,6 +109,9 @@ class AiChatService {
                     ),
                   );
                 }
+              } else if (json['model_fallback'] is Map<String, dynamic>) {
+                yield ModelFallbackEvent(ModelFallbackNotice.fromJson(
+                    json['model_fallback'] as Map<String, dynamic>));
               } else if (json.containsKey('error')) {
                 final message = json['error'] as String?;
                 yield StreamErrorEvent(

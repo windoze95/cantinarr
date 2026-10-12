@@ -11,6 +11,7 @@ import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../ai_assistant/data/codex_oauth_service.dart';
 import '../../ai_assistant/data/grok_oauth_service.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
+import '../../ai_assistant/ui/model_fallback_setting.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/credentials_service.dart';
 import '../logic/outbound_proxy_provider.dart';
@@ -35,6 +36,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
         _selectedProvider,
         _selectedModel,
         _healthCheckEnabled,
+        _modelFallbackEnabled,
         if (_selectedModel == _customModelValue) _customModelController.text,
         if (_showOpenAiReasoningEffort) _openaiReasoningEffort,
         if (_localProviderSelected) ...[
@@ -71,6 +73,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   String _selectedProvider = 'anthropic';
   String _selectedModel = 'claude-opus-5-5';
   bool _healthCheckEnabled = true;
+  bool _modelFallbackEnabled = false;
   bool _isSaving = false;
   bool _isTestingAI = false;
 
@@ -148,6 +151,13 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       creds['ai_provider'] = _selectedProvider;
       creds['ai_model'] = selectedModel;
       aiChanged = true;
+    }
+    if (_providerFor(_selectedProvider, _status?.ai.providers ?? const [])
+                ?.modelFallback !=
+            null &&
+        (_modelFallbackEnabled != (_status?.ai.modelFallbackEnabled ?? false) ||
+            _selectedProvider != _status?.ai.provider)) {
+      creds['ai_model_fallback_enabled'] = _modelFallbackEnabled.toString();
     }
     // Only a visible control writes: hidden state must never silently
     // rewrite the server, and older servers reject the key as unknown.
@@ -295,6 +305,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   void _syncAISelection(CredentialsStatus status) {
     _selectedProvider = status.ai.provider;
     _healthCheckEnabled = status.ai.healthCheckEnabled;
+    _modelFallbackEnabled = status.ai.modelFallbackEnabled;
     final provider = _providerFor(_selectedProvider, status.ai.providers);
     final hasModel =
         provider?.models.any((model) => model.id == status.ai.model) ?? false;
@@ -375,6 +386,8 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     final provider =
         _providerFor(providerId, _status?.ai.providers ?? const []);
     setState(() {
+      _modelFallbackEnabled = _status?.ai.provider == providerId &&
+          (_status?.ai.modelFallbackEnabled ?? false);
       _selectedProvider = provider?.id ?? providerId;
       _selectedModel = provider?.models.isNotEmpty == true
           ? provider!.models.first.id
@@ -470,6 +483,16 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                             onModelChanged: (value) =>
                                 setState(() => _selectedModel = value),
                           ),
+                        ),
+                        ModelFallbackSetting(
+                          provider: _providerFor(_selectedProvider,
+                              _status?.ai.providers ?? const []),
+                          enabled: _modelFallbackEnabled,
+                          shared: true,
+                          onChanged: _isSaving
+                              ? null
+                              : (value) =>
+                                  setState(() => _modelFallbackEnabled = value),
                         ),
                         if (_showOpenAiReasoningEffort) ...[
                           const SizedBox(height: 12),

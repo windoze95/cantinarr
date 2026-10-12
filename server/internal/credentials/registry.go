@@ -24,8 +24,9 @@ const (
 	KeyGrokKey         = "grok_key"
 	KeyTraktClientID   = "trakt_client_id"
 
-	KeyAIProvider = "ai_provider"
-	KeyAIModel    = "ai_model"
+	KeyAIProvider             = "ai_provider"
+	KeyAIModel                = "ai_model"
+	KeyAIModelFallbackEnabled = "ai_model_fallback_enabled"
 	// KeyAIHealthCheckEnabled controls only the scheduled shared-model probe.
 	// Provider/model saves always perform their own validation turn.
 	KeyAIHealthCheckEnabled = "ai_health_check_enabled"
@@ -144,14 +145,16 @@ type AIProviderOption struct {
 	// shared profile. They are filtered out of personal settings payloads
 	// and rejected as personal selections: their endpoints can name
 	// cluster-internal hosts, which must never ride a non-admin path.
-	SharedOnly bool            `json:"shared_only,omitempty"`
-	Models     []AIModelOption `json:"models"`
+	SharedOnly    bool                 `json:"shared_only,omitempty"`
+	Models        []AIModelOption      `json:"models"`
+	ModelFallback *ModelRecommendation `json:"model_fallback,omitempty"`
 }
 
 // AIConfig is the active provider/model pair used by the AI assistant.
 type AIConfig struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
+	Provider             string `json:"provider"`
+	Model                string `json:"model"`
+	ModelFallbackEnabled bool   `json:"model_fallback_enabled"`
 }
 
 var AIProviders = []AIProviderOption{
@@ -628,12 +631,12 @@ func (r *Registry) GetAIConfig() AIConfig {
 	// will refuse. The settings surface can then report and repair the real
 	// configuration rather than masking it.
 	if !IsValidAIProvider(provider) {
-		return AIConfig{Provider: provider, Model: model}
+		return AIConfig{Provider: provider, Model: model, ModelFallbackEnabled: r.GetSetting(KeyAIModelFallbackEnabled) == "true"}
 	}
 	if model == "" {
 		model = DefaultAIModel(provider)
 	}
-	return AIConfig{Provider: provider, Model: model}
+	return AIConfig{Provider: provider, Model: model, ModelFallbackEnabled: r.GetSetting(KeyAIModelFallbackEnabled) == "true"}
 }
 
 // SetAIConfig persists the active AI provider/model. Unknown providers are

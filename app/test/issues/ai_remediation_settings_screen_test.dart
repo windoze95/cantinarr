@@ -135,6 +135,7 @@ void main() {
     final save = find.widgetWithText(ElevatedButton, 'Save');
     await _scrollUntilBuilt(tester, save);
     await tester.ensureVisible(save);
+    await tester.pumpAndSettle();
     await tester.tap(save);
     await tester.pumpAndSettle();
 

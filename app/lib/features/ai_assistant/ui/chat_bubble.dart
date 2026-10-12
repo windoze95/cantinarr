@@ -108,6 +108,11 @@ class ChatBubble extends StatelessWidget {
                     ),
                   ),
 
+                if (!isUser && message.modelFallback != null) ...[
+                  const SizedBox(height: 8),
+                  _ModelFallbackCard(notice: message.modelFallback!),
+                ],
+
                 // Inline error state with retry affordance
                 if (!isUser && message.errorText != null) ...[
                   if (message.content.isNotEmpty) const SizedBox(height: 8),
@@ -488,4 +493,33 @@ class _MediaResultCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ModelFallbackCard extends StatelessWidget {
+  final ModelFallbackNotice notice;
+  const _ModelFallbackCard({required this.notice});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppTheme.surface,
+          border: Border.all(color: AppTheme.border),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('AI model fallback',
+              style: TextStyle(fontWeight: FontWeight.w600)),
+          Text(
+              'Selected: ${notice.selectedModel}\n${notice.status == 'used' ? 'Using' : notice.status == 'failed' ? 'Failed replacement' : 'Replacement attempt'}: ${notice.replacementModel}'),
+          Text(
+              '${notice.reason} ${notice.recommendationSource}. ${notice.differences}'),
+          TextButton(
+            onPressed: () => context.push('/settings/ai'),
+            child: Text(notice.source == 'personal'
+                ? 'Review personal AI settings'
+                : 'Review included AI access'),
+          ),
+        ]),
+      );
 }

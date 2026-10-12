@@ -205,7 +205,8 @@ type Issue struct {
 	// the dedicated tile and disclose the closure verbs' mute durations
 	// (resolve 60d / dismiss 180d / close-without-fix 365d) at the point of
 	// decision instead of hiding a 12-month choice behind a generic button.
-	IsPrevention bool `json:"is_prevention"`
+	IsPrevention bool   `json:"is_prevention"`
+	SettingsPath string `json:"settings_path,omitempty"`
 
 	InstanceID string `json:"instance_id"`
 	DownloadID string `json:"-"`

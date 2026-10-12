@@ -5,3 +5,5 @@ Please test upgrading with your sign-in retained, browsing and requesting media,
 When reporting an issue, include your device, iOS version, and Cantinarr server version.
 
 AI provider choices now use current model IDs and the matching API or OAuth endpoint. Check saving your selected provider/model and an AI conversation with tool lookups.
+
+Optional fallback uses provider-managed defaults or rolling aliases for OpenAI OAuth, Gemini, xAI API, and Grok OAuth. Check that unsupported providers hide the switch, the saved choice stays unchanged, and chat and administrator notices identify the replacement.

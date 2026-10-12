@@ -11,6 +11,7 @@ import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../settings/settings_anchors.dart';
 import '../data/ai_provider_models.dart';
+import 'model_fallback_setting.dart';
 import '../data/ai_settings_service.dart';
 import '../data/codex_oauth_service.dart';
 import '../data/grok_oauth_service.dart';
@@ -35,6 +36,7 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
   Object get _draftValues => [
         _provider,
         _model,
+        _modelFallbackEnabled,
         if (_model == _customModel) _customModelController.text,
       ];
   static const _customModel = '__custom__';
@@ -43,6 +45,7 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
   late final TextEditingController _customModelController;
   String? _provider;
   String? _model;
+  bool _modelFallbackEnabled = false;
   bool _saving = false;
   bool _clearing = false;
   bool _personalExpanded = false;
@@ -64,6 +67,7 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
   void _ensureSelection(AiSettings settings) {
     if (_provider != null) return;
     final configured = settings.personal.config;
+    _modelFallbackEnabled = configured?.modelFallbackEnabled ?? false;
     // Nothing chosen yet: adopt the server-advertised zero-config default
     // (OpenAI OAuth + the fast tier) before falling back to list order.
     final fallback = settings.provider(settings.defaultProvider ?? '') != null
@@ -98,6 +102,8 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
   void _selectProvider(AiSettings settings, String provider) {
     final option = settings.provider(provider);
     setState(() {
+      _modelFallbackEnabled = settings.personal.config?.provider == provider &&
+          (settings.personal.config?.modelFallbackEnabled ?? false);
       _provider = provider;
       _model = option?.models.firstOrNull?.id ?? _customModel;
       _apiKeyController.clear();
@@ -131,13 +137,16 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
       await service.usePersonal(
         provider: provider,
         model: model,
+        modelFallbackEnabled: settings.provider(provider)?.modelFallback != null
+            ? _modelFallbackEnabled
+            : null,
         apiKey: saveKey ? _apiKeyController.text.trim() : null,
       );
       _apiKeyController.clear();
       _draft.markSaved(_draftValues);
       await _refresh();
       _message(
-        'Personal ${settings.providerLabel(provider)} passed its test and is now active.',
+        'Personal ${settings.providerLabel(provider)} settings saved.',
       );
     } catch (error) {
       _message(_friendlyError(error, 'Could not update personal AI access.'));
@@ -301,6 +310,9 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
             customModelController: _customModelController,
             apiKeyController: _apiKeyController,
             saving: _saving,
+            modelFallbackEnabled: _modelFallbackEnabled,
+            onFallbackChanged: (value) =>
+                setState(() => _modelFallbackEnabled = value),
             collapsed: includedActive && !_personalExpanded,
             onToggleCollapsed: includedActive
                 ? () => setState(() => _personalExpanded = !_personalExpanded)
@@ -432,6 +444,8 @@ class _PersonalSourcePanel extends StatelessWidget {
   final TextEditingController customModelController;
   final TextEditingController apiKeyController;
   final bool saving;
+  final bool modelFallbackEnabled;
+  final ValueChanged<bool> onFallbackChanged;
   final bool collapsed;
   final VoidCallback? onToggleCollapsed;
   final ValueChanged<String> onProviderSelected;
@@ -449,6 +463,8 @@ class _PersonalSourcePanel extends StatelessWidget {
     required this.customModelController,
     required this.apiKeyController,
     required this.saving,
+    required this.modelFallbackEnabled,
+    required this.onFallbackChanged,
     required this.collapsed,
     required this.onToggleCollapsed,
     required this.onProviderSelected,
@@ -640,9 +656,19 @@ class _PersonalSourcePanel extends StatelessWidget {
                 ),
               ],
             ],
+            ModelFallbackSetting(
+              provider: option,
+              enabled: modelFallbackEnabled,
+              onChanged: saving ? null : onFallbackChanged,
+            ),
+            if (configured && activeThisProvider)
+              OutlinedButton(
+                onPressed: saving ? null : onUseConfigured,
+                child: const Text('Save personal AI settings'),
+              ),
             const SizedBox(height: 10),
             const Text(
-              'Provider and model saves require one small response test. '
+              'New provider, model, and credential selections require one small response test. '
               'A failed save keeps your previous active settings.',
               style: TextStyle(
                 color: AppTheme.textMuted,

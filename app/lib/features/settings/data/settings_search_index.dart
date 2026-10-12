@@ -1310,6 +1310,9 @@ const List<SettingsSearchEntry> _credentialsEntries = [
     route: '/settings/credentials',
     screenTitle: 'Providers & Credentials',
     keywords: [
+      'fallback',
+      'recommended model',
+      'retired model',
       'provider',
       'shared',
       'included',
@@ -1545,6 +1548,9 @@ const List<SettingsSearchEntry> _aiAccessEntries = [
     screenTitle: 'AI Access',
     section: 'Personal',
     keywords: [
+      'fallback',
+      'recommended model',
+      'retired model',
       'personal',
       'api key',
       'byok',
