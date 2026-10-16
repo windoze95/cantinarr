@@ -47,6 +47,12 @@ var demoLogo []byte
 //go:embed assets/favicon.png
 var demoFavicon []byte
 
+//go:embed assets/fonts/schibsted-var.woff2
+var demoFont []byte
+
+//go:embed assets/fonts/SchibstedGrotesk-OFL.txt
+var demoFontLicense []byte
+
 // demoLandingRendered is the landing page with DEMO_SERVER_URL substituted.
 var demoLandingRendered string
 
@@ -111,6 +117,16 @@ func buildRouter() chi.Router {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write(demoFavicon)
+	})
+	r.Get("/static/fonts/schibsted-var.woff2", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Header().Set("Content-Type", "font/woff2")
+		_, _ = w.Write(demoFont)
+	})
+	r.Get("/static/fonts/SchibstedGrotesk-OFL.txt", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write(demoFontLicense)
 	})
 	registerDownloadActivityArtwork(r)
 

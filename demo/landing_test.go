@@ -19,8 +19,8 @@ func TestLandingPageConnectsToConfiguredDemo(t *testing.T) {
 	for _, want := range []string{
 		`<html lang="en">`,
 		`<link rel="icon" href="/static/favicon.png?v=2" type="image/png">`,
-		`<img class="brand-mark" src="/static/logo.png?v=2" alt="" width="30" height="30">`,
-		`Explore Cantinarr without setting up a <em>server.</em>`,
+		`<img src="/static/logo.png" alt="" width="30" height="30" />`,
+		`<h1 id="demo-title">Try Cantinarr.</h1>`,
 		`<code>` + serverURL + `</code>`,
 		`href="cantinarr://connect?token=` + demoConnectTokenStr + `&amp;server=` + url.QueryEscape(serverURL) + `"`,
 		`>Open in Cantinarr</a>`,
@@ -42,11 +42,14 @@ func TestLandingPageConnectsToConfiguredDemo(t *testing.T) {
 
 func TestLandingPageServesBrandAssets(t *testing.T) {
 	for _, test := range []struct {
-		path string
-		want []byte
+		path        string
+		contentType string
+		want        []byte
 	}{
-		{path: "/static/logo.png", want: demoLogo},
-		{path: "/static/favicon.png", want: demoFavicon},
+		{path: "/static/logo.png", contentType: "image/png", want: demoLogo},
+		{path: "/static/favicon.png", contentType: "image/png", want: demoFavicon},
+		{path: "/static/fonts/schibsted-var.woff2", contentType: "font/woff2", want: demoFont},
+		{path: "/static/fonts/SchibstedGrotesk-OFL.txt", contentType: "text/plain; charset=utf-8", want: demoFontLicense},
 	} {
 		t.Run(test.path, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, test.path, nil)
@@ -57,8 +60,8 @@ func TestLandingPageServesBrandAssets(t *testing.T) {
 			if res.Code != http.StatusOK {
 				t.Fatalf("GET %s status = %d, want %d", test.path, res.Code, http.StatusOK)
 			}
-			if got := res.Header().Get("Content-Type"); got != "image/png" {
-				t.Fatalf("GET %s Content-Type = %q, want image/png", test.path, got)
+			if got := res.Header().Get("Content-Type"); got != test.contentType {
+				t.Fatalf("GET %s Content-Type = %q, want %q", test.path, got, test.contentType)
 			}
 			if !bytes.Equal(res.Body.Bytes(), test.want) {
 				t.Fatalf("GET %s did not return the embedded brand asset", test.path)
