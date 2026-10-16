@@ -120,7 +120,7 @@ Full parity with the current Cantinarr API surface:
 | `data_music.go` | Public-domain artists/albums/tracks/track files, Lidarr queue and history fixtures, the music cross-domain hooks |
 | `data_music_public_domain.go` | Four real CC0 releases with original covers, track titles, and durations; provenance in `assets/music/` |
 | `data_misc.go` | Genres and Trakt list fixtures |
-| `assets/` | `go:embed` — sample download file, landing HTML, Cantinarr branding, and the CC0 music catalog and covers |
+| `assets/` | `go:embed` — sample download file, landing HTML, Cantinarr branding and Schibsted font, and the CC0 music catalog and covers. The font's OFL notice is in `assets/fonts/` |
 | `tools/smoke.sh` | Read-mostly parity smoke test (hundreds of checks; `--mutate` adds the state-changing flows). Run it against a local or the live demo |
 
 ## Branch Workflow
