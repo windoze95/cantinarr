@@ -130,8 +130,12 @@ Future<void> _pump(WidgetTester tester, _Media media,
     _Auth? auth,
     String? instanceId,
     Size size = const Size(1100, 900)}) async {
-  await tester.binding.setSurfaceSize(size);
-  addTearDown(() => tester.binding.setSurfaceSize(null));
+  // Pin both logical layout and raster scale. setSurfaceSize alone leaves
+  // the test view at its default DPR (3), making the phone golden a dense
+  // 1170x2532 raster whose thin edges drift across host renderers.
+  tester.view.physicalSize = size;
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.reset);
   await tester.pumpWidget(ProviderScope(
       overrides: [
         authProvider.overrideWith(
@@ -139,7 +143,7 @@ Future<void> _pump(WidgetTester tester, _Media media,
         mediaAccessServiceProvider.overrideWithValue(media),
       ],
       child: MaterialApp(
-          theme: AppTheme.dark,
+          theme: AppTheme.dark.copyWith(platform: TargetPlatform.android),
           home: AppAmbientBackground(
               child: MediaUserImportScreen(instanceId: instanceId)))));
   await tester.pumpAndSettle();
