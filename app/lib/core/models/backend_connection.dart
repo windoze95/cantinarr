@@ -91,6 +91,9 @@ class BackendConnection {
   /// Supports linking accounts independently from managing their access.
   final bool mediaAccountManagement;
 
+  /// Imports create new users; existing identities require explicit linking.
+  final bool mediaUserImportExplicitLinking;
+
   /// Server supports paired Apple TV handoffs.
   final bool appleTvRemote;
   final bool tvMatchCorrections;
@@ -129,6 +132,7 @@ class BackendConnection {
     this.plexAccessRequestable = false,
     this.adminCatalogBrowsing = false,
     this.mediaAccountManagement = false,
+    this.mediaUserImportExplicitLinking = false,
     this.appleTvRemote = false,
     this.tvMatchCorrections = false,
     this.tvLibraryNavigation = false,
@@ -157,6 +161,7 @@ class BackendConnection {
     bool? plexAccessRequestable,
     bool? adminCatalogBrowsing,
     bool? mediaAccountManagement,
+    bool? mediaUserImportExplicitLinking,
     bool? appleTvRemote,
     bool? tvMatchCorrections,
     bool? tvLibraryNavigation,
@@ -191,6 +196,8 @@ class BackendConnection {
         cover4KBadges: cover4KBadges ?? this.cover4KBadges,
         mediaAccountManagement:
             mediaAccountManagement ?? this.mediaAccountManagement,
+        mediaUserImportExplicitLinking: mediaUserImportExplicitLinking ??
+            this.mediaUserImportExplicitLinking,
         hiddenDiscoverTabs: clearHiddenDiscoverTabs
             ? null
             : hiddenDiscoverTabs ?? this.hiddenDiscoverTabs,

@@ -2,7 +2,6 @@ package mediaaccess
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,11 +10,10 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mediaserver"
 )
 
-// UserCreator finds or creates the passwordless Cantinarr user an import
-// names and issues its connect link. auth.Service is the production one;
+// UserCreator creates the passwordless Cantinarr user an import names and
+// issues its connect link. auth.Service is the production one;
 // the import never touches the users table's identity columns itself.
 type UserCreator interface {
-	CreateConnectToken(createdBy int64, name, serverURL string) (*auth.CreateConnectTokenResponse, error)
 	CreateImportUser(createdBy int64, name, serverURL string) (int64, *auth.CreateConnectTokenResponse, error)
 }
 
@@ -39,10 +37,10 @@ const (
 	ImportAlreadyLinked = "already_linked"
 	// ImportUserFailed: the Cantinarr user could not be created.
 	ImportUserFailed = "user_failed"
-	// ImportUserHasAccount: the Cantinarr user of that name already has an
-	// account on this server.
+	// ImportUserHasAccount: the new Cantinarr user acquired another account
+	// on this server before the import linked its remote account.
 	ImportUserHasAccount = "user_has_account"
-	// ImportUsernameConflict: a Plex import cannot reuse a local namesake.
+	// ImportUsernameConflict: an import cannot reuse a local namesake.
 	ImportUsernameConflict = "username_conflict"
 	// ImportLinkFailed: the user exists (and has their link) but the account
 	// could not be linked; the admin can link it by hand.
@@ -50,8 +48,8 @@ const (
 )
 
 // ImportResult is one requested account's outcome. Created says a Cantinarr
-// user was made for it. Jellyfin/Emby can reuse an existing namesake without a
-// new connect link; Plex requires a new user or an explicit account link.
+// user was made for it. Every provider requires a new user or an explicit
+// account link; a remote display name never selects an existing local user.
 // Linked says the media account is now that user's.
 type ImportResult struct {
 	PlexIdentityError string `json:"plex_identity_error,omitempty"`
@@ -67,10 +65,9 @@ type ImportResult struct {
 }
 
 // ImportAccounts turns accounts the media server lists into Cantinarr users:
-// for each requested id, a user named after the account (found or created;
-// a new one gets a connect link for the admin to hand out), the instance
-// grant, and the account linked to them, exactly as the admin's link picker
-// does it. The admin's pick is the mapping; the remote account changes only
+// for each requested id, a new user named after the account (with a connect
+// link for the admin to hand out), the instance grant, and the account linked
+// to them, exactly as the admin's link picker does it. The remote changes only
 // when access management is explicitly requested.
 // Rows are best-effort and independent, each carrying its own outcome, so
 // one failure never stops the rest; only a server that cannot list its
@@ -143,44 +140,19 @@ func (s *Service) importOne(ctx context.Context, adminID int64, instanceID, serv
 	if username == "" {
 		username = id
 	}
-	userID, err := s.userIDByName(username)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		var token *auth.CreateConnectTokenResponse
-		if invite {
-			userID, token, err = s.userCreator.CreateImportUser(adminID, username, serverURL)
-		} else {
-			token, err = s.userCreator.CreateConnectToken(adminID, username, serverURL)
-		}
-		if err != nil {
-			if errors.Is(err, auth.ErrUserExists) {
-				res.Error = ImportUsernameConflict
-				return res
-			}
-			s.logger.Error("mediaaccess: import: create user", "err", err, "instance_id", instanceID)
-			res.Error = ImportUserFailed
+	// Selecting a remote account does not select an existing local namesake.
+	// The creation transaction also refuses a concurrently created namesake.
+	userID, token, err := s.userCreator.CreateImportUser(adminID, username, serverURL)
+	if err != nil {
+		if errors.Is(err, auth.ErrUserExists) {
+			res.Error = ImportUsernameConflict
 			return res
 		}
-		if !invite {
-			userID, err = s.userIDByName(username)
-		}
-		if err != nil {
-			s.logger.Error("mediaaccess: import: load created user", "err", err, "instance_id", instanceID)
-			res.Error = ImportUserFailed
-			return res
-		}
-		res.Created, res.Link, res.OriginSource = true, token.Link, token.OriginSource
-	case err != nil:
-		s.logger.Error("mediaaccess: import: load user", "err", err, "instance_id", instanceID)
+		s.logger.Error("mediaaccess: import: create user", "err", err, "instance_id", instanceID)
 		res.Error = ImportUserFailed
 		return res
 	}
-	// Selecting a remote account does not select an existing local namesake.
-	// The admin can make that mapping explicitly through Link account.
-	if invite && !res.Created {
-		res.Error = ImportUsernameConflict
-		return res
-	}
+	res.Created, res.Link, res.OriginSource = true, token.Link, token.OriginSource
 	res.UserID, res.Username = userID, username
 	if invite {
 		// The share's email is the identity the guide and the invite pass key
@@ -203,12 +175,4 @@ func (s *Service) importOne(ctx context.Context, adminID int64, instanceID, serv
 		res.Error = ImportLinkFailed
 	}
 	return res
-}
-
-// userIDByName resolves a Cantinarr user by exact username, the rule the
-// connect-link path applies when it finds or creates one.
-func (s *Service) userIDByName(username string) (int64, error) {
-	var id int64
-	err := s.db.QueryRow("SELECT id FROM users WHERE username = ?", username).Scan(&id)
-	return id, err
 }

@@ -2,6 +2,12 @@
 
 Plex sign-in lets someone use their Plex account to enter Cantinarr on web, iOS, Android, or the MCP authorization page. Both **Enable Plex sign-in** and **Allow automatic signup** start off. Library access and sign-in are separate: removing a Plex share later does not remove an established Cantinarr identity.
 
+## Import existing Plex users
+
+Open **Settings > Users > Import users**, choose the Plex server, and select its shared accounts. The saved Plex instance also offers **Import users**. Existing Cantinarr users require an explicit **Link to existing user** selection; matching usernames never authorize the mapping. Remote access management starts off.
+
+Import results show sign-in, request assignments, and media access separately. **Review Plex sign-in** opens the settings below. Importing does not enable sign-in or automatic signup. **Assign request libraries** adds Radarr, Sonarr, Chaptarr, or Lidarr assignments without replacing other access.
+
 ## Enable sign-in and review existing users
 
 1. Open **Settings > Plex sign-in**.

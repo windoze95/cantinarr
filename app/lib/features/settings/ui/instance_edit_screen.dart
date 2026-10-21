@@ -154,14 +154,18 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   bool _isDefault = false;
   bool _autoAddUsers = true;
   bool _assignmentDetailsLoaded = false;
-  bool get _assignmentModel => ref.read(authProvider).valueOrNull?.connection?.instanceAssignments ?? false;
+  bool get _assignmentModel =>
+      ref.read(authProvider).valueOrNull?.connection?.instanceAssignments ??
+      false;
   bool get _newAssignments => _assignmentModel && _supportsMediaDownloads;
   bool _tagRequests = false;
   bool _tagRequestsLoaded = false;
   bool get _supportsRequesterTags =>
       const ['radarr', 'sonarr', 'chaptarr', 'lidarr'].contains(_serviceType) &&
-      (ref.read(authProvider).valueOrNull?.connection?.requesterTagging ?? false);
+      (ref.read(authProvider).valueOrNull?.connection?.requesterTagging ??
+          false);
   bool _isSaving = false;
+  bool _creationComplete = false;
   bool _isTesting = false;
   String? _testResult;
   bool _testSucceeded = false;
@@ -347,7 +351,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   /// Types with no global default: their instances reach users only through
   /// access grants, so the default toggle is hidden and never sent.
-  bool get _grantOnly => _isMediaServer || (!_assignmentModel && (_isChaptarr || _isLidarr));
+  bool get _grantOnly =>
+      _isMediaServer || (!_assignmentModel && (_isChaptarr || _isLidarr));
 
   bool get _supportsMediaDownloads =>
       _serviceType == 'radarr' ||
@@ -377,7 +382,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   /// user-select. The other source types show it when this instance is NOT
   /// the global default, as a per-user override of that default.
   bool get _showUserSelect =>
-      _supportsUserAssignment && !_newAssignments && (_grantOnly || !_isDefault);
+      _supportsUserAssignment &&
+      !_newAssignments &&
+      (_grantOnly || !_isDefault);
 
   /// The type selector is still on its disabled placeholder (see
   /// [InstanceEditScreen.serviceTypePrompt]): the form asked for a choice
@@ -586,7 +593,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   /// Mutates state; call from within setState.
   void _applyAutoDefault() {
     if (widget.isEditing || !_instancesLoaded || _grantOnly) return;
-    _isDefault = !_instances.any((i) => i.serviceType == _serviceType && (!_assignmentModel || i.isDefault));
+    _isDefault = !_instances.any((i) =>
+        i.serviceType == _serviceType && (!_assignmentModel || i.isDefault));
     _defaultDraft.markSaved(_isDefault);
   }
 
@@ -1209,9 +1217,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           _newAssignments
               ? 'Set "$newName" as the preferred request destination for users assigned to it who have no personal preference. Existing access and pending requests stay unchanged.'
               : '"${sibling.name}" is currently the default $label instance. '
-          'Saving will move the default from "${sibling.name}" to "$newName": '
-          'requests and dashboard statuses for users without a per-user '
-          'instance will switch to "$newName".',
+                  'Saving will move the default from "${sibling.name}" to "$newName": '
+                  'requests and dashboard statuses for users without a per-user '
+                  'instance will switch to "$newName".',
         ),
         actions: [
           TextButton(
@@ -1229,16 +1237,28 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   }
 
   Future<bool> _confirmDefaultRemoval() async {
-    if (!_newAssignments || !widget.isEditing || _isDefault ||
+    if (!_newAssignments ||
+        !widget.isEditing ||
+        _isDefault ||
         !_instances.any((i) => i.id == widget.instanceId && i.isDefault)) {
       return true;
     }
-    return await showDialog<bool>(context: context, builder: (context) => AlertDialog(
-      title: const Text('Remove the global default?'),
-      content: const Text('Users without a personal preference will use their first assigned instance. Existing access and pending requests stay unchanged.'),
-      actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-        TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Remove default'))],
-    )) == true;
+    return await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+                  title: const Text('Remove the global default?'),
+                  content: const Text(
+                      'Users without a personal preference will use their first assigned instance. Existing access and pending requests stay unchanged.'),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('Cancel')),
+                    TextButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('Remove default'))
+                  ],
+                )) ==
+        true;
   }
 
   bool _sameSelection(Set<int> a, Set<int> b) =>
@@ -1431,7 +1451,67 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     });
   }
 
+  Future<void> _openUserImport() async {
+    final added = _assignedUserIds.difference(_savedAssignedUserIds);
+    final removed = _savedAssignedUserIds.difference(_assignedUserIds);
+    final editedPolicies = {
+      for (final userId in _absEditedPolicies)
+        if (_absPolicies[userId] != null) userId: _absPolicies[userId]!,
+    };
+    await context.push(Uri(
+      path: '/settings/users/import',
+      queryParameters: {'instanceId': widget.instanceId!},
+    ).toString());
+    if (!mounted) return;
+    await _loadDirectory();
+    if (!mounted) return;
+    // Refresh imported accounts while preserving edits still in this form.
+    setState(() {
+      _assignedUserIds = {..._assignedUserIds, ...added}..removeAll(removed);
+      _absPolicies.addAll(editedPolicies);
+    });
+  }
+
+  Future<void> _offerUserImport(String instanceId) async {
+    // This runs only after creation has persisted. Dismissing or returning
+    // from import must never submit the new-instance form a second time.
+    _markInstanceSaved();
+    _savedAssignedUserIds = Set.of(_assignedUserIds);
+    setState(() => _isSaving = false);
+    final importNow = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Media server connected'),
+        content: Text(
+          '${_nameController.text.trim()} is connected. Import its users to '
+          'link their media accounts and finish their Cantinarr access setup.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Not now'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            icon: const Icon(Icons.group_add_outlined),
+            label: const Text('Import users'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (importNow == true) {
+      context.pushReplacement(Uri(
+        path: '/settings/users/import',
+        queryParameters: {'instanceId': instanceId},
+      ).toString());
+    } else {
+      _finishEditing();
+    }
+  }
+
   Future<void> _save() async {
+    if (_creationComplete) return;
     final validationError = _validate();
     if (validationError != null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1465,7 +1545,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                     ? _absSavedDefaultIds
                     : _selectedLibraryIds.toList(growable: false),
                 listeningApps: _isAbs ? _listeningApps : null,
-                videoApps: VideoApps.serviceTypes.contains(_serviceType) ? _videoApps : null,
+                videoApps: VideoApps.serviceTypes.contains(_serviceType)
+                    ? _videoApps
+                    : null,
                 machineIdentifier: _isPlex ? _plexMachineId : '',
                 autoApprove: _isPlex && _plexAutoApprove,
               )
@@ -1496,8 +1578,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             username: _usernameController.text.trim(),
             password: _passwordController.text,
             isDefault: isDefault,
-            tagRequests: _supportsRequesterTags && _tagRequestsLoaded ? _tagRequests : null,
-            autoAddUsers: _newAssignments && _assignmentDetailsLoaded ? _autoAddUsers : null,
+            tagRequests: _supportsRequesterTags && _tagRequestsLoaded
+                ? _tagRequests
+                : null,
+            autoAddUsers: _newAssignments && _assignmentDetailsLoaded
+                ? _autoAddUsers
+                : null,
             mediaPathMappings: mediaPathMappings,
             mediaServerConfig: mediaServerConfig,
             plexLinkPin: plexLinkPin,
@@ -1555,6 +1641,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         mediaServerConfig: mediaServerConfig,
         plexLinkPin: plexLinkPin,
       );
+      _creationComplete = true;
       // The instance exists now, so a failed assignment must not re-run
       // create: surface it and let the admin retry from the edit screen.
       String? assignmentError;
@@ -1601,7 +1688,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                       ? 'Instance created — instant updates configured'
                       : 'Instance created')),
         );
-        _finishEditing();
+        if (_isMediaServer && problems.isEmpty) {
+          await _offerUserImport(created.id);
+        } else {
+          _finishEditing();
+        }
       }
     } catch (e) {
       if (!mounted) return;
@@ -1663,7 +1754,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         notifier.setActiveWatchHistoryInstance(watchHistoryId);
       }
       final tdarrId = activeBefore.activeTdarrInstanceId;
-      if (tdarrId != null && refreshed.tdarrInstances.any((i) => i.id == tdarrId)) {
+      if (tdarrId != null &&
+          refreshed.tdarrInstances.any((i) => i.id == tdarrId)) {
         notifier.setActiveTdarrInstance(tdarrId);
       }
     } catch (_) {
@@ -2146,7 +2238,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   }
 
   String get _defaultSubtitle {
-    if (_newAssignments) return 'Preferred request destination for users assigned to this instance. Choosing a default does not grant access.';
+    if (_newAssignments)
+      return 'Preferred request destination for users assigned to this instance. Choosing a default does not grant access.';
     if (_isDownloadClient) return 'Use this as the default download client';
     if (_isWatchHistory) {
       return 'Use this as the default $_serviceLabel instance';
@@ -3000,6 +3093,24 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          if (widget.isEditing && _isMediaServer) ...[
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: _isSaving ? null : _openUserImport,
+                icon: const Icon(Icons.group_add_outlined),
+                label: const Text('Import users'),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.only(top: 4, bottom: 16),
+              child: Text(
+                'Link existing media accounts to Cantinarr users, then review '
+                'sign-in and request permissions.',
+                style: TextStyle(color: AppTheme.textSecondary),
+              ),
+            ),
+          ],
           // Service type (only for new instances)
           if (!widget.isEditing) ...[
             const Text('Service Type',
@@ -3164,13 +3275,16 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             ),
           if (_isTdarr) ...[
             const SizedBox(height: 12),
-            const Text('Use the Tdarr server API URL (normally port 8266). '
+            const Text(
+                'Use the Tdarr server API URL (normally port 8266). '
                 'If authentication is enabled, create a key in Tdarr under Tools > API Keys.',
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
             if (widget.isEditing && _tdarrHasKey)
-              CheckboxListTile(contentPadding: EdgeInsets.zero,
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
                 title: const Text('Remove saved API key'),
-                subtitle: const Text('For a Tdarr server with authentication disabled.'),
+                subtitle: const Text(
+                    'For a Tdarr server with authentication disabled.'),
                 value: _clearTdarrKey,
                 onChanged: (value) => setState(() {
                   _clearTdarrKey = value ?? false;
@@ -3280,20 +3394,33 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           if (_newAssignments) ...[
             SwitchListTile(
               title: const Text('Automatically add new users'),
-              subtitle: const Text('Assign accounts created after this setting is saved, including invitations, imports, and SSO accounts. Existing users stay unchanged.'),
+              subtitle: const Text(
+                  'Assign accounts created after this setting is saved, including invitations, imports, and SSO accounts. Existing users stay unchanged.'),
               value: _autoAddUsers,
-              onChanged: _isSaving || (widget.isEditing && !_assignmentDetailsLoaded) ? null : (value) => setState(() => _autoAddUsers = value),
+              onChanged:
+                  _isSaving || (widget.isEditing && !_assignmentDetailsLoaded)
+                      ? null
+                      : (value) => setState(() => _autoAddUsers = value),
             ),
             ListTile(
               title: const Text('Manage users'),
-              subtitle: Text(!widget.isEditing ? 'Save this instance to assign existing users.' :
-                _userSelectError != null ? 'Could not load assignment count. Open to retry.' :
-                _users == null ? 'Loading assignments…' : '${_users!.where((u) => _assignedUserIds.contains(u.id)).length} assigned users'),
+              subtitle: Text(!widget.isEditing
+                  ? 'Save this instance to assign existing users.'
+                  : _userSelectError != null
+                      ? 'Could not load assignment count. Open to retry.'
+                      : _users == null
+                          ? 'Loading assignments…'
+                          : '${_users!.where((u) => _assignedUserIds.contains(u.id)).length} assigned users'),
               trailing: const Icon(Icons.chevron_right),
-              onTap: !widget.isEditing || _isSaving ? null : () async {
-                await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => InstanceUsersScreen(instanceId: widget.instanceId!, instanceName: _nameController.text.trim())));
-                if (mounted) await _loadPins();
-              },
+              onTap: !widget.isEditing || _isSaving
+                  ? null
+                  : () async {
+                      await Navigator.of(context).push(MaterialPageRoute<void>(
+                          builder: (_) => InstanceUsersScreen(
+                              instanceId: widget.instanceId!,
+                              instanceName: _nameController.text.trim())));
+                      if (mounted) await _loadPins();
+                    },
             ),
           ],
           if (_showUserSelect) ..._buildUserSelect(),
@@ -3303,17 +3430,20 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               title: const Text('Tag requests with requester'),
               subtitle: Text(
                 'Tag new requests on ${switch (_serviceType) {
-                  'chaptarr' => 'the Chaptarr author, separately for eBooks and audiobooks',
+                  'chaptarr' =>
+                    'the Chaptarr author, separately for eBooks and audiobooks',
                   'lidarr' => 'the Lidarr artist, shared by all their albums',
                   'sonarr' => 'the Sonarr series',
                   _ => 'the Radarr movie',
                 }}. Existing tags stay. Turning this off cancels unfinished tagging. '
                 'Check Approvals > History for status and retry.',
-                style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                style: const TextStyle(
+                    color: AppTheme.textSecondary, fontSize: 13),
               ),
               value: _tagRequests,
               onChanged: _isSaving || (widget.isEditing && !_tagRequestsLoaded)
-                  ? null : (value) => setState(() => _tagRequests = value),
+                  ? null
+                  : (value) => setState(() => _tagRequests = value),
               activeTrackColor: AppTheme.accent,
             ),
 
@@ -3349,7 +3479,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
           // Save button
           ElevatedButton(
-            onPressed: _isSaving ? null : _save,
+            onPressed: _isSaving || _creationComplete ? null : _save,
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.accent,
               foregroundColor: Colors.black,
@@ -3364,7 +3494,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                     child: CircularProgressIndicator(
                         strokeWidth: 2, color: Colors.black),
                   )
-                : Text(widget.isEditing ? 'Save Changes' : 'Add Instance'),
+                : Text(_creationComplete
+                    ? 'Instance created'
+                    : widget.isEditing
+                        ? 'Save Changes'
+                        : 'Add Instance'),
           ),
 
           // Hardcover (Chaptarr, editing only). The token is verified by the

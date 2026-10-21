@@ -96,6 +96,7 @@ import '../features/settings/ui/listening_apps_screen.dart';
 import '../features/settings/ui/video_apps_screen.dart';
 import '../features/settings/ui/user_request_settings_screen.dart';
 import '../features/settings/ui/users_screen.dart';
+import '../features/media_access/ui/media_user_import_screen.dart';
 import '../features/setup_wizard/ui/setup_wizard_screen.dart';
 import '../features/shell/ui/app_shell.dart';
 import '../features/sonarr/ui/sonarr_calendar_screen.dart';
@@ -240,7 +241,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       if (isAuthenticated && !isAdmin && _isAdminOnlyRoute(state.uri.path)) {
         return landing;
       }
-      if (isAuthenticated && !isAdmin &&
+      if (isAuthenticated &&
+          !isAdmin &&
           state.uri.path.startsWith('/downloads') &&
           auth?.connection?.downloadsActivity != true) {
         return landing;
@@ -658,10 +660,16 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               ),
             ),
             branches: [
-              StatefulShellBranch(routes: [GoRoute(path: '/tdarr/activity',
-                  builder: (_, __) => const TdarrScreen(activity: true))]),
-              StatefulShellBranch(routes: [GoRoute(path: '/tdarr/libraries',
-                  builder: (_, __) => const TdarrScreen(activity: false))]),
+              StatefulShellBranch(routes: [
+                GoRoute(
+                    path: '/tdarr/activity',
+                    builder: (_, __) => const TdarrScreen(activity: true))
+              ]),
+              StatefulShellBranch(routes: [
+                GoRoute(
+                    path: '/tdarr/libraries',
+                    builder: (_, __) => const TdarrScreen(activity: false))
+              ]),
             ],
           ),
           // Authenticated secondary routes stay inside the same shell. On
@@ -723,11 +731,16 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             builder: (_, state) {
               final id = int.tryParse(state.pathParameters['seriesId'] ?? '');
               final instance = state.uri.queryParameters['instance_id']?.trim();
-              if (id == null || id <= 0 || instance == null || instance.isEmpty) {
-                return const _InvalidRouteScreen(message: 'This TV library link is invalid.');
+              if (id == null ||
+                  id <= 0 ||
+                  instance == null ||
+                  instance.isEmpty) {
+                return const _InvalidRouteScreen(
+                    message: 'This TV library link is invalid.');
               }
-              return AppAmbientBackground(child: TVLibraryDetailScreen(
-                  seriesId: id, instanceId: instance));
+              return AppAmbientBackground(
+                  child: TVLibraryDetailScreen(
+                      seriesId: id, instanceId: instance));
             },
           ),
           GoRoute(
@@ -846,6 +859,25 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 const AppAmbientBackground(child: UsersScreen()),
           ),
           GoRoute(
+            path: '/settings/users/import',
+            builder: (_, state) => AppAmbientBackground(
+              child: MediaUserImportScreen(
+                instanceId: state.uri.queryParameters['instanceId'],
+              ),
+            ),
+          ),
+          GoRoute(
+            path: '/settings/users/:userId/access',
+            redirect: (_, state) =>
+                _positiveIntParameter(state, 'userId') == null
+                    ? '/settings/users'
+                    : null,
+            builder: (_, state) => AppAmbientBackground(
+              child:
+                  UsersScreen(userId: _positiveIntParameter(state, 'userId')),
+            ),
+          ),
+          GoRoute(
             path: '/settings/users/:userId/request-settings',
             onExit: confirmSettingsExit,
             redirect: (_, state) =>
@@ -922,7 +954,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/request-allowance',
-            builder: (_, __) => const AppAmbientBackground(child: RequestAllowanceScreen()),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: RequestAllowanceScreen()),
           ),
           GoRoute(
             path: '/settings/request-settings',
@@ -933,14 +966,17 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/tv-matches',
-            builder: (_, __) => const AppAmbientBackground(child: TVMatchesScreen()),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: TVMatchesScreen()),
           ),
           GoRoute(
             path: '/settings/tv-matches/:tmdbId',
             onExit: confirmSettingsExit,
-            builder: (_, state) => AppAmbientBackground(child: TVMatchEditorScreen(
-              tmdbId: int.tryParse(state.pathParameters['tmdbId'] ?? '') ?? 0,
-              instanceId: state.uri.queryParameters['instance_id'])),
+            builder: (_, state) => AppAmbientBackground(
+                child: TVMatchEditorScreen(
+                    tmdbId:
+                        int.tryParse(state.pathParameters['tmdbId'] ?? '') ?? 0,
+                    instanceId: state.uri.queryParameters['instance_id'])),
           ),
           GoRoute(
             path: '/settings/discord-notifications',
@@ -1295,7 +1331,9 @@ String? _mediaDetailRedirect(GoRouterState state) {
   }
   return _hasValidMediaDetailParameters(state)
       ? null
-      : type == 'tv' ? '/dashboard/tv' : '/dashboard/movies';
+      : type == 'tv'
+          ? '/dashboard/tv'
+          : '/dashboard/movies';
 }
 
 /// Defensive fallback for a malformed parameter if a future router version

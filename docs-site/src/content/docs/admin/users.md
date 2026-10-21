@@ -7,6 +7,27 @@ sidebar:
 
 Open **Settings > Users** as an administrator. Start with an ordinary user for someone who should browse and request. Administrator access includes server configuration and connected-service management.
 
+## Import people from a media server
+
+1. Open **Settings > Users > Import users**, or choose **Import users** on a saved media-server instance.
+2. Choose Plex, Jellyfin, Emby, or Audiobookshelf and the intended server. If none is connected, choose **Connect a media server** first.
+3. Search and select accounts. New names create ordinary Cantinarr users. To attach an account to someone already in Cantinarr, choose **Link to existing user** and select that person explicitly. Matching usernames never select a person for you.
+4. Review the results and finish the remaining sign-in and access steps. You can import up to 200 accounts at a time. **Select all** skips administrators and unresolved mappings.
+
+Remote access management starts off. Importing with it off leaves the existing server account and its libraries unchanged. An already-linked account shows who holds it. Pending invitations, disabled accounts, and protected administrators remain visible.
+
+If the server needs an update, update it before using this workflow. Cantinarr does not fall back to automatic username matching on older servers.
+
+## Finish account setup
+
+Open a user to see **User access**. The same three sections appear in import results:
+
+- **Cantinarr sign-in** shows invitation instructions and linked identities. For Plex, use **Review Plex sign-in** to review the identity and save your choice for sign-in and automatic signup. Neither is enabled by importing. Jellyfin, Emby, and Audiobookshelf passwords remain credentials for those servers, not Cantinarr. If single sign-on is required, the invitation takes the recipient through the configured provider.
+- **Request permissions** shows movie, TV, book, and music assignments. **Assign request libraries** adds selected libraries without replacing existing assignments or routing defaults. Leaving requests unassigned is valid.
+- **Media server accounts** shows the linked account, management choice, and current access state. Linked, active, pending acceptance, and unconfirmed access mean different things. A failed read is reported as unknown.
+
+Partial failures retain completed results. Retry only unfinished accounts. If an interrupted operation created a user but its outcome cannot be confirmed, review the current accounts and choose the mapping explicitly before continuing. Replacing an invitation invalidates the old link.
+
 ## Add a person
 
 1. Create the user with a recognizable username and the intended role.

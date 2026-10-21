@@ -185,8 +185,20 @@ const List<SettingsSearchEntry> _rootEntries = [
     route: '/settings/video-apps',
     screenTitle: 'Settings',
     section: 'Account',
-    keywords: ['infuse', 'plex', 'jellyfin', 'emby', 'player', 'watch',
-      'movies', 'shows', 'default', 'iphone', 'ipad', 'browser'],
+    keywords: [
+      'infuse',
+      'plex',
+      'jellyfin',
+      'emby',
+      'player',
+      'watch',
+      'movies',
+      'shows',
+      'default',
+      'iphone',
+      'ipad',
+      'browser'
+    ],
     gate: gateVideoServers,
   ),
   SettingsSearchEntry(
@@ -196,8 +208,19 @@ const List<SettingsSearchEntry> _rootEntries = [
     route: '/settings/listening-apps',
     screenTitle: 'Settings',
     section: 'Account',
-    keywords: ['audiobookshelf', 'shelfplayer', 'theshelf', 'player', 'listen',
-      'audiobooks', 'default', 'iphone', 'ipad', 'android', 'browser'],
+    keywords: [
+      'audiobookshelf',
+      'shelfplayer',
+      'theshelf',
+      'player',
+      'listen',
+      'audiobooks',
+      'default',
+      'iphone',
+      'ipad',
+      'android',
+      'browser'
+    ],
     gate: gateAudiobookshelf,
   ),
   SettingsSearchEntry(
@@ -313,6 +336,14 @@ const List<SettingsSearchEntry> _rootEntries = [
     // Connect Link vocabulary must land here.
     keywords: [
       'accounts',
+      'import',
+      'sync users',
+      'shared users',
+      'account linking',
+      'plex',
+      'jellyfin',
+      'emby',
+      'audiobookshelf',
       'roles',
       'invites',
       'connect link',
@@ -336,7 +367,16 @@ const List<SettingsSearchEntry> _rootEntries = [
       route: '/settings/plex-auth',
       screenTitle: 'Settings',
       section: 'Admin',
-      keywords: ['plex', 'login', 'signup', 'identity', 'mapping'],
+      keywords: [
+        'plex',
+        'login',
+        'signup',
+        'identity',
+        'mapping',
+        'import',
+        'shared users',
+        'account linking'
+      ],
       gate: gateAdmin),
   SettingsSearchEntry(
       id: 'screen.oidc',
@@ -502,7 +542,15 @@ const List<SettingsSearchEntry> _rootEntries = [
     route: '/settings/request-settings',
     screenTitle: 'Settings',
     section: 'Admin',
-    keywords: ['request defaults', 'approval', 'seasons', 'quality', 'allowance', 'quota', 'rolling limits'],
+    keywords: [
+      'request defaults',
+      'approval',
+      'seasons',
+      'quality',
+      'allowance',
+      'quota',
+      'rolling limits'
+    ],
     gate: gateAdmin,
   ),
   SettingsSearchEntry(
@@ -530,7 +578,15 @@ const List<SettingsSearchEntry> _rootEntries = [
     screenTitle: 'Discord Notifications',
     section: 'Notifications',
     route: '/settings/discord-notifications/server',
-    keywords: ['webhook', 'role', 'thread', 'poster', 'discord', 'test', 'delivery'],
+    keywords: [
+      'webhook',
+      'role',
+      'thread',
+      'poster',
+      'discord',
+      'test',
+      'delivery'
+    ],
     gate: gateAdmin,
   ),
   SettingsSearchEntry(

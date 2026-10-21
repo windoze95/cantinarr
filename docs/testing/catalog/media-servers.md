@@ -31,7 +31,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 
 ## Importing
 
-- [ ] `MSRV-021` · P1 · UI/LIVE — From Users, import two accounts that exist only on the server (one of them switched off there) plus the server's administrator (ticked by hand, since Select all skips it); verify a Cantinarr user of each exact name appears granted and linked (`created_by_cantinarr=0`), each new user's connect link redeems, the accounts' policies on the server are untouched, including the switched-off account when management is unchecked, an account already linked to someone cannot be picked, an account whose name matches an existing Cantinarr user is attached to that user without a new link, and importing the same accounts again answers "already linked" for each and creates nothing. Repeat on Emby.
+- [ ] `MSRV-021` · P1 · UI/LIVE — From Users, import two accounts that exist only on the server (one of them switched off there) plus the server's administrator (ticked by hand, since Select all skips it); verify a Cantinarr user of each exact name appears granted and linked (`created_by_cantinarr=0`), each new user's connect link redeems, the accounts' policies on the server are untouched, including the switched-off account when management is unchecked, an account already linked to someone cannot be picked, an account whose name matches an existing Cantinarr user requires an explicit mapping before linking without a new invitation, and importing the same accounts again answers "already linked" for each and creates nothing. Repeat on Emby and Audiobookshelf.
 
 ## Access off and on
 

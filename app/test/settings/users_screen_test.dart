@@ -12,6 +12,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 void main() {
   testWidgets('a kids account carries a Child tag, others do not',
@@ -310,8 +311,9 @@ Future<_MediaAdapter> _pumpWithMediaServer(
   List<String> grants = const ['jf-a'],
   List<UserSummary>? users,
   List<Map<String, dynamic>> importResults = const [],
+  Size viewport = const Size(1000, 800),
 }) async {
-  await tester.binding.setSurfaceSize(const Size(1000, 800));
+  await tester.binding.setSurfaceSize(viewport);
   addTearDown(() => tester.binding.setSurfaceSize(null));
 
   final adapter = _MediaAdapter(
@@ -331,7 +333,25 @@ Future<_MediaAdapter> _pumpWithMediaServer(
             supportsManagement: supportsManagement)),
         backendClientProvider.overrideWithValue(dio),
       ],
-      child: MaterialApp(theme: AppTheme.dark, home: const UsersScreen()),
+      child: MaterialApp.router(
+        theme: AppTheme.dark,
+        routerConfig: GoRouter(
+          initialLocation: '/settings/users',
+          routes: [
+            GoRoute(
+                path: '/settings/users',
+                builder: (_, __) => const UsersScreen()),
+            GoRoute(
+                path: '/settings/users/import',
+                builder: (_, __) =>
+                    const Scaffold(body: Text('Shared import workflow'))),
+            GoRoute(
+                path: '/settings/users/:userId/access',
+                builder: (_, state) => UsersScreen(
+                    userId: int.parse(state.pathParameters['userId']!))),
+          ],
+        ),
+      ),
     ),
   );
   await tester.pumpAndSettle();
@@ -346,9 +366,11 @@ Future<void> _openMenu(WidgetTester tester) async {
 void _mediaServerAccountTests() {
   testWidgets('picker refresh updates pending accounts without linking',
       (tester) async {
-    final adapter = await _pumpWithMediaServer(tester, supportsManagement: true,
-      instances: const [ServiceInstance(
-        id: 'jf-a', serviceType: 'plex', name: 'Home Plex')]);
+    final adapter = await _pumpWithMediaServer(tester,
+        supportsManagement: true,
+        instances: const [
+          ServiceInstance(id: 'jf-a', serviceType: 'plex', name: 'Home Plex')
+        ]);
     adapter.remoteUsers = [
       {'id': 'pending@example.com', 'name': 'Pending account', 'pending': true},
     ];
@@ -357,7 +379,11 @@ void _mediaServerAccountTests() {
     await tester.pumpAndSettle();
     expect(find.text('Awaiting Plex acceptance'), findsOneWidget);
     adapter.remoteUsers = [
-      {'id': 'pending@example.com', 'name': 'Accepted account', 'pending': false},
+      {
+        'id': 'pending@example.com',
+        'name': 'Accepted account',
+        'pending': false
+      },
     ];
     await tester.tap(find.byTooltip('Refresh accounts'));
     await tester.pumpAndSettle();
@@ -367,22 +393,36 @@ void _mediaServerAccountTests() {
     expect(adapter.requests.where((r) => r.method != 'GET'), isEmpty);
   });
 
-  testWidgets('Plex servers show independent acceptance without historical badge',
+  testWidgets(
+      'Plex servers show independent acceptance without historical badge',
       (tester) async {
-    const first = ServiceInstance(id: 'px-a', serviceType: 'plex', name: 'First');
-    const second = ServiceInstance(id: 'px-b', serviceType: 'plex', name: 'Second');
-    await _pumpWithMediaServer(tester, supportsManagement: true,
-      instances: const [first, second], grants: const ['px-a', 'px-b'],
+    const first =
+        ServiceInstance(id: 'px-a', serviceType: 'plex', name: 'First');
+    const second =
+        ServiceInstance(id: 'px-b', serviceType: 'plex', name: 'Second');
+    await _pumpWithMediaServer(
+      tester,
+      supportsManagement: true,
+      instances: const [first, second],
+      grants: const ['px-a', 'px-b'],
       accounts: [
-        for (final id in ['px-a', 'px-b']) {
-          ..._accountRow(), 'instance_id': id, 'service_type': 'plex',
-          'verified': true, 'pending': id == 'px-a', 'granted': true,
-        },
+        for (final id in ['px-a', 'px-b'])
+          {
+            ..._accountRow(),
+            'instance_id': id,
+            'service_type': 'plex',
+            'verified': true,
+            'pending': id == 'px-a',
+            'granted': true,
+          },
       ],
     );
-    expect(find.text('First: Granted · Managed by Cantinarr · Awaiting Plex acceptance'),
+    expect(
+        find.text(
+            'First: Granted · Managed by Cantinarr · Awaiting Plex acceptance'),
         findsOneWidget);
-    expect(find.text('Second: Granted · Managed by Cantinarr · Active on server'),
+    expect(
+        find.text('Second: Granted · Managed by Cantinarr · Active on server'),
         findsOneWidget);
     expect(find.text('Plex invite sent'), findsNothing);
     await tester.binding.setSurfaceSize(const Size(390, 844));
@@ -477,122 +517,120 @@ void _mediaServerAccountTests() {
     expect(find.text('Stop managing Home Jellyfin access…'), findsNothing);
   });
 
-  testWidgets('the import action shows only with a media server',
+  testWidgets(
+      'visible import and invite labels fit a narrow phone without servers',
       (tester) async {
-    await _pumpWithMediaServer(tester, instances: const []);
-    expect(find.byTooltip('Import from a media server'), findsNothing);
+    await _pumpWithMediaServer(tester,
+        instances: const [], viewport: const Size(320, 700));
+    expect(find.widgetWithText(ElevatedButton, 'Import users'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, 'Invite user'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.text('Import users'));
+    await tester.pumpAndSettle();
+    expect(find.text('Shared import workflow'), findsOneWidget);
+  });
+
+  testWidgets('import uses the shared routed workflow with a media server',
+      (tester) async {
+    await _pumpWithMediaServer(tester);
+    await tester.tap(find.text('Import users'));
+    await tester.pumpAndSettle();
+    expect(find.text('Shared import workflow'), findsOneWidget);
+  });
+
+  testWidgets('a user row opens their access destination', (tester) async {
+    await _pumpWithMediaServer(tester);
+    await tester.tap(find.text('living-room'));
+    await tester.pumpAndSettle();
+    expect(find.text('User access'), findsOneWidget);
+    expect(find.text('Cantinarr sign-in'), findsOneWidget);
+    expect(find.text('Request permissions'), findsOneWidget);
+    expect(find.text('Media server accounts'), findsOneWidget);
   });
 
   testWidgets(
-      'importing picks accounts, says what each becomes, and hands back '
-      'the links', (tester) async {
-    final adapter = await _pumpWithMediaServer(
-      tester,
-      // living-room (user 7) is linked to the server's r1; the picker's u2
-      // is free. A Cantinarr user named old-tablet already exists.
-      accounts: [
-        {..._accountRow(remoteUsername: 'lr-tv'), 'remote_user_id': 'u2'},
-      ],
-      users: [
-        const UserSummary(
-          id: 7,
-          username: 'living-room',
-          role: 'admin',
-          permissions: [],
-          createdAt: '',
-          deviceCount: 1,
-          hasPassword: true,
-          passwordEnabled: true,
-          passkeyEnabled: false,
-          hasPendingInvite: false,
-        ),
-        const UserSummary(
-          id: 8,
-          username: 'old-tablet',
-          role: 'user',
-          permissions: [],
-          createdAt: '',
-          deviceCount: 0,
-          hasPassword: false,
-          passwordEnabled: false,
-          passkeyEnabled: false,
-          hasPendingInvite: true,
-        ),
-      ],
-      importResults: [
-        {
-          'remote_user_id': 'a1',
-          'remote_username': 'jfadmin',
-          'user_id': 9,
-          'username': 'jfadmin',
-          'created': true,
-          'linked': true,
-          'link': 'https://cantinarr.example/connect?token=one',
-          'origin_source': 'app',
-        },
-        {
-          'remote_user_id': 'u3',
-          'remote_username': 'old-tablet',
-          'user_id': 8,
-          'username': 'old-tablet',
-          'created': false,
-          'linked': true,
-        },
-      ],
-    );
-
-    await tester.tap(find.byTooltip('Import from a media server'));
+      'user access offers a labeled link action without writing until selected',
+      (tester) async {
+    final adapter = await _pumpWithMediaServer(tester);
+    await tester.tap(find.text('living-room'));
     await tester.pumpAndSettle();
-    expect(find.text('Import from Home Jellyfin'), findsOneWidget);
-    expect(find.textContaining('This server manages linked accounts'),
-        findsOneWidget);
-    // What each pick would do, said before it happens.
-    expect(find.text('Administrator · New Cantinarr user jfadmin'),
-        findsOneWidget);
-    expect(find.text('Already linked to living-room'), findsOneWidget);
+    expect(find.text('No account linked'), findsOneWidget);
+    await tester.ensureVisible(find.text('Link Jellyfin account'));
+    await tester.pumpAndSettle();
+    expect(find.text('Link Jellyfin account').hitTestable(), findsOneWidget);
+    await tester.tap(find.text('Link Jellyfin account'));
+    await tester.pumpAndSettle();
+    expect(find.text('Link a Jellyfin account'), findsOneWidget);
     expect(
-      find.text('Turned off on the server · Existing Cantinarr user '
-          'old-tablet'),
-      findsOneWidget,
-    );
-    // The linked row cannot be picked; the button waits for a pick.
-    final linkedTile = tester.widget<CheckboxListTile>(
-        find.widgetWithText(CheckboxListTile, 'lr-tv'));
-    expect(linkedTile.onChanged, isNull);
-    expect(
-        find.widgetWithText(ElevatedButton, 'Import 0 accounts'), findsNothing);
+        adapter.requests.where((request) => request.method != 'GET'), isEmpty);
+  });
 
-    // Select all skips the administrator; it is ticked by hand.
-    await tester.tap(find.text('Select all'));
+  testWidgets('unknown media links expose no mutation actions', (tester) async {
+    await _pumpWithMediaServer(tester,
+        accountsFail: true, supportsManagement: true);
+    await tester.tap(find.text('living-room'));
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(ElevatedButton, 'Import 1 account'),
+    expect(
+        find.text('Could not verify media-server accounts. Refresh to retry.'),
         findsOneWidget);
-    await tester.tap(find.widgetWithText(CheckboxListTile, 'jfadmin'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Import 2 accounts'));
-    await tester.pumpAndSettle();
+    expect(find.text('No account linked'), findsNothing);
+    expect(find.text('Link Jellyfin account'), findsNothing);
+    expect(find.text('Manage server access'), findsNothing);
+    expect(find.text('Unlink account'), findsNothing);
+  });
 
-    final post = adapter.requests
-        .singleWhere((r) => r.path == '/api/admin/media-servers/jf-a/import');
-    expect(post.method, 'POST');
-    expect(post.body, {
-      'remote_user_ids': ['u3', 'a1'],
-      'server_url': 'https://cantinarr.example',
-    });
-
-    // The outcome per row, the link only for a user that was created.
-    expect(find.text('Imported 2 accounts from Home Jellyfin'), findsOneWidget);
-    expect(find.text('New user jfadmin, linked'), findsOneWidget);
-    expect(find.text('Existing user old-tablet, linked'), findsOneWidget);
-    expect(find.byTooltip('Copy link for jfadmin'), findsOneWidget);
-    expect(find.byTooltip('Copy link for old-tablet'), findsNothing);
+  testWidgets('direct media actions fit a phone and preserve confirmations',
+      (tester) async {
+    final adapter = await _pumpWithMediaServer(tester,
+        supportsManagement: true,
+        viewport: const Size(320, 800),
+        accounts: [
+          {..._accountRow(), 'manage_access': false, 'verified': true}
+        ]);
+    await tester.tap(find.text('living-room'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Manage server access'));
+    await tester.pumpAndSettle();
+    expect(find.text('Manage server access').hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.text('Manage server access'));
+    await tester.pumpAndSettle();
+    expect(find.text('Manage access on Home Jellyfin?'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Unlink account'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Unlink account'));
+    await tester.pumpAndSettle();
+    expect(find.text('Unlink account?'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
     expect(
-        find.textContaining('address your app connects with'), findsOneWidget);
-    expect(find.text('Copy all links'), findsOneWidget);
-
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Done'));
+        adapter.requests.where((request) => request.method != 'GET'), isEmpty);
+    await tester.scrollUntilVisible(find.byIcon(Icons.more_vert), -300,
+        scrollable: find.byType(Scrollable).first);
     await tester.pumpAndSettle();
-    expect(find.text('Imported 2 users from Home Jellyfin'), findsOneWidget);
+    await _openMenu(tester);
+    expect(find.text('Unlink Home Jellyfin account'), findsNothing);
+    expect(find.text('Manage Home Jellyfin access…'), findsNothing);
+  });
+
+  testWidgets('protected media administrators have no direct management action',
+      (tester) async {
+    await _pumpWithMediaServer(tester, supportsManagement: true, accounts: [
+      {
+        ..._accountRow(),
+        'administrator': true,
+        'manage_access': false,
+        'verified': true,
+      }
+    ]);
+    await tester.tap(find.text('living-room'));
+    await tester.pumpAndSettle();
+    expect(find.text('Manage server access'), findsNothing);
+    expect(find.text('Stop managing server access'), findsNothing);
+    expect(find.text('Unlink account'), findsOneWidget);
+    expect(find.text('Turn Cantinarr access off'), findsOneWidget);
   });
 
   testWidgets('a linked account is tagged and its menu flips access',
@@ -806,8 +844,29 @@ void _mediaServerAccountTests() {
     expect(find.textContaining('Link '), findsNothing);
   });
 
-  testWidgets('inviting a new user from the app bar mints their connect link',
+  testWidgets(
+      'invitations explain required SSO instead of promising direct sign-in',
       (tester) async {
+    final auth = _FakeAuthNotifier();
+    final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
+      ..httpClientAdapter =
+          _CredentialsAdapter(provider: 'codex', ssoOnly: true);
+    await tester.pumpWidget(ProviderScope(overrides: [
+      authProvider.overrideWith(() => auth),
+      backendClientProvider.overrideWithValue(dio),
+    ], child: MaterialApp(theme: AppTheme.dark, home: const UsersScreen())));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Invite user'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'Mom');
+    await tester.tap(find.text('Create invite'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('continue through Work SSO'), findsOneWidget);
+    expect(find.textContaining('does not bypass required single sign-on'),
+        findsOneWidget);
+  });
+
+  testWidgets('inviting a new user mints their connect link', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1000, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -829,7 +888,7 @@ void _mediaServerAccountTests() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Invite a new user'));
+    await tester.tap(find.text('Invite user'));
     await tester.pumpAndSettle();
     expect(find.text('Invite a new user'), findsOneWidget);
 
@@ -900,11 +959,12 @@ class _MediaAdapter implements HttpClientAdapter {
       }
     } else if (path == '/api/admin/media-servers/jf-a/users') {
       response = {
-        'users': remoteUsers ?? [
-          {'id': 'a1', 'name': 'jfadmin', 'is_administrator': true},
-          {'id': 'u2', 'name': 'lr-tv'},
-          {'id': 'u3', 'name': 'old-tablet', 'is_disabled': true},
-        ],
+        'users': remoteUsers ??
+            [
+              {'id': 'a1', 'name': 'jfadmin', 'is_administrator': true},
+              {'id': 'u2', 'name': 'lr-tv'},
+              {'id': 'u3', 'name': 'old-tablet', 'is_disabled': true},
+            ],
       };
     } else if (path == '/api/admin/media-servers/jf-a/import') {
       response = {'results': importResults};
@@ -1041,9 +1101,11 @@ class _CredentialsAdapter implements HttpClientAdapter {
     this.nextProvider,
     this.fail = false,
     this.configured,
+    this.ssoOnly = false,
   });
 
   final String provider;
+  final bool ssoOnly;
   final String? nextProvider;
   final bool fail;
 
@@ -1057,6 +1119,18 @@ class _CredentialsAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    if (options.uri.path == '/api/auth/status') {
+      return ResponseBody.fromString(
+          jsonEncode({
+            'needs_setup': false,
+            'sso_only': ssoOnly,
+            'sso_provider': 'Work SSO'
+          }),
+          200,
+          headers: {
+            Headers.contentTypeHeader: [Headers.jsonContentType]
+          });
+    }
     final responseProvider =
         requests++ == 0 ? provider : nextProvider ?? provider;
     if (fail) {

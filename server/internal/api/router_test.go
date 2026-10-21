@@ -611,7 +611,7 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			}
 			assertExactMapKeys(t, payload,
 				"server_name", "version", "min_app_version", "services", "instances", "issues_enabled", "allow_reporting",
-				"plex_access_requestable", "media_account_management", "admin_catalog_browsing", "hidden_discover_tabs", "apple_tv_remote", "tv_match_corrections", "tv_library_navigation", "request_quotas", "requester_tagging", "instance_assignments", "initial_instance_setup", "downloads_activity", "downloads_user_scope", "cover_4k_badges",
+				"plex_access_requestable", "media_account_management", "media_user_import_explicit_linking", "admin_catalog_browsing", "hidden_discover_tabs", "apple_tv_remote", "tv_match_corrections", "tv_library_navigation", "request_quotas", "requester_tagging", "instance_assignments", "initial_instance_setup", "downloads_activity", "downloads_user_scope", "cover_4k_badges",
 			)
 
 			if string(payload["apple_tv_remote"]) != "false" {
@@ -625,6 +625,9 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			}
 			if string(payload["admin_catalog_browsing"]) != "true" {
 				t.Fatal("missing admin catalog capability")
+			}
+			if string(payload["media_user_import_explicit_linking"]) != "true" {
+				t.Fatal("missing explicit media-user linking capability")
 			}
 			var services map[string]bool
 			if err := json.Unmarshal(payload["services"], &services); err != nil {

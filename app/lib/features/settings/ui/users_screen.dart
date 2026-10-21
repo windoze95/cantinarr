@@ -6,23 +6,25 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/data/auth_service.dart';
+import '../../auth/data/server_status.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../media_access/data/media_access_service.dart';
-import '../../media_access/ui/media_server_import_sheet.dart';
 import '../../media_access/ui/media_server_link_sheet.dart';
 import '../../notifications/push_service.dart';
 import '../data/credentials_service.dart';
 import '../data/request_settings_service.dart';
 import '../logic/plex_invites_provider.dart';
+import 'user_onboarding_status.dart';
 
 /// Admin screen for managing user accounts: invite new users, change roles,
 /// remove users, and see who still has an outstanding connect-link invite.
 class UsersScreen extends ConsumerStatefulWidget {
-  const UsersScreen({super.key});
+  const UsersScreen({super.key, this.userId});
+
+  final int? userId;
 
   @override
   ConsumerState<UsersScreen> createState() => _UsersScreenState();
@@ -31,7 +33,10 @@ class UsersScreen extends ConsumerStatefulWidget {
 class _UsersScreenState extends ConsumerState<UsersScreen> {
   List<UserSummary>? _users;
   bool _isLoading = true;
+  int _statusRevision = 0;
+  bool _mediaActionBusy = false;
   String? _error;
+  ServerStatus? _serverStatus;
   String _sharedAiProvider = '';
   bool _sharedAiConfigured = true;
 
@@ -65,6 +70,14 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     try {
       final users = await ref.read(authProvider.notifier).listUsers();
       try {
+        final response =
+            await ref.read(backendClientProvider).get('/api/auth/status');
+        _serverStatus = ServerStatus.fromJson(
+            Map<String, dynamic>.from(response.data as Map));
+      } catch (_) {
+        _serverStatus = null;
+      }
+      try {
         final credentials = await CredentialsService(
           backendDio: ref.read(backendClientProvider),
         ).getStatus();
@@ -86,14 +99,17 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       }
       // Keep the drawer's "Plex invites" badge in step with what this
       // screen just learned (e.g. a grant given here clears the count).
+      if (!mounted) return;
       ref.read(plexInvitesWaitingProvider.notifier).refresh();
       setState(() {
+        _statusRevision++;
         _users = users;
         _mediaAccounts = mediaAccounts;
         _mediaAccountsFailed = mediaAccountsFailed;
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = 'Failed to load users';
         _isLoading = false;
@@ -183,8 +199,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   Future<void> _resendInvite(UserSummary user) async {
     await _generateAndShowInviteLink(
       user.username,
-      'Share this link with them. It signs one device into the app, '
-      'once. It replaces any previous link and expires in 7 days.',
+      'Share this one-time Cantinarr link with them. '
+      'It replaces any previous link and expires in 7 days.',
     );
   }
 
@@ -236,8 +252,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     if (name == null || name.isEmpty || !mounted) return;
     await _generateAndShowInviteLink(
       name,
-      'Share this link with them. It signs one device into the app, '
-      'once, and expires in 7 days.',
+      'Share this one-time Cantinarr link with them. '
+      'It expires in 7 days.',
     );
   }
 
@@ -266,6 +282,10 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     if (!mounted) return;
 
     final newLink = link;
+    final invitedUser =
+        _users?.where((user) => user.username == username).firstOrNull;
+    final ssoRequired =
+        _serverStatus?.ssoOnly == true && invitedUser?.isAdmin != true;
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -275,7 +295,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              description,
+              '$description '
+              '${ssoRequired ? 'They continue through ${_serverStatus!.ssoProvider} to sign in. The invite does not bypass required single sign-on.' : _serverStatus == null ? 'Sign-in requirements could not be verified. Your server’s sign-in policy still applies.' : 'It connects one device to their Cantinarr account.'}',
               style: const TextStyle(color: AppTheme.textSecondary),
             ),
             const SizedBox(height: 12),
@@ -447,34 +468,34 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
                     'Credentials, this user\'s prompts will run through it '
                     'and count against its quota or allowance.'
                 : codex
-                ? 'Prompts and tool context will use the shared OpenAI OAuth '
-                    'account. All enabled users consume the same Codex '
-                    'allowance, and activity is attributable to that account. '
-                    'Any subscription or usage costs remain with it. ChatGPT '
-                    'accounts are intended for one person—only enable this for '
-                    'people or devices you control.'
-                : grokOAuth
-                ? 'Prompts and tool context will use the shared xAI Grok '
-                    'account. All enabled users consume the same Grok '
-                    'subscription allowance, and activity is attributable to '
-                    'that account. Any subscription or usage costs remain with '
-                    'it. xAI accounts are intended for one person—only enable '
-                    'this for people or devices you control.'
-                : providerUnknown
-                    ? 'Cantinarr could not confirm which shared provider is '
-                        'selected. If it is an OAuth provider (OpenAI or xAI '
-                        'Grok), prompts and tool context will use one shared '
-                        'account and its subscription allowance, activity is '
-                        'attributable to that account, and any subscription or '
-                        'usage costs remain with it. Those accounts are '
-                        'intended for one person—only enable this for people '
-                        'or devices you control. If it uses an API key, '
-                        'requests count against that provider\'s paid quota '
-                        'and may create charges.'
-                    : 'This user can send prompts and tool context through the '
-                        'server AI provider. Requests count against its paid quota '
-                        'and may create provider charges. Their selected personal '
-                        'provider still takes priority.',
+                    ? 'Prompts and tool context will use the shared OpenAI OAuth '
+                        'account. All enabled users consume the same Codex '
+                        'allowance, and activity is attributable to that account. '
+                        'Any subscription or usage costs remain with it. ChatGPT '
+                        'accounts are intended for one person—only enable this for '
+                        'people or devices you control.'
+                    : grokOAuth
+                        ? 'Prompts and tool context will use the shared xAI Grok '
+                            'account. All enabled users consume the same Grok '
+                            'subscription allowance, and activity is attributable to '
+                            'that account. Any subscription or usage costs remain with '
+                            'it. xAI accounts are intended for one person—only enable '
+                            'this for people or devices you control.'
+                        : providerUnknown
+                            ? 'Cantinarr could not confirm which shared provider is '
+                                'selected. If it is an OAuth provider (OpenAI or xAI '
+                                'Grok), prompts and tool context will use one shared '
+                                'account and its subscription allowance, activity is '
+                                'attributable to that account, and any subscription or '
+                                'usage costs remain with it. Those accounts are '
+                                'intended for one person—only enable this for people '
+                                'or devices you control. If it uses an API key, '
+                                'requests count against that provider\'s paid quota '
+                                'and may create charges.'
+                            : 'This user can send prompts and tool context through the '
+                                'server AI provider. Requests count against its paid quota '
+                                'and may create provider charges. Their selected personal '
+                                'provider still takes priority.',
           ),
           actions: [
             TextButton(
@@ -578,7 +599,10 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
           .updateUserInstanceGrants(user.id, {server.serviceType: next});
       await _loadUsers();
       if (!mounted) return;
-      final pending = _mediaAccounts.any((account) => account.userId == user.id && account.instanceId == server.id && account.accessSyncPending);
+      final pending = _mediaAccounts.any((account) =>
+          account.userId == user.id &&
+          account.instanceId == server.id &&
+          account.accessSyncPending);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(
             'Turned ${server.name} access in Cantinarr ${enabled ? 'on' : 'off'} '
@@ -587,8 +611,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-            _friendlyError(e, "Couldn't change ${server.name} access")),
+        content:
+            Text(_friendlyError(e, "Couldn't change ${server.name} access")),
       ));
     }
   }
@@ -701,96 +725,50 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     return match != null ? match.group(1)! : fallback;
   }
 
-  /// Opens the import for one media server (a chooser first when there are
-  /// several): picked accounts become granted, linked Cantinarr users.
   Future<void> _importFromMediaServer() async {
-    final servers = _mediaServers;
-    if (servers.isEmpty) return;
-    ServiceInstance? server = servers.length == 1 ? servers.single : null;
-    server ??= await showAppSheet<ServiceInstance>(
-      context,
-      builder: (sheetContext) => AppSheet(
-        padding: const EdgeInsets.fromLTRB(
-          AppTheme.spaceXl,
-          0,
-          AppTheme.spaceXl,
-          AppTheme.spaceXl,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Import from which server?',
-              style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: AppTheme.spaceMd),
-            for (final candidate in servers)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.live_tv_outlined,
-                    color: AppTheme.textSecondary),
-                title: Text(candidate.name,
-                    style: const TextStyle(color: AppTheme.textPrimary)),
-                onTap: () => Navigator.of(sheetContext).pop(candidate),
-              ),
-          ],
-        ),
-      ),
-    );
-    if (server == null || !mounted) return;
-    final users = _users ?? const <UserSummary>[];
-    final imported = await showMediaServerImportSheet(
-      context,
-      server: server,
-      existingUsers: {for (final u in users) u.username: u.id},
-      linkedTo: {
-        for (final row in _mediaAccounts)
-          if (row.instanceId == server.id)
-            row.remoteUserId: users
-                    .where((u) => u.id == row.userId)
-                    .map((u) => u.username)
-                    .firstOrNull ??
-                'another user',
-      },
-    );
-    if (imported == null || !mounted) return;
-    await _loadUsers();
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(imported == 1
-          ? 'Imported 1 user from ${server.name}'
-          : 'Imported $imported users from ${server.name}'),
-    ));
+    await context.push('/settings/users/import');
+    if (mounted) await _loadUsers();
+  }
+
+  Future<void> _openUser(UserSummary user) async {
+    await context.push('/settings/users/${user.id}/access');
+    if (mounted) await _loadUsers();
   }
 
   @override
   Widget build(BuildContext context) {
-    final mediaServers = ref.watch(authProvider).valueOrNull?.connection
-            ?.mediaServerInstances ??
-        const <ServiceInstance>[];
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Users'),
-        actions: [
-          if (mediaServers.isNotEmpty)
-            IconButton(
-              tooltip: 'Import from a media server',
-              icon: const Icon(Icons.group_add_outlined),
-              onPressed: _isLoading ? null : _importFromMediaServer,
-            ),
-          IconButton(
-            tooltip: 'Invite a new user',
-            icon: const Icon(Icons.person_add_outlined),
-            onPressed: _isLoading ? null : _inviteNewUser,
-          ),
-        ],
+        title: Text(widget.userId == null ? 'Users' : 'User access'),
       ),
-      body: CenteredContent(child: _buildBody()),
+      body: CenteredContent(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (widget.userId == null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 8,
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: _importFromMediaServer,
+                      icon: const Icon(Icons.group_add_outlined),
+                      label: const Text('Import users'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _isLoading ? null : _inviteNewUser,
+                      icon: const Icon(Icons.person_add_outlined),
+                      label: const Text('Invite user'),
+                    ),
+                  ],
+                ),
+              ),
+            Expanded(child: _buildBody()),
+          ],
+        ),
+      ),
     );
   }
 
@@ -813,6 +791,29 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     }
 
     final users = _users ?? [];
+    if (widget.userId != null) {
+      final user = users.where((user) => user.id == widget.userId).firstOrNull;
+      if (user == null) {
+        return const Center(child: Text('This user is no longer available.'));
+      }
+      return RefreshIndicator(
+        onRefresh: _loadUsers,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            _buildUserTile(user, showMediaActions: false),
+            const SizedBox(height: 16),
+            UserOnboardingStatus(
+              key: ValueKey(_statusRevision),
+              userId: user.id,
+              onIssueInvitation: () => _resendInvite(user),
+              mediaAccountActions: (server, account) =>
+                  _mediaAccountActions(user, server, account),
+            ),
+          ],
+        ),
+      );
+    }
     if (users.isEmpty) {
       return const Center(
         child: Text(
@@ -822,13 +823,13 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       );
     }
 
-    final currentUserId = ref.read(authProvider).valueOrNull?.user?.id;
     final mediaServers =
         ref.watch(authProvider).valueOrNull?.connection?.mediaServerInstances ??
             const <ServiceInstance>[];
     // The notice takes the first row when the account read failed, so the
     // list still renders every user and the gap is named, not implied.
-    final showPlexHelp = mediaServers.any((server) => server.serviceType == 'plex');
+    final showPlexHelp =
+        mediaServers.any((server) => server.serviceType == 'plex');
     final failureRows = _mediaAccountsFailed ? 1 : 0;
     final noticeRows = failureRows + (showPlexHelp ? 1 : 0);
 
@@ -842,8 +843,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
         itemBuilder: (context, index) {
           if (index < failureRows) {
             return const ListTile(
-              leading: Icon(Icons.sync_problem_outlined,
-                  color: AppTheme.warning),
+              leading:
+                  Icon(Icons.sync_problem_outlined, color: AppTheme.warning),
               title: Text(
                 "Couldn't load media server accounts. Pull to refresh.",
                 style: TextStyle(color: AppTheme.warning, fontSize: 13),
@@ -862,49 +863,121 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
             );
           }
           final user = users[index - noticeRows];
-          return _UserTile(
-            user: user,
-            isSelf: user.id == currentUserId,
-            mediaServers: mediaServers,
-            supportsManagement: _supportsManagement,
-            onSetManagement: (server, account) =>
-                _setMediaManagement(user, server, account),
-            mediaAccounts: {
-              for (final row in _mediaAccounts)
-                if (row.userId == user.id) row.instanceId: row,
-            },
-            onLinkMediaAccount: (server) => _linkMediaAccount(user, server),
-            onSetMediaAccess: (server, enabled) =>
-                _setMediaAccess(user, server, enabled: enabled),
-            onUnlinkMediaAccount: (server, account) =>
-                _unlinkMediaAccount(user, server, account),
-            onChangeRole: (role) => _changeRole(user, role),
-            onDelete: () => _deleteUser(user),
-            onResendInvite: () => _resendInvite(user),
-            onSendTestPush: () => _sendTestPush(user),
-            // The per-user screen leads with the kids account switch, so
-            // the row's Child tag is re-read once it pops.
-            onRequestSettings: () => context
-                .push(
-              '/settings/users/${user.id}/request-settings'
-              '${user.isAdmin ? '?admin=1' : ''}',
-              extra: user.username,
-            )
-                .then((_) {
-              if (mounted) _loadUsers();
-            }),
-            onSetAuthMethods: ({bool? passwordEnabled, bool? passkeyEnabled}) =>
-                _setAuthMethods(
-              user,
-              passwordEnabled: passwordEnabled,
-              passkeyEnabled: passkeyEnabled,
-            ),
-            onSetSharedAiAccess: (enabled) => _setSharedAiAccess(user, enabled),
-            sharedAiProvider: _sharedAiProvider,
-            sharedAiConfigured: _sharedAiConfigured,
-          );
+          return _buildUserTile(user, onOpen: () => _openUser(user));
         },
       ),
+    );
+  }
+
+  Future<void> _runMediaAction(Future<void> Function() action) async {
+    if (_mediaActionBusy) return;
+    setState(() => _mediaActionBusy = true);
+    try {
+      await action();
+    } finally {
+      if (mounted) setState(() => _mediaActionBusy = false);
+    }
+  }
+
+  Widget _mediaAccountActions(UserSummary user, ServiceInstance server,
+      MediaServerAccountRow? account) {
+    if (account == null) {
+      return OutlinedButton.icon(
+        onPressed: _mediaActionBusy
+            ? null
+            : () => _runMediaAction(() => _linkMediaAccount(user, server)),
+        icon: const Icon(Icons.link),
+        label: Text('Link ${mediaServerTypeLabel(server.serviceType)} account'),
+      );
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(
+        account.manageAccess && !account.administrator
+            ? 'Changing this Cantinarr grant also changes access on ${server.name}.'
+            : 'Changing this Cantinarr grant leaves server access unchanged.',
+        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+      ),
+      Wrap(spacing: 8, runSpacing: 8, children: [
+        TextButton.icon(
+          onPressed: _mediaActionBusy
+              ? null
+              : () => _runMediaAction(() =>
+                  _setMediaAccess(user, server, enabled: !account.granted)),
+          icon: Icon(account.granted
+              ? Icons.block_outlined
+              : Icons.play_circle_outline),
+          label:
+              Text('Turn Cantinarr access ${account.granted ? 'off' : 'on'}'),
+        ),
+        if (_supportsManagement && !account.administrator)
+          TextButton.icon(
+            onPressed: _mediaActionBusy
+                ? null
+                : () => _runMediaAction(
+                    () => _setMediaManagement(user, server, account)),
+            icon: const Icon(Icons.manage_accounts_outlined),
+            label: Text(account.manageAccess
+                ? 'Stop managing server access'
+                : 'Manage server access'),
+          ),
+        TextButton.icon(
+          onPressed: _mediaActionBusy
+              ? null
+              : () => _runMediaAction(
+                  () => _unlinkMediaAccount(user, server, account)),
+          icon: const Icon(Icons.link_off),
+          label: const Text('Unlink account'),
+        ),
+      ]),
+    ]);
+  }
+
+  Widget _buildUserTile(UserSummary user,
+      {VoidCallback? onOpen, bool showMediaActions = true}) {
+    final currentUserId = ref.read(authProvider).valueOrNull?.user?.id;
+    final mediaServers = _mediaServers;
+    return _UserTile(
+      user: user,
+      onOpen: onOpen,
+      showMediaActions: showMediaActions,
+      isSelf: user.id == currentUserId,
+      mediaServers: mediaServers,
+      supportsManagement: _supportsManagement,
+      onSetManagement: (server, account) =>
+          _setMediaManagement(user, server, account),
+      mediaAccounts: {
+        for (final row in _mediaAccounts)
+          if (row.userId == user.id) row.instanceId: row,
+      },
+      onLinkMediaAccount: (server) => _linkMediaAccount(user, server),
+      onSetMediaAccess: (server, enabled) =>
+          _setMediaAccess(user, server, enabled: enabled),
+      onUnlinkMediaAccount: (server, account) =>
+          _unlinkMediaAccount(user, server, account),
+      onChangeRole: (role) => _changeRole(user, role),
+      onDelete: () => _deleteUser(user),
+      onResendInvite: () => _resendInvite(user),
+      onSendTestPush: () => _sendTestPush(user),
+      // The per-user screen leads with the kids account switch, so
+      // the row's Child tag is re-read once it pops.
+      onRequestSettings: () => context
+          .push(
+        '/settings/users/${user.id}/request-settings'
+        '${user.isAdmin ? '?admin=1' : ''}',
+        extra: user.username,
+      )
+          .then((_) {
+        if (mounted) _loadUsers();
+      }),
+      onSetAuthMethods: ({bool? passwordEnabled, bool? passkeyEnabled}) =>
+          _setAuthMethods(
+        user,
+        passwordEnabled: passwordEnabled,
+        passkeyEnabled: passkeyEnabled,
+      ),
+      onSetSharedAiAccess: (enabled) => _setSharedAiAccess(user, enabled),
+      sharedAiProvider: _sharedAiProvider,
+      sharedAiConfigured: _sharedAiConfigured,
     );
   }
 }
@@ -912,6 +985,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
 class _UserTile extends StatelessWidget {
   const _UserTile({
     required this.user,
+    this.onOpen,
+    this.showMediaActions = true,
     required this.isSelf,
     required this.mediaServers,
     required this.supportsManagement,
@@ -932,6 +1007,8 @@ class _UserTile extends StatelessWidget {
   });
 
   final UserSummary user;
+  final VoidCallback? onOpen;
+  final bool showMediaActions;
   final bool isSelf;
 
   /// Every media server the admin's config lists, and this user's linked
@@ -963,6 +1040,7 @@ class _UserTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
+      onTap: onOpen,
       leading: CircleAvatar(
         backgroundColor: user.isAdmin
             ? AppTheme.accent.withValues(alpha: 0.2)
@@ -1047,7 +1125,8 @@ class _UserTile extends StatelessWidget {
                   color: account.accessSyncPending ||
                           !account.verified ||
                           account.pending == true ||
-                          (server.serviceType == 'plex' && account.pending == null)
+                          (server.serviceType == 'plex' &&
+                              account.pending == null)
                       ? AppTheme.warning
                       : account.granted
                           ? AppTheme.available
@@ -1184,7 +1263,8 @@ class _UserTile extends StatelessWidget {
         // Media servers, one set per shared server: link an existing
         // account when none is recorded; otherwise flip access (the grant,
         // which the server mirrors onto the account) or forget the link.
-        for (final server in mediaServers)
+        for (final server
+            in showMediaActions ? mediaServers : const <ServiceInstance>[])
           if (mediaAccounts[server.id] case final account?) ...[
             PopupMenuItem(
               value: 'media_access:${server.id}',

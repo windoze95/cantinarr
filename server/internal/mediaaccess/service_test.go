@@ -744,6 +744,67 @@ func TestLinkAccountExplicitManagementGrantsAndEnables(t *testing.T) {
 	}
 }
 
+func TestLinkAccountRetryFinishesGrantAndPreservesManagement(t *testing.T) {
+	for _, managed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("managed=%v", managed), func(t *testing.T) {
+			e := newEnv(t)
+			alice := e.user("alice")
+			jf := e.jellyfin("Home", instance.MediaServerConfig{})
+			sibling := e.jellyfin("Other library", instance.MediaServerConfig{})
+			e.grant(alice, sibling)
+			remote := e.provider.addUser("alice", false, true)
+			if _, err := e.db.Exec(`CREATE TRIGGER reject_link_grant BEFORE INSERT ON user_instance_grants
+				WHEN NEW.instance_id = '` + jf + `' BEGIN SELECT RAISE(ABORT, 'test grant failure'); END`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.svc.LinkAccount(context.Background(), alice, jf, remote, managed); err == nil {
+				t.Fatal("expected failure after the account row was saved")
+			}
+			if row := e.row(alice, jf); row == nil || row.ManageAccess != managed {
+				t.Fatalf("partial account = %+v", row)
+			}
+			if _, err := e.db.Exec("DROP TRIGGER reject_link_grant"); err != nil {
+				t.Fatal(err)
+			}
+			// A retry cannot adopt or stop management, even if its submitted
+			// default differs from the original explicit choice.
+			account, err := e.svc.LinkAccount(context.Background(), alice, jf, remote, !managed)
+			if err != nil || !account.Granted || account.ManageAccess != managed || account.Disabled == managed {
+				t.Fatalf("retry = %+v, %v", account, err)
+			}
+			grants, err := e.store.ListUserGrants(alice)
+			if err != nil || !contains(grants["jellyfin"], jf) || !contains(grants["jellyfin"], sibling) {
+				t.Fatalf("grants = %v, %v", grants, err)
+			}
+			writes := e.provider.disables
+			if managed && writes != 1 || !managed && writes != 0 || len(e.provider.libraryWrites) != 0 {
+				t.Fatalf("unexpected remote access writes=%d libraries=%v", writes, e.provider.libraryWrites)
+			}
+			if _, err := e.svc.LinkAccount(context.Background(), alice, jf, remote, !managed); err != nil || e.provider.disables != writes {
+				t.Fatalf("completed retry changed remote access: writes=%d error=%v", e.provider.disables, err)
+			}
+		})
+	}
+}
+
+func TestLinkAccountPlexRetryUsesCanonicalIdentity(t *testing.T) {
+	e := newEnv(t)
+	user := e.user("friend")
+	server := e.mediaServer("plex", "Plex", instance.MediaServerConfig{})
+	provider := newFakeInviteProvider()
+	provider.share("friend@example.com", false)
+	e.providers[server] = provider
+	for _, email := range []string{"friend@example.com", "FRIEND@EXAMPLE.COM"} {
+		account, err := e.svc.LinkAccount(context.Background(), user, server, email)
+		if err != nil || !account.Granted || account.RemoteUserID != "friend@example.com" || account.ManageAccess {
+			t.Fatalf("link %s = %+v, %v", email, account, err)
+		}
+	}
+	if provider.invites != 0 || provider.removals != 0 || len(provider.libraryWrites) != 0 {
+		t.Fatal("link retry changed Plex sharing")
+	}
+}
+
 func TestUnlinkLeavesRemoteAndGrant(t *testing.T) {
 	e := newEnv(t)
 	alice := e.user("alice")

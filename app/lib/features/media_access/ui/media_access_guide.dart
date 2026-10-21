@@ -281,10 +281,12 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
     );
   }
 
-  String _openLabel(MediaServerAccess server) =>
-      VideoApps.serviceTypes.contains(server.serviceType) &&
-          ref.read(mediaAppLauncherProvider).videoAppFor(server.videoApps) == VideoApp.infuse
-          ? 'Open in Infuse' : 'Open';
+  String _openLabel(MediaServerAccess server) => VideoApps.serviceTypes
+              .contains(server.serviceType) &&
+          ref.read(mediaAppLauncherProvider).videoAppFor(server.videoApps) ==
+              VideoApp.infuse
+      ? 'Open in Infuse'
+      : 'Open ${mediaServerTypeLabel(server.serviceType)}';
 
   Future<void> _open(MediaServerAccess server) async {
     final launcher = ref.read(mediaAppLauncherProvider);
@@ -292,10 +294,10 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
         ? await launcher.openAudiobook(
             webUrl: server.publicAddress, apps: server.listeningApps)
         : await launcher.open(
-          serviceType: server.serviceType,
-          apps: server.videoApps,
-          webUrl: server.publicAddress,
-        );
+            serviceType: server.serviceType,
+            apps: server.videoApps,
+            webUrl: server.publicAddress,
+          );
     if (opened || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text("Couldn't open ${server.name}."),
@@ -320,8 +322,12 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
     ref.listen(authProvider, (previous, next) {
       if (previous?.valueOrNull?.connection == null) return;
       if (previous?.valueOrNull?.user?.id != next.valueOrNull?.user?.id ||
-          previous?.valueOrNull?.connection?.serverUrl != next.valueOrNull?.connection?.serverUrl) {
-        setState(() { _servers = null; _failed = false; });
+          previous?.valueOrNull?.connection?.serverUrl !=
+              next.valueOrNull?.connection?.serverUrl) {
+        setState(() {
+          _servers = null;
+          _failed = false;
+        });
       }
       _load();
     });
@@ -492,7 +498,8 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
         const SizedBox(height: 24),
         const _TipCard(
           title: 'Choose your video app',
-          message: 'On iPhone and iPad, choose your media server’s app, Infuse, or '
+          message:
+              'On iPhone and iPad, choose your media server’s app, Infuse, or '
               'Browser in Settings → Account → Video apps, or follow your admin’s '
               'default. Connect your servers inside Infuse first. Open in Infuse '
               'finds a movie or show across its connected libraries; it cannot '
@@ -515,14 +522,16 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
   }
 
   Widget _guideLink(String label, String url) => Link(
-    uri: Uri.parse(url),
-    target: LinkTarget.blank,
-    builder: (context, followLink) => Align(
-      alignment: Alignment.centerLeft,
-      child: TextButton.icon(onPressed: followLink,
-        icon: const Icon(Icons.open_in_new, size: 16), label: Text(label)),
-    ),
-  );
+        uri: Uri.parse(url),
+        target: LinkTarget.blank,
+        builder: (context, followLink) => Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+              onPressed: followLink,
+              icon: const Icon(Icons.open_in_new, size: 16),
+              label: Text(label)),
+        ),
+      );
 
   Widget _serviceInstructions(String type, {required int number}) {
     final label = mediaServerTypeLabel(type);
@@ -642,7 +651,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
           Text(
             server.autoLinkSuppressed
                 ? 'Your account was unlinked from ${server.name}. Link it again explicitly to reconnect this server.'
-                : 'You have access to ${server.name}. Sign in with Plex to link your account, or share the email of your Plex account.',
+                : 'Your admin has offered access to ${server.name}. Sign in with Plex to link your account, or share the email of your Plex account.',
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 14,
@@ -655,9 +664,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
                 ? () => _requestInvite(server, plexEmail)
                 : _signInWithPlex,
             icon: const Icon(Icons.login, size: 18),
-            label: Text(server.autoLinkSuppressed
-                ? 'Link my Plex account'
-                : 'Sign in with Plex'),
+            label: const Text('Link my Plex account'),
           ),
           if (!server.autoLinkSuppressed)
             TextButton.icon(
@@ -715,8 +722,10 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
         children: [
           Row(
             children: [
-              const Icon(Icons.check_circle,
-                  color: AppTheme.available, size: 18),
+              Icon(account.verified ? Icons.check_circle : Icons.info_outline,
+                  color:
+                      account.verified ? AppTheme.available : AppTheme.warning,
+                  size: 18),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -912,8 +921,38 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
       Text('${mediaServerTypeLabel(server.serviceType)} · ${server.name}',
           style: const TextStyle(
               color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
+      const SizedBox(height: 6),
+      Text(
+        account != null && !account.verified
+            ? 'Access could not be verified'
+            : account == null
+                ? (server.autoLinkSuppressed
+                    ? 'Account intentionally unlinked'
+                    : 'Account not linked')
+                : account.pending
+                    ? 'Awaiting invitation acceptance'
+                    : account.disabled
+                        ? 'Access disabled'
+                        : 'Access active',
+        style: TextStyle(
+          color: account != null && !account.verified
+              ? AppTheme.warning
+              : AppTheme.textSecondary,
+          fontSize: 13,
+        ),
+      ),
       const SizedBox(height: 12),
       body,
+      const SizedBox(height: 12),
+      Text(
+        server.serviceType == 'plex'
+            ? 'Use your Plex account in Plex. Linking library access here does '
+                'not change how you sign in to Cantinarr.'
+            : 'Use your ${mediaServerTypeLabel(server.serviceType)} username '
+                'and password on ${server.name}. These credentials are separate '
+                'from signing in to Cantinarr.',
+        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+      ),
       if (supported && account != null) ...[
         const SizedBox(height: 10),
         Text(
@@ -973,7 +1012,8 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
           ElevatedButton.icon(
             onPressed: () => _linkOwnAccount(server, username),
             icon: const Icon(Icons.login, size: 18),
-            label: const Text('Sign in to link it'),
+            label: Text(
+                'Link my ${mediaServerTypeLabel(server.serviceType)} account'),
           ),
           const SizedBox(height: 8),
           const Text(
@@ -987,8 +1027,8 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'You have access to ${server.name}. Create your account to '
-            'get started.',
+            'Your admin has offered access to ${server.name}. Create or link '
+            'your account to get started.',
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 14,
@@ -999,12 +1039,14 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
           ElevatedButton.icon(
             onPressed: () => _createAccount(server, username),
             icon: const Icon(Icons.person_add_alt_1_outlined, size: 18),
-            label: const Text('Create my account'),
+            label: Text(
+                'Create my ${mediaServerTypeLabel(server.serviceType)} account'),
           ),
           TextButton.icon(
             onPressed: () => _linkOwnAccount(server, username),
             icon: const Icon(Icons.login, size: 18),
-            label: const Text('I already have an account'),
+            label: Text(
+                'Link my ${mediaServerTypeLabel(server.serviceType)} account'),
           ),
         ],
       );
@@ -1019,8 +1061,11 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Your access to ${server.name} is turned off. Ask your admin '
-              "if you think that's a mistake.",
+              account.verified
+                  ? 'Your access to ${server.name} is turned off. Ask your admin '
+                      "if you think that's a mistake."
+                  : 'Your last known access to ${server.name} was turned off. '
+                      'Refresh to check again, or ask your admin.',
               style: const TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 14,
@@ -1036,8 +1081,10 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
         children: [
           Row(
             children: [
-              const Icon(Icons.check_circle,
-                  color: AppTheme.available, size: 18),
+              Icon(account.verified ? Icons.check_circle : Icons.info_outline,
+                  color:
+                      account.verified ? AppTheme.available : AppTheme.warning,
+                  size: 18),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(

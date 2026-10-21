@@ -241,6 +241,9 @@ func TestAdminRoutesStatusMapping(t *testing.T) {
 	if account.UserID != alice || account.InstanceName != "Home" || account.Username != "alice" || account.CreatedByCantinarr || account.ManageAccess || !account.Granted || !account.Disabled {
 		t.Fatalf("account = %+v", account)
 	}
+	if rec := link(alice, jf, aliceID); rec.Code != http.StatusOK {
+		t.Fatalf("same mapping retry = %d %s", rec.Code, rec.Body.String())
+	}
 	if rec := link(bob, jf, aliceID); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "remote_already_linked") {
 		t.Fatalf("duplicate remote = %d %s", rec.Code, rec.Body.String())
 	}

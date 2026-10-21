@@ -278,7 +278,7 @@ func NewRouter(
 
 			// Setup checklist: which features are configured, derived live on
 			// every request (drives the app's setup wizard + reminders).
-			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, aiHandler, serverSettings, remediationService))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, aiHandler, serverSettings, remediationService, authService))
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/setup-status/skips", setupSkipHandler(serverSettings))
 
 			// Update availability + the admin-configured management-portal URL the
@@ -1010,19 +1010,20 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"allow_reporting": remSettings.AllowReporting,
 			// True when a Plex server exists at all, so a user without the
 			// grant can still ask for access from the guide.
-			"plex_access_requestable":  plexRequestable,
-			"admin_catalog_browsing":   true,
-			"request_quotas":           true,
-			"requester_tagging":        true,
-			"instance_assignments":     true,
-			"initial_instance_setup":   initialInstanceSetup,
-			"tv_match_corrections":     true,
-			"tv_library_navigation":    true,
-			"downloads_activity":       true,
-			"downloads_user_scope":     downloadsUserScope,
-			"apple_tv_remote":          len(appleTVCapability) > 0 && appleTVCapability[0](),
-			"media_account_management": true,
-			"hidden_discover_tabs":     hiddenTabs,
+			"plex_access_requestable":            plexRequestable,
+			"admin_catalog_browsing":             true,
+			"request_quotas":                     true,
+			"requester_tagging":                  true,
+			"instance_assignments":               true,
+			"initial_instance_setup":             initialInstanceSetup,
+			"tv_match_corrections":               true,
+			"tv_library_navigation":              true,
+			"downloads_activity":                 true,
+			"downloads_user_scope":               downloadsUserScope,
+			"apple_tv_remote":                    len(appleTVCapability) > 0 && appleTVCapability[0](),
+			"media_account_management":           true,
+			"media_user_import_explicit_linking": true,
+			"hidden_discover_tabs":               hiddenTabs,
 			// An admin choice for every cover on this server; see the
 			// status route's include_4k for how shows are answered.
 			"cover_4k_badges": cover4KBadges,

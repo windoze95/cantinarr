@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -102,8 +103,11 @@ func TestImportAccountsCreatesGrantsAndLinks(t *testing.T) {
 		t.Fatalf("kylo's grants = %v, want the instance", grants)
 	}
 
-	if r := byRemote[hanID]; r.Created || !r.Linked || r.UserID != han || r.Link != "" || r.Error != "" {
-		t.Fatalf("existing user of that name: %+v, want reused and linked, no new link", r)
+	if r := byRemote[hanID]; r.Created || r.Linked || r.UserID != 0 || r.Link != "" || r.Error != ImportUsernameConflict {
+		t.Fatalf("existing user of that name: %+v, want username_conflict without access", r)
+	}
+	if e.row(han, jf) != nil {
+		t.Fatal("existing namesake acquired a media account")
 	}
 	if r := byRemote[adminID]; !r.Created || !r.Linked || r.Error != "" {
 		t.Fatalf("administrator account: %+v, want imported like any other", r)
@@ -117,8 +121,8 @@ func TestImportAccountsCreatesGrantsAndLinks(t *testing.T) {
 	if r := byRemote[failingID]; r.Error != ImportUserFailed || r.Linked {
 		t.Fatalf("creator failure: %+v, want user_failed", r)
 	}
-	if r := byRemote[secondDookuID]; r.Error != ImportUserHasAccount || r.Linked || r.UserID != dooku {
-		t.Fatalf("user already has an account here: %+v, want user_has_account", r)
+	if r := byRemote[secondDookuID]; r.Error != ImportUsernameConflict || r.Linked || r.UserID != 0 {
+		t.Fatalf("user already has an account here: %+v, want username_conflict", r)
 	}
 	if got := strings.Join(creator.names, ","); got != "kylo,vaderadmin,failing" {
 		t.Fatalf("users created = %q, want only the ones that needed creating, in order", got)
@@ -179,6 +183,119 @@ func TestImportAccountsAdoptsPlexShares(t *testing.T) {
 	}
 	if email, _ := e.svc.plexEmail(rey); email != "rey@example.com" {
 		t.Fatalf("rey's own email changed to %q", email)
+	}
+}
+
+func TestImportAccountsRequiresNewUsersForEveryProvider(t *testing.T) {
+	for _, serviceType := range []string{"plex", "jellyfin", "emby", "audiobookshelf"} {
+		t.Run(serviceType, func(t *testing.T) {
+			e := newEnv(t)
+			admin := e.user("admin")
+			existing := e.user("friend")
+			creator := auth.NewService(e.db, "test-secret")
+			e.svc.SetUserCreator(creator)
+			previous, err := creator.CreateConnectToken(admin, "friend", "https://cantinarr.example")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := e.mediaServer(serviceType, "Library", instance.MediaServerConfig{})
+			remoteID, newID := "friend@example.com", "newbie@example.com"
+			var invites *fakeInviteProvider
+			if serviceType == "plex" {
+				invites = newFakeInviteProvider()
+				invites.share(remoteID, false)
+				invites.share(newID, true)
+				e.providers[server] = invites
+			} else {
+				remoteID = e.provider.addUser("friend", false, true)
+				newID = e.provider.addUser("newbie", false, true)
+			}
+			results, err := e.svc.ImportAccounts(context.Background(), admin, server, "https://cantinarr.example", []string{remoteID, newID})
+			if err != nil || len(results) != 2 {
+				t.Fatalf("import = %+v, %v", results, err)
+			}
+			if conflict := results[0]; conflict.Error != ImportUsernameConflict || conflict.Created || conflict.Linked || conflict.UserID != 0 || conflict.Link != "" {
+				t.Fatalf("namesake = %+v", conflict)
+			}
+			if fresh := results[1]; fresh.Error != "" || !fresh.Created || !fresh.Linked || fresh.UserID == existing || fresh.Link == "" {
+				t.Fatalf("new account = %+v", fresh)
+			}
+			grants, err := e.store.ListUserGrants(existing)
+			if err != nil || len(grants) != 0 || e.row(existing, server) != nil {
+				t.Fatalf("namesake gained access: grants=%v error=%v", grants, err)
+			}
+			var token string
+			if err := e.db.QueryRow("SELECT token FROM connect_tokens WHERE user_id=?", existing).Scan(&token); err != nil || !strings.Contains(previous.Link, token) {
+				t.Fatalf("namesake's invitation changed: %v", err)
+			}
+			if e.provider.disables != 0 || len(e.provider.libraryWrites) != 0 || invites != nil && (invites.invites != 0 || invites.removals != 0 || len(invites.libraryWrites) != 0) {
+				t.Fatal("import changed remote access")
+			}
+		})
+	}
+}
+
+func TestImportAccountsConcurrentNamesakesHaveOneWinnerForEveryProvider(t *testing.T) {
+	for _, serviceType := range []string{"plex", "jellyfin", "emby", "audiobookshelf"} {
+		t.Run(serviceType, func(t *testing.T) {
+			e := newEnv(t)
+			admin := e.user("admin")
+			e.svc.SetUserCreator(auth.NewService(e.db, "test-secret"))
+			server := e.mediaServer(serviceType, "Library", instance.MediaServerConfig{})
+			remoteIDs := make([]string, 8)
+			invites := newFakeInviteProvider()
+			for i := range remoteIDs {
+				if serviceType == "plex" {
+					remoteIDs[i] = "friend@" + itoa(int64(i)) + ".example"
+					invites.share(remoteIDs[i], false)
+				} else {
+					remoteIDs[i] = e.provider.addUser("friend", false, false)
+				}
+			}
+			if serviceType == "plex" {
+				e.providers[server] = invites
+			}
+			start := make(chan struct{})
+			results := make(chan ImportResult, len(remoteIDs))
+			var wg sync.WaitGroup
+			for _, remoteID := range remoteIDs {
+				wg.Add(1)
+				go func(id string) {
+					defer wg.Done()
+					<-start
+					rows, err := e.svc.ImportAccounts(context.Background(), admin, server, "https://cantinarr.example", []string{id})
+					if err != nil || len(rows) != 1 {
+						t.Errorf("import = %+v, %v", rows, err)
+						return
+					}
+					results <- rows[0]
+				}(remoteID)
+			}
+			close(start)
+			wg.Wait()
+			close(results)
+			created, conflicts := 0, 0
+			for result := range results {
+				switch {
+				case result.Created && result.Linked && result.Error == "" && result.Link != "":
+					created++
+				case result.Error == ImportUsernameConflict && !result.Created && !result.Linked && result.UserID == 0 && result.Link == "":
+					conflicts++
+				default:
+					t.Errorf("unexpected result: %+v", result)
+				}
+			}
+			if created != 1 || conflicts != len(remoteIDs)-1 {
+				t.Fatalf("created=%d conflicts=%d", created, conflicts)
+			}
+			var tokens, accounts int
+			if err := e.db.QueryRow("SELECT COUNT(*) FROM connect_tokens").Scan(&tokens); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.db.QueryRow("SELECT COUNT(*) FROM user_media_server_accounts").Scan(&accounts); err != nil || tokens != 1 || accounts != 1 {
+				t.Fatalf("tokens=%d accounts=%d error=%v", tokens, accounts, err)
+			}
+		})
 	}
 }
 
