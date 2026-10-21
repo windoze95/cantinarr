@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
@@ -134,9 +135,8 @@ Future<void> _pump(WidgetTester tester, _Media media,
     _Auth? auth,
     String? instanceId,
     Size size = const Size(1100, 900)}) async {
-  // Pin both logical layout and raster scale. setSurfaceSize alone leaves
-  // the test view at its default DPR (3), making the phone golden a dense
-  // 1170x2532 raster whose thin edges drift across host renderers.
+  // Pin physical size and DPR so MediaQuery and screenshot dimensions describe
+  // the requested viewport, with one raster pixel per logical pixel.
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
@@ -171,8 +171,13 @@ void main() {
           RemoteMediaServerUser(id: 'c', name: 'Charlie', isDisabled: true),
         ];
       await _pump(tester, media, size: viewport.$2);
-      await expectLater(find.byType(MaterialApp),
-          matchesGoldenFile('goldens/media_user_import_${viewport.$1}.png'));
+      // These text-rich scenes retain full coverage with renderer-specific
+      // baselines. macOS and Linux rasterize Ahem/icon edges differently even
+      // with identical layout; both use the unchanged repository comparator.
+      await expectLater(
+          find.byType(MaterialApp),
+          matchesGoldenFile('goldens/${Platform.operatingSystem}/'
+              'media_user_import_${viewport.$1}.png'));
       expect(tester.takeException(), isNull);
     });
   }
