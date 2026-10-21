@@ -787,6 +787,79 @@ func TestLinkAccountRetryFinishesGrantAndPreservesManagement(t *testing.T) {
 	}
 }
 
+func TestLinkAccountConcurrentServersPreserveGrants(t *testing.T) {
+	e := newEnv(t)
+	alice := e.user("alice")
+	sibling := e.jellyfin("Existing library", instance.MediaServerConfig{})
+	e.grant(alice, sibling)
+	radarr := e.mediaServer("radarr", "Request library", instance.MediaServerConfig{})
+	e.grantType(alice, "radarr", radarr)
+	if err := e.store.SetUserDefault(alice, "radarr", radarr); err != nil {
+		t.Fatal(err)
+	}
+	// Adding an unrelated link must not delete even an existing grant row.
+	// This guard also makes a read/replace implementation fail deterministically,
+	// independent of how the concurrent reads and writes are scheduled.
+	if _, err := e.db.Exec(`CREATE TRIGGER preserve_existing_link_grant BEFORE DELETE ON user_instance_grants
+		WHEN OLD.user_id = ` + itoa(alice) + ` AND OLD.instance_id = '` + sibling + `'
+		BEGIN SELECT RAISE(ABORT, 'existing grant must not be replaced'); END`); err != nil {
+		t.Fatal(err)
+	}
+	type selection struct {
+		instanceID string
+		remoteID   string
+		partial    bool
+	}
+	selections := make([]selection, 8)
+	for i := range selections {
+		inst := e.jellyfin(fmt.Sprintf("Library %d", i), instance.MediaServerConfig{})
+		remote := e.provider.addUser(fmt.Sprintf("alice-%d", i), false, true)
+		selections[i] = selection{inst, remote, i%2 == 0}
+		if selections[i].partial {
+			if _, err := e.svc.insertAccount(accountRow{UserID: alice, InstanceID: inst, RemoteUserID: remote, RemoteUsername: fmt.Sprintf("alice-%d", i)}, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, selected := range selections {
+		wg.Add(1)
+		go func(selected selection) {
+			defer wg.Done()
+			<-start
+			// Partial linked-only mappings must retain their saved management
+			// choice even when the retry submits true.
+			account, err := e.svc.LinkAccount(context.Background(), alice, selected.instanceID, selected.remoteID, selected.partial)
+			if err != nil || !account.Granted || account.ManageAccess || !account.Disabled || account.RemoteUserID != selected.remoteID {
+				t.Errorf("link %s = %+v, %v", selected.instanceID, account, err)
+			}
+		}(selected)
+	}
+	close(start)
+	wg.Wait()
+	grants, err := e.store.ListUserGrants(alice)
+	if err != nil || len(grants["jellyfin"]) != len(selections)+1 || !contains(grants["jellyfin"], sibling) || !reflect.DeepEqual(grants["radarr"], []string{radarr}) {
+		t.Fatalf("grants = %v, %v", grants, err)
+	}
+	for _, selected := range selections {
+		row := e.row(alice, selected.instanceID)
+		if !contains(grants["jellyfin"], selected.instanceID) || row == nil || row.RemoteUserID != selected.remoteID || row.ManageAccess {
+			t.Errorf("missing or changed selection %s: %+v", selected.instanceID, row)
+		}
+	}
+	if preferred, pinned, err := e.store.GetUserDefault(alice, "radarr"); err != nil || !pinned || preferred != radarr {
+		t.Fatalf("request default = %q, %v, %v", preferred, pinned, err)
+	}
+	var role string
+	if err := e.db.QueryRow("SELECT role FROM users WHERE id=?", alice).Scan(&role); err != nil || role != "user" {
+		t.Fatalf("role = %q, %v", role, err)
+	}
+	if e.provider.creates != 0 || e.provider.disables != 0 || e.provider.deletes != 0 || len(e.provider.libraryWrites) != 0 {
+		t.Fatal("concurrent linked-only operations changed remote accounts")
+	}
+}
+
 func TestLinkAccountPlexRetryUsesCanonicalIdentity(t *testing.T) {
 	e := newEnv(t)
 	user := e.user("friend")

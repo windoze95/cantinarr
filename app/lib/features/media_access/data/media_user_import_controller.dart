@@ -11,6 +11,7 @@ class MediaImportChoice {
   bool selected = false;
   int? targetUserId;
   bool requiresMapping = false;
+  bool mappingUnavailable = false;
   bool uncertain = false;
   MediaServerAccountRow? account;
   MediaServerImportResult? result;
@@ -47,6 +48,9 @@ class MediaUserImportController extends ChangeNotifier {
   List<MediaImportChoice> choices = [];
   bool loading = true;
   bool busy = false;
+  bool reconciling = false;
+  bool accountsCurrent = false;
+  int accessReadRevision = 0;
   bool manageAccess = false;
   bool submitted = false;
   String? error;
@@ -76,7 +80,7 @@ class MediaUserImportController extends ChangeNotifier {
   List<MediaImportChoice> get pending =>
       selected.where((c) => c.selectable).toList();
   int get selectedIncompleteCount => selected.where((c) => !c.complete).length;
-  List<int> get successfulUserIds => selected
+  List<int> get successfulUserIds => choices
       .where((c) => c.complete && c.result?.userId != null)
       .map((c) => c.result!.userId!)
       .toSet()
@@ -85,6 +89,7 @@ class MediaUserImportController extends ChangeNotifier {
       supportsExplicitLinking &&
       !loading &&
       !busy &&
+      !reconciling &&
       error == null &&
       pending.isNotEmpty &&
       selectedIncompleteCount <= maxSelection;
@@ -95,6 +100,7 @@ class MediaUserImportController extends ChangeNotifier {
 
   Future<void> load() async {
     loading = true;
+    accountsCurrent = false;
     error = null;
     _changed();
     try {
@@ -105,14 +111,14 @@ class MediaUserImportController extends ChangeNotifier {
       ]);
       users = values[1] as List<UserSummary>;
       final accounts = values[2] as List<MediaServerAccountRow>;
+      accountsCurrent = true;
       final previous = {for (final c in choices) c.remote.id: c};
       choices = (values[0] as List<RemoteMediaServerUser>).map((remote) {
         final choice = previous[remote.id] ?? MediaImportChoice(remote);
         choice.remote = remote;
         choice.listed = true;
         choice.account = _accountFor(accounts, remote.id);
-        choice.requiresMapping =
-            users.any((u) => u.username == choice.username);
+        _refreshMapping(choice);
         return choice;
       }).toList();
       final listedIds = choices.map((c) => c.remote.id).toSet();
@@ -141,14 +147,27 @@ class MediaUserImportController extends ChangeNotifier {
           .firstOrNull;
 
   void select(MediaImportChoice choice, bool value) {
-    if (busy || !choice.selectable) return;
+    if (busy || reconciling || !choice.selectable) return;
     if (value && selectedIncompleteCount >= maxSelection) return;
     choice.selected = value;
     _changed();
   }
 
+  void _refreshMapping(MediaImportChoice choice) {
+    if (choice.result?.userId == null &&
+        choice.targetUserId != null &&
+        !users.any((u) => u.id == choice.targetUserId)) {
+      choice.targetUserId = null;
+      choice.mappingUnavailable = true;
+      choice.selected = false;
+      choice.uncertain = false;
+    }
+    choice.requiresMapping = choice.mappingUnavailable ||
+        users.any((u) => u.username == choice.username);
+  }
+
   void selectAll(Iterable<MediaImportChoice> visible) {
-    if (busy) return;
+    if (busy || reconciling) return;
     for (final choice in visible) {
       if (selectedIncompleteCount >= maxSelection) break;
       if (choice.selectable && !choice.remote.isAdministrator) {
@@ -159,7 +178,7 @@ class MediaUserImportController extends ChangeNotifier {
   }
 
   void clearSelection() {
-    if (busy) return;
+    if (busy || reconciling) return;
     for (final choice in choices) {
       if (!choice.complete) choice.selected = false;
     }
@@ -168,19 +187,26 @@ class MediaUserImportController extends ChangeNotifier {
 
   void mapTo(MediaImportChoice choice, int? userId) {
     if (busy ||
+        reconciling ||
         choice.complete ||
         choice.alreadyLinked ||
         choice.uncertain ||
-        choice.result?.created == true) {
+        choice.result?.userId != null) {
+      return;
+    }
+    if ((userId == null && choice.mappingUnavailable) ||
+        (userId != null && !users.any((u) => u.id == userId))) {
       return;
     }
     choice.targetUserId = userId;
+    choice.mappingUnavailable = false;
+    _refreshMapping(choice);
     if (!choice.selectable) choice.selected = false;
     _changed();
   }
 
   void setManagement(bool value) {
-    if (busy || submitted) return;
+    if (busy || reconciling || submitted) return;
     manageAccess = value;
     _changed();
   }
@@ -257,18 +283,25 @@ class MediaUserImportController extends ChangeNotifier {
   }
 
   Future<void> reconcile() async {
+    if (reconciling) return;
+    reconciling = true;
+    accessReadRevision++;
+    accountsCurrent = false;
     error = null;
+    _changed();
     try {
       final values =
           await Future.wait<Object>([readUsers(), service.listAccounts()]);
       users = values[0] as List<UserSummary>;
       final accounts = values[1] as List<MediaServerAccountRow>;
+      accountsCurrent = true;
       for (final choice in choices) {
         final account = _accountFor(accounts, choice.remote.id);
         choice.account = account;
-        choice.requiresMapping =
-            users.any((u) => u.username == choice.username);
-        if (!choice.selected || choice.complete) continue;
+        _refreshMapping(choice);
+        if ((!choice.selected && !choice.uncertain) || choice.complete) {
+          continue;
+        }
         if (account != null) {
           final expected = choice.result?.userId ?? choice.targetUserId;
           if (expected != null && account.userId != expected) {
@@ -308,6 +341,8 @@ class MediaUserImportController extends ChangeNotifier {
       error =
           'Could not verify the latest accounts. Completed results are kept. '
           'Check current state before retrying incomplete accounts.';
+    } finally {
+      reconciling = false;
     }
     _changed();
   }

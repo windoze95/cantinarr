@@ -1086,16 +1086,10 @@ func (s *Service) LinkAccount(ctx context.Context, userID int64, instanceID, rem
 		}
 	}
 
-	grants, err := s.store.ListUserGrants(userID)
-	if err != nil {
+	// Different server links can run concurrently for the same user. Add only
+	// this pair so a stale read cannot replace another link's grant.
+	if err := s.store.AddUserGrant(userID, instanceID); err != nil {
 		return Account{}, err
-	}
-	if !contains(grants[inst.ServiceType], instanceID) {
-		if err := s.store.SetUserGrants(userID, map[string][]string{
-			inst.ServiceType: append(grants[inst.ServiceType], instanceID),
-		}); err != nil {
-			return Account{}, err
-		}
 	}
 	s.reconcileAccountLocked(ctx, userID, instanceID)
 

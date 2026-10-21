@@ -74,16 +74,14 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
         setState(() => _failed = true);
         return;
       }
-      // A refresh that failed keeps what was shown; say so rather than
-      // swapping a working screen for an error.
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text("Couldn't refresh your media servers."),
-      ));
+      // Retain the known servers, but do not keep presenting old account
+      // verification or actions as current after a failed read.
+      setState(() => _failed = true);
     }
   }
 
   void _retry() {
-    setState(() => _failed = false);
+    if (_servers == null) setState(() => _failed = false);
     _load();
   }
 
@@ -377,15 +375,17 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
                       onRefresh: _load,
                       child: ListView(
                         padding: const EdgeInsets.all(16),
-                        children: servers.isEmpty && !askForPlex
-                            ? [_buildEmpty(isAdmin: user?.isAdmin == true)]
-                            : _buildGuide(
-                                servers,
-                                username: user?.username ?? '',
-                                plexEmail: user?.plexEmail ?? '',
-                                types: types,
-                                askForPlex: askForPlex,
-                              ),
+                        children: _failed && servers.isEmpty
+                            ? [_buildLoadFailure()]
+                            : servers.isEmpty && !askForPlex
+                                ? [_buildEmpty(isAdmin: user?.isAdmin == true)]
+                                : _buildGuide(
+                                    servers,
+                                    username: user?.username ?? '',
+                                    plexEmail: user?.plexEmail ?? '',
+                                    types: types,
+                                    askForPlex: askForPlex,
+                                  ),
                       ),
                     )),
         ]),
@@ -469,6 +469,18 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
         ),
       ),
       const SizedBox(height: 24),
+      if (_failed) ...[
+        const Text(
+          'Could not refresh your media servers. The names and addresses below are from the last successful check.',
+          style: TextStyle(color: AppTheme.warning),
+        ),
+        TextButton.icon(
+          onPressed: _retry,
+          icon: const Icon(Icons.refresh),
+          label: const Text('Retry'),
+        ),
+        const SizedBox(height: 12),
+      ],
       _SectionHeader(
         number: 1,
         title: onlyPlex
@@ -481,11 +493,13 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
       for (final server in servers)
         Padding(
           padding: const EdgeInsets.only(bottom: 12),
-          child: server.isInvite
-              ? _buildInviteCard(server, plexEmail)
-              : _buildAccountCard(server, username),
+          child: _failed
+              ? _buildUnavailableCard(server)
+              : server.isInvite
+                  ? _buildInviteCard(server, plexEmail)
+                  : _buildAccountCard(server, username),
         ),
-      if (askForPlex)
+      if (askForPlex && !_failed)
         Padding(
           padding: const EdgeInsets.only(bottom: 12),
           child: _buildAskForPlexCard(plexEmail),
@@ -532,6 +546,42 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
               label: Text(label)),
         ),
       );
+
+  Widget _buildUnavailableCard(MediaServerAccess server) => _card(Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('${mediaServerTypeLabel(server.serviceType)} · ${server.name}',
+              style: const TextStyle(
+                  color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          const Text('Access could not be verified',
+              style: TextStyle(color: AppTheme.warning)),
+          const SizedBox(height: 8),
+          if (server.account != null)
+            Text('Last known account: ${server.account!.username}',
+                style: const TextStyle(color: AppTheme.textSecondary)),
+          const Text(
+            'Retry to check your account and available actions. Opening the server does not confirm you still have access.',
+            style: TextStyle(color: AppTheme.textSecondary),
+          ),
+          if (server.publicAddress.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(server.publicAddress),
+            Wrap(spacing: 8, children: [
+              TextButton.icon(
+                onPressed: () => _copy(server.publicAddress, 'Address copied'),
+                icon: const Icon(Icons.copy, size: 16),
+                label: const Text('Copy address'),
+              ),
+              TextButton.icon(
+                onPressed: () => _open(server),
+                icon: const Icon(Icons.open_in_new, size: 16),
+                label: Text(_openLabel(server)),
+              ),
+            ]),
+          ],
+        ],
+      ));
 
   Widget _serviceInstructions(String type, {required int number}) {
     final label = mediaServerTypeLabel(type);

@@ -42,6 +42,36 @@ func createUser(t *testing.T, s *Store, username string) int64 {
 	return id
 }
 
+func TestAddUserGrantNotifiesOnlyNewCommittedPairs(t *testing.T) {
+	s := newTestStore(t)
+	user := createUser(t, s, "reader")
+	server := mkInstance(t, s, "jellyfin", "Library")
+	var notified []grant
+	s.SetGrantAddedObserver(func(userID int64, instanceID string) {
+		// The callback can read the committed row; no transaction holds the
+		// single SQLite connection while observers run.
+		grants, err := s.ListUserGrants(userID)
+		if err != nil || !reflect.DeepEqual(grants["jellyfin"], []string{server}) {
+			t.Errorf("observer saw grants = %v, %v", grants, err)
+		}
+		notified = append(notified, grant{userID, instanceID})
+	})
+	for i := 0; i < 2; i++ {
+		if err := s.AddUserGrant(user, server); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.AddUserGrant(9999, server); err == nil {
+		t.Fatal("unknown user accepted")
+	}
+	if err := s.AddUserGrant(user, "missing-server"); err == nil {
+		t.Fatal("unknown instance accepted")
+	}
+	if !reflect.DeepEqual(notified, []grant{{user, server}}) {
+		t.Fatalf("notifications = %v", notified)
+	}
+}
+
 func mkInstance(t *testing.T, s *Store, serviceType, name string) string {
 	t.Helper()
 	inst := &Instance{ServiceType: serviceType, Name: name, URL: "http://localhost", APIKey: "key"}

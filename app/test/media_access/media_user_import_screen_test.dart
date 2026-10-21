@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:cantinarr/core/models/backend_connection.dart';
+import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/widgets/app_ambient_background.dart';
 import 'package:cantinarr/features/auth/data/auth_service.dart';
@@ -6,6 +9,7 @@ import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/media_access/data/media_access_service.dart';
 import 'package:cantinarr/features/media_access/data/media_user_import_controller.dart';
 import 'package:cantinarr/features/media_access/ui/media_user_import_screen.dart';
+import 'package:cantinarr/features/settings/ui/user_onboarding_status.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -141,6 +145,10 @@ Future<void> _pump(WidgetTester tester, _Media media,
         authProvider.overrideWith(
             () => auth ?? _Auth(media, instances: servers, capable: capable)),
         mediaAccessServiceProvider.overrideWithValue(media),
+        backendClientProvider.overrideWithValue(Dio()
+          ..interceptors.add(InterceptorsWrapper(onRequest: (options, handler) {
+            handler.reject(DioException(requestOptions: options));
+          }))),
       ],
       child: MaterialApp(
           theme: AppTheme.dark.copyWith(platform: TargetPlatform.android),
@@ -391,6 +399,225 @@ void main() {
     await controller.submit();
     expect(media.imports, isEmpty);
     expect(media.links, isEmpty);
+  });
+
+  test('cleared uncertain rows still reconcile without replaying creation',
+      () async {
+    final media = _Media()
+      ..remote = const [RemoteMediaServerUser(id: 'a', name: 'Alice')];
+    media.onImport = (_) async {
+      media.failRead = true;
+      throw Exception('lost response');
+    };
+    final controller = _controller(media);
+    addTearDown(controller.dispose);
+    await controller.load();
+    controller.selectAll(controller.choices);
+    await controller.submit();
+    controller.clearSelection();
+    expect(controller.choices.single.selected, isFalse);
+    expect(controller.choices.single.uncertain, isTrue);
+    media.failRead = false;
+    media.users = [_user(10, 'Alice')];
+    media.accounts = [
+      const MediaServerAccountRow(
+          userId: 10,
+          instanceId: 'jellyfin-1',
+          instanceName: 'Family',
+          serviceType: 'jellyfin',
+          remoteUserId: 'a',
+          remoteUsername: 'Alice')
+    ];
+    await controller.reconcile();
+    expect(controller.choices.single.uncertain, isFalse);
+    expect(controller.choices.single.complete, isTrue);
+    expect(controller.successfulUserIds, [10]);
+    await controller.submit();
+    expect(media.imports, hasLength(1));
+    expect(media.links, isEmpty);
+  });
+
+  test('reconciliation blocks mutations until current state has been read',
+      () async {
+    final media = _Media()
+      ..remote = const [RemoteMediaServerUser(id: 'a', name: 'Alice')];
+    Completer<List<UserSummary>>? pendingRead;
+    final controller = MediaUserImportController(
+        service: media,
+        readUsers: () async =>
+            pendingRead == null ? media.users : pendingRead.future,
+        server: _server,
+        serverUrl: 'https://cantinarr.example',
+        supportsExplicitLinking: true,
+        supportsManagement: true);
+    addTearDown(controller.dispose);
+    await controller.load();
+    controller.selectAll(controller.choices);
+    pendingRead = Completer<List<UserSummary>>();
+    final read = controller.reconcile();
+    expect(controller.reconciling, isTrue);
+    expect(controller.accountsCurrent, isFalse);
+    expect(controller.canSubmit, isFalse);
+    await controller.submit();
+    expect(media.imports, isEmpty);
+    pendingRead.complete(media.users);
+    await read;
+    expect(controller.accountsCurrent, isTrue);
+    expect(controller.canSubmit, isTrue);
+  });
+
+  test('a persisted existing-user link keeps its confirmed retry target',
+      () async {
+    final media = _Media()
+      ..users = [_user(10, 'First'), _user(11, 'Second')]
+      ..remote = const [RemoteMediaServerUser(id: 'a', name: 'Alice')];
+    media.onLink = (id, remote) async {
+      final row = MediaServerAccountRow(
+          userId: id,
+          instanceId: 'jellyfin-1',
+          instanceName: 'Family',
+          serviceType: 'jellyfin',
+          remoteUserId: remote,
+          remoteUsername: 'Alice',
+          granted: media.links.length > 1);
+      media.accounts = [row];
+      return row;
+    };
+    final controller = _controller(media);
+    addTearDown(controller.dispose);
+    await controller.load();
+    final choice = controller.choices.single;
+    controller.mapTo(choice, 10);
+    controller.select(choice, true);
+    await controller.submit();
+    expect(choice.result!.created, isFalse);
+    expect(choice.result!.linked, isFalse);
+    expect(choice.result!.userId, 10);
+    controller.mapTo(choice, 11);
+    expect(choice.targetUserId, 10);
+    await controller.submit();
+    expect(media.links.map((call) => call.$1), [10, 10]);
+    expect(choice.complete, isTrue);
+  });
+
+  test(
+      'a deleted explicit target requires a fresh choice without implicit creation',
+      () async {
+    final media = _Media()
+      ..users = [_user(10, 'First'), _user(11, 'Second')]
+      ..remote = const [RemoteMediaServerUser(id: 'a', name: 'Alice')];
+    media.onLink = (id, remote) async {
+      media.users = [_user(11, 'Second')];
+      throw const MediaAccessException(status: 404);
+    };
+    final controller = _controller(media);
+    addTearDown(controller.dispose);
+    await controller.load();
+    final choice = controller.choices.single;
+    controller.mapTo(choice, 10);
+    controller.select(choice, true);
+    await controller.submit();
+    expect(choice.targetUserId, isNull);
+    expect(choice.mappingUnavailable, isTrue);
+    expect(choice.requiresMapping, isTrue);
+    expect(choice.selected, isFalse);
+    expect(controller.canSubmit, isFalse);
+    controller.mapTo(choice, null);
+    expect(choice.requiresMapping, isTrue);
+    controller.mapTo(choice, 11);
+    controller.select(choice, true);
+    expect(controller.canSubmit, isTrue);
+    expect(media.imports, isEmpty);
+  });
+
+  testWidgets(
+      'a failed current-state check clears stale active status and refreshes next steps',
+      (tester) async {
+    final media = _Media()
+      ..users = [_user(9, 'Existing')]
+      ..remote = const [
+        RemoteMediaServerUser(id: 'old', name: 'Existing'),
+        RemoteMediaServerUser(
+            id: 'a', name: 'Alice', isDisabled: true, pending: true),
+      ]
+      ..accounts = const [
+        MediaServerAccountRow(
+            userId: 9,
+            instanceId: 'jellyfin-1',
+            instanceName: 'Family',
+            serviceType: 'jellyfin',
+            remoteUserId: 'old',
+            remoteUsername: 'Existing',
+            verified: true)
+      ];
+    media.onImport = (_) async {
+      media.users = [_user(9, 'Existing'), _user(10, 'Alice')];
+      media.accounts = [
+        const MediaServerAccountRow(
+            userId: 9,
+            instanceId: 'jellyfin-1',
+            instanceName: 'Family',
+            serviceType: 'jellyfin',
+            remoteUserId: 'old',
+            remoteUsername: 'Existing',
+            verified: true),
+        const MediaServerAccountRow(
+            userId: 10,
+            instanceId: 'jellyfin-1',
+            instanceName: 'Family',
+            serviceType: 'jellyfin',
+            remoteUserId: 'a',
+            remoteUsername: 'Alice',
+            verified: true)
+      ];
+      return const [
+        MediaServerImportResult(
+            remoteUserId: 'a',
+            remoteUsername: 'Alice',
+            userId: 10,
+            username: 'Alice',
+            created: true,
+            linked: true,
+            link: 'original-invitation')
+      ];
+    };
+    await _pump(tester, media);
+    await tester.tap(find.text('Select all'));
+    await tester.pump();
+    await tester.tap(find.text('Import selected accounts'));
+    await tester.pumpAndSettle();
+    final freshAccount = tester.widget<CheckboxListTile>(find
+        .descendant(
+            of: find.byKey(const ValueKey('account-a')),
+            matching: find.byType(CheckboxListTile))
+        .first);
+    expect((freshAccount.subtitle! as Text).data, contains('Active on server'));
+    expect((freshAccount.subtitle! as Text).data, isNot(contains('Disabled')));
+    expect((freshAccount.subtitle! as Text).data, isNot(contains('Awaiting')));
+    final before =
+        tester.widget<UserOnboardingStatus>(find.byType(UserOnboardingStatus));
+    media.failRead = true;
+    await tester.ensureVisible(find.text('Check current state'));
+    await tester.tap(find.text('Check current state'));
+    await tester.pumpAndSettle();
+    final account = tester.widget<CheckboxListTile>(find
+        .descendant(
+            of: find.byKey(const ValueKey('account-a')),
+            matching: find.byType(CheckboxListTile))
+        .first);
+    expect((account.subtitle! as Text).data,
+        contains('Server access unconfirmed'));
+    expect(
+        (account.subtitle! as Text).data, isNot(contains('Active on server')));
+    expect(find.textContaining('Last known link to Existing'), findsOneWidget);
+    expect(find.textContaining('Already linked to Existing'), findsNothing);
+    final after =
+        tester.widget<UserOnboardingStatus>(find.byType(UserOnboardingStatus));
+    expect(after.key, isNot(before.key));
+    expect(after.invitationLink, 'original-invitation');
+    expect(find.textContaining('Could not verify media-server accounts'),
+        findsOneWidget);
+    expect(media.imports, hasLength(1));
   });
 
   test('refresh keeps completed receipts for removed remote accounts',

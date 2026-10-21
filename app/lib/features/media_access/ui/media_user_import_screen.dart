@@ -247,13 +247,14 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
                           '${controller.selectedIncompleteCount} to import · '
                           '${MediaUserImportController.maxSelection} maximum')),
                   TextButton(
-                      onPressed: controller.busy
+                      onPressed: controller.busy || controller.reconciling
                           ? null
                           : () => controller.selectAll(visible),
                       child: const Text('Select all')),
                   TextButton(
-                      onPressed:
-                          controller.busy ? null : controller.clearSelection,
+                      onPressed: controller.busy || controller.reconciling
+                          ? null
+                          : controller.clearSelection,
                       child: const Text('Clear')),
                 ]),
                 if (visible.isEmpty)
@@ -295,6 +296,7 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
                 OutlinedButton.icon(
                   onPressed: _assigning ||
                           controller.busy ||
+                          controller.reconciling ||
                           controller.successfulUserIds
                               .every(_excludedAssignments.contains)
                       ? null
@@ -385,7 +387,7 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
       if (controller.error != null) ...[
         _message(controller.error!, error: true),
         TextButton(
-            onPressed: controller.busy
+            onPressed: controller.busy || controller.reconciling
                 ? null
                 : controller.submitted
                     ? controller.reconcile
@@ -395,7 +397,9 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
                 : 'Refresh accounts')),
       ] else if (controller.submitted)
         TextButton.icon(
-            onPressed: controller.busy ? null : controller.reconcile,
+            onPressed: controller.busy || controller.reconciling
+                ? null
+                : controller.reconcile,
             icon: const Icon(Icons.refresh),
             label: const Text('Check current state')),
     ]);
@@ -422,12 +426,35 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
               subtitle: Text(
                   [
                     if (!choice.listed) 'No longer listed by the media server',
+                    if (choice.mappingUnavailable)
+                      'The selected Cantinarr user is no longer available. Choose another user.',
                     if (remote.isAdministrator) 'Protected administrator',
-                    if (remote.isDisabled) 'Disabled on server',
-                    if (remote.pending) 'Awaiting invitation acceptance',
-                    if (choice.alreadyLinked) 'Already linked to $linkedOwner',
-                    if (choice.complete) 'Linked to ${result!.username}',
-                    if (choice.account != null) choice.account!.accessLabel,
+                    if (remote.isDisabled &&
+                        choice.account == null &&
+                        result == null)
+                      controller.submitted
+                          ? 'Last listed as disabled'
+                          : 'Disabled on server',
+                    if (remote.pending &&
+                        choice.account == null &&
+                        result == null)
+                      controller.submitted
+                          ? 'Last listed with a pending invitation'
+                          : 'Awaiting invitation acceptance',
+                    if (choice.alreadyLinked)
+                      controller.accountsCurrent
+                          ? 'Already linked to $linkedOwner'
+                          : 'Last known link to $linkedOwner',
+                    if (choice.complete) 'Imported as ${result!.username}',
+                    if (!controller.accountsCurrent &&
+                        (choice.account != null || result != null))
+                      'Server access unconfirmed',
+                    if (controller.accountsCurrent && choice.account != null)
+                      choice.account!.accessLabel,
+                    if (controller.accountsCurrent &&
+                        choice.complete &&
+                        choice.account == null)
+                      'No current media-account link',
                     if (!choice.alreadyLinked && !choice.complete)
                       choice.targetUserId != null
                           ? 'Link to ${controller.ownerName(choice.targetUserId!)}'
@@ -439,7 +466,7 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
               value: choice.complete
                   ? !_excludedAssignments.contains(result!.userId)
                   : choice.selected,
-              onChanged: controller.busy
+              onChanged: controller.busy || controller.reconciling
                   ? null
                   : choice.complete
                       ? (value) {
@@ -456,10 +483,12 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
                           : null,
             ),
             if (!choice.complete && !choice.alreadyLinked && !choice.uncertain)
-              if (result?.created == true)
-                Text(
-                    'User ${result!.username} was created. Retrying completes the '
-                    'link for this user and keeps their invitation.')
+              if (result?.userId != null)
+                Text(result!.created
+                    ? 'User ${result.username} was created. Retrying completes the '
+                        'link for this user and keeps their invitation.'
+                    : 'Continue linking to ${result.username}. Retrying keeps '
+                        'this selected Cantinarr user.')
               else
                 DropdownButtonFormField<int>(
                   key: ValueKey('mapping-${remote.id}-${choice.targetUserId}'),
@@ -480,7 +509,7 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
                           child: Text(
                               '${user.username}${user.isAdmin ? ' (administrator)' : ''}')),
                   ],
-                  onChanged: controller.busy
+                  onChanged: controller.busy || controller.reconciling
                       ? null
                       : (value) =>
                           controller.mapTo(choice, value == -1 ? null : value),
@@ -508,12 +537,19 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
                       : Icons.expand_more),
                   label: const Text('Sign-in and access next steps')),
               if (_expanded.contains(remote.id))
-                UserOnboardingStatus(
-                  key: ValueKey('status-${remote.id}-$_statusVersion'),
-                  userId: result.userId!,
-                  invitationLink: result.link,
-                  originSource: result.originSource,
-                ),
+                if (controller.busy || controller.reconciling)
+                  const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text('Checking current sign-in and access status…'),
+                  )
+                else
+                  UserOnboardingStatus(
+                    key: ValueKey('status-${remote.id}-$_statusVersion-'
+                        '${controller.accessReadRevision}'),
+                    userId: result.userId!,
+                    invitationLink: result.link,
+                    originSource: result.originSource,
+                  ),
               TextButton(
                   onPressed: () async {
                     await context

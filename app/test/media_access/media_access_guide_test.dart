@@ -574,6 +574,96 @@ void main() {
     expect(find.text('Access active'), findsNothing);
   });
 
+  for (final server in [_jellyfin, _emby, _audiobookshelf, _plex]) {
+    testWidgets(
+        '${server.serviceType} failed refresh replaces active access with unknown and retains identity',
+        (tester) async {
+      var unavailable = false;
+      final adapter = await _pumpGuide(tester,
+          instances: [server],
+          size: const Size(390, 1200),
+          handlers: {
+            'GET /api/media-servers': (_, __) => unavailable
+                ? const _Reply(0, {})
+                : _Reply(200, [
+                    {
+                      'instance_id': server.id,
+                      'service_type': server.serviceType,
+                      'name': server.name,
+                      'public_address': 'https://media.example.com',
+                      'account': _account(),
+                    }
+                  ]),
+          });
+      expect(find.text('Access active'), findsOneWidget);
+
+      unavailable = true;
+      await _lastAuth!.refreshConfig();
+      await tester.pumpAndSettle();
+
+      expect(find.text('Access active'), findsNothing);
+      expect(find.text('Access could not be verified'), findsOneWidget);
+      expect(find.text('Last known account: alice'), findsOneWidget);
+      expect(
+          find.text(
+              '${mediaServerTypeLabel(server.serviceType)} · ${server.name}'),
+          findsOneWidget);
+      expect(find.text('https://media.example.com'), findsOneWidget);
+      expect(find.text('Retry'), findsOneWidget);
+      expect(find.text('Open ${mediaServerTypeLabel(server.serviceType)}'),
+          findsOneWidget);
+      expect(find.textContaining('Create my'), findsNothing);
+      expect(find.textContaining('Link my'), findsNothing);
+      expect(find.text('Share my Plex email'), findsNothing);
+      expect(find.text('Wrong email?'), findsNothing);
+      expect(
+          adapter.requests.every((request) => request.method == 'GET'), isTrue);
+      expect(tester.takeException(), isNull);
+
+      unavailable = false;
+      await tester.tap(find.widgetWithText(TextButton, 'Retry'));
+      await tester.pumpAndSettle();
+      expect(find.text('Access active'), findsOneWidget);
+      expect(find.text('Access could not be verified'), findsNothing);
+    });
+  }
+
+  testWidgets(
+      'successful retry restores pending and intentionally unlinked states',
+      (tester) async {
+    var unavailable = false;
+    await _pumpGuide(tester,
+        instances: const [_plex, _jellyfin],
+        size: const Size(390, 1600),
+        handlers: {
+          'GET /api/media-servers': (_, __) => unavailable
+              ? const _Reply(503, {})
+              : _Reply(200, [
+                  _plexServer(account: _share()),
+                  {..._server(), 'auto_link_suppressed': true},
+                ]),
+        });
+    expect(find.text('Awaiting invitation acceptance'), findsOneWidget);
+    expect(find.text('Account intentionally unlinked'), findsOneWidget);
+
+    unavailable = true;
+    await _lastAuth!.refreshConfig();
+    await tester.pumpAndSettle();
+    expect(find.text('Access could not be verified'), findsNWidgets(2));
+    expect(find.text('Awaiting invitation acceptance'), findsNothing);
+    expect(find.text('Account intentionally unlinked'), findsNothing);
+    expect(find.text('Wrong email?'), findsNothing);
+    expect(find.text('Link my Jellyfin account'), findsNothing);
+
+    unavailable = false;
+    await tester.tap(find.widgetWithText(TextButton, 'Retry'));
+    await tester.pumpAndSettle();
+    expect(find.text('Awaiting invitation acceptance'), findsOneWidget);
+    expect(find.text('Account intentionally unlinked'), findsOneWidget);
+    expect(find.text('Wrong email?'), findsOneWidget);
+    expect(find.text('Link my Jellyfin account'), findsOneWidget);
+  });
+
   testWidgets('explicitly unlinked Plex server offers per-server relink',
       (tester) async {
     await _pumpGuide(tester, supportsManagement: true, instances: const [
@@ -1168,6 +1258,27 @@ void main() {
     expect(find.text("Couldn't load your media servers."), findsNothing);
     expect(find.widgetWithText(ElevatedButton, 'Create my Jellyfin account'),
         findsOneWidget);
+  });
+
+  testWidgets('a failed refresh does not preserve an empty ready state',
+      (tester) async {
+    var unavailable = false;
+    await _pumpGuide(tester, instances: const [], handlers: {
+      'GET /api/media-servers': (_, __) =>
+          unavailable ? const _Reply(503, {}) : const _Reply(200, <Object>[]),
+    });
+    expect(find.textContaining('No media server is shared with you yet'),
+        findsOneWidget);
+
+    unavailable = true;
+    await _lastAuth!.refreshConfig();
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('No media server is shared with you yet'),
+        findsNothing);
+    expect(find.text("Couldn't load your media servers."), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Retry'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('the password never reaches the safe HTTP log', (tester) async {
