@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../core/widgets/action_sheet.dart';
 import '../../../core/widgets/library_actions.dart';
@@ -16,10 +17,12 @@ Future<void> showMovieActions(
   VoidCallback? onChanged,
   VoidCallback? onRemoved,
 }) async {
-  final action = selectedAction ?? await showActionSheet<LibraryAction>(
-    context, title: movie.title,
-    actions: libraryActions('movie', monitored: movie.monitored),
-  );
+  final action = selectedAction ??
+      await showActionSheet<LibraryAction>(
+        context,
+        title: movie.title,
+        actions: libraryActions('movie', monitored: movie.monitored),
+      );
   if (action == null || !context.mounted) return;
 
   void toast(String message) {
@@ -32,14 +35,16 @@ Future<void> showMovieActions(
     switch (action) {
       case LibraryAction.search:
         await service.searchMovie(movie.id);
-        toast('Searching for ${movie.title}…');
+        toast(context.l10n.adminSearchingFor2((movie.title).toString()));
       case LibraryAction.interactive:
         await Navigator.of(context, rootNavigator: true).push(AmbientPageRoute(
-          builder: (_) => RadarrReleasesScreen(instanceId: instanceId,
-            movieId: movie.id, movieTitle: movie.title)));
+            builder: (_) => RadarrReleasesScreen(
+                instanceId: instanceId,
+                movieId: movie.id,
+                movieTitle: movie.title)));
       case LibraryAction.rescan:
         await service.rescanMovie(movie.id);
-        toast('Rescan queued for ${movie.title}');
+        toast(context.l10n.adminRescanQueuedFor((movie.title).toString()));
         if (context.mounted) onChanged?.call();
       case LibraryAction.edit:
         final saved = await Navigator.of(context, rootNavigator: true)
@@ -49,22 +54,23 @@ Future<void> showMovieActions(
         if (saved == true && context.mounted) onChanged?.call();
       case LibraryAction.refresh:
         await service.refreshMovie(movie.id);
-        toast('Refresh queued for ${movie.title}');
+        toast(context.l10n.adminRefreshQueuedFor((movie.title).toString()));
         if (context.mounted) onChanged?.call();
       case LibraryAction.remove:
-        final deleteFiles = await confirmLibraryRemoval(context, title: movie.title, noun: 'movie', service: 'Radarr');
+        final deleteFiles = await confirmLibraryRemoval(context,
+            title: movie.title, noun: 'movie', service: 'Radarr');
         if (deleteFiles == null) return;
         await service.deleteMovie(movie.id, deleteFiles: deleteFiles);
-        toast('Removed ${movie.title}');
+        toast(context.l10n.adminRemoved((movie.title).toString()));
         if (context.mounted) onRemoved?.call();
       case LibraryAction.monitoring:
         await service.setMovieMonitored(movie.id, monitored: !movie.monitored);
         toast(movie.monitored
-            ? 'Stopped monitoring ${movie.title}'
-            : 'Monitoring ${movie.title}');
+            ? context.l10n.adminStoppedMonitoring2((movie.title).toString())
+            : context.l10n.adminMonitoring2((movie.title).toString()));
         if (context.mounted) onChanged?.call();
     }
   } catch (e) {
-    toast('Action failed: $e');
+    toast(context.l10n.adminActionFailed((e).toString()));
   }
 }

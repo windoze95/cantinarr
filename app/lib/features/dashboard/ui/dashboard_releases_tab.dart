@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -112,8 +113,8 @@ class _DashboardReleasesTabState extends ConsumerState<DashboardReleasesTab> {
         final seriesById = {for (final s in series) s.id: s};
         final raw = await service.getCalendar(start: start, end: end);
         for (final entry in raw) {
-          final event = releaseEventFromSonarr(entry, seriesById,
-              instanceId: sonarr.id);
+          final event =
+              releaseEventFromSonarr(entry, seriesById, instanceId: sonarr.id);
           if (event != null) events.add(event);
         }
       } catch (_) {
@@ -187,19 +188,19 @@ class _DashboardReleasesTabState extends ConsumerState<DashboardReleasesTab> {
     }
 
     if (!hasInstances) {
-      return const _StatusMessage(
+      return _StatusMessage(
         icon: Icons.event_outlined,
-        title: 'Nothing to schedule yet',
-        message: 'Connect a Radarr, Sonarr, or Lidarr service to see when '
-            'your movies, shows, and albums drop.',
+        title: context.l10n.browseNothingToScheduleYet,
+        message: context.l10n
+            .browseConnectARadarrSonarrOrLidarrServiceToSeeWhenBrowseYourMoviesShowsAndAlbumsDrop,
       );
     }
 
     if (_loadError) {
       return _StatusMessage(
         icon: Icons.error_outline,
-        title: "Couldn't load releases",
-        message: 'Check your connection and try again.',
+        title: context.l10n.browseCouldnTLoadReleases,
+        message: context.l10n.browseCheckYourConnectionAndTryAgain,
         onRetry: _load,
       );
     }
@@ -233,13 +234,13 @@ class _DashboardReleasesTabState extends ConsumerState<DashboardReleasesTab> {
         onRefresh: _load,
         color: AppTheme.accent,
         child: ListView(
-          children: const [
+          children: [
             SizedBox(height: 120),
             _StatusMessage(
               icon: Icons.event_busy_outlined,
-              title: 'No upcoming releases',
-              message:
-                  'Upcoming movies and episodes in your library will appear here.',
+              title: context.l10n.browseNoUpcomingReleases,
+              message: context.l10n
+                  .browseUpcomingMoviesAndEpisodesInYourLibraryWillAppearHere,
             ),
           ],
         ),
@@ -307,9 +308,10 @@ class _DashboardReleasesTabState extends ConsumerState<DashboardReleasesTab> {
               hasScrollBody: false,
               child: _StatusMessage(
                 icon: Icons.event_available_outlined,
-                title: 'Nothing on '
-                    '${DateFormat('MMM d').format(_selectedDay)}',
-                message: 'Pick another day to see what drops.',
+                title: context.l10n.browseNothingOnDate(
+                    DateFormat.MMMd(context.l10n.dateLocale)
+                        .format(_selectedDay)),
+                message: context.l10n.browsePickAnotherDayToSeeWhatDrops,
               ),
             )
           else
@@ -348,9 +350,10 @@ class _ViewToggle extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _segment(_ReleasesView.list, Icons.view_agenda_outlined, 'List'),
+          _segment(_ReleasesView.list, Icons.view_agenda_outlined,
+              context.l10n.browseList),
           _segment(_ReleasesView.calendar, Icons.calendar_month_outlined,
-              'Calendar'),
+              context.l10n.browseCalendar),
         ],
       ),
     );
@@ -405,14 +408,17 @@ class _ReleaseTile extends StatelessWidget {
     final isTv = event.mediaType == ReleaseMediaType.tv;
     final isMusic = event.mediaType == ReleaseMediaType.music;
     final tmdbId = event.tmdbId;
-    final timeLabel = isTv ? DateFormat('h:mm a').format(event.date) : null;
+    final timeLabel = isTv
+        ? MaterialLocalizations.of(context).formatTimeOfDay(
+            TimeOfDay.fromDateTime(event.date),
+            alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context))
+        : null;
 
     final VoidCallback? onTap;
     if (isMusic) {
       final foreignId = event.foreignId;
       onTap = foreignId != null
-          ? () => context.push(
-              '/detail/album/$foreignId'
+          ? () => context.push('/detail/album/$foreignId'
               '?title=${Uri.encodeComponent(event.title)}'
               '${event.instanceId != null ? '&instance_id=${event.instanceId}' : ''}')
           : null;
@@ -423,63 +429,67 @@ class _ReleaseTile extends StatelessWidget {
     }
 
     Widget tile(VoidCallback? tap) => InkWell(
-      onTap: tap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            _poster(isTv, isMusic),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    event.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: AppTheme.textPrimary,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Row(
+          onTap: tap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                _poster(isTv, isMusic),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(
-                        isMusic
-                            ? Icons.album_outlined
-                            : (isTv ? Icons.tv : Icons.movie_outlined),
-                        size: 13,
-                        color: AppTheme.textSecondary,
-                      ),
-                      const SizedBox(width: 5),
-                      Expanded(
-                        child: Text(
-                          event.subtitle ??
-                              (isMusic ? 'Album' : (isTv ? 'Episode' : 'Movie')),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: AppTheme.textSecondary,
-                            fontSize: 13,
-                          ),
+                      Text(
+                        event.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
                         ),
+                      ),
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          Icon(
+                            isMusic
+                                ? Icons.album_outlined
+                                : (isTv ? Icons.tv : Icons.movie_outlined),
+                            size: 13,
+                            color: AppTheme.textSecondary,
+                          ),
+                          const SizedBox(width: 5),
+                          Expanded(
+                            child: Text(
+                              event.subtitle ??
+                                  (isMusic
+                                      ? context.l10n.browseAlbum
+                                      : (isTv
+                                          ? context.l10n.browseEpisode
+                                          : context.l10n.browseMovie)),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: AppTheme.textSecondary,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(width: 8),
+                _trailing(timeLabel),
+              ],
             ),
-            const SizedBox(width: 8),
-            _trailing(timeLabel),
-          ],
-        ),
-      ),
-    );
+          ),
+        );
     if (isTv && event.instanceId != null && event.seriesId != null) {
       return TVLibraryLink(
         instanceId: event.instanceId!,
@@ -555,14 +565,14 @@ class _MonthCalendar extends StatelessWidget {
     required this.onMonthDelta,
   });
 
-  static const _weekdayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-
   @override
   Widget build(BuildContext context) {
     final monthStart = DateTime(month.year, month.month, 1);
     final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
     // weekday: Mon=1..Sun=7 — shift so the grid starts on Sunday.
-    final leading = monthStart.weekday % 7;
+    final localizations = MaterialLocalizations.of(context);
+    final firstDay = localizations.firstDayOfWeekIndex;
+    final leading = (monthStart.weekday % 7 - firstDay + 7) % 7;
     final cellCount = leading + daysInMonth;
 
     return Column(
@@ -575,12 +585,13 @@ class _MonthCalendar extends StatelessWidget {
                 icon: const Icon(Icons.chevron_left,
                     color: AppTheme.textSecondary),
                 onPressed: () => onMonthDelta(-1),
-                tooltip: 'Previous month',
+                tooltip: context.l10n.browsePreviousMonth,
               ),
               Expanded(
                 child: Center(
                   child: Text(
-                    DateFormat('MMMM yyyy').format(monthStart),
+                    DateFormat.yMMMM(context.l10n.dateLocale)
+                        .format(monthStart),
                     style: const TextStyle(
                       color: AppTheme.textPrimary,
                       fontSize: 16,
@@ -593,7 +604,7 @@ class _MonthCalendar extends StatelessWidget {
                 icon: const Icon(Icons.chevron_right,
                     color: AppTheme.textSecondary),
                 onPressed: () => onMonthDelta(1),
-                tooltip: 'Next month',
+                tooltip: context.l10n.browseNextMonth,
               ),
             ],
           ),
@@ -602,11 +613,11 @@ class _MonthCalendar extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 8),
           child: Row(
             children: [
-              for (final label in _weekdayLabels)
+              for (var i = 0; i < 7; i++)
                 Expanded(
                   child: Center(
                     child: Text(
-                      label,
+                      localizations.narrowWeekdays[(firstDay + i) % 7],
                       style: const TextStyle(
                         color: AppTheme.textSecondary,
                         fontSize: 12,
@@ -762,7 +773,7 @@ class _StatusMessage extends StatelessWidget {
               const SizedBox(height: 20),
               ElevatedButton(
                 onPressed: onRetry,
-                child: const Text('Retry'),
+                child: Text(context.l10n.browseRetry),
               ),
             ],
           ],

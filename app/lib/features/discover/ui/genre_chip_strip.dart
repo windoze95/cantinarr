@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -21,8 +22,11 @@ class GenreChipStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (genres.isEmpty) return const SizedBox.shrink();
-    final horizontalPadding = MediaQuery.sizeOf(context).width >= 900 ? 24.0 : 16.0;
-    final everything = mediaType == MediaType.tv ? 'All shows' : 'All movies';
+    final horizontalPadding =
+        MediaQuery.sizeOf(context).width >= 900 ? 24.0 : 16.0;
+    final everything = mediaType == MediaType.tv
+        ? context.l10n.browseAllShows
+        : context.l10n.browseAllMovies;
 
     return Padding(
       padding: const EdgeInsets.only(top: 20),
@@ -32,7 +36,7 @@ class GenreChipStrip extends StatelessWidget {
           const SizedBox(height: 4),
           Padding(
             padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
-            child: const SectionHeader(title: 'Browse by genre'),
+            child: SectionHeader(title: context.l10n.browseBrowseByGenre),
           ),
           const SizedBox(height: 12),
           SizedBox(

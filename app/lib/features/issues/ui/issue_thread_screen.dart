@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/operations_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -104,7 +106,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
       }
     }
     final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
-    return m != null ? m.group(1)! : 'Something went wrong';
+    return m != null ? m.group(1)! : context.l10n.opsSomethingWentWrongMessage;
   }
 
   Future<void> _load({bool initial = false}) async {
@@ -210,20 +212,18 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
       context: context,
       builder: (dialogContext) => AlertDialog(
         backgroundColor: AppTheme.surface,
-        title: const Text(
-          'Close this as fixed?',
+        title: Text(
+          context.l10n.opsCloseThisAsFixed,
           style: TextStyle(color: AppTheme.textPrimary),
         ),
-        content: const Text(
-          'This closes the conversation. You won’t be able to reply while it '
-          'is closed. If the problem continues, ask an administrator to take '
-          'another look.',
+        content: Text(
+          context.l10n.opsThisClosesTheConversationYouWonT,
           style: TextStyle(color: AppTheme.textSecondary, height: 1.35),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Not yet'),
+            child: Text(context.l10n.opsNotYet),
           ),
           ElevatedButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
@@ -231,7 +231,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
               backgroundColor: AppTheme.available,
               foregroundColor: AppTheme.background,
             ),
-            child: const Text('Yes, it’s fixed'),
+            child: Text(context.l10n.opsYesItSFixed),
           ),
         ],
       ),
@@ -244,7 +244,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
       await _load();
       if (!mounted) return;
       ref.read(issueQueueCountsProvider.notifier).refresh();
-      _showSnack('Thanks for checking. This is closed.');
+      _showSnack(context.l10n.opsThanksForCheckingThisIsClosed);
     } catch (e) {
       // The window can shut under us: another fix may have started executing,
       // or an admin may have completed the issue first. Say what the server
@@ -270,19 +270,21 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
       builder: (dialogContext) => AlertDialog(
         backgroundColor: AppTheme.surface,
         title: Text(
-          issue.isPrevention ? 'Dismiss this notice?' : 'Dismiss this issue?',
+          issue.isPrevention
+              ? context.l10n.opsDismissThisNotice
+              : context.l10n.opsDismissThisIssue,
           style: const TextStyle(color: AppTheme.textPrimary),
         ),
         content: Text(
           issue.isPrevention
-              ? 'Dismissing silences this notice for about 6 months. It only returns if the problem re-forms from newer incidents.'
-              : 'This closes the issue without applying any pending fixes. Pending fixes will no longer be available for approval.',
+              ? context.l10n.opsDismissingSilencesThisNoticeForAbout6
+              : context.l10n.opsThisClosesTheIssueWithoutApplyingAny,
           style: const TextStyle(color: AppTheme.textSecondary),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.opsCancel),
           ),
           ElevatedButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
@@ -290,7 +292,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
               backgroundColor: AppTheme.error,
               foregroundColor: AppTheme.background,
             ),
-            child: const Text('Dismiss issue'),
+            child: Text(context.l10n.opsDismissIssue),
           ),
         ],
       ),
@@ -304,7 +306,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
       ref.read(issueQueueCountsProvider.notifier).refresh();
       ref.read(pendingAgentActionsProvider.notifier).refresh();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Issue dismissed.')),
+        SnackBar(content: Text(context.l10n.opsIssueDismissed)),
       );
     } catch (e) {
       if (!mounted) return;
@@ -348,8 +350,8 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
       ref.read(pendingAgentActionsProvider.notifier).refresh();
       _showSnack(
         disposition == AdminIssueDisposition.resolved
-            ? 'Issue marked resolved.'
-            : 'Issue closed without a fix.',
+            ? context.l10n.opsIssueMarkedResolved
+            : context.l10n.opsIssueClosedWithoutAFix,
       );
     } catch (e) {
       // A terminal transition is a CAS. If another admin/agent or an approval
@@ -360,8 +362,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
       if (!mounted) return;
       final current = _thread?.issue;
       if (conflict || current?.status.isTerminal == true) {
-        _showSnack(
-            'The issue changed before completion. Showing its current state.');
+        _showSnack(context.l10n.opsTheIssueChangedBeforeCompletionShowingIts);
       } else {
         _showSnack(_friendlyError(e));
       }
@@ -380,7 +381,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
       if (!mounted) return;
       ref.read(issueQueueCountsProvider.notifier).refresh();
       ref.read(pendingAgentActionsProvider.notifier).refresh();
-      _showSnack('Issue reopened for review.');
+      _showSnack(context.l10n.opsIssueReopenedForReview);
     } catch (e) {
       await _load();
       if (!mounted) return;
@@ -393,7 +394,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
           content: Text(_friendlyError(e)),
           action: existingId > 0
               ? SnackBarAction(
-                  label: 'Open issue',
+                  label: context.l10n.opsOpenIssue,
                   onPressed: () => context.push('/issues/$existingId'),
                 )
               : null,
@@ -425,12 +426,12 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
       appBar: AppBar(
         title: Text(thread?.issue.title.isNotEmpty == true
             ? thread!.issue.title
-            : 'Issue'),
+            : context.l10n.opsIssue),
         actions: [
           if (isAdmin && thread != null && !thread.issue.status.isTerminal)
             IconButton(
               onPressed: _dismissing || _completing ? null : _dismissIssue,
-              tooltip: 'Dismiss issue',
+              tooltip: context.l10n.opsDismissIssue,
               icon: _dismissing
                   ? const SizedBox(
                       width: 18,
@@ -454,13 +455,15 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(_friendlyError(_error ?? 'Could not load issue'),
+                        Text(
+                            _friendlyError(
+                                _error ?? context.l10n.opsCouldNotLoadIssue),
                             style: const TextStyle(color: AppTheme.error),
                             textAlign: TextAlign.center),
                         const SizedBox(height: 12),
                         ElevatedButton(
                           onPressed: () => _load(initial: true),
-                          child: const Text('Retry'),
+                          child: Text(context.l10n.opsRetry),
                         ),
                       ],
                     ),
@@ -512,22 +515,22 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
                     const SizedBox(height: 10),
                     IssueRefreshBanner(
                       message:
-                          "Couldn't refresh this issue. Showing the last update.",
+                          context.l10n.opsCouldnTRefreshThisIssueShowingThe,
                       onRetry: _load,
                     ),
                   ],
                   if (_activityError != null) ...[
                     const SizedBox(height: 10),
                     IssueRefreshBanner(
-                      message:
-                          "Agent activity couldn't be refreshed. History may be incomplete.",
+                      message: context
+                          .l10n.opsAgentActivityCouldnTBeRefreshedHistory,
                       onRetry: _load,
                     ),
                   ],
                   const SizedBox(height: 16),
                   for (final msg in thread.messages) _MessageRow(message: msg),
                   if (_runs.isNotEmpty) ...[
-                    const _ActivityHeading('Agent investigations'),
+                    _ActivityHeading(context.l10n.opsAgentInvestigations),
                     for (final run in _runs)
                       _RunSummaryTile(
                         run: run,
@@ -535,7 +538,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
                       ),
                   ],
                   if (_actions.isNotEmpty)
-                    const _ActivityHeading('Agent fixes'),
+                    _ActivityHeading(context.l10n.opsAgentFixes),
                   // Every historical action remains visible here. Only a
                   // server-authorized, locally valid proposal renders controls.
                   for (final action in _actions)
@@ -580,7 +583,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.refresh),
-              label: const Text('Reopen issue'),
+              label: Text(context.l10n.opsReopenIssue),
             ),
           ),
         if (!issue.status.isTracking)
@@ -589,8 +592,8 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
             sending: _sending,
             enabled: !issue.status.isTerminal,
             hintText: issue.status == IssueStatus.awaitingUser
-                ? 'Answer the question…'
-                : 'Add a reply…',
+                ? context.l10n.opsAnswerTheQuestion
+                : context.l10n.opsAddAReply,
             onSend: _sendReply,
           ),
       ],
@@ -610,8 +613,8 @@ class _ReporterWaitBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = status == IssueStatus.awaitingApproval
-        ? "A fix is ready and waiting for an administrator's approval. Nothing is needed from you right now."
-        : 'An administrator is taking a closer look at this.';
+        ? context.l10n.opsAFixIsReadyAndWaitingFor
+        : context.l10n.opsAnAdministratorIsTakingACloserLook;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -671,7 +674,7 @@ class _PassiveTrackingBanner extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  status.label,
+                  localizeOperationsLabel(context, status.label),
                   style: const TextStyle(
                     color: AppTheme.textPrimary,
                     fontSize: 13,
@@ -679,9 +682,8 @@ class _PassiveTrackingBanner extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 4),
-                const Text(
-                  'We’re tracking this quietly and will step in if it still '
-                  'needs help.',
+                Text(
+                  context.l10n.opsWeReTrackingThisQuietlyAndWill,
                   style: TextStyle(
                     color: AppTheme.textSecondary,
                     fontSize: 13,
@@ -723,8 +725,8 @@ class _ReporterConfirmPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Is it right now?',
+          Text(
+            context.l10n.opsIsItRightNow,
             style: TextStyle(
               color: AppTheme.textPrimary,
               fontSize: 14,
@@ -732,10 +734,8 @@ class _ReporterConfirmPanel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          const Text(
-            'You’re the one who can tell — have a look, and if the content is '
-            'what you expected, close this out. Still not right? Reply below '
-            'instead and we’ll keep looking.',
+          Text(
+            context.l10n.opsYouReTheOneWhoCanTell,
             style: TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 12,
@@ -755,7 +755,7 @@ class _ReporterConfirmPanel extends StatelessWidget {
                     ),
                   )
                 : const Icon(Icons.check_circle_outline, size: 18),
-            label: const Text('This is fixed'),
+            label: Text(context.l10n.opsThisIsFixed),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.available,
               foregroundColor: AppTheme.background,
@@ -795,7 +795,9 @@ class _AdminCompletionPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            needsReview ? 'Complete after admin review' : 'Complete this issue',
+            needsReview
+                ? context.l10n.opsCompleteAfterAdminReview
+                : context.l10n.opsCompleteThisIssue,
             style: const TextStyle(
               color: AppTheme.textPrimary,
               fontSize: 14,
@@ -805,8 +807,8 @@ class _AdminCompletionPanel extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             needsReview
-                ? 'Verify the current arr state, then record the honest outcome. You can add a note about what you checked.'
-                : 'Record a final human judgment, with an optional note for context. This is separate from dismissing the report.',
+                ? context.l10n.opsVerifyTheCurrentArrStateThenRecord
+                : context.l10n.opsRecordAFinalHumanJudgmentWithAn,
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 12,
@@ -823,7 +825,7 @@ class _AdminCompletionPanel extends StatelessWidget {
                     ? null
                     : () => onDisposition(AdminIssueDisposition.resolved),
                 icon: const Icon(Icons.check_circle_outline, size: 18),
-                label: const Text('Mark resolved'),
+                label: Text(context.l10n.opsMarkResolved),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppTheme.available,
                   foregroundColor: AppTheme.background,
@@ -834,7 +836,7 @@ class _AdminCompletionPanel extends StatelessWidget {
                     ? null
                     : () => onDisposition(AdminIssueDisposition.wontFix),
                 icon: const Icon(Icons.do_not_disturb_alt_outlined, size: 18),
-                label: const Text('Close without fix'),
+                label: Text(context.l10n.opsCloseWithoutFix),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: AppTheme.textPrimary,
                   side: const BorderSide(color: AppTheme.border),
@@ -879,7 +881,9 @@ class _AdminResolutionDialogState extends State<_AdminResolutionDialog> {
     return AlertDialog(
       backgroundColor: AppTheme.surface,
       title: Text(
-        resolved ? 'Mark this issue resolved?' : 'Close without a fix?',
+        resolved
+            ? context.l10n.opsMarkThisIssueResolved
+            : context.l10n.opsCloseWithoutAFix,
         style: const TextStyle(color: AppTheme.textPrimary),
       ),
       content: SingleChildScrollView(
@@ -889,8 +893,8 @@ class _AdminResolutionDialogState extends State<_AdminResolutionDialog> {
           children: [
             Text(
               resolved
-                  ? 'Confirm only after checking that the reported problem is no longer present.'
-                  : 'Use this when you reviewed the issue but cannot or should not apply a fix.',
+                  ? context.l10n.opsConfirmOnlyAfterCheckingThatTheReported
+                  : context.l10n.opsUseThisWhenYouReviewedTheIssue,
               style: const TextStyle(
                 color: AppTheme.textSecondary,
                 height: 1.35,
@@ -900,8 +904,8 @@ class _AdminResolutionDialogState extends State<_AdminResolutionDialog> {
               const SizedBox(height: 8),
               Text(
                 resolved
-                    ? 'Closing a notice this way silences it for about 2 months; it returns only if the problem re-forms from newer incidents.'
-                    : 'Closing without a fix tells Cantinarr you are not going to change this — the notice stays silent for 12 months unless the problem re-forms.',
+                    ? context.l10n.opsClosingANoticeThisWaySilencesIt
+                    : context.l10n.opsClosingWithoutAFixTellsCantinarrYou,
                 style: const TextStyle(
                   color: AppTheme.requested,
                   fontSize: 12,
@@ -912,8 +916,8 @@ class _AdminResolutionDialogState extends State<_AdminResolutionDialog> {
             ],
             if (widget.needsVerification) ...[
               const SizedBox(height: 8),
-              const Text(
-                'An uncertain or partial agent outcome must be verified manually before completion.',
+              Text(
+                context.l10n.opsAnUncertainOrPartialAgentOutcomeMust,
                 style: TextStyle(
                   color: AppTheme.requested,
                   fontSize: 12,
@@ -929,9 +933,9 @@ class _AdminResolutionDialogState extends State<_AdminResolutionDialog> {
               maxLines: 5,
               maxLength: maxNoteLength,
               style: const TextStyle(color: AppTheme.textPrimary),
-              decoration: const InputDecoration(
-                labelText: 'Completion note (optional)',
-                hintText: 'What did you verify, or why is no fix appropriate?',
+              decoration: InputDecoration(
+                labelText: context.l10n.opsCompletionNoteOptional,
+                hintText: context.l10n.opsWhatDidYouVerifyOrWhyIs,
                 border: OutlineInputBorder(),
               ),
             ),
@@ -941,7 +945,7 @@ class _AdminResolutionDialogState extends State<_AdminResolutionDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(context.l10n.opsCancel),
         ),
         ElevatedButton(
           onPressed: () => Navigator.of(context).pop(_controller.text.trim()),
@@ -949,7 +953,9 @@ class _AdminResolutionDialogState extends State<_AdminResolutionDialog> {
             backgroundColor: resolved ? AppTheme.available : AppTheme.error,
             foregroundColor: AppTheme.background,
           ),
-          child: Text(resolved ? 'Mark resolved' : 'Close without fix'),
+          child: Text(resolved
+              ? context.l10n.opsMarkResolved
+              : context.l10n.opsCloseWithoutFix),
         ),
       ],
     );
@@ -965,8 +971,9 @@ class _IssueSummaryCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bits = <String>[
-      issue.scopeLabel,
-      if (issue.category != null) issue.category!.label,
+      localizeOperationsLabel(context, issue.scopeLabel),
+      if (issue.category != null)
+        localizeOperationsLabel(context, issue.category!.label),
     ];
     return Container(
       padding: const EdgeInsets.all(14),
@@ -984,7 +991,8 @@ class _IssueSummaryCard extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'Status: ${issue.status.label}',
+            context.l10n.opsIssueStatus(
+                localizeOperationsLabel(context, issue.status.label)),
             style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 13,
@@ -995,19 +1003,18 @@ class _IssueSummaryCard extends StatelessWidget {
             TextButton.icon(
               onPressed: () => context.push('/settings/credentials'),
               icon: const Icon(Icons.settings_outlined),
-              label: const Text('Review provider settings'),
+              label: Text(context.l10n.opsReviewProviderSettings),
             ),
-          if (issue.source == 'system' &&
-              issue.settingsPath == '/settings/ai')
+          if (issue.source == 'system' && issue.settingsPath == '/settings/ai')
             TextButton.icon(
               onPressed: () => context.push('/settings/ai'),
               icon: const Icon(Icons.person_outline),
-              label: const Text('Open AI Access for your own account'),
+              label: Text(context.l10n.opsOpenAIAccessForYourOwnAccount),
             ),
           if (issue.status.isTerminal) ...[
             const SizedBox(height: 6),
             Text(
-              issue.resolutionKind.label +
+              localizeOperationsLabel(context, issue.resolutionKind.label) +
                   (issue.closedAt == null
                       ? ''
                       : ' · ${DateFormat('MMM d, h:mm a').format(issue.closedAt!)}'),
@@ -1017,10 +1024,11 @@ class _IssueSummaryCard extends StatelessWidget {
                 fontWeight: FontWeight.w600,
               ),
             ),
-            if (issue.resolutionLabel.trim().isNotEmpty) ...[
+            if (localizeOperationsLabel(context, issue.resolutionLabel.trim())
+                .isNotEmpty) ...[
               const SizedBox(height: 8),
               SelectableText(
-                issue.resolutionLabel.trim(),
+                localizeOperationsLabel(context, issue.resolutionLabel.trim()),
                 style: const TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 13,
@@ -1033,14 +1041,15 @@ class _IssueSummaryCard extends StatelessWidget {
           // but calmly: it is not a review demand, so no attention color.
           if ((issue.status == IssueStatus.needsAdmin ||
                   issue.status == IssueStatus.waiting) &&
-              issue.resolutionLabel.trim().isNotEmpty) ...[
+              localizeOperationsLabel(context, issue.resolutionLabel.trim())
+                  .isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(
               issue.status == IssueStatus.waiting
-                  ? 'Where to look'
+                  ? context.l10n.opsWhereToLook
                   : issue.isPrevention
-                      ? 'What to change'
-                      : 'Needs a closer look',
+                      ? context.l10n.opsWhatToChange
+                      : context.l10n.opsNeedsACloserLook,
               style: TextStyle(
                 color: issue.status == IssueStatus.waiting
                     ? AppTheme.textSecondary
@@ -1067,8 +1076,7 @@ class _IssueSummaryCard extends StatelessWidget {
                         children: [
                           const Text('•  ',
                               style: TextStyle(
-                                  color: AppTheme.textSecondary,
-                                  fontSize: 13)),
+                                  color: AppTheme.textSecondary, fontSize: 13)),
                           Expanded(
                             child: SelectableText(
                               step.trim().replaceFirst(RegExp(r'^[-•]\s*'), ''),
@@ -1086,7 +1094,7 @@ class _IssueSummaryCard extends StatelessWidget {
               )
             else
               SelectableText(
-                issue.resolutionLabel.trim(),
+                localizeOperationsLabel(context, issue.resolutionLabel.trim()),
                 style: const TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 13,
@@ -1137,7 +1145,7 @@ class _RunSummaryTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final detail = <String>[
-      '${run.stepCount} ${run.stepCount == 1 ? 'step' : 'steps'}',
+      context.l10n.opsRunStepsAlternate(run.stepCount),
       if (run.startedAt != null)
         DateFormat('MMM d, h:mm a').format(run.startedAt!),
     ];
@@ -1148,7 +1156,7 @@ class _RunSummaryTile extends StatelessWidget {
         onTap: onTap,
         leading: const Icon(Icons.timeline, color: AppTheme.accent),
         title: Text(
-          run.statusLabel,
+          localizeOperationsLabel(context, run.statusLabel),
           style: const TextStyle(
             color: AppTheme.textPrimary,
             fontWeight: FontWeight.w600,
@@ -1316,7 +1324,7 @@ class _WorkingIndicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Padding(
+    return Padding(
       padding: EdgeInsets.only(top: 4, left: 2),
       child: Row(
         children: [
@@ -1328,7 +1336,7 @@ class _WorkingIndicator extends StatelessWidget {
           ),
           SizedBox(width: 8),
           Text(
-            'Working on it…',
+            context.l10n.opsWorkingOnIt,
             style: TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 12,
@@ -1401,10 +1409,10 @@ class _ReplyBar extends StatelessWidget {
                     ),
                   ],
                 )
-              : const Padding(
+              : Padding(
                   padding: EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                   child: Text(
-                    'This issue is closed.',
+                    context.l10n.opsThisIssueIsClosed,
                     style:
                         TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                   ),

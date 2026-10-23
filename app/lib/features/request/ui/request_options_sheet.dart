@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
@@ -124,8 +126,8 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Request options',
+          Text(
+            context.l10n.browseRequestOptions,
             style: TextStyle(
               color: AppTheme.textPrimary,
               fontSize: 20,
@@ -134,7 +136,7 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
           ),
           const SizedBox(height: 16),
           if (widget.libraries.length > 1 || widget.showLibrary) ...[
-            const _SectionLabel('Library'),
+            _SectionLabel(context.l10n.browseLibrary),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -169,14 +171,14 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
             const SizedBox(height: 16),
           ],
           if (!_loadingOptions && o.canChooseSeason) ...[
-            const _SectionLabel('Seasons'),
+            _SectionLabel(context.l10n.browseSeasons),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: SeasonScope.choices
                   .map((c) => ChoiceChip(
-                        label: Text(c.label),
+                        label: Text(browseLabel(context, c.label)),
                         selected: _seasonScope == c.value,
                         onSelected: (_) =>
                             setState(() => _seasonScope = c.value),
@@ -198,7 +200,7 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
           if (!_loadingOptions &&
               o.canChooseQuality &&
               o.qualityProfiles.isNotEmpty) ...[
-            const _SectionLabel('Quality'),
+            _SectionLabel(context.l10n.browseQuality),
             const SizedBox(height: 8),
             DropdownButtonFormField<int?>(
               // Re-key per library: the form field caches its own selection,
@@ -216,9 +218,9 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
                 ),
               ),
               items: [
-                const DropdownMenuItem<int?>(
+                DropdownMenuItem<int?>(
                   value: null,
-                  child: Text('Default'),
+                  child: Text(context.l10n.browseDefault),
                 ),
                 ...o.qualityProfiles.map(
                   (p) => DropdownMenuItem<int?>(
@@ -244,7 +246,7 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  child: const Text('Cancel'),
+                  child: Text(context.l10n.browseCancel),
                 ),
               ),
               const SizedBox(width: 12),
@@ -270,7 +272,7 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  child: const Text('Request'),
+                  child: Text(context.l10n.browseRequest),
                 ),
               ),
             ],

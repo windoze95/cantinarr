@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/setup_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -118,15 +120,15 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       case 'tdarr':
         return {'service_type': 'tdarr'};
       case 'tautulli':
-        return {'service_type_prompt': 'Select a monitoring service'};
+        return {'service_type_prompt': context.l10n.setupSelectMonitoring};
       case 'books':
         return {'service_type': 'chaptarr'};
       case 'music':
         return {'service_type': 'lidarr'};
       case 'media_servers':
-        return {'service_type_prompt': 'Select a media server'};
+        return {'service_type_prompt': context.l10n.setupSelectMediaServer};
       case 'download_client':
-        return {'service_type_prompt': 'Select a download client'};
+        return {'service_type_prompt': context.l10n.setupSelectDownloadClient};
       default:
         return null;
     }
@@ -154,8 +156,10 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(skipped
-              ? 'Could not skip "${item.title}". Try again.'
-              : 'Could not restore "${item.title}". Try again.')));
+              ? context.l10n
+                  .setupSkipError(localizeSetupLabel(context, item.title))
+              : context.l10n.setupRestoreError(
+                  localizeSetupLabel(context, item.title)))));
     } finally {
       if (mounted) setState(() => _savingKey = null);
     }
@@ -167,14 +171,14 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     final status = ref.watch(setupStatusProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Setup Checklist')),
+      appBar: AppBar(title: Text(context.l10n.setupChecklist)),
       body: CenteredContent(
           child: !isAdmin
-              ? const Center(
+              ? Center(
                   child: Padding(
                     padding: EdgeInsets.all(24),
                     child: Text(
-                      'The setup checklist is for server admins.',
+                      context.l10n.setupAdminsOnly,
                       style: TextStyle(color: AppTheme.textSecondary),
                       textAlign: TextAlign.center,
                     ),
@@ -201,7 +205,10 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                status.summary,
+                status.isComplete
+                    ? context.l10n.setupNothingLeft
+                    : context.l10n.setupConfiguredCount(
+                        status.configured, status.effectiveTotal),
                 style: const TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 18,
@@ -220,16 +227,16 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-              const Text(
-                'Set up the features you want. Skip anything you don\'t use; '
-                'you can restore it later. Skips apply to everyone on this server.',
+              Text(
+                context.l10n.setupExplanation,
                 style: TextStyle(
                     color: AppTheme.textSecondary, fontSize: 13, height: 1.4),
               ),
             ],
           ),
         ),
-        _SectionHeader(title: 'Features', remaining: status.remaining),
+        _SectionHeader(
+            title: context.l10n.setupFeatures, remaining: status.remaining),
         ...status.items.map(_buildItem),
         const SizedBox(height: 8),
         const Divider(color: AppTheme.border),
@@ -239,11 +246,10 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
               ref.read(setupReminderEnabledProvider.notifier).set(v),
           secondary: const Icon(Icons.notifications_outlined,
               color: AppTheme.textSecondary),
-          title: const Text('Remind me in the menu',
+          title: Text(context.l10n.setupRemindMenu,
               style: TextStyle(
                   color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),
-          subtitle: const Text(
-              'Show this checklist while items remain to set up or skip',
+          subtitle: Text(context.l10n.setupShowRemaining,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
         ),
         const SizedBox(height: 24),
@@ -272,7 +278,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     } else {
       actions.add(_skipAction(item));
       if (route != null) {
-        actions.add(const StatusPill(text: 'Set up', color: AppTheme.accent));
+        actions.add(
+            StatusPill(text: context.l10n.setupSetUp, color: AppTheme.accent));
       }
     }
 
@@ -287,7 +294,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                 : dismissed
                     ? AppTheme.textSecondary
                     : AppTheme.accent),
-        title: Text(item.title,
+        title: Text(localizeSetupLabel(context, item.title),
             style: TextStyle(
                 color: item.configured || dismissed
                     ? AppTheme.textSecondary
@@ -296,11 +303,11 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(item.description,
+            Text(localizeSetupLabel(context, item.description),
                 style: const TextStyle(
                     color: AppTheme.textSecondary, fontSize: 13)),
             if (!canSkip && !item.configured && !dismissed)
-              const Text('Update the server to skip this item.',
+              Text(context.l10n.setupUpdateToSkip,
                   style:
                       TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
             if (actionsBelow) ...[
@@ -319,16 +326,16 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
 
   Widget _skipAction(SetupItem item, {bool restore = false}) {
     final enabled = _savingKey == null && (restore || item.optional);
-    final label = restore ? 'Skipped' : 'Skip';
+    final label = restore ? context.l10n.setupSkipped : context.l10n.setupSkip;
     return Semantics(
       button: true,
       enabled: enabled,
       child: Tooltip(
         message: restore
-            ? 'Restore to the checklist'
+            ? context.l10n.setupRestore
             : item.optional
-                ? 'Skip this feature for everyone on the server'
-                : 'Update the server to skip this item.',
+                ? context.l10n.setupSkipEveryone
+                : context.l10n.setupUpdateToSkip,
         child: InkWell(
           borderRadius: BorderRadius.circular(12),
           // Absorb a disabled tap so it cannot open the parent settings row.
@@ -375,8 +382,8 @@ class _SectionHeader extends StatelessWidget {
               // so a header forced to wrap breaks in the middle rather than
               // leaving a bare "1" hanging on the next line.
               text: remaining > 0
-                  ? '\u00A0\u00B7 $remaining\u00A0LEFT'
-                  : '\u00A0\u00B7 DONE',
+                  ? context.l10n.setupRemaining(remaining)
+                  : context.l10n.setupDone,
               style: base.copyWith(
                 color:
                     remaining > 0 ? AppTheme.textSecondary : AppTheme.available,

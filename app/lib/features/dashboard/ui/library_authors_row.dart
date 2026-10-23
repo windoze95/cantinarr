@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -59,7 +61,7 @@ class LibraryAuthorsRow extends ConsumerWidget {
               horizontal: viewportWidth >= 900 ? 24 : 16,
             ),
             child: SectionHeader(
-              title: 'Authors',
+              title: context.l10n.browseAuthors,
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -68,10 +70,10 @@ class LibraryAuthorsRow extends ConsumerWidget {
                     total: page?.total ?? authors.length,
                   ),
                   SectionSortMenu<AuthorSort>(
-                    tooltip: 'Sort authors',
+                    tooltip: context.l10n.browseSortAuthors,
                     options: AuthorSort.values,
                     selected: ref.watch(bookAuthorsSortProvider),
-                    labelOf: (option) => option.label,
+                    labelOf: (option) => browseLabel(context, option.label),
                     onSelected: (next) =>
                         ref.read(bookAuthorsSortProvider.notifier).state = next,
                   ),
@@ -132,7 +134,7 @@ class AuthorAvatarCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final count = author.countLabel;
+    final count = browseLabel(context, author.countLabel);
     return SizedBox(
       width: size,
       child: InkWell(

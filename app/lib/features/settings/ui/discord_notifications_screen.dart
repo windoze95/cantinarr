@@ -1,3 +1,5 @@
+import 'settings_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -33,14 +35,18 @@ class _DiscordNotificationsScreenState
   bool _busy = false;
   String? _error;
 
-  Map<String, bool> get _selectedEvents => {..._events, 'request_auto_approved': _includeAutoApproved};
+  Map<String, bool> get _selectedEvents =>
+      {..._events, 'request_auto_approved': _includeAutoApproved};
   Map<String, dynamic> get _options => {
-    'events': _selectedEvents,
-    'enable_mentions': _mentions, 'embed_poster': _poster,
-    'role_id': _role.text.trim(), 'thread_id': _thread.text.trim(),
-    'username': _username.text.trim(), 'avatar_url': _avatar.text.trim(),
-    'role_events': _roleEvents,
-  };
+        'events': _selectedEvents,
+        'enable_mentions': _mentions,
+        'embed_poster': _poster,
+        'role_id': _role.text.trim(),
+        'thread_id': _thread.text.trim(),
+        'username': _username.text.trim(),
+        'avatar_url': _avatar.text.trim(),
+        'role_events': _roleEvents,
+      };
   // Older servers reject unknown settings, so only a server that reports
   // events is sent (or shown) the newer options.
   bool get _modern => _settings?.supportsEvents == true;
@@ -75,7 +81,10 @@ class _DiscordNotificationsScreenState
         key: settings.events[key] == true,
     };
     _roleEvents = {
-      for (final key in {...discordEventLabels.keys, ...settings.roleEvents.keys})
+      for (final key in {
+        ...discordEventLabels.keys,
+        ...settings.roleEvents.keys
+      })
         key: settings.roleEvents[key] == true,
     };
     _mentions = settings.enableMentions;
@@ -104,10 +113,12 @@ class _DiscordNotificationsScreenState
       });
     } catch (e) {
       if (mounted) {
-        setState(() => _error = e is DioException &&
-                e.response?.statusCode == 404
-            ? 'Discord notifications need a newer server. Update Cantinarr and try again.'
-            : 'Could not read Discord settings and delivery status. Try again.');
+        setState(() => _error =
+            e is DioException && e.response?.statusCode == 404
+                ? context.l10n
+                    .settingsDiscordNotificationsNeedANewerServerUpdateCantinarr
+                : context
+                    .l10n.settingsCouldNotReadDiscordSettingsAndDeliveryStatus);
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -120,8 +131,8 @@ class _DiscordNotificationsScreenState
         _enabled &&
         _webhook.text.trim().isEmpty &&
         _settings?.hasWebhook != true) {
-      setState(
-          () => _error = 'Add a webhook URL before enabling notifications.');
+      setState(() => _error =
+          context.l10n.settingsAddAWebhookUrlBeforeEnablingNotifications);
       return;
     }
     setState(() {
@@ -138,12 +149,14 @@ class _DiscordNotificationsScreenState
         _saved(settings);
         _testResult = null;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(remove ? 'Webhook removed' : 'Saved')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(remove
+              ? context.l10n.settingsWebhookRemoved
+              : context.l10n.settingsSaved)));
     } catch (_) {
       if (mounted) {
         setState(() => _error =
-            'Could not save Discord settings. Check the webhook URL, Discord IDs, and appearance settings.');
+            context.l10n.settingsCouldNotSaveDiscordSettingsCheckTheWebhook);
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -163,8 +176,8 @@ class _DiscordNotificationsScreenState
       if (mounted) setState(() => _testResult = result);
     } catch (_) {
       if (mounted) {
-        setState(() => _error =
-            'Could not test the webhook. Check the URL and try again.');
+        setState(() =>
+            _error = context.l10n.settingsCouldNotTestTheWebhookCheckTheUrl);
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -180,8 +193,11 @@ class _DiscordNotificationsScreenState
           enabled: !_busy,
           autocorrect: false,
           onChanged: (_) => setState(() => _testResult = null),
-          decoration: InputDecoration(labelText: label, helperText: hint,
-              helperMaxLines: 3, border: const OutlineInputBorder()),
+          decoration: InputDecoration(
+              labelText: label,
+              helperText: hint,
+              helperMaxLines: 3,
+              border: const OutlineInputBorder()),
         ),
       );
 
@@ -190,12 +206,14 @@ class _DiscordNotificationsScreenState
         hasChanges: () => _draft.hasChanges(_values),
         isSaving: _busy,
         child: Scaffold(
-          appBar: AppBar(title: const Text('Server Discord Notifications'), actions: [
-            IconButton(
-                tooltip: 'Refresh delivery status',
-                onPressed: _busy ? null : _load,
-                icon: const Icon(Icons.refresh)),
-          ]),
+          appBar: AppBar(
+              title: Text(context.l10n.settingsServerDiscordNotifications),
+              actions: [
+                IconButton(
+                    tooltip: context.l10n.settingsRefreshDeliveryStatus,
+                    onPressed: _busy ? null : _load,
+                    icon: const Icon(Icons.refresh)),
+              ]),
           body: Align(
             alignment: Alignment.topCenter,
             child: ConstrainedBox(
@@ -210,22 +228,25 @@ class _DiscordNotificationsScreenState
                               color: Theme.of(context).colorScheme.error))),
                 if (_settings != null) ...[
                   Text(_modern
-                      ? 'Choose which request and problem-report updates appear in your Discord channel or thread. Users can opt in to personal mentions in Discord Notifications.'
-                      : 'Send new media requests needing approval to a Discord text channel. You can also include requests that need no review.'),
+                      ? context.l10n
+                          .settingsChooseWhichRequestAndProblemReportUpdatesAppear
+                      : context
+                          .l10n.settingsSendNewMediaRequestsNeedingApprovalToA),
                   const SizedBox(height: 12),
-                  const Text(
-                      'Enabling this shares media titles, media types, requester usernames, library names, and request or report states with Discord and everyone who can read the channel. If External Address is configured, messages also include a link to Cantinarr.'),
+                  Text(context.l10n
+                      .settingsEnablingThisSharesMediaTitlesMediaTypesRequester),
                   SwitchListTile.adaptive(
                     contentPadding: EdgeInsets.zero,
-                    title: const Text('Send notifications to Discord'),
+                    title:
+                        Text(context.l10n.settingsSendNotificationsToDiscord),
                     value: _enabled,
                     onChanged: _busy
                         ? null
                         : (value) => setState(() => _enabled = value),
                   ),
                   const SizedBox(height: 12),
-                  const Text(
-                      'In your Discord text channel, open Edit Channel → Integrations → Webhooks, create a webhook, and copy its URL.'),
+                  Text(context
+                      .l10n.settingsInYourDiscordTextChannelOpenEditChannel),
                   const SizedBox(height: 16),
                   TextField(
                     controller: _webhook,
@@ -236,11 +257,11 @@ class _DiscordNotificationsScreenState
                     onChanged: (_) => setState(() => _testResult = null),
                     decoration: InputDecoration(
                       labelText: _settings!.hasWebhook
-                          ? 'Replace webhook URL'
-                          : 'Webhook URL',
+                          ? context.l10n.settingsReplaceWebhookUrl
+                          : context.l10n.settingsWebhookUrl,
                       helperText: _settings!.hasWebhook
-                          ? 'A webhook is saved. Leave blank to keep it.'
-                          : 'Paste the Discord HTTPS webhook URL.',
+                          ? context.l10n.settingsAWebhookIsSavedLeaveBlankToKeep
+                          : context.l10n.settingsPasteTheDiscordHttpsWebhookUrl,
                       helperMaxLines: 2,
                       border: const OutlineInputBorder(),
                     ),
@@ -249,83 +270,121 @@ class _DiscordNotificationsScreenState
                   if (!_modern) ...[
                     SwitchListTile.adaptive(
                       contentPadding: EdgeInsets.zero,
-                      title:
-                          const Text('Include automatically approved requests'),
-                      subtitle: const Text(
-                          'Also notify the channel when no review is needed.'),
+                      title: Text(context
+                          .l10n.settingsIncludeAutomaticallyApprovedRequests),
+                      subtitle: Text(context
+                          .l10n.settingsAlsoNotifyTheChannelWhenNoReviewIs),
                       value: _includeAutoApproved,
                       onChanged: _busy || !_enabled
                           ? null
                           : (value) =>
                               setState(() => _includeAutoApproved = value),
                     ),
-                    const Text(
-                        'Personal mentions, more events, threads, and appearance options need a newer server. Update Cantinarr to use them.'),
+                    Text(context.l10n
+                        .settingsPersonalMentionsMoreEventsThreadsAndAppearanceOptions),
                   ] else ...[
-                  ExpansionTile(
-                    key: const PageStorageKey('discord-events'),
-                    tilePadding: EdgeInsets.zero,
-                    title: const Text('Events'),
-                    subtitle: Text('${_selectedEvents.values.where((value) => value).length} event categories selected'),
-                    children: [
-                  for (final entry in discordEventLabels.entries)
+                    ExpansionTile(
+                      key: const PageStorageKey('discord-events'),
+                      tilePadding: EdgeInsets.zero,
+                      title: Text(context.l10n.settingsEvents),
+                      subtitle: Text(context.l10n
+                          .settingsMessageValue1EventCategoriesSelected(
+                              (_selectedEvents.values
+                                      .where((value) => value)
+                                      .length)
+                                  .toString())),
+                      children: [
+                        for (final entry in discordEventLabels.entries)
+                          SwitchListTile.adaptive(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(entry.key == 'request_auto_approved'
+                                ? context.l10n
+                                    .settingsIncludeAutomaticallyApprovedRequests
+                                : entry.value),
+                            subtitle: entry.key == 'request_available'
+                                ? Text(context.l10n
+                                    .settingsTvEpisodesAreGroupedOver60SecondsExisting)
+                                : null,
+                            value: entry.key == 'request_auto_approved'
+                                ? _includeAutoApproved
+                                : _events[entry.key] == true,
+                            onChanged: _busy || !_enabled
+                                ? null
+                                : (value) => setState(() {
+                                      if (entry.key ==
+                                          'request_auto_approved') {
+                                        _includeAutoApproved = value;
+                                      } else {
+                                        _events = {
+                                          ..._events,
+                                          entry.key: value
+                                        };
+                                      }
+                                    }),
+                          ),
+                      ],
+                    ),
                     SwitchListTile.adaptive(
                       contentPadding: EdgeInsets.zero,
-                      title: Text(entry.key == 'request_auto_approved'
-                          ? 'Include automatically approved requests' : entry.value),
-                      subtitle: entry.key == 'request_available'
-                          ? const Text('TV episodes are grouped over 60 seconds. Existing available content is not replayed when enabled.') : null,
-                      value: entry.key == 'request_auto_approved'
-                          ? _includeAutoApproved : _events[entry.key] == true,
-                      onChanged: _busy || !_enabled ? null : (value) => setState(() {
-                        if (entry.key == 'request_auto_approved') {
-                          _includeAutoApproved = value;
-                        } else {
-                          _events = {..._events, entry.key: value};
-                        }
-                      }),
+                      title: Text(context.l10n.settingsAllowDiscordMentions),
+                      subtitle: Text(context
+                          .l10n.settingsUsersMustOptInAndAddTheirDiscord),
+                      value: _mentions,
+                      onChanged: _busy
+                          ? null
+                          : (value) => setState(() => _mentions = value),
                     ),
-                    ],
-                  ),
-                  SwitchListTile.adaptive(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Allow Discord mentions'),
-                    subtitle: const Text('Users must opt in and add their Discord IDs. Only selected roles and users can be pinged.'),
-                    value: _mentions,
-                    onChanged: _busy ? null : (value) => setState(() => _mentions = value),
-                  ),
-                  ExpansionTile(
-                    key: const PageStorageKey('discord-roles'),
-                    tilePadding: EdgeInsets.zero,
-                    title: const Text('Role mentions'),
-                    children: [
-                      _field(_role, 'Discord role ID', 'Optional. Enable Developer Mode in Discord to copy IDs.'),
-                      for (final entry in discordEventLabels.entries)
-                        CheckboxListTile(
-                          title: Text(entry.value),
-                          value: _roleEvents[entry.key] == true,
-                          onChanged: _busy || !_mentions ? null : (value) => setState(() {
-                            _roleEvents = {..._roleEvents, entry.key: value == true};
-                          }),
+                    ExpansionTile(
+                      key: const PageStorageKey('discord-roles'),
+                      tilePadding: EdgeInsets.zero,
+                      title: Text(context.l10n.settingsRoleMentions),
+                      children: [
+                        _field(
+                            _role,
+                            context.l10n.settingsDiscordRoleId,
+                            context.l10n
+                                .settingsOptionalEnableDeveloperModeInDiscordToCopy),
+                        for (final entry in discordEventLabels.entries)
+                          CheckboxListTile(
+                            title: Text(
+                                settingsDiscordEventLabel(context, entry.key)),
+                            value: _roleEvents[entry.key] == true,
+                            onChanged: _busy || !_mentions
+                                ? null
+                                : (value) => setState(() {
+                                      _roleEvents = {
+                                        ..._roleEvents,
+                                        entry.key: value == true
+                                      };
+                                    }),
+                          ),
+                      ],
+                    ),
+                    ExpansionTile(
+                      key: const PageStorageKey('discord-appearance'),
+                      tilePadding: EdgeInsets.zero,
+                      title: Text(context.l10n.settingsThreadAndAppearance),
+                      children: [
+                        _field(
+                            _thread,
+                            context.l10n.settingsDiscordThreadId,
+                            context.l10n
+                                .settingsOptionalUseAThreadInTheWebhookChannel),
+                        _field(_username, context.l10n.settingsDisplayName,
+                            context.l10n.settingsLeaveBlankToUseTheWebhookName),
+                        _field(_avatar, context.l10n.settingsAvatarUrl,
+                            context.l10n.settingsOptionalPublicHttpsImageUrl),
+                        SwitchListTile.adaptive(
+                          title: Text(context.l10n.settingsIncludePosters),
+                          subtitle: Text(context
+                              .l10n.settingsShowMovieAndTvArtworkWhenAvailable),
+                          value: _poster,
+                          onChanged: _busy
+                              ? null
+                              : (value) => setState(() => _poster = value),
                         ),
-                    ],
-                  ),
-                  ExpansionTile(
-                    key: const PageStorageKey('discord-appearance'),
-                    tilePadding: EdgeInsets.zero,
-                    title: const Text('Thread and appearance'),
-                    children: [
-                      _field(_thread, 'Discord thread ID', 'Optional. Use a thread in the webhook channel.'),
-                      _field(_username, 'Display name', 'Leave blank to use the webhook name.'),
-                      _field(_avatar, 'Avatar URL', 'Optional public HTTPS image URL.'),
-                      SwitchListTile.adaptive(
-                        title: const Text('Include posters'),
-                        subtitle: const Text('Show movie and TV artwork when available.'),
-                        value: _poster,
-                        onChanged: _busy ? null : (value) => setState(() => _poster = value),
-                      ),
-                    ],
-                  ),
+                      ],
+                    ),
                   ],
                   const SizedBox(height: 16),
                   if (_error != null)
@@ -337,48 +396,52 @@ class _DiscordNotificationsScreenState
                   Wrap(spacing: 12, runSpacing: 12, children: [
                     FilledButton(
                         onPressed: _busy ? null : () => _save(),
-                        child: const Text('Save')),
+                        child: Text(context.l10n.settingsSave)),
                     OutlinedButton(
                         onPressed: _busy ||
                                 (!_settings!.hasWebhook &&
                                     _webhook.text.trim().isEmpty)
                             ? null
                             : _test,
-                        child: const Text('Send test message')),
+                        child: Text(context.l10n.settingsSendTestMessage)),
                     if (_settings!.hasWebhook)
                       TextButton(
                           onPressed: _busy ? null : () => _save(remove: true),
-                          child: const Text('Remove webhook')),
+                          child: Text(context.l10n.settingsRemoveWebhook)),
                   ]),
                   const SizedBox(height: 12),
                   Text(_modern
-                      ? 'Test sends a sample message using the entered URL, or the saved webhook if blank. It uses the thread and appearance above without saving changes or mentioning anyone.'
-                      : 'Test sends a sample message using the entered URL, or the saved webhook if blank. It does not save your changes or enable notifications.'),
+                      ? context
+                          .l10n.settingsTestSendsASampleMessageUsingTheEntered
+                      : context.l10n
+                          .settingsTestSendsASampleMessageUsingTheEntered2),
                   if (_testResult != null)
                     ListTile(
                         contentPadding: EdgeInsets.zero,
-                        title: Text('Test: ${_testResult!.label}'),
+                        title: Text(context.l10n.settingsMessageTestValue1(
+                            (settingsModelLabel(context, _testResult!.label))
+                                .toString())),
                         subtitle: Text(_testResult!.detail)),
                   const SizedBox(height: 28),
-                  Text('Recent deliveries',
+                  Text(context.l10n.settingsRecentDeliveries,
                       style: Theme.of(context).textTheme.titleLarge),
                   const SizedBox(height: 8),
-                  const Text(
-                      'Discord failures do not affect media requests. Unconfirmed messages are not resent automatically to avoid duplicate alerts. Disabling or replacing the webhook cancels messages waiting to send.'),
+                  Text(context.l10n
+                      .settingsDiscordFailuresDoNotAffectMediaRequestsUnconfirmed),
                   if (_settings!.error != null)
                     Text(_settings!.error!,
                         style: TextStyle(
                             color: Theme.of(context).colorScheme.error)),
                   if (_settings!.recent.isEmpty)
-                    const Padding(
+                    Padding(
                         padding: EdgeInsets.symmetric(vertical: 16),
-                        child: Text(
-                            'No notifications have been queued. Only selected events occurring while notifications are enabled are sent.')),
+                        child: Text(context.l10n
+                            .settingsNoNotificationsHaveBeenQueuedOnlySelectedEvents)),
                   for (final delivery in _settings!.recent)
                     ListTile(
                       contentPadding: EdgeInsets.zero,
                       title: Text(
-                          '${delivery.subject} · ${delivery.label}'),
+                          '${settingsDiscordSubject(context, delivery)} · ${settingsModelLabel(context, delivery.label)}'),
                       subtitle: Text(
                           '${delivery.detail}${delivery.updatedAt == null ? '' : '\n${delivery.updatedAt}'}'),
                     ),

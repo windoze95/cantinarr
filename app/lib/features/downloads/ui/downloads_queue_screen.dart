@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -168,8 +169,9 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
     if (!mounted) return;
     if (failures.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Failed to ${resume ? 'resume' : 'pause'}: '
-              '${failures.join(', ')}')));
+          content: Text(context.l10n.adminFailedTo(
+              (resume ? 'resume' : 'pause').toString(),
+              (failures.join(', ')).toString()))));
     }
     ref.read(downloadsRefreshProvider.notifier).refresh();
     await _loadQueue(silent: true);
@@ -182,7 +184,9 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
       () => item.isPaused
           ? service.resumeItem(item.id)
           : service.pauseItem(item.id),
-      failureLabel: item.isPaused ? 'Failed to resume' : 'Failed to pause',
+      failureLabel: item.isPaused
+          ? context.l10n.adminFailedToResume
+          : context.l10n.adminFailedToPause,
     );
   }
 
@@ -198,14 +202,14 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
     try {
       await _serviceFor(source).deleteItem(item.id, deleteData: deleteData);
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Removed from queue')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.adminRemovedFromQueue)));
       ref.read(downloadsRefreshProvider.notifier).refresh();
       _loadQueue(silent: true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to remove: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(context.l10n.adminFailedToRemove((e).toString()))));
     }
   }
 
@@ -243,18 +247,19 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
       for (final source in sources)
         if (_sourceErrors.containsKey(source.id)) source,
     ];
-    final nothingLoaded =
-        sources.every((source) => _queues[source.id] == null);
+    final nothingLoaded = sources.every((source) => _queues[source.id] == null);
     String? fatalError;
     if (sources.isEmpty) {
-      fatalError = 'No download client configured';
+      fatalError = context.l10n.adminNoDownloadClientConfigured;
     } else if (nothingLoaded && failedSources.length == sources.length) {
       fatalError = sources.length == 1
-          ? 'Failed to load queue: ${_sourceErrors[sources.single.id]}'
-          : 'Failed to load queues:\n${[
+          ? context.l10n.adminFailedToLoadQueue(
+              (_sourceErrors[sources.single.id]).toString())
+          : context.l10n.adminFailedToLoadQueues(([
               for (final source in failedSources)
                 '${source.name}: ${_sourceErrors[source.id]}'
-            ].join('\n')}';
+            ].join('\n'))
+              .toString());
     }
     if (fatalError != null) {
       return Center(
@@ -268,7 +273,8 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
                   textAlign: TextAlign.center),
             ),
             const SizedBox(height: 16),
-            ElevatedButton(onPressed: _loadQueue, child: const Text('Retry')),
+            ElevatedButton(
+                onPressed: _loadQueue, child: Text(context.l10n.adminRetry)),
           ],
         ),
       );
@@ -305,13 +311,13 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
             child: entries.isEmpty
                 ? ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
-                    children: const [
+                    children: [
                       SizedBox(height: 160),
                       Icon(Icons.check_circle_outline,
                           size: 48, color: AppTheme.available),
                       SizedBox(height: 12),
                       Center(
-                        child: Text('Queue is empty',
+                        child: Text(context.l10n.adminQueueIsEmpty,
                             style: TextStyle(
                                 color: AppTheme.textSecondary, fontSize: 16)),
                       ),
@@ -378,7 +384,9 @@ class _GlobalQueueHeader extends StatelessWidget {
           Expanded(
             child: Text(
               paused
-                  ? (multiClient ? 'All queues paused' : 'Queue paused')
+                  ? (multiClient
+                      ? context.l10n.adminAllQueuesPaused
+                      : context.l10n.adminQueuePaused)
                   : '$speedFormatted • $itemCount item${itemCount == 1 ? '' : 's'}',
               style: const TextStyle(
                   color: AppTheme.textPrimary,
@@ -390,7 +398,9 @@ class _GlobalQueueHeader extends StatelessWidget {
           TextButton.icon(
             onPressed: onTogglePause,
             icon: Icon(paused ? Icons.play_arrow : Icons.pause, size: 18),
-            label: Text(paused ? 'Resume all' : 'Pause all'),
+            label: Text(paused
+                ? context.l10n.adminResumeAll
+                : context.l10n.adminPauseAll),
             style: TextButton.styleFrom(
               foregroundColor: paused ? AppTheme.available : AppTheme.accent,
               textStyle:
@@ -423,9 +433,9 @@ class _SourceErrorBanner extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Not responding: ${names.join(', ')}',
-              style: const TextStyle(
-                  color: AppTheme.textSecondary, fontSize: 12),
+              context.l10n.adminNotResponding((names.join(', ')).toString()),
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -445,7 +455,8 @@ class RemoveDownloadDialog extends StatefulWidget {
   final String name;
   final String serviceType;
 
-  const RemoveDownloadDialog({super.key, required this.name, required this.serviceType});
+  const RemoveDownloadDialog(
+      {super.key, required this.name, required this.serviceType});
 
   @override
   State<RemoveDownloadDialog> createState() => RemoveDownloadDialogState();
@@ -460,7 +471,7 @@ class RemoveDownloadDialogState extends State<RemoveDownloadDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: AppTheme.surface,
-      title: const Text('Remove Download'),
+      title: Text(context.l10n.adminRemoveDownload),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -476,46 +487,56 @@ class RemoveDownloadDialogState extends State<RemoveDownloadDialog> {
             CheckboxListTile(
               value: _deleteData,
               onChanged: (v) => setState(() => _deleteData = v ?? false),
-              title: const Text('Also delete downloaded data',
+              title: Text(context.l10n.adminAlsoDeleteDownloadedData,
                   style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
               controlAffinity: ListTileControlAffinity.leading,
               contentPadding: EdgeInsets.zero,
               activeColor: AppTheme.accent,
             )
           else
-            const Text(
-              'NZBGet removes the queue item only; '
-              'downloaded files stay on disk.',
-              style:
-                  TextStyle(color: AppTheme.textSecondary, fontSize: 12.5),
+            Text(
+              context.l10n.adminNZBGetRemovesTheQueueItemOnlyDownloaded,
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12.5),
             ),
         ],
       ),
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel')),
+            child: Text(context.l10n.adminCancel)),
         TextButton(
           onPressed: () =>
               Navigator.pop(context, _supportsDeleteData && _deleteData),
           style: TextButton.styleFrom(foregroundColor: AppTheme.error),
-          child: const Text('Remove'),
+          child: Text(context.l10n.adminRemove),
         ),
       ],
     );
   }
 }
 
-({String label, Color color}) _statusStyle(String status) {
+({String label, Color color}) _statusStyle(String status,
+    {AppLocalizations? strings}) {
   final s = status.toLowerCase();
   if (s.contains('error') || s.contains('fail') || s.contains('missing')) {
-    return (label: 'Error', color: AppTheme.error);
+    return (
+      label: (strings ?? lookupAppLocalizations(const Locale('en'))).adminError,
+      color: AppTheme.error
+    );
   }
   if (s.contains('stalled')) {
-    return (label: 'Stalled', color: AppTheme.requested);
+    return (
+      label:
+          (strings ?? lookupAppLocalizations(const Locale('en'))).adminStalled,
+      color: AppTheme.requested
+    );
   }
   if (s.contains('paused') || s.contains('stopped')) {
-    return (label: 'Paused', color: AppTheme.unavailable);
+    return (
+      label:
+          (strings ?? lookupAppLocalizations(const Locale('en'))).adminPaused,
+      color: AppTheme.unavailable
+    );
   }
   if (s.contains('queued') ||
       s.contains('alloc') ||
@@ -524,22 +545,40 @@ class RemoveDownloadDialogState extends State<RemoveDownloadDialog> {
       s.contains('fetching') ||
       s.contains('grabbing') ||
       s.contains('propagating')) {
-    return (label: 'Queued', color: AppTheme.unavailable);
+    return (
+      label:
+          (strings ?? lookupAppLocalizations(const Locale('en'))).adminQueued,
+      color: AppTheme.unavailable
+    );
   }
   if (s.contains('upload') || s.contains('seed') || s.contains('complet')) {
-    return (label: 'Completed', color: AppTheme.available);
+    return (
+      label: (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminCompleted,
+      color: AppTheme.available
+    );
   }
   if (s.contains('extract') ||
       s.contains('repair') ||
       s.contains('verify') ||
       s.contains('moving')) {
-    return (label: 'Processing', color: AppTheme.requested);
+    return (
+      label: (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminProcessing,
+      color: AppTheme.requested
+    );
   }
   if (s.contains('download') || s.contains('running')) {
-    return (label: 'Downloading', color: AppTheme.downloading);
+    return (
+      label: (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminDownloading,
+      color: AppTheme.downloading
+    );
   }
   return (
-    label: status.isEmpty ? 'Unknown' : status,
+    label: status.isEmpty
+        ? (strings ?? lookupAppLocalizations(const Locale('en'))).adminUnknown
+        : status,
     color: AppTheme.textSecondary
   );
 }
@@ -564,7 +603,7 @@ class _DownloadItemCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = _statusStyle(item.status);
+    final style = _statusStyle(item.status, strings: context.l10n);
     final eta = item.etaFormatted;
     final client = clientName;
 
@@ -612,18 +651,20 @@ class _DownloadItemCard extends StatelessWidget {
                           color: AppTheme.textSecondary,
                         ),
                         const SizedBox(width: 8),
-                        Text(item.isPaused ? 'Resume' : 'Pause'),
+                        Text(item.isPaused
+                            ? context.l10n.adminResume
+                            : context.l10n.adminPause),
                       ],
                     ),
                   ),
-                  const PopupMenuItem(
+                  PopupMenuItem(
                     value: 'remove',
                     child: Row(
                       children: [
                         Icon(Icons.delete_outline,
                             size: 18, color: AppTheme.error),
                         SizedBox(width: 8),
-                        Text('Remove'),
+                        Text(context.l10n.adminRemove),
                       ],
                     ),
                   ),
@@ -666,8 +707,10 @@ class _DownloadItemCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    '${item.progress.toStringAsFixed(1)}% • '
-                    '${item.downloadedFormatted} of ${item.sizeFormatted}',
+                    context.l10n.adminOf2(
+                        (item.progress.toStringAsFixed(1)).toString(),
+                        (item.downloadedFormatted).toString(),
+                        (item.sizeFormatted).toString()),
                     style: const TextStyle(
                         color: AppTheme.textSecondary, fontSize: 11),
                     overflow: TextOverflow.ellipsis,

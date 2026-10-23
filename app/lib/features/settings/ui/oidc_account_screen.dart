@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -50,8 +51,8 @@ class _OIDCAccountScreenState extends ConsumerState<OIDCAccountScreen> {
       if (mounted) {
         setState(() => _error =
             e is DioException && e.response?.statusCode == 404
-                ? 'This server does not support single sign-on.'
-                : oidcError(e));
+                ? context.l10n.settingsThisServerDoesNotSupportSingleSignOn
+                : oidcError(e, context: context));
       }
     }
   }
@@ -64,7 +65,7 @@ class _OIDCAccountScreenState extends ConsumerState<OIDCAccountScreen> {
           .read(authProvider.notifier)
           .startSSO(conn.serverUrl, purpose: 'link');
     } catch (e) {
-      if (mounted) setState(() => _error = oidcError(e));
+      if (mounted) setState(() => _error = oidcError(e, context: context));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -74,16 +75,16 @@ class _OIDCAccountScreenState extends ConsumerState<OIDCAccountScreen> {
     final approved = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-              title: const Text('Unlink single sign-on?'),
-              content: const Text(
-                  'This signs out this account’s SSO devices and MCP clients. A permitted local sign-in method is required to unlink your own account.'),
+              title: Text(context.l10n.settingsUnlinkSingleSignOn),
+              content:
+                  Text(context.l10n.settingsThisSignsOutThisAccountSSsoDevices),
               actions: [
                 TextButton(
                     onPressed: () => Navigator.pop(context, false),
-                    child: const Text('Cancel')),
+                    child: Text(context.l10n.settingsCancel)),
                 FilledButton(
                     onPressed: () => Navigator.pop(context, true),
-                    child: const Text('Unlink'))
+                    child: Text(context.l10n.settingsUnlink))
               ],
             ));
     if (approved != true || !mounted) return;
@@ -97,7 +98,7 @@ class _OIDCAccountScreenState extends ConsumerState<OIDCAccountScreen> {
       await _load();
       await ref.read(authProvider.notifier).refreshUser();
     } catch (e) {
-      if (mounted) setState(() => _error = oidcError(e));
+      if (mounted) setState(() => _error = oidcError(e, context: context));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -105,14 +106,13 @@ class _OIDCAccountScreenState extends ConsumerState<OIDCAccountScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Linked sign-in')),
+        appBar: AppBar(title: Text(context.l10n.settingsLinkedSignIn)),
         body: Align(
             alignment: Alignment.topCenter,
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 680),
               child: ListView(padding: const EdgeInsets.all(24), children: [
-                const Text(
-                    'Sign in to Cantinarr and the provider to link an identity. Administrators can also confirm a Plex mapping after checking current account data. Names and emails alone never authorize sign-in.'),
+                Text(context.l10n.settingsSignInToCantinarrAndTheProviderTo),
                 const SizedBox(height: 16),
                 if (_error != null)
                   Text(_error!,
@@ -121,8 +121,7 @@ class _OIDCAccountScreenState extends ConsumerState<OIDCAccountScreen> {
                 if (_identities == null && _error == null)
                   const Center(child: CircularProgressIndicator()),
                 if (_identities?.isEmpty == true)
-                  const Text(
-                      'No single sign-on identity is linked to this account.'),
+                  Text(context.l10n.settingsNoSingleSignOnIdentityIsLinkedTo),
                 for (final identity in _identities ?? <Map<String, dynamic>>[])
                   Card(
                       child: Padding(
@@ -130,16 +129,18 @@ class _OIDCAccountScreenState extends ConsumerState<OIDCAccountScreen> {
                     child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text('Linked',
+                          Text(context.l10n.settingsLinked,
                               style: TextStyle(fontWeight: FontWeight.bold)),
                           SelectableText(identity['issuer'] as String),
                           const SizedBox(height: 8),
-                          SelectableText('Identity: ${identity['subject']}'),
+                          SelectableText(context.l10n
+                              .settingsMessageIdentityValue1(
+                                  (identity['subject']).toString())),
                           TextButton(
                               onPressed: _busy
                                   ? null
                                   : () => _unlink(identity['issuer'] as String),
-                              child: const Text('Unlink')),
+                              child: Text(context.l10n.settingsUnlink)),
                         ]),
                   )),
                 if (widget.userId == null && _status?.ssoAvailable == true) ...[
@@ -147,17 +148,18 @@ class _OIDCAccountScreenState extends ConsumerState<OIDCAccountScreen> {
                   FilledButton.icon(
                       onPressed: _busy ? null : _link,
                       icon: const Icon(Icons.link),
-                      label: Text('Link with ${_status!.ssoProvider}')),
+                      label: Text(context.l10n.settingsMessageLinkWithValue1(
+                          (_status!.ssoProvider).toString()))),
                   const SizedBox(height: 12),
-                  const Text(
-                      'Your browser will open. Closing it leaves your current session unchanged.'),
+                  Text(context
+                      .l10n.settingsYourBrowserWillOpenClosingItLeavesYour),
                 ],
                 _PlexIdentities(userId: widget.userId),
                 if (_status?.ssoOnly == true)
-                  const Padding(
+                  Padding(
                       padding: EdgeInsets.only(top: 16),
-                      child: Text(
-                          'This server requires single sign-on for regular users. Administrators retain local recovery access.')),
+                      child: Text(context.l10n
+                          .settingsThisServerRequiresSingleSignOnForRegular)),
               ]),
             )),
       );
@@ -202,11 +204,11 @@ class _PlexIdentitiesState extends ConsumerState<_PlexIdentities> {
     } on DioException catch (e) {
       if (mounted) {
         setState(() => _error = e.response?.statusCode == 404
-            ? 'This server does not support Plex sign-in.'
-            : oidcError(e));
+            ? context.l10n.settingsThisServerDoesNotSupportPlexSignIn
+            : oidcError(e, context: context));
       }
     } catch (e) {
-      if (mounted) setState(() => _error = oidcError(e));
+      if (mounted) setState(() => _error = oidcError(e, context: context));
     }
   }
 
@@ -214,16 +216,16 @@ class _PlexIdentitiesState extends ConsumerState<_PlexIdentities> {
     final confirmed = await showDialog<bool>(
         context: context,
         builder: (c) => AlertDialog(
-                title: const Text('Unlink Plex sign-in?'),
-                content: const Text(
-                    'This signs out Plex devices and MCP clients. Library access stays as it is. Your own account needs another permitted sign-in method.'),
+                title: Text(context.l10n.settingsUnlinkPlexSignIn),
+                content: Text(
+                    context.l10n.settingsThisSignsOutPlexDevicesAndMcpClients),
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(c, false),
-                      child: const Text('Cancel')),
+                      child: Text(context.l10n.settingsCancel)),
                   FilledButton(
                       onPressed: () => Navigator.pop(c, true),
-                      child: const Text('Unlink Plex'))
+                      child: Text(context.l10n.settingsUnlinkPlex))
                 ]));
     if (confirmed != true || !mounted) return;
     setState(() => _busy = true);
@@ -234,7 +236,9 @@ class _PlexIdentitiesState extends ConsumerState<_PlexIdentities> {
           method: 'DELETE', accessToken: c.accessToken);
       if (widget.userId == null) {
         try {
-          await ref.read(authServiceProvider).fetchMe(c.serverUrl, c.accessToken);
+          await ref
+              .read(authServiceProvider)
+              .fetchMe(c.serverUrl, c.accessToken);
         } on DioException catch (e) {
           if (e.response?.statusCode != 401) rethrow;
           await ref.read(authProvider.notifier).logout();
@@ -244,7 +248,7 @@ class _PlexIdentitiesState extends ConsumerState<_PlexIdentities> {
       await ref.read(authProvider.notifier).refreshUser();
       if (mounted) await _load();
     } catch (e) {
-      if (mounted) setState(() => _error = oidcError(e));
+      if (mounted) setState(() => _error = oidcError(e, context: context));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -260,7 +264,7 @@ class _PlexIdentitiesState extends ConsumerState<_PlexIdentities> {
         if (_identities == null && _error == null)
           const LinearProgressIndicator(),
         if (_identities?.isEmpty == true)
-          const Text('No Plex sign-in identity is linked.'),
+          Text(context.l10n.settingsNoPlexSignInIdentityIsLinked),
         for (final p in _identities ?? <Map<String, dynamic>>[])
           Card(
               child: Padding(
@@ -268,12 +272,14 @@ class _PlexIdentitiesState extends ConsumerState<_PlexIdentities> {
                   child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(p['username']?.toString() ?? 'Plex account'),
+                        Text(p['username']?.toString() ??
+                            context.l10n.settingsPlexAccount),
                         Text(p['email']?.toString() ?? ''),
-                        SelectableText('Plex ID: ${p['plex_account_id']}'),
+                        SelectableText(context.l10n.settingsMessagePlexIdValue1(
+                            (p['plex_account_id']).toString())),
                         TextButton(
                             onPressed: _busy ? null : _unlink,
-                            child: const Text('Unlink Plex')),
+                            child: Text(context.l10n.settingsUnlinkPlex)),
                       ]))),
         if (widget.userId == null && _available && _identities?.isEmpty == true)
           FilledButton.icon(
@@ -287,6 +293,6 @@ class _PlexIdentitiesState extends ConsumerState<_PlexIdentities> {
                       }).toString());
                     },
               icon: const Icon(Icons.link),
-              label: const Text('Link with Plex')),
+              label: Text(context.l10n.settingsLinkWithPlex)),
       ]);
 }

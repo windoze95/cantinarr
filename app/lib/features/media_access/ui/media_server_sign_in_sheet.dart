@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
@@ -62,11 +63,11 @@ class _MediaServerSignInSheetState
     final username = _usernameController.text.trim();
     final password = _passwordController.text;
     if (username.isEmpty) {
-      setState(() => _error = 'Enter your username.');
+      setState(() => _error = context.l10n.mediaEnterYourUsername);
       return;
     }
     if (password.isEmpty) {
-      setState(() => _error = 'Enter your password.');
+      setState(() => _error = context.l10n.mediaEnterYourPassword);
       return;
     }
     setState(() {
@@ -101,34 +102,37 @@ class _MediaServerSignInSheetState
     }
   }
 
-  static const _genericFailure =
-      "Couldn't link the account. Try again in a moment, or ask your admin.";
+  String get _genericFailure =>
+      context.l10n.mediaCouldnTLinkTheAccountTryAgainInAMomentOrAskYourAdmin;
 
   /// Requester-voice copy per refusal: what happened and what to do next.
   String _describe(MediaAccessException e) {
     final name = widget.server.name;
     if (e.isTransport) {
-      return "Couldn't reach the server. Check your connection and try again.";
+      return context
+          .l10n.mediaCouldnTReachTheServerCheckYourConnectionAndTryAgain;
     }
     switch (e.code) {
       case 'bad_credentials':
-        return 'Wrong username or password for $name.';
+        return context.l10n
+            .mediaWrongUsernameOrPasswordForValue0((name).toString());
       case 'account_refused':
-        return "$name won't let that account sign in right now. It may be "
-            'turned off. Ask your admin.';
+        return context.l10n
+            .mediaValue0WonTLetThatAccountSignInRightNowItMayBeTurnedOffAskYourAdmin(
+                (name).toString());
       case 'remote_already_linked':
-        return 'That account is already linked to another Cantinarr user. '
-            'Ask your admin.';
+        return context.l10n
+            .mediaThatAccountIsAlreadyLinkedToAnotherCantinarrUserAskYourAdmin;
     }
     switch (e.status) {
       case 403:
-        return 'That server is not available to you.';
+        return context.l10n.mediaThatServerIsNotAvailableToYou;
       case 404:
         // A server from before this route exists; nothing else answers 404.
-        return "This server doesn't support linking an existing account "
-            'yet. Ask your admin to update it.';
+        return context.l10n
+            .mediaThisServerDoesnTSupportLinkingAnExistingAccountYetAskYourAdminToUpdateIt;
       case 429:
-        return 'Too many attempts. Wait a minute and try again.';
+        return context.l10n.mediaTooManyAttemptsWaitAMinuteAndTryAgain;
       default:
         return _genericFailure;
     }
@@ -153,7 +157,7 @@ class _MediaServerSignInSheetState
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Link your $product account',
+                context.l10n.mediaLinkYourValue0Account((product).toString()),
                 style: const TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 20,
@@ -162,9 +166,9 @@ class _MediaServerSignInSheetState
               ),
               const SizedBox(height: AppTheme.spaceSm),
               Text(
-                'Enter the username and password of your existing account on '
-                "$name. Cantinarr checks them with $name once and doesn't "
-                'keep the password.',
+                context.l10n
+                    .mediaEnterTheUsernameAndPasswordOfYourExistingAccountOnValue0CantinarrChecksThemWithValue1OnceA(
+                        (name).toString(), (name).toString()),
                 style: const TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 14,
@@ -180,8 +184,8 @@ class _MediaServerSignInSheetState
                 enableSuggestions: false,
                 autofillHints: const [AutofillHints.username],
                 textInputAction: TextInputAction.next,
-                decoration: const InputDecoration(
-                  labelText: 'Username',
+                decoration: InputDecoration(
+                  labelText: context.l10n.mediaUsername,
                   prefixIcon: Icon(Icons.person_outline),
                 ),
               ),
@@ -196,10 +200,12 @@ class _MediaServerSignInSheetState
                 textInputAction: TextInputAction.done,
                 onSubmitted: (_) => _submit(),
                 decoration: InputDecoration(
-                  labelText: 'Password',
+                  labelText: context.l10n.mediaPassword,
                   prefixIcon: const Icon(Icons.lock_outline),
                   suffixIcon: IconButton(
-                    tooltip: _obscure ? 'Show password' : 'Hide password',
+                    tooltip: _obscure
+                        ? context.l10n.mediaShowPassword
+                        : context.l10n.mediaHidePassword,
                     icon: Icon(
                         _obscure ? Icons.visibility : Icons.visibility_off),
                     onPressed: () => setState(() => _obscure = !_obscure),
@@ -235,7 +241,7 @@ class _MediaServerSignInSheetState
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: Colors.black),
                       )
-                    : const Text('Link account'),
+                    : Text(context.l10n.mediaLinkAccount),
               ),
             ],
           ),

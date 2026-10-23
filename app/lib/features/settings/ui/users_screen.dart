@@ -1,3 +1,6 @@
+import '../../notifications/ui/notification_labels.dart';
+import '../../media_access/ui/media_access_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -111,7 +114,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'Failed to load users';
+        _error = context.l10n.settingsFailedToLoadUsers;
         _isLoading = false;
       });
     }
@@ -127,8 +130,10 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
           SnackBar(
             content: Text(
               newRole == 'admin'
-                  ? '${user.username} is now an admin'
-                  : '${user.username} is now a user',
+                  ? context.l10n.settingsMessageValue1IsNowAnAdmin(
+                      (user.username).toString())
+                  : context.l10n.settingsMessageValue1IsNowAUser(
+                      (user.username).toString()),
             ),
           ),
         );
@@ -136,7 +141,9 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_friendlyError(e, 'Failed to change role'))),
+          SnackBar(
+              content: Text(
+                  _friendlyError(e, context.l10n.settingsFailedToChangeRole))),
         );
       }
     }
@@ -150,23 +157,25 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Remove User'),
+        title: Text(context.l10n.settingsRemoveUser),
         content: Text(
-          'Remove "${user.username}"? This deletes their account, devices, '
-          'and any pending invites. This cannot be undone.'
-          '${managed.isEmpty ? '' : '\n\nCantinarr will turn off their managed server access on: $managed.'}'
-          '${_supportsManagement ? '\n\nLinked-only accounts stay as they are on their servers.' : ''}'
-          '${_mediaAccountsFailed ? '\n\nMedia account details could not be loaded; managed server access will still be turned off.' : ''}',
+          context.l10n
+                  .settingsMessageRemoveValue1ThisDeletesTheirAccountDevices(
+                      (user.username).toString()) +
+              context.l10n.settingsAndAnyPendingInvitesThisCannotBeUndone +
+              '${managed.isEmpty ? '' : context.l10n.settingsMessageCantinarrWillTurnOffTheirManagedServerAccess((managed).toString())}'
+                  '${_supportsManagement ? context.l10n.settingsNNlinkedOnlyAccountsStayAsTheyAre : ''}'
+                  '${_mediaAccountsFailed ? context.l10n.settingsNNmediaAccountDetailsCouldNotBeLoaded : ''}',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.settingsCancel),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Remove'),
+            child: Text(context.l10n.settingsRemove),
           ),
         ],
       ),
@@ -179,13 +188,17 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       await _loadUsers();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Removed ${user.username}')),
+          SnackBar(
+              content: Text(context.l10n
+                  .settingsMessageRemovedValue1((user.username).toString()))),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_friendlyError(e, 'Failed to remove user'))),
+          SnackBar(
+              content: Text(
+                  _friendlyError(e, context.l10n.settingsFailedToRemoveUser))),
         );
       }
     }
@@ -199,8 +212,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   Future<void> _resendInvite(UserSummary user) async {
     await _generateAndShowInviteLink(
       user.username,
-      'Share this one-time Cantinarr link with them. '
-      'It replaces any previous link and expires in 7 days.',
+      context.l10n.settingsShareThisOneTimeCantinarrLinkWithThem,
     );
   }
 
@@ -215,13 +227,13 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
         isDialog: true,
         hasChanges: () => nameController.text.isNotEmpty,
         child: AlertDialog(
-          title: const Text('Invite a new user'),
+          title: Text(context.l10n.settingsInviteANewUser),
           content: TextField(
             controller: nameController,
             autofocus: true,
-            decoration: const InputDecoration(
-              labelText: 'Name',
-              hintText: 'e.g. Mom, Dad, Roommate',
+            decoration: InputDecoration(
+              labelText: context.l10n.settingsName,
+              hintText: context.l10n.settingsEGMomDadRoommate2,
               prefixIcon: Icon(Icons.person_outline),
             ),
             textCapitalization: TextCapitalization.words,
@@ -235,7 +247,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).maybePop(),
-              child: const Text('Cancel'),
+              child: Text(context.l10n.settingsCancel),
             ),
             ElevatedButton(
               onPressed: () {
@@ -243,7 +255,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
                 if (trimmed.isEmpty) return;
                 Navigator.of(dialogContext).pop(trimmed);
               },
-              child: const Text('Create invite'),
+              child: Text(context.l10n.settingsCreateInvite),
             ),
           ],
         ),
@@ -252,8 +264,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     if (name == null || name.isEmpty || !mounted) return;
     await _generateAndShowInviteLink(
       name,
-      'Share this one-time Cantinarr link with them. '
-      'It expires in 7 days.',
+      context.l10n.settingsShareThisOneTimeCantinarrLinkWithThem2,
     );
   }
 
@@ -272,7 +283,9 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_friendlyError(e, 'Failed to create link'))),
+          SnackBar(
+              content: Text(
+                  _friendlyError(e, context.l10n.settingsFailedToCreateLink))),
         );
       }
       return;
@@ -289,14 +302,15 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text('Invite link for $username'),
+        title: Text(context.l10n
+            .settingsMessageInviteLinkForValue1((username).toString())),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               '$description '
-              '${ssoRequired ? 'They continue through ${_serverStatus!.ssoProvider} to sign in. The invite does not bypass required single sign-on.' : _serverStatus == null ? 'Sign-in requirements could not be verified. Your server’s sign-in policy still applies.' : 'It connects one device to their Cantinarr account.'}',
+              '${ssoRequired ? context.l10n.settingsMessageTheyContinueThroughValue1ToSignInThe((_serverStatus!.ssoProvider).toString()) : _serverStatus == null ? context.l10n.settingsSignInRequirementsCouldNotBeVerifiedYour : context.l10n.settingsItConnectsOneDeviceToTheirCantinarrAccount}',
               style: const TextStyle(color: AppTheme.textSecondary),
             ),
             const SizedBox(height: 12),
@@ -313,10 +327,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
             ),
             if (originSource == 'app') ...[
               const SizedBox(height: 12),
-              const Text(
-                'This link uses the address your app connects with. If they '
-                'are not on your network, set External Address in Settings '
-                'and issue a new link.',
+              Text(
+                context.l10n.settingsThisLinkUsesTheAddressYourAppConnects,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
               ),
             ],
@@ -325,17 +337,17 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Done'),
+            child: Text(context.l10n.settingsDone),
           ),
           ElevatedButton.icon(
             onPressed: () {
               Clipboard.setData(ClipboardData(text: newLink));
               ScaffoldMessenger.of(dialogContext).showSnackBar(
-                const SnackBar(content: Text('Link copied!')),
+                SnackBar(content: Text(context.l10n.settingsLinkCopied)),
               );
             },
             icon: const Icon(Icons.copy, size: 18),
-            label: const Text('Copy'),
+            label: Text(context.l10n.settingsCopy),
           ),
         ],
       ),
@@ -354,13 +366,16 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(describePushTest(result, username: user.username)),
+          content: Text(localizedDescribePushTest(context, result,
+              username: user.username)),
         ),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_friendlyError(e, 'Failed to send test push'))),
+        SnackBar(
+            content: Text(
+                _friendlyError(e, context.l10n.settingsFailedToSendTestPush))),
       );
     }
   }
@@ -377,23 +392,29 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: Text(isPassword ? 'Disable password?' : 'Disable passkeys?'),
+          title: Text(isPassword
+              ? context.l10n.settingsDisablePassword
+              : context.l10n.settingsDisablePasskeys),
           content: Text(
             isPassword
-                ? "This clears ${user.username}'s password. They can set a new "
-                    'one only if you re-enable it.'
-                : "This deletes ${user.username}'s passkeys. They'll need to "
-                    'register again if you re-enable them.',
+                ? context.l10n
+                        .settingsMessageThisClearsValue1SPasswordTheyCanSet(
+                            (user.username).toString()) +
+                    context.l10n.settingsOneOnlyIfYouReEnableIt
+                : context.l10n
+                        .settingsMessageThisDeletesValue1SPasskeysTheyLlNeed(
+                            (user.username).toString()) +
+                    context.l10n.settingsRegisterAgainIfYouReEnableThem,
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
+              child: Text(context.l10n.settingsCancel),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error),
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('Disable'),
+              child: Text(context.l10n.settingsDisable),
             ),
           ],
         ),
@@ -410,15 +431,18 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       await _loadUsers();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Updated ${user.username}'s sign-in methods")),
+          SnackBar(
+              content: Text(context.l10n
+                  .settingsMessageUpdatedValue1SSignInMethods(
+                      (user.username).toString()))),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content:
-                Text(_friendlyError(e, 'Failed to update sign-in methods')),
+            content: Text(_friendlyError(
+                e, context.l10n.settingsFailedToUpdateSignInMethods)),
           ),
         );
       }
@@ -460,51 +484,30 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          title: Text('Include AI access for ${user.username}?'),
+          title: Text(context.l10n.settingsMessageIncludeAiAccessForValue1(
+              (user.username).toString())),
           content: Text(
             unconfigured
-                ? 'No shared AI provider is set up yet, so this only stages '
-                    'access. Once an admin configures one under Providers & '
-                    'Credentials, this user\'s prompts will run through it '
-                    'and count against its quota or allowance.'
+                ? context.l10n.settingsNoSharedAiProviderIsSetUpYet
                 : codex
-                    ? 'Prompts and tool context will use the shared OpenAI OAuth '
-                        'account. All enabled users consume the same Codex '
-                        'allowance, and activity is attributable to that account. '
-                        'Any subscription or usage costs remain with it. ChatGPT '
-                        'accounts are intended for one person—only enable this for '
-                        'people or devices you control.'
+                    ? context.l10n.settingsPromptsAndToolContextWillUseTheShared
                     : grokOAuth
-                        ? 'Prompts and tool context will use the shared xAI Grok '
-                            'account. All enabled users consume the same Grok '
-                            'subscription allowance, and activity is attributable to '
-                            'that account. Any subscription or usage costs remain with '
-                            'it. xAI accounts are intended for one person—only enable '
-                            'this for people or devices you control.'
+                        ? context
+                            .l10n.settingsPromptsAndToolContextWillUseTheShared2
                         : providerUnknown
-                            ? 'Cantinarr could not confirm which shared provider is '
-                                'selected. If it is an OAuth provider (OpenAI or xAI '
-                                'Grok), prompts and tool context will use one shared '
-                                'account and its subscription allowance, activity is '
-                                'attributable to that account, and any subscription or '
-                                'usage costs remain with it. Those accounts are '
-                                'intended for one person—only enable this for people '
-                                'or devices you control. If it uses an API key, '
-                                'requests count against that provider\'s paid quota '
-                                'and may create charges.'
-                            : 'This user can send prompts and tool context through the '
-                                'server AI provider. Requests count against its paid quota '
-                                'and may create provider charges. Their selected personal '
-                                'provider still takes priority.',
+                            ? context.l10n
+                                .settingsCantinarrCouldNotConfirmWhichSharedProviderIs
+                            : context.l10n
+                                .settingsThisUserCanSendPromptsAndToolContext,
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel'),
+              child: Text(context.l10n.settingsCancel),
             ),
             ElevatedButton(
               onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Include AI access'),
+              child: Text(context.l10n.settingsIncludeAiAccess),
             ),
           ],
         ),
@@ -531,15 +534,18 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(enabled
-              ? 'Included AI enabled for ${user.username}'
-              : 'Included AI removed for ${user.username}'),
+              ? context.l10n.settingsMessageIncludedAiEnabledForValue1(
+                  (user.username).toString())
+              : context.l10n.settingsMessageIncludedAiRemovedForValue1(
+                  (user.username).toString())),
         ),
       );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(_friendlyError(error, 'Failed to update AI access')),
+          content: Text(_friendlyError(
+              error, context.l10n.settingsFailedToUpdateAiAccess)),
         ),
       );
     }
@@ -569,14 +575,23 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       await _loadUsers();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-            'Linked ${remote.name} on ${server.name} to ${user.username}'
-            '${linked.plexIdentityError.isEmpty ? '' : '. Plex sign-in was not linked: ${linked.plexIdentityError}'}'),
+        content: Text(context.l10n
+            .settingsMessageLinkedValue1OnValue2ToValue3Value4(
+                (remote.name).toString(),
+                (server.name).toString(),
+                (user.username).toString(),
+                (linked.plexIdentityError.isEmpty
+                        ? ''
+                        : context.l10n
+                            .settingsMessagePlexSignInWasNotLinkedValue1(
+                                (linked.plexIdentityError).toString()))
+                    .toString())),
       ));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(_mediaAccessError(e, "Couldn't link the account")),
+        content: Text(
+            _mediaAccessError(e, context.l10n.settingsCouldnTLinkTheAccount)),
       ));
     }
   }
@@ -604,15 +619,25 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
           account.instanceId == server.id &&
           account.accessSyncPending);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-            'Turned ${server.name} access in Cantinarr ${enabled ? 'on' : 'off'} '
-            'for ${user.username}${pending ? '. Server access change pending; Cantinarr will retry.' : ''}'),
+        content: Text(context.l10n
+            .settingsMessageTurnedValue1AccessInCantinarrValue2ForValue3(
+                (server.name).toString(),
+                (enabled ? context.l10n.settingsOn2 : context.l10n.settingsOff2)
+                    .toString(),
+                (user.username).toString(),
+                (pending
+                        ? context.l10n
+                            .settingsServerAccessChangePendingCantinarrWillRetry
+                        : '')
+                    .toString())),
       ));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content:
-            Text(_friendlyError(e, "Couldn't change ${server.name} access")),
+        content: Text(_friendlyError(
+            e,
+            context.l10n.settingsMessageCouldnTChangeValue1Access(
+                (server.name).toString()))),
       ));
     }
   }
@@ -627,21 +652,23 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Unlink account?'),
+        title: Text(context.l10n.settingsUnlinkAccount),
         content: Text(
-          'Cantinarr will forget that ${user.username} is '
-          '${account.remoteUsername} on ${server.name}. The account on '
-          '${server.name} stays as it is. Their Cantinarr grant stays in place. '
-          'Link it explicitly to connect it again.',
+          context.l10n.settingsMessageCantinarrWillForgetThatValue1IsValue2On(
+                  (user.username).toString(),
+                  (account.remoteUsername).toString(),
+                  (server.name).toString(),
+                  (server.name).toString()) +
+              context.l10n.settingsLinkItExplicitlyToConnectItAgain,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.settingsCancel),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Unlink'),
+            child: Text(context.l10n.settingsUnlink),
           ),
         ],
       ),
@@ -655,13 +682,17 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       await _loadUsers();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Unlinked ${account.remoteUsername} on ${server.name} '
-            'from ${user.username}'),
+        content: Text(context.l10n
+            .settingsMessageUnlinkedValue1OnValue2FromValue3(
+                (account.remoteUsername).toString(),
+                (server.name).toString(),
+                (user.username).toString())),
       ));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(_mediaAccessError(e, "Couldn't unlink the account")),
+        content: Text(
+            _mediaAccessError(e, context.l10n.settingsCouldnTUnlinkTheAccount)),
       ));
     }
   }
@@ -671,25 +702,37 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     final manage = !account.manageAccess;
     final remoteAction = server.serviceType == 'plex'
         ? (account.granted
-            ? 'restore their Plex share if needed'
-            : 'remove their Plex share')
-        : (account.granted ? 'enable this account' : 'disable this account');
+            ? context.l10n.settingsRestoreTheirPlexShareIfNeeded
+            : context.l10n.settingsRemoveTheirPlexShare)
+        : (account.granted
+            ? context.l10n.settingsEnableThisAccount
+            : context.l10n.settingsDisableThisAccount);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(manage
-            ? 'Manage access on ${server.name}?'
-            : 'Stop managing access?'),
+            ? context.l10n
+                .settingsMessageManageAccessOnValue1((server.name).toString())
+            : context.l10n.settingsStopManagingAccess),
         content: Text(manage
-            ? 'Cantinarr will $remoteAction to match this user’s current grant. Future grant changes and user deletion will also change server access. Enabling management keeps the existing library selections.${server.serviceType == 'plex' ? ' Restoring a removed Plex share uses this server’s current shared-library selection.' : ''}'
-            : 'The link and account on ${server.name} stay as they are. Pending access changes are canceled. Future Cantinarr grant changes and user deletion will leave this account alone.'),
+            ? context.l10n.settingsMessageCantinarrWillValue1ToMatchThisUserS(
+                (remoteAction).toString(),
+                (server.serviceType == 'plex'
+                        ? context.l10n
+                            .settingsRestoringARemovedPlexShareUsesThisServer
+                        : '')
+                    .toString())
+            : context.l10n.settingsMessageTheLinkAndAccountOnValue1StayAs(
+                (server.name).toString())),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
+              child: Text(context.l10n.settingsCancel)),
           FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: Text(manage ? 'Manage access' : 'Stop managing')),
+              child: Text(manage
+                  ? context.l10n.settingsManageAccess
+                  : context.l10n.settingsStopManaging)),
         ],
       ),
     );
@@ -702,16 +745,18 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(
         result.accessSyncPending
-            ? 'Management saved. The server access change is pending; Cantinarr will retry.'
+            ? context.l10n.settingsManagementSavedTheServerAccessChangeIsPending
             : manage
-                ? 'Cantinarr now manages access on ${server.name}'
-                : 'Stopped managing access on ${server.name}',
+                ? context.l10n.settingsMessageCantinarrNowManagesAccessOnValue1(
+                    (server.name).toString())
+                : context.l10n.settingsMessageStoppedManagingAccessOnValue1(
+                    (server.name).toString()),
       )));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(
-              _mediaAccessError(e, 'Couldn’t change account management'))));
+          content: Text(_mediaAccessError(
+              e, context.l10n.settingsCouldnTChangeAccountManagement))));
     }
   }
 
@@ -739,7 +784,9 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.userId == null ? 'Users' : 'User access'),
+        title: Text(widget.userId == null
+            ? context.l10n.settingsUsers
+            : context.l10n.settingsUserAccess),
       ),
       body: CenteredContent(
         child: Column(
@@ -755,12 +802,12 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
                     ElevatedButton.icon(
                       onPressed: _importFromMediaServer,
                       icon: const Icon(Icons.group_add_outlined),
-                      label: const Text('Import users'),
+                      label: Text(context.l10n.settingsImportUsers),
                     ),
                     OutlinedButton.icon(
                       onPressed: _isLoading ? null : _inviteNewUser,
                       icon: const Icon(Icons.person_add_outlined),
-                      label: const Text('Invite user'),
+                      label: Text(context.l10n.settingsInviteUser),
                     ),
                   ],
                 ),
@@ -784,7 +831,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
           children: [
             Text(_error!, style: const TextStyle(color: AppTheme.error)),
             const SizedBox(height: 16),
-            ElevatedButton(onPressed: _loadUsers, child: const Text('Retry')),
+            ElevatedButton(
+                onPressed: _loadUsers, child: Text(context.l10n.settingsRetry)),
           ],
         ),
       );
@@ -794,7 +842,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     if (widget.userId != null) {
       final user = users.where((user) => user.id == widget.userId).firstOrNull;
       if (user == null) {
-        return const Center(child: Text('This user is no longer available.'));
+        return Center(
+            child: Text(context.l10n.settingsThisUserIsNoLongerAvailable));
       }
       return RefreshIndicator(
         onRefresh: _loadUsers,
@@ -815,9 +864,9 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       );
     }
     if (users.isEmpty) {
-      return const Center(
+      return Center(
         child: Text(
-          'No users yet',
+          context.l10n.settingsNoUsersYet,
           style: TextStyle(color: AppTheme.textSecondary),
         ),
       );
@@ -842,23 +891,23 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
             const Divider(height: 1, color: AppTheme.border),
         itemBuilder: (context, index) {
           if (index < failureRows) {
-            return const ListTile(
+            return ListTile(
               leading:
                   Icon(Icons.sync_problem_outlined, color: AppTheme.warning),
               title: Text(
-                "Couldn't load media server accounts. Pull to refresh.",
+                context.l10n.settingsCouldnTLoadMediaServerAccountsPullTo,
                 style: TextStyle(color: AppTheme.warning, fontSize: 13),
               ),
             );
           }
           if (index < noticeRows) {
-            return const ListTile(
+            return ListTile(
               leading: Icon(Icons.info_outline, color: AppTheme.textSecondary),
-              title: Text('Plex library access and sign-in are separate'),
+              title: Text(
+                  context.l10n.settingsPlexLibraryAccessAndSignInAreSeparate),
               subtitle: Text(
-                'Sending a library invitation records the media-account link. '
-                'The recipient accepts it in their own Plex account. '
-                'Review login identities in Settings > Plex sign-in.',
+                context.l10n
+                    .settingsSendingALibraryInvitationRecordsTheMediaAccount,
               ),
             );
           }
@@ -887,14 +936,18 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
             ? null
             : () => _runMediaAction(() => _linkMediaAccount(user, server)),
         icon: const Icon(Icons.link),
-        label: Text('Link ${mediaServerTypeLabel(server.serviceType)} account'),
+        label: Text(context.l10n.settingsMessageLinkValue1Account(
+            (mediaServerTypeLabel(server.serviceType)).toString())),
       );
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(
         account.manageAccess && !account.administrator
-            ? 'Changing this Cantinarr grant also changes access on ${server.name}.'
-            : 'Changing this Cantinarr grant leaves server access unchanged.',
+            ? context.l10n
+                .settingsMessageChangingThisCantinarrGrantAlsoChangesAccessOn(
+                    (server.name).toString())
+            : context.l10n
+                .settingsChangingThisCantinarrGrantLeavesServerAccessUnchanged,
         style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
       ),
       Wrap(spacing: 8, runSpacing: 8, children: [
@@ -906,8 +959,11 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
           icon: Icon(account.granted
               ? Icons.block_outlined
               : Icons.play_circle_outline),
-          label:
-              Text('Turn Cantinarr access ${account.granted ? 'off' : 'on'}'),
+          label: Text(context.l10n.settingsMessageTurnCantinarrAccessValue1(
+              (account.granted
+                      ? context.l10n.settingsOff2
+                      : context.l10n.settingsOn2)
+                  .toString())),
         ),
         if (_supportsManagement && !account.administrator)
           TextButton.icon(
@@ -917,8 +973,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
                     () => _setMediaManagement(user, server, account)),
             icon: const Icon(Icons.manage_accounts_outlined),
             label: Text(account.manageAccess
-                ? 'Stop managing server access'
-                : 'Manage server access'),
+                ? context.l10n.settingsStopManagingServerAccess
+                : context.l10n.settingsManageServerAccess),
           ),
         TextButton.icon(
           onPressed: _mediaActionBusy
@@ -926,7 +982,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
               : () => _runMediaAction(
                   () => _unlinkMediaAccount(user, server, account)),
           icon: const Icon(Icons.link_off),
-          label: const Text('Unlink account'),
+          label: Text(context.l10n.settingsUnlinkAccount2),
         ),
       ]),
     ]);
@@ -1065,7 +1121,7 @@ class _UserTile extends StatelessWidget {
           ),
           if (isSelf) ...[
             const SizedBox(width: 8),
-            const _Tag(label: 'You', color: AppTheme.accent),
+            _Tag(label: context.l10n.settingsYou, color: AppTheme.accent),
           ],
         ],
       ),
@@ -1076,30 +1132,46 @@ class _UserTile extends StatelessWidget {
           runSpacing: 4,
           children: [
             _Tag(
-              label: user.isAdmin ? 'Admin' : 'User',
+              label: user.isAdmin
+                  ? context.l10n.settingsAdmin
+                  : context.l10n.settingsUser,
               color: user.isAdmin ? AppTheme.accent : AppTheme.textSecondary,
             ),
             if (user.ssoLinked)
-              const _Tag(label: 'SSO linked', color: AppTheme.available),
-            if (user.child) const _Tag(label: 'Child', color: AppTheme.info),
+              _Tag(
+                  label: context.l10n.settingsSsoLinked,
+                  color: AppTheme.available),
+            if (user.child)
+              _Tag(label: context.l10n.settingsChild, color: AppTheme.info),
             if (user.hasPendingInvite)
-              const _Tag(label: 'Invited', color: AppTheme.requested)
+              _Tag(
+                  label: context.l10n.settingsInvited,
+                  color: AppTheme.requested)
             else if (_needsInvite)
-              const _Tag(label: 'Invite expired', color: AppTheme.unavailable),
+              _Tag(
+                  label: context.l10n.settingsInviteExpired,
+                  color: AppTheme.unavailable),
             _Tag(
               label: user.deviceCount == 1
-                  ? '1 device'
-                  : '${user.deviceCount} devices',
+                  ? context.l10n.settings1Device
+                  : context.l10n.settingsMessageValue1Devices(
+                      (user.deviceCount).toString()),
               color: user.deviceCount > 0
                   ? AppTheme.available
                   : AppTheme.unavailable,
             ),
             if (user.passwordEnabled)
-              const _Tag(label: 'Password', color: AppTheme.textSecondary),
+              _Tag(
+                  label: context.l10n.settingsPassword,
+                  color: AppTheme.textSecondary),
             if (user.passkeyEnabled)
-              const _Tag(label: 'Passkey', color: AppTheme.textSecondary),
+              _Tag(
+                  label: context.l10n.settingsPasskey,
+                  color: AppTheme.textSecondary),
             if (user.sharedAiEnabled)
-              const _Tag(label: 'AI included', color: AppTheme.signal),
+              _Tag(
+                  label: context.l10n.settingsAiIncluded,
+                  color: AppTheme.signal),
             if (user.plexEmail.isNotEmpty)
               _Tag(label: user.plexEmail, color: AppTheme.textSecondary),
             if (user.plexEmail.isNotEmpty &&
@@ -1107,8 +1179,9 @@ class _UserTile extends StatelessWidget {
                 !mediaServers.any((server) =>
                     server.serviceType == 'plex' &&
                     mediaAccounts.containsKey(server.id)))
-              const _Tag(
-                  label: 'Asked for Plex access', color: AppTheme.requested),
+              _Tag(
+                  label: context.l10n.settingsAskedForPlexAccess,
+                  color: AppTheme.requested),
             // One tag per linked media-server account: the server's name
             // alone when the account name matches the Cantinarr username,
             // the remote name otherwise, and ": off" while access is off.
@@ -1116,9 +1189,10 @@ class _UserTile extends StatelessWidget {
               if (mediaAccounts[server.id] case final account?)
                 _Tag(
                   label: supportsManagement
-                      ? '${server.name}${account.remoteUsername == user.username ? '' : ' (${account.remoteUsername})'}: ${account.granted ? 'Granted' : 'No grant'} · ${account.managementLabel} · ${account.accessLabel}'
+                      ? '${server.name}${account.remoteUsername == user.username ? '' : ' (${account.remoteUsername})'}: ${account.granted ? context.l10n.notificationGranted : context.l10n.settingsNoGrant} · ${mediaAccessLabel(context, account.managementLabel)} · ${mediaAccessLabel(context, account.accessLabel)}'
                       : account.disabled
-                          ? '${server.name}: off'
+                          ? context.l10n.settingsMessageValue1Off(
+                              (server.name).toString())
                           : account.remoteUsername == user.username
                               ? server.name
                               : '${server.name}: ${account.remoteUsername}',
@@ -1207,12 +1281,13 @@ class _UserTile extends StatelessWidget {
         }
       },
       itemBuilder: (context) => [
-        const PopupMenuItem(value: 'sso', child: Text('Linked sign-in')),
-        const PopupMenuItem(
+        PopupMenuItem(
+            value: 'sso', child: Text(context.l10n.settingsLinkedSignIn)),
+        PopupMenuItem(
           value: 'request_settings',
           child: ListTile(
             leading: Icon(Icons.tune),
-            title: Text('User settings…'),
+            title: Text(context.l10n.settingsUserSettings),
             contentPadding: EdgeInsets.zero,
           ),
         ),
@@ -1220,20 +1295,20 @@ class _UserTile extends StatelessWidget {
           value: 'toggle_shared_ai',
           child: ListTile(
             leading: const Icon(Icons.auto_awesome_outlined),
-            title: const Text('Included AI access'),
+            title: Text(context.l10n.settingsIncludedAiAccess),
             subtitle: Text(
               // An unknown provider (failed fetch) is not the same as a known
               // absence — and the server-defaulted provider name may not
               // claim an allowance that doesn't exist yet.
               !sharedAiConfigured && sharedAiProvider.isNotEmpty
-                  ? 'No shared provider configured yet'
+                  ? context.l10n.settingsNoSharedProviderConfiguredYet
                   : sharedAiProvider == 'codex'
-                      ? 'Shared OpenAI OAuth allowance'
+                      ? context.l10n.settingsSharedOpenaiOauthAllowance
                       : sharedAiProvider == 'grok_oauth'
-                          ? 'Shared xAI Grok allowance'
+                          ? context.l10n.settingsSharedXaiGrokAllowance
                           : sharedAiProvider.isEmpty
-                              ? 'Provider status unavailable'
-                              : 'Server provider quota',
+                              ? context.l10n.settingsProviderStatusUnavailable
+                              : context.l10n.settingsServerProviderQuota,
             ),
             trailing: IgnorePointer(
               child: Switch(
@@ -1254,8 +1329,10 @@ class _UserTile extends StatelessWidget {
               leading: const Icon(Icons.link),
               title: Text(
                 user.hasPendingInvite
-                    ? 'New invite link'
-                    : (_needsInvite ? 'Re-invite' : 'Issue device link'),
+                    ? context.l10n.settingsNewInviteLink
+                    : (_needsInvite
+                        ? context.l10n.settingsReInvite
+                        : context.l10n.settingsIssueDeviceLink),
               ),
               contentPadding: EdgeInsets.zero,
             ),
@@ -1273,12 +1350,15 @@ class _UserTile extends StatelessWidget {
                     ? Icons.play_circle_outline
                     : Icons.block_outlined),
                 title: Text(!account.granted
-                    ? 'Turn ${server.name} access on'
-                    : 'Turn ${server.name} access off'),
+                    ? context.l10n.settingsMessageTurnValue1AccessOn(
+                        (server.name).toString())
+                    : context.l10n.settingsMessageTurnValue1AccessOff(
+                        (server.name).toString())),
                 subtitle: supportsManagement
                     ? Text(account.manageAccess && !account.administrator
-                        ? 'Also changes server access'
-                        : 'Cantinarr only; server access stays the same')
+                        ? context.l10n.settingsAlsoChangesServerAccess
+                        : context
+                            .l10n.settingsCantinarrOnlyServerAccessStaysTheSame)
                     : null,
                 contentPadding: EdgeInsets.zero,
               ),
@@ -1289,8 +1369,10 @@ class _UserTile extends StatelessWidget {
                 child: ListTile(
                   leading: const Icon(Icons.manage_accounts_outlined),
                   title: Text(account.manageAccess
-                      ? 'Stop managing ${server.name} access…'
-                      : 'Manage ${server.name} access…'),
+                      ? context.l10n.settingsMessageStopManagingValue1Access(
+                          (server.name).toString())
+                      : context.l10n.settingsMessageManageValue1Access(
+                          (server.name).toString())),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
@@ -1298,7 +1380,8 @@ class _UserTile extends StatelessWidget {
               value: 'media_unlink:${server.id}',
               child: ListTile(
                 leading: const Icon(Icons.link_off),
-                title: Text('Unlink ${server.name} account'),
+                title: Text(context.l10n.settingsMessageUnlinkValue1Account(
+                    (server.name).toString())),
                 contentPadding: EdgeInsets.zero,
               ),
             ),
@@ -1307,34 +1390,35 @@ class _UserTile extends StatelessWidget {
               value: 'media_link:${server.id}',
               child: ListTile(
                 leading: const Icon(Icons.live_tv_outlined),
-                title: Text('Link ${server.name} account…'),
+                title: Text(context.l10n.settingsMessageLinkValue1Account2(
+                    (server.name).toString())),
                 contentPadding: EdgeInsets.zero,
               ),
             ),
         if (!isSelf)
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'test_push',
             child: ListTile(
               leading: Icon(Icons.notifications_active_outlined),
-              title: Text('Send test push'),
+              title: Text(context.l10n.settingsSendTestPush),
               contentPadding: EdgeInsets.zero,
             ),
           ),
         if (!user.isAdmin)
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'make_admin',
             child: ListTile(
               leading: Icon(Icons.arrow_upward),
-              title: Text('Make admin'),
+              title: Text(context.l10n.settingsMakeAdmin),
               contentPadding: EdgeInsets.zero,
             ),
           ),
         if (user.isAdmin && !isSelf)
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'make_user',
             child: ListTile(
               leading: Icon(Icons.arrow_downward),
-              title: Text('Make user'),
+              title: Text(context.l10n.settingsMakeUser),
               contentPadding: EdgeInsets.zero,
             ),
           ),
@@ -1350,11 +1434,11 @@ class _UserTile extends StatelessWidget {
               leading: Icon(
                   user.passwordEnabled ? Icons.lock_outline : Icons.lock_open),
               title: Text(user.passwordEnabled
-                  ? 'Disable password'
-                  : 'Enable password'),
+                  ? context.l10n.settingsDisablePassword2
+                  : context.l10n.settingsEnablePassword),
               subtitle: user.passwordEnabled
                   ? null
-                  : const Text('Lets them sign in on the web'),
+                  : Text(context.l10n.settingsLetsThemSignInOnTheWeb),
               contentPadding: EdgeInsets.zero,
             ),
           ),
@@ -1363,20 +1447,22 @@ class _UserTile extends StatelessWidget {
             value: user.passkeyEnabled ? 'disable_passkey' : 'enable_passkey',
             child: ListTile(
               leading: const Icon(Icons.fingerprint),
-              title: Text(
-                  user.passkeyEnabled ? 'Disable passkeys' : 'Enable passkeys'),
+              title: Text(user.passkeyEnabled
+                  ? context.l10n.settingsDisablePasskeys2
+                  : context.l10n.settingsEnablePasskeys),
               subtitle: user.passkeyEnabled
                   ? null
-                  : const Text('Lets them sign in on the web (HTTPS)'),
+                  : Text(context.l10n.settingsLetsThemSignInOnTheWebHttps),
               contentPadding: EdgeInsets.zero,
             ),
           ),
         if (!isSelf)
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'delete',
             child: ListTile(
               leading: Icon(Icons.delete_outline, color: AppTheme.error),
-              title: Text('Remove', style: TextStyle(color: AppTheme.error)),
+              title: Text(context.l10n.settingsRemove,
+                  style: TextStyle(color: AppTheme.error)),
               contentPadding: EdgeInsets.zero,
             ),
           ),

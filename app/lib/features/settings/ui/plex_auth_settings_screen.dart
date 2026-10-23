@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -46,7 +47,7 @@ class _PlexAuthSettingsScreenState
         _error = null;
       });
     } catch (e) {
-      if (mounted) setState(() => _error = oidcError(e));
+      if (mounted) setState(() => _error = oidcError(e, context: context));
     }
   }
 
@@ -62,11 +63,11 @@ class _PlexAuthSettingsScreenState
           _config = config;
           _draft.markSaved(_draftValues);
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Plex sign-in settings saved.')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.l10n.settingsPlexSignInSettingsSaved)));
       }
     } catch (e) {
-      if (mounted) setState(() => _error = oidcError(e));
+      if (mounted) setState(() => _error = oidcError(e, context: context));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -86,7 +87,7 @@ class _PlexAuthSettingsScreenState
             (result['candidates'] as List).cast<Map<String, dynamic>>());
       }
     } catch (e) {
-      if (mounted) setState(() => _error = oidcError(e));
+      if (mounted) setState(() => _error = oidcError(e, context: context));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -108,7 +109,7 @@ class _PlexAuthSettingsScreenState
       if (!mounted) return;
       await _review();
     } catch (e) {
-      if (mounted) setState(() => _error = oidcError(e));
+      if (mounted) setState(() => _error = oidcError(e, context: context));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -123,14 +124,13 @@ class _PlexAuthSettingsScreenState
       );
 
   Widget _buildPage(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Plex sign-in')),
+        appBar: AppBar(title: Text(context.l10n.settingsPlexSignIn)),
         body: Align(
             alignment: Alignment.topCenter,
             child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 720),
                 child: ListView(padding: const EdgeInsets.all(24), children: [
-                  const Text(
-                      'Let users sign in with their linked Plex account. Removing a library share later does not remove their Cantinarr sign-in.'),
+                  Text(context.l10n.settingsLetUsersSignInWithTheirLinkedPlex),
                   if (_error != null)
                     Padding(
                         padding: const EdgeInsets.symmetric(vertical: 16),
@@ -141,17 +141,17 @@ class _PlexAuthSettingsScreenState
                     const Center(child: CircularProgressIndicator()),
                   if (_config != null) ...[
                     SwitchListTile(
-                        title: const Text('Enable Plex sign-in'),
-                        subtitle: const Text(
-                            'Single sign-on policy still applies to regular users.'),
+                        title: Text(context.l10n.settingsEnablePlexSignIn),
+                        subtitle: Text(context.l10n
+                            .settingsSingleSignOnPolicyStillAppliesToRegular),
                         value: _config!['enabled'] == true,
                         onChanged: _busy
                             ? null
                             : (v) => setState(() => _config!['enabled'] = v)),
                     SwitchListTile(
-                        title: const Text('Allow automatic signup'),
-                        subtitle: const Text(
-                            'New users must own or have accepted access to a configured Plex server. Pending invitations and friends without a share do not qualify.'),
+                        title: Text(context.l10n.settingsAllowAutomaticSignup),
+                        subtitle: Text(context
+                            .l10n.settingsNewUsersMustOwnOrHaveAcceptedAccess),
                         value: _config!['auto_create'] == true,
                         onChanged: _busy
                             ? null
@@ -159,21 +159,22 @@ class _PlexAuthSettingsScreenState
                                 setState(() => _config!['auto_create'] = v)),
                     FilledButton(
                         onPressed: _busy ? null : _save,
-                        child: const Text('Save settings')),
+                        child: Text(context.l10n.settingsSaveSettings)),
                     const SizedBox(height: 24),
-                    const Text('Review existing users',
+                    Text(context.l10n.settingsReviewExistingUsers,
                         style: TextStyle(
                             fontSize: 20, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 8),
-                    const Text(
-                        'Library access and sign-in are separate. Select only accounts you recognize; confirmation checks Plex again. Unavailable or ambiguous matches cannot be confirmed. If no unique account matches, check that the recipient accepted the library invitation in their own Plex account, then load fresh accounts again.'),
+                    Text(context
+                        .l10n.settingsLibraryAccessAndSignInAreSeparateSelect),
                     OutlinedButton(
                         onPressed: _busy ? null : _review,
-                        child: const Text('Load fresh Plex accounts')),
+                        child:
+                            Text(context.l10n.settingsLoadFreshPlexAccounts)),
                     if (_busy) const LinearProgressIndicator(),
                     if (_candidates?.isEmpty == true)
-                      const Text(
-                          'No existing Plex media-account links were found to review. Typed email addresses are not login identities.'),
+                      Text(context.l10n
+                          .settingsNoExistingPlexMediaAccountLinksWereFound),
                     for (final c in _candidates ?? <Map<String, dynamic>>[])
                       CheckboxListTile(
                         value: c['confirmed'] == true ||
@@ -191,18 +192,21 @@ class _PlexAuthSettingsScreenState
                                   }
                                 }),
                         title: Text(
-                            '${c['username']} → ${c['plex_username'] == '' ? 'Unconfirmed Plex account' : c['plex_username']}',
+                            '${c['username']} → ${c['plex_username'] == '' ? context.l10n.settingsUnconfirmedPlexAccount : c['plex_username']}',
                             style: TextStyle(
                                 color:
                                     Theme.of(context).colorScheme.onSurface)),
                         subtitle: Text(
                             [
                               if (c['email'] != '')
-                                '${c['email']} (Plex ID ${c['plex_account_id']})',
+                                context.l10n.settingsMessageValue1PlexIdValue2(
+                                    (c['email']).toString(),
+                                    (c['plex_account_id']).toString()),
                               (c['servers'] as List)
                                   .map((s) => s['name'])
                                   .join(', '),
-                              if (c['confirmed'] == true) 'Confirmed',
+                              if (c['confirmed'] == true)
+                                context.l10n.settingsConfirmed,
                               if (c['reason'] != null) c['reason'] as String,
                             ].join('\n'),
                             style: TextStyle(
@@ -215,8 +219,9 @@ class _PlexAuthSettingsScreenState
                       FilledButton(
                           onPressed:
                               _busy || _selected.isEmpty ? null : _confirm,
-                          child:
-                              Text('Confirm selected (${_selected.length})')),
+                          child: Text(context.l10n
+                              .settingsMessageConfirmSelectedValue1(
+                                  (_selected.length).toString()))),
                   ],
                 ]))),
       );

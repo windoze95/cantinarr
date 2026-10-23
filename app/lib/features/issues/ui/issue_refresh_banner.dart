@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -56,7 +57,7 @@ class IssueRefreshBanner extends StatelessWidget {
               minimumSize: const Size(0, 36),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
-            child: const Text('Retry'),
+            child: Text(context.l10n.opsRetry),
           ),
         ],
       ),

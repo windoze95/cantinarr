@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -152,7 +153,8 @@ class _RequesterArtistDetailScreenState
       if (mounted && generation == _generation) {
         setState(() {
           _loading = false;
-          _error = 'This artist’s catalog releases could not be loaded.';
+          _error =
+              context.l10n.browseThisArtistSCatalogReleasesCouldNotBeLoaded;
         });
       }
     }
@@ -176,9 +178,10 @@ class _RequesterArtistDetailScreenState
     });
     if (!access.canBrowse('lidarr', _instanceId)) {
       return Scaffold(
-          appBar: AppBar(title: const Text('Artist')),
-          body: const Center(
-              child: Text('Music is not available for this account.')));
+          appBar: AppBar(title: Text(context.l10n.browseArtist)),
+          body: Center(
+              child:
+                  Text(context.l10n.browseMusicIsNotAvailableForThisAccount)));
     }
     final library = _instanceId == null
         ? null
@@ -201,8 +204,9 @@ class _RequesterArtistDetailScreenState
     final missingFromLibrary = library?.error is DioException &&
         (library!.error as DioException).response?.statusCode == 404;
     return Scaffold(
-        appBar:
-            AppBar(title: Text(_artist?.name ?? widget.nameHint ?? 'Artist')),
+        appBar: AppBar(
+            title: Text(
+                _artist?.name ?? widget.nameHint ?? context.l10n.browseArtist)),
         body: CenteredContent(
             child: ListView(
                 key: PageStorageKey(
@@ -215,8 +219,8 @@ class _RequesterArtistDetailScreenState
               if (_artistFailed)
                 TextButton(
                     onPressed: _loadArtist,
-                    child: const Text(
-                        'Artist details could not be checked. Retry')),
+                    child: Text(context
+                        .l10n.browseArtistDetailsCouldNotBeCheckedRetry)),
               for (var i = 0; i < _albums.length; i++)
                 MusicAlbumResultTile(
                     key: ValueKey('album:${_albums[i].foreignId}:$i'),
@@ -241,27 +245,29 @@ class _RequesterArtistDetailScreenState
               if (_error != null)
                 TextButton(
                     onPressed: () => _load(_next ?? 1),
-                    child: Text('$_error Retry')),
+                    child: Text(context.l10n.browseErrorRetry(_error ?? ''))),
               if (!_loading &&
                   _error == null &&
                   _albums.isEmpty &&
                   extras.isEmpty)
-                const Padding(
+                Padding(
                     padding: EdgeInsets.all(24),
-                    child: Text(
-                        'No albums, EPs, or singles on this catalog page.')),
+                    child: Text(context
+                        .l10n.browseNoAlbumsEPsOrSinglesOnThisCatalogPage)),
               if (_next != null && !_loading)
                 TextButton(
                     onPressed: () => _load(_next!),
-                    child: const Text('More releases')),
+                    child: Text(context.l10n.browseMoreReleases)),
               if (library?.hasError == true && !missingFromLibrary)
-                const Padding(
+                Padding(
                     padding: EdgeInsets.all(16),
-                    child: Text('Library availability could not be checked.')),
+                    child: Text(context
+                        .l10n.browseLibraryAvailabilityCouldNotBeChecked)),
               if (saved?.hasError == true)
-                const Padding(
+                Padding(
                     padding: EdgeInsets.all(16),
-                    child: Text('Saved requests could not be checked.')),
+                    child: Text(
+                        context.l10n.browseSavedRequestsCouldNotBeChecked)),
             ])));
   }
 }

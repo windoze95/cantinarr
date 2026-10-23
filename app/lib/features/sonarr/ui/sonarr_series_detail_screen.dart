@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -95,7 +96,7 @@ class _SonarrSeriesDetailScreenState
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _error = 'Failed to load series: $e';
+        _error = context.l10n.adminFailedToLoadSeries((e).toString());
       });
     }
   }
@@ -172,8 +173,9 @@ class _SonarrSeriesDetailScreenState
       });
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not change monitoring: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              context.l10n.adminCouldNotChangeMonitoring((e).toString()))));
     } finally {
       if (mounted) setState(() => _togglingSeasons.remove(season.seasonNumber));
     }
@@ -230,12 +232,15 @@ class _SonarrSeriesDetailScreenState
 
   /// Long-press menu for a season: automatic or interactive season search.
   Future<void> _showSeasonActions(SonarrSeason season) async {
+    final translations = context.l10n;
     final action = await showActionSheet<String>(
       context,
-      title: seasonLabel(season.seasonNumber),
-      actions: const [
-        SheetAction('automatic', Icons.search, 'Automatic Search'),
-        SheetAction('interactive', Icons.manage_search, 'Interactive Search'),
+      title: seasonLabel(season.seasonNumber, strings: translations),
+      actions: [
+        SheetAction(
+            'automatic', Icons.search, translations.adminAutomaticSearch),
+        SheetAction('interactive', Icons.manage_search,
+            translations.adminInteractiveSearch),
       ],
     );
     if (action == null || !mounted) return;
@@ -243,9 +248,11 @@ class _SonarrSeriesDetailScreenState
       case 'automatic':
         try {
           await _service.searchSeason(_series.id, season.seasonNumber);
-          _toast('Searching for ${seasonLabel(season.seasonNumber)}…');
+          _toast(translations.adminSearchingFor2(
+              (seasonLabel(season.seasonNumber, strings: translations))
+                  .toString()));
         } catch (e) {
-          _toast('Search failed: $e');
+          _toast(translations.adminSearchFailed((e).toString()));
         }
       case 'interactive':
         Navigator.of(context, rootNavigator: true).push(
@@ -307,7 +314,7 @@ class _SonarrSeriesDetailScreenState
             Icons.track_changes_outlined, 'Trakt'),
     ];
     if (links.isEmpty) {
-      _toast('No external links available');
+      _toast(context.l10n.adminNoExternalLinksAvailable);
       return;
     }
     final url = await showActionSheet<String>(context,
@@ -330,17 +337,17 @@ class _SonarrSeriesDetailScreenState
         actions: [
           IconButton(
             icon: const Icon(Icons.link, color: AppTheme.textPrimary),
-            tooltip: 'External links',
+            tooltip: context.l10n.adminExternalLinks,
             onPressed: _openLinks,
           ),
           IconButton(
             icon: const Icon(Icons.edit_outlined, color: AppTheme.textPrimary),
-            tooltip: 'Edit series',
+            tooltip: context.l10n.adminEditSeries2,
             onPressed: _openEdit,
           ),
           IconButton(
             icon: const Icon(Icons.more_vert, color: AppTheme.textPrimary),
-            tooltip: 'Series actions',
+            tooltip: context.l10n.adminSeriesActions,
             onPressed: _showSeriesMenu,
           ),
         ],
@@ -373,10 +380,10 @@ class _SonarrSeriesDetailScreenState
                             onToggleMonitored: () => _toggleSeasonMonitored(s),
                           )),
                       if (seasons.isEmpty && !_isLoading)
-                        const Padding(
+                        Padding(
                           padding: EdgeInsets.all(32),
                           child: Center(
-                            child: Text('No seasons',
+                            child: Text(context.l10n.adminNoSeasons,
                                 style:
                                     TextStyle(color: AppTheme.textSecondary)),
                           ),
@@ -388,8 +395,11 @@ class _SonarrSeriesDetailScreenState
   }
 }
 
-String seasonLabel(int seasonNumber) =>
-    seasonNumber == 0 ? 'Specials' : 'Season $seasonNumber';
+String seasonLabel(int seasonNumber, {AppLocalizations? strings}) =>
+    seasonNumber == 0
+        ? (strings ?? lookupAppLocalizations(const Locale('en'))).adminSpecials
+        : (strings ?? lookupAppLocalizations(const Locale('en')))
+            .adminSeason((seasonNumber).toString());
 
 /// "11/11 Episodes Available • 2 unaired" — see [seasonAvailabilityLine] for
 /// why the fraction is Sonarr's monitored-and-aired episodeCount while the
@@ -406,8 +416,8 @@ class _AvailabilityLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final line =
-        seasonAvailabilityLine(stats, moreToCome: moreToCome, queue: queue);
+    final line = seasonAvailabilityLine(stats,
+        moreToCome: moreToCome, queue: queue, strings: context.l10n);
     return Text(
       line.text,
       style: TextStyle(
@@ -448,7 +458,7 @@ class _AllSeasonsCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('All Seasons',
+                  Text(context.l10n.adminAllSeasons,
                       style: TextStyle(
                           color: AppTheme.textPrimary,
                           fontSize: 17,
@@ -524,19 +534,17 @@ class _SeasonCard extends StatelessWidget {
   /// The tooltip carries the action, plus the reason the bookmark looks
   /// half-filled — the availability line calls a still-airing season's
   /// remainder "unaired", so nothing else on the card says it.
-  String get _tooltip {
-    if (!seriesMonitored) return 'Series is unmonitored';
+  String _tooltip(BuildContext context) {
+    if (!seriesMonitored) return context.l10n.adminSeriesIsUnmonitored;
     final counts = episodeMonitor;
     if (season.monitored) {
       final left = counts == null ? 0 : counts.total - counts.monitored;
-      if (left == 0) return 'Stop monitoring';
-      return 'Stop monitoring — $left '
-          '${left == 1 ? 'episode is' : 'episodes are'} unmonitored';
+      if (left == 0) return context.l10n.adminStopMonitoring;
+      return context.l10n.adminStopMonitoringCount(left);
     }
     final on = counts?.monitored ?? 0;
-    if (on == 0) return 'Monitor';
-    return 'Monitor — $on '
-        '${on == 1 ? 'episode is' : 'episodes are'} monitored';
+    if (on == 0) return context.l10n.adminMonitor;
+    return context.l10n.adminMonitorCount(on);
   }
 
   /// The series pauses all of its seasons without changing their saved flags.
@@ -583,7 +591,8 @@ class _SeasonCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(seasonLabel(season.seasonNumber),
+                    Text(
+                        seasonLabel(season.seasonNumber, strings: context.l10n),
                         style: const TextStyle(
                             color: AppTheme.textPrimary,
                             fontSize: 16,
@@ -612,7 +621,7 @@ class _SeasonCard extends StatelessWidget {
               onTap: busy || !seriesMonitored ? () {} : null,
               child: IconButton(
                 onPressed: busy || !seriesMonitored ? null : onToggleMonitored,
-                tooltip: _tooltip,
+                tooltip: _tooltip(context),
                 icon: busy
                     ? const SizedBox(
                         width: 18,

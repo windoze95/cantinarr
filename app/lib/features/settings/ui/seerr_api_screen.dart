@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -44,12 +45,13 @@ class _SeerrApiScreenState extends ConsumerState<SeerrApiScreen> {
         _reveal = false;
       });
       if (done != null) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(done)));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(done)));
       }
     } catch (_) {
       if (mounted) {
-        setState(() => _error =
-            failure ?? 'Could not read the Seerr-compatible API key. Try again.');
+        setState(() => _error = failure ??
+            context.l10n.settingsCouldNotReadTheSeerrCompatibleApiKey);
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -64,53 +66,56 @@ class _SeerrApiScreenState extends ConsumerState<SeerrApiScreen> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('Replace the key?'),
-          content: const Text(
-              'Apps using the current key stop working until you paste the new one into them.'),
+          title: Text(context.l10n.settingsReplaceTheKey),
+          content:
+              Text(context.l10n.settingsAppsUsingTheCurrentKeyStopWorkingUntil),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel')),
+                child: Text(context.l10n.settingsCancel)),
             FilledButton(
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('Replace key')),
+                child: Text(context.l10n.settingsReplaceKey)),
           ],
         ),
       );
       if (confirmed != true) return;
     }
     await _run(_service.issue,
-        failure: 'Could not issue a key. Try again.',
-        done: replacing ? 'Key replaced' : 'Key issued');
+        failure: context.l10n.settingsCouldNotIssueAKeyTryAgain,
+        done: replacing
+            ? context.l10n.settingsKeyReplaced
+            : context.l10n.settingsKeyIssued);
   }
 
   Future<void> _revoke() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Revoke the key?'),
-        content: const Text(
-            'Every app using it loses access at once. You can issue a new key any time.'),
+        title: Text(context.l10n.settingsRevokeTheKey),
+        content: Text(context.l10n.settingsEveryAppUsingItLosesAccessAtOnce),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
+              child: Text(context.l10n.settingsCancel)),
           FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('Revoke key')),
+              child: Text(context.l10n.settingsRevokeKey)),
         ],
       ),
     );
     if (confirmed != true) return;
     await _run(_service.revoke,
-        failure: 'Could not revoke the key. Try again.', done: 'Key revoked');
+        failure: context.l10n.settingsCouldNotRevokeTheKeyTryAgain,
+        done: context.l10n.settingsKeyRevoked);
   }
 
   Future<void> _copy(String label, String value) async {
     await Clipboard.setData(ClipboardData(text: value));
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text('$label copied')));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            context.l10n.settingsMessageValue1Copied((label).toString()))));
   }
 
   @override
@@ -120,38 +125,38 @@ class _SeerrApiScreenState extends ConsumerState<SeerrApiScreen> {
     final key = _key;
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Seerr-compatible API')),
+      appBar: AppBar(title: Text(context.l10n.settingsSeerrApi)),
       body: Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 700),
           child: ListView(padding: const EdgeInsets.all(20), children: [
             if (_busy) const LinearProgressIndicator(),
-            const Text(
-                'Some apps read requests from Seerr, Overseerr, or Jellyseerr: Maintainerr uses them to know who asked for a title before it cleans up, Homepage shows request counts, Dashbrr lists and approves them. Cantinarr answers the same API, so those apps can read its requests instead.'),
+            Text(context.l10n.settingsSomeAppsReadRequestsFromSeerrOverseerrOr),
             const SizedBox(height: 12),
-            const Text(
-                'Where the app asks for a Seerr address and API key, enter the address it can reach this server at and the key below. The app adds /api/v1 itself. The key acts as the administrator who issued it and can read every movie and TV request, approve or decline waiting ones, and delete requests. Books and music are not included.'),
+            Text(context.l10n.settingsWhereTheAppAsksForASeerrAddress),
             const SizedBox(height: 20),
-            Text('Address', style: theme.textTheme.titleMedium),
+            Text(context.l10n.settingsAddress,
+                style: theme.textTheme.titleMedium),
             const SizedBox(height: 4),
             SelectableText(serverUrl.isNotEmpty
                 ? serverUrl
-                : 'The address this app is connected with is not known yet.'),
+                : context.l10n.settingsTheAddressThisAppIsConnectedWithIs),
             if (serverUrl.isNotEmpty)
               Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton.icon(
-                    onPressed: () => _copy('Address', serverUrl),
+                    onPressed: () =>
+                        _copy(context.l10n.settingsAddress, serverUrl),
                     icon: const Icon(Icons.copy),
-                    label: const Text('Copy address')),
+                    label: Text(context.l10n.settingsCopyAddress)),
               ),
             const SizedBox(height: 4),
-            Text(
-                'This is the address your app uses. An app on another machine or in another container may need a different one, such as the server\'s LAN address or its container name.',
+            Text(context.l10n.settingsThisIsTheAddressYourAppUsesAn,
                 style: theme.textTheme.bodySmall),
             const SizedBox(height: 20),
-            Text('API key', style: theme.textTheme.titleMedium),
+            Text(context.l10n.settingsApiKey,
+                style: theme.textTheme.titleMedium),
             const SizedBox(height: 4),
             if (_error != null)
               Padding(
@@ -159,24 +164,36 @@ class _SeerrApiScreenState extends ConsumerState<SeerrApiScreen> {
                   child: Text(_error!,
                       style: TextStyle(color: theme.colorScheme.error))),
             if (key != null && !key.configured)
-              const Text('No key has been issued. Issue one to let apps connect.'),
+              Text(context.l10n.settingsNoKeyHasBeenIssuedIssueOneTo),
             if (key != null && key.configured) ...[
               SelectableText(_reveal ? key.apiKey : '•' * 24),
               const SizedBox(height: 4),
               Text(
-                  'Issued by ${key.issuedBy.isEmpty ? 'an administrator' : key.issuedBy}'
-                  '${key.createdAt == null ? '' : ' on ${_date(key.createdAt!)}'}.',
+                  context.l10n.settingsMessageIssuedByValue1Value2(
+                      (key.issuedBy.isEmpty
+                              ? context.l10n.settingsAnAdministrator
+                              : key.issuedBy)
+                          .toString(),
+                      (key.createdAt == null
+                              ? ''
+                              : context.l10n.settingsMessageOnValue1(
+                                  (_date(key.createdAt!)).toString()))
+                          .toString()),
                   style: theme.textTheme.bodySmall),
               const SizedBox(height: 8),
               Wrap(spacing: 12, runSpacing: 12, children: [
                 FilledButton.icon(
-                    onPressed: _busy ? null : () => _copy('API key', key.apiKey),
+                    onPressed: _busy
+                        ? null
+                        : () => _copy(context.l10n.settingsApiKey, key.apiKey),
                     icon: const Icon(Icons.copy),
-                    label: const Text('Copy key')),
+                    label: Text(context.l10n.settingsCopyKey)),
                 OutlinedButton(
                     onPressed:
                         _busy ? null : () => setState(() => _reveal = !_reveal),
-                    child: Text(_reveal ? 'Hide key' : 'Show key')),
+                    child: Text(_reveal
+                        ? context.l10n.settingsHideKey
+                        : context.l10n.settingsShowKey)),
               ]),
             ],
             const SizedBox(height: 16),
@@ -184,21 +201,22 @@ class _SeerrApiScreenState extends ConsumerState<SeerrApiScreen> {
               if (key != null && key.configured)
                 OutlinedButton(
                     onPressed: _busy ? null : _issue,
-                    child: const Text('Replace key'))
+                    child: Text(context.l10n.settingsReplaceKey))
               else
                 FilledButton(
                     onPressed: _busy || key == null ? null : _issue,
-                    child: const Text('Issue key')),
+                    child: Text(context.l10n.settingsIssueKey)),
               if (key != null && key.configured)
                 TextButton(
                     onPressed: _busy ? null : _revoke,
-                    child: const Text('Revoke key')),
+                    child: Text(context.l10n.settingsRevokeKey)),
             ]),
             const SizedBox(height: 28),
-            Text('What the apps see', style: theme.textTheme.titleMedium),
+            Text(context.l10n.settingsWhatTheAppsSee,
+                style: theme.textTheme.titleMedium),
             const SizedBox(height: 8),
-            const Text(
-                'Availability is read live from Radarr and Sonarr each time, so a title removed from a library reads as gone at once and its request can be made again. A request an app deletes is removed from the requester\'s history too, and any allowance it used is released. If a library cannot be reached, the API answers with an error rather than a shorter list; apps built for Seerr treat that as a temporary failure and try again.'),
+            Text(
+                context.l10n.settingsAvailabilityIsReadLiveFromRadarrAndSonarr),
           ]),
         ),
       ),

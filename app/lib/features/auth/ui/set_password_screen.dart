@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/auth_messages.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -42,12 +44,11 @@ class _SetPasswordScreenState extends ConsumerState<SetPasswordScreen> {
     final confirm = _confirmController.text;
 
     if (password.length < _minLength) {
-      setState(
-          () => _error = 'Password must be at least $_minLength characters.');
+      setState(() => _error = context.l10n.authMinimumPassword(_minLength));
       return;
     }
     if (password != confirm) {
-      setState(() => _error = 'Passwords do not match.');
+      setState(() => _error = context.l10n.authPasswordsMismatchPeriod);
       return;
     }
 
@@ -60,7 +61,7 @@ class _SetPasswordScreenState extends ConsumerState<SetPasswordScreen> {
       await ref.read(authProvider.notifier).setPassword(password);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Password saved')),
+        SnackBar(content: Text(context.l10n.authPasswordSaved)),
       );
       _passwordController.clear();
       _confirmController.clear();
@@ -83,10 +84,10 @@ class _SetPasswordScreenState extends ConsumerState<SetPasswordScreen> {
       }
       if (e.type == DioExceptionType.connectionError ||
           e.type == DioExceptionType.connectionTimeout) {
-        return 'Could not connect to server';
+        return context.l10n.authConnectServerError;
       }
     }
-    return 'Could not save password. Please try again.';
+    return context.l10n.authSavePasswordError;
   }
 
   @override
@@ -101,11 +102,13 @@ class _SetPasswordScreenState extends ConsumerState<SetPasswordScreen> {
   Widget _buildPage(BuildContext context) {
     final user = ref.watch(authProvider).valueOrNull?.user;
     final isChange = user?.hasPassword == true;
-    final account = user?.username ?? 'your account';
+    final account = user?.username ?? context.l10n.authYourAccount;
 
     return Scaffold(
-      appBar:
-          AppBar(title: Text(isChange ? 'Change Password' : 'Create Password')),
+      appBar: AppBar(
+          title: Text(isChange
+              ? context.l10n.authChangePassword
+              : context.l10n.authCreatePassword)),
       body: CenteredContent(
           child: SafeArea(
         child: ListView(
@@ -115,15 +118,14 @@ class _SetPasswordScreenState extends ConsumerState<SetPasswordScreen> {
             const SizedBox(height: 24),
             Text(
               isChange
-                  ? 'Update the password for $account.'
-                  : 'Add a password to $account.',
+                  ? context.l10n.authUpdateAccountPassword(account)
+                  : context.l10n.authAddAccountPassword(account),
               style: const TextStyle(
                   color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
             ),
             const SizedBox(height: 8),
-            const Text(
-              'A password lets you sign in — and authorize MCP clients — on '
-              'servers without HTTPS, where passkeys are unavailable.',
+            Text(
+              context.l10n.authPasswordExplanation,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
             const SizedBox(height: 24),
@@ -133,7 +135,7 @@ class _SetPasswordScreenState extends ConsumerState<SetPasswordScreen> {
               obscureText: _obscure,
               autofocus: true,
               decoration: InputDecoration(
-                labelText: 'New password',
+                labelText: context.l10n.authNewPassword,
                 prefixIcon: const Icon(Icons.lock_outline),
                 suffixIcon: IconButton(
                   icon:
@@ -148,8 +150,8 @@ class _SetPasswordScreenState extends ConsumerState<SetPasswordScreen> {
               controller: _confirmController,
               enabled: !_isSaving,
               obscureText: _obscure,
-              decoration: const InputDecoration(
-                labelText: 'Confirm password',
+              decoration: InputDecoration(
+                labelText: context.l10n.authConfirmPasswordLower,
                 prefixIcon: Icon(Icons.lock_outline),
               ),
               autofillHints: const [AutofillHints.newPassword],
@@ -157,7 +159,8 @@ class _SetPasswordScreenState extends ConsumerState<SetPasswordScreen> {
             ),
             if (_error != null) ...[
               const SizedBox(height: 16),
-              Text(_error!, style: const TextStyle(color: AppTheme.error)),
+              Text(localizeAuthMessage(context, _error!),
+                  style: const TextStyle(color: AppTheme.error)),
             ],
             const SizedBox(height: 24),
             FilledButton.icon(
@@ -169,7 +172,9 @@ class _SetPasswordScreenState extends ConsumerState<SetPasswordScreen> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.check),
-              label: Text(_isSaving ? 'Saving...' : 'Save Password'),
+              label: Text(_isSaving
+                  ? context.l10n.authSaving
+                  : context.l10n.authSavePassword),
             ),
           ],
         ),

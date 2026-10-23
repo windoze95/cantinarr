@@ -8,6 +8,9 @@ import 'package:url_launcher/url_launcher.dart';
 import 'core/network/websocket_client.dart';
 import 'core/providers/realtime_provider.dart';
 import 'core/storage/preferences.dart';
+import 'core/storage/locale_preferences.dart';
+import 'l10n/l10n.dart';
+import 'l10n/auth_messages.dart';
 import 'core/theme/app_theme.dart';
 import 'core/utils/version_compat.dart';
 import 'core/widgets/app_ambient_background.dart';
@@ -56,8 +59,7 @@ bool sameServer(String left, String right) =>
 @visibleForTesting
 String normalizeServer(String value) {
   var normalized = value.trim();
-  if (!normalized.startsWith('http://') &&
-      !normalized.startsWith('https://')) {
+  if (!normalized.startsWith('http://') && !normalized.startsWith('https://')) {
     normalized = 'https://$normalized';
   }
   while (normalized.endsWith('/')) {
@@ -86,6 +88,10 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
     with WidgetsBindingObserver {
   StreamSubscription<Uri>? _linkSubscription;
   final _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+
+  AppLocalizations get _strings =>
+      _scaffoldMessengerKey.currentContext?.l10n ??
+      lookupAppLocalizations(const Locale('en'));
 
   @override
   void initState() {
@@ -145,25 +151,38 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
     }
   }
 
+  String _signInError() {
+    final error = ref.read(authProvider).valueOrNull?.error;
+    final context = _scaffoldMessengerKey.currentContext;
+    if (error == null) return _strings.appSignInFailed;
+    return context == null ? error : localizeAuthMessage(context, error);
+  }
+
   Future<void> _openOIDCReturn(Uri uri) async {
     await ref.read(authProvider.future);
     if (!mounted) return;
     try {
       final purpose = await ref.read(authProvider.notifier).finishSSO(uri);
       if (!mounted || purpose.isEmpty) return;
-      final target = purpose == 'test' ? '/settings/oidc'
-          : purpose == 'link' ? '/settings/sso-account' : '/dashboard/movies';
+      final target = purpose == 'test'
+          ? '/settings/oidc'
+          : purpose == 'link'
+              ? '/settings/sso-account'
+              : '/dashboard/movies';
       ref.read(appRouterProvider).go(Uri(path: target, queryParameters: {
-        if (purpose != 'login') 'verified': uri.queryParameters['flow'] ?? '',
-      }).toString());
+            if (purpose != 'login')
+              'verified': uri.queryParameters['flow'] ?? '',
+          }).toString());
       if (purpose != 'login') {
-        _scaffoldMessengerKey.currentState?.showSnackBar(SnackBar(content: Text(
-          purpose == 'test' ? 'Test sign-in succeeded. No account was created or linked.' : 'Single sign-on identity linked.')));
+        _scaffoldMessengerKey.currentState?.showSnackBar(SnackBar(
+            content: Text(purpose == 'test'
+                ? _strings.appTestSignInSucceeded
+                : _strings.appIdentityLinked)));
       }
     } catch (e) {
       if (!mounted) return;
-      _scaffoldMessengerKey.currentState?.showSnackBar(SnackBar(content: Text(
-        ref.read(authProvider).valueOrNull?.error ?? 'Sign-in could not be completed. Please try again.')));
+      _scaffoldMessengerKey.currentState
+          ?.showSnackBar(SnackBar(content: Text(_signInError())));
     }
   }
 
@@ -188,29 +207,25 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
     // The dialog needs a context under MaterialApp.router; this state sits
     // above it, so borrow the root navigator's (same reason _openPasskeyCreate
     // navigates through the router instance).
-    final dialogContext = ref
-        .read(appRouterProvider)
-        .routerDelegate
-        .navigatorKey
-        .currentContext;
+    final dialogContext =
+        ref.read(appRouterProvider).routerDelegate.navigatorKey.currentContext;
     if (dialogContext == null || !dialogContext.mounted) return;
 
     final confirmed = await showDialog<bool>(
       context: dialogContext,
       builder: (context) => AlertDialog(
-        title: const Text('Switch Server'),
+        title: Text(context.l10n.appSwitchServer),
         content: Text(
-          'This connect link is for $server. Connect there instead? '
-          'This device will be signed out of $currentLabel.',
+          context.l10n.appSwitchServerBody(server, currentLabel),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.appCancel),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Switch'),
+            child: Text(context.l10n.appSwitch),
           ),
         ],
       ),
@@ -222,8 +237,7 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
     if (switched == ServerSwitchResult.rejected) {
       _scaffoldMessengerKey.currentState?.showSnackBar(SnackBar(
         content: Text(
-          'Could not connect with that link. It may have expired. '
-          'You are still signed in to $currentLabel.',
+          _strings.appConnectLinkRejected(currentLabel),
         ),
       ));
     }
@@ -274,12 +288,12 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
         behavior: SnackBarBehavior.floating,
         backgroundColor: AppTheme.error,
         duration: const Duration(seconds: 8),
-        content: const Text(
-          'An auto-approval rule paused itself after a failed fix.',
-          style: TextStyle(color: AppTheme.background),
+        content: Text(
+          _strings.appApprovalRulePaused,
+          style: const TextStyle(color: AppTheme.background),
         ),
         action: SnackBarAction(
-          label: 'Review',
+          label: _strings.appReview,
           textColor: AppTheme.background,
           onPressed: () => ref.read(appRouterProvider).push(target),
         ),
@@ -298,13 +312,12 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
         behavior: SnackBarBehavior.floating,
         backgroundColor: AppTheme.error,
         duration: const Duration(seconds: 8),
-        content: const Text(
-          'Auto-fix paused: too many failed attempts. Re-enable it in AI '
-          'remediation settings.',
-          style: TextStyle(color: AppTheme.background),
+        content: Text(
+          _strings.appAutoFixPaused,
+          style: const TextStyle(color: AppTheme.background),
         ),
         action: SnackBarAction(
-          label: 'Settings',
+          label: _strings.appSettings,
           textColor: AppTheme.background,
           onPressed: () =>
               ref.read(appRouterProvider).push('/settings/ai-remediation'),
@@ -342,6 +355,9 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
     final router = ref.watch(appRouterProvider);
     return MaterialApp.router(
       title: 'Cantinarr',
+      locale: ref.watch(appLocaleProvider),
+      supportedLocales: AppLocalizations.supportedLocales,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
       theme: AppTheme.dark,
       debugShowCheckedModeBanner: false,
       scaffoldMessengerKey: _scaffoldMessengerKey,
@@ -442,7 +458,7 @@ class _ReconnectingBar extends StatelessWidget {
       height: 26,
       color: AppTheme.surfaceVariant,
       alignment: Alignment.center,
-      child: const Row(
+      child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           SizedBox(
@@ -453,8 +469,8 @@ class _ReconnectingBar extends StatelessWidget {
           ),
           SizedBox(width: 8),
           Text(
-            'Reconnecting…',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+            context.l10n.appReconnecting,
+            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
           ),
         ],
       ),
@@ -484,7 +500,7 @@ class _UpdateBanner extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final bar = _pickBar(ref);
+    final bar = _pickBar(context, ref);
     if (bar == null) return child;
 
     return Column(
@@ -500,12 +516,12 @@ class _UpdateBanner extends ConsumerWidget {
 
   /// The admin's primary update action: their configured management portal,
   /// else the update guide.
-  (String, String) _updateAction(String managementUrl) =>
+  (String, String) _updateAction(BuildContext context, String managementUrl) =>
       managementUrl.isNotEmpty
-          ? ('Update', managementUrl)
-          : ('How to update', _updateGuideUrl);
+          ? (context.l10n.appUpdate, managementUrl)
+          : (context.l10n.appHowToUpdate, _updateGuideUrl);
 
-  Widget? _pickBar(WidgetRef ref) {
+  Widget? _pickBar(BuildContext context, WidgetRef ref) {
     final isAdmin = ref.watch(
       authProvider.select((s) => s.valueOrNull?.user?.isAdmin ?? false),
     );
@@ -532,8 +548,7 @@ class _UpdateBanner extends ConsumerWidget {
         if (ref.watch(dismissedAppSkewPairProvider) != pair) {
           return _UpdateBannerBar(
             icon: Icons.warning_amber_rounded,
-            message: 'This app is older than your server supports — '
-                'update it from the app store',
+            message: context.l10n.appTooOld,
             onDismiss: () =>
                 ref.read(dismissedAppSkewPairProvider.notifier).set(pair),
           );
@@ -541,11 +556,12 @@ class _UpdateBanner extends ConsumerWidget {
       case VersionSkewWarning.serverTooOld:
         final pair = '${connection?.serverVersion}|$appFloor';
         if (ref.watch(dismissedServerSkewPairProvider) != pair) {
-          final (label, url) = _updateAction(status?.managementUrl ?? '');
+          final (label, url) =
+              _updateAction(context, status?.managementUrl ?? '');
           return _UpdateBannerBar(
             icon: Icons.warning_amber_rounded,
-            message: 'Server ${connection?.serverVersion} is older than '
-                'this app supports — update the server',
+            message:
+                context.l10n.appServerTooOld(connection?.serverVersion ?? ''),
             actionLabel: label,
             actionUrl: url,
             onDismiss: () =>
@@ -614,7 +630,8 @@ class _UpdateBannerBar extends StatelessWidget {
             // No tooltip: this bar renders above MaterialApp's Navigator, so
             // there is no Overlay for one to mount into. The semantic label
             // keeps the button readable to screen readers.
-            icon: const Icon(Icons.close, size: 18, semanticLabel: 'Dismiss'),
+            icon: Icon(Icons.close,
+                size: 18, semanticLabel: context.l10n.appDismiss),
             color: AppTheme.textSecondary,
             visualDensity: VisualDensity.compact,
           ),

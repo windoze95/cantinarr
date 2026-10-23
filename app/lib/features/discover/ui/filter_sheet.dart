@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/config/app_config.dart';
@@ -165,9 +166,10 @@ class _FilterSheetState extends State<FilterSheet> {
   String get _yearLabel {
     final from = _years.start.round();
     final to = _years.end.round();
-    if (from == FilterSheet.earliestYear && to == _latestYear) return 'Any year';
+    if (from == FilterSheet.earliestYear && to == _latestYear)
+      return context.l10n.browseAnyYear;
     if (from == to) return '$from';
-    return '$from to $to';
+    return context.l10n.browseYearRange(from, to);
   }
 
   Future<void> _setRegion(String code) async {
@@ -213,25 +215,24 @@ class _FilterSheetState extends State<FilterSheet> {
             children: [
               Expanded(
                 child: Text(
-                  'Filters',
+                  context.l10n.browseFilters,
                   style: textTheme.titleLarge,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
               TextButton(
-                onPressed: () =>
-                    Navigator.of(context).pop(BrowseFilters.none),
-                child: const Text('Clear'),
+                onPressed: () => Navigator.of(context).pop(BrowseFilters.none),
+                child: Text(context.l10n.browseClear),
               ),
               const SizedBox(width: 8),
               FilledButton(
                 onPressed: () => Navigator.of(context).pop(_filters),
-                child: const Text('Apply'),
+                child: Text(context.l10n.browseApply),
               ),
             ],
           ),
           if (widget.genres.isNotEmpty) ...[
-            _heading('Genres'),
+            _heading(context.l10n.browseGenres),
             Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -251,10 +252,11 @@ class _FilterSheetState extends State<FilterSheet> {
               ],
             ),
           ],
-          _heading('Released'),
+          _heading(context.l10n.browseReleased),
           Text(
             _yearLabel,
-            style: textTheme.bodyMedium?.copyWith(color: AppTheme.textSecondary),
+            style:
+                textTheme.bodyMedium?.copyWith(color: AppTheme.textSecondary),
           ),
           RangeSlider(
             values: _years,
@@ -267,13 +269,13 @@ class _FilterSheetState extends State<FilterSheet> {
             ),
             onChanged: (values) => setState(() => _years = values),
           ),
-          _heading('Minimum rating'),
+          _heading(context.l10n.browseMinimumRating),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
               _chip(
-                'Any',
+                context.l10n.browseAny,
                 selected: _minRating == null,
                 onSelected: (_) => setState(() => _minRating = null),
               ),
@@ -286,7 +288,7 @@ class _FilterSheetState extends State<FilterSheet> {
             ],
           ),
           if (widget.languages.isNotEmpty) ...[
-            _heading('Language'),
+            _heading(context.l10n.browseLanguage),
             DropdownMenu<String>(
               key: const ValueKey('language-menu'),
               expandedInsets: EdgeInsets.zero,
@@ -295,9 +297,9 @@ class _FilterSheetState extends State<FilterSheet> {
               menuHeight: 320,
               initialSelection: _language ?? FilterSheet.anyLanguage,
               dropdownMenuEntries: [
-                const DropdownMenuEntry(
+                DropdownMenuEntry(
                   value: FilterSheet.anyLanguage,
-                  label: 'Any language',
+                  label: context.l10n.browseAnyLanguage,
                 ),
                 for (final language in widget.languages)
                   DropdownMenuEntry(
@@ -306,13 +308,14 @@ class _FilterSheetState extends State<FilterSheet> {
                   ),
               ],
               onSelected: (code) => setState(() {
-                _language =
-                    code == null || code == FilterSheet.anyLanguage ? null : code;
+                _language = code == null || code == FilterSheet.anyLanguage
+                    ? null
+                    : code;
               }),
             ),
           ],
           if (showStreaming) ...[
-            _heading('Streaming on'),
+            _heading(context.l10n.browseStreamingOn),
             if (widget.regions.isNotEmpty) ...[
               DropdownMenu<String>(
                 key: const ValueKey('region-menu'),
@@ -340,8 +343,9 @@ class _FilterSheetState extends State<FilterSheet> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: Text(
-                  'Streaming services could not be loaded.',
-                  style: textTheme.bodySmall?.copyWith(color: AppTheme.textMuted),
+                  context.l10n.browseStreamingServicesCouldNotBeLoaded,
+                  style:
+                      textTheme.bodySmall?.copyWith(color: AppTheme.textMuted),
                 ),
               ),
             Wrap(
@@ -364,23 +368,23 @@ class _FilterSheetState extends State<FilterSheet> {
               ],
             ),
           ],
-          _heading('Keywords'),
+          _heading(context.l10n.browseKeywords),
           TagPickerField(
             key: const ValueKey('keyword-field'),
             kind: 'keyword',
             values: _keywords,
-            hint: 'Add a keyword',
-            failureMessage: 'Keywords could not be searched.',
+            hint: context.l10n.browseAddAKeyword,
+            failureMessage: context.l10n.browseKeywordsCouldNotBeSearched,
             search: _lookups.searchKeywords,
             onChanged: (values) => setState(() => _keywords = values),
           ),
-          _heading('Studios'),
+          _heading(context.l10n.browseStudios),
           TagPickerField(
             key: const ValueKey('studio-field'),
             kind: 'studio',
             values: _companies,
-            hint: 'Add a studio',
-            failureMessage: 'Studios could not be searched.',
+            hint: context.l10n.browseAddAStudio,
+            failureMessage: context.l10n.browseStudiosCouldNotBeSearched,
             search: _lookups.searchCompanies,
             onChanged: (values) => setState(() => _companies = values),
           ),

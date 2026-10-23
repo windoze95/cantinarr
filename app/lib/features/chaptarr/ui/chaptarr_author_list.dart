@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/storage/library_view_preferences.dart';
@@ -29,20 +30,26 @@ class ChaptarrAuthorList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => LibraryCollection(
-    viewMode: viewMode, scrollKey: scrollKey, embedded: embedded,
-    emptyMessage: 'No authors found', itemCount: authors.length,
-    itemBuilder: (context, index) {
-      final author = authors[index];
-      return _AuthorTile(
-        key: ValueKey(author.id), grid: viewMode == LibraryViewMode.grid,
-        author: author,
-        onTap: () => onTap(author),
-        onAction: onAction == null ? null : (action) => onAction!(author, action),
-        image: imageSourceFor == null
-            ? (url: author.coverUrl ?? '', headers: null) : imageSourceFor!(author),
+        viewMode: viewMode,
+        scrollKey: scrollKey,
+        embedded: embedded,
+        emptyMessage: context.l10n.adminNoAuthorsFound,
+        itemCount: authors.length,
+        itemBuilder: (context, index) {
+          final author = authors[index];
+          return _AuthorTile(
+            key: ValueKey(author.id),
+            grid: viewMode == LibraryViewMode.grid,
+            author: author,
+            onTap: () => onTap(author),
+            onAction:
+                onAction == null ? null : (action) => onAction!(author, action),
+            image: imageSourceFor == null
+                ? (url: author.coverUrl ?? '', headers: null)
+                : imageSourceFor!(author),
+          );
+        },
       );
-    },
-  );
 }
 
 class _AuthorTile extends StatelessWidget {
@@ -51,8 +58,13 @@ class _AuthorTile extends StatelessWidget {
   final VoidCallback onTap;
   final ValueChanged<LibraryAction>? onAction;
   final ImageSource? image;
-  const _AuthorTile({super.key, required this.grid, required this.author,
-    required this.onTap, this.onAction, this.image});
+  const _AuthorTile(
+      {super.key,
+      required this.grid,
+      required this.author,
+      required this.onTap,
+      this.onAction,
+      this.image});
 
   @override
   Widget build(BuildContext context) {
@@ -63,8 +75,12 @@ class _AuthorTile extends StatelessWidget {
       grid: grid,
       name: author.authorName,
       onTap: onTap,
-      onLongPress: onAction == null ? null : () => showLibraryActionMenu(
-        context, title: author.authorName, actions: libraryActions('author'), onSelected: onAction!),
+      onLongPress: onAction == null
+          ? null
+          : () => showLibraryActionMenu(context,
+              title: author.authorName,
+              actions: libraryActions('author'),
+              onSelected: onAction!),
       artwork: CachedImage(
         url: image?.url,
         headers: image?.headers,
@@ -80,21 +96,23 @@ class _AuthorTile extends StatelessWidget {
             runSpacing: 4,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              if (!grid) Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                decoration: BoxDecoration(
-                  color: _statusColor.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  _statusText,
-                  style: TextStyle(
-                    color: _statusColor,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
+              if (!grid)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: _statusColor.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    _statusText(context),
+                    style: TextStyle(
+                      color: _statusColor,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ),
-              ),
               if (stats != null) ...[
                 Text(
                   author.bookCountLabel,
@@ -118,8 +136,12 @@ class _AuthorTile extends StatelessWidget {
           ],
         ],
       ),
-      actions: onAction == null ? null : LibraryActionMenu(
-        title: author.authorName, actions: libraryActions('author'), onSelected: onAction!),
+      actions: onAction == null
+          ? null
+          : LibraryActionMenu(
+              title: author.authorName,
+              actions: libraryActions('author'),
+              onSelected: onAction!),
     );
   }
 
@@ -129,10 +151,10 @@ class _AuthorTile extends StatelessWidget {
         _ => AppTheme.requested,
       };
 
-  String get _statusText => switch (author.status) {
-        'continuing' => 'Continuing',
-        'ended' => 'Ended',
-        _ => 'Unknown',
+  String _statusText(BuildContext context) => switch (author.status) {
+        'continuing' => context.l10n.adminContinuing,
+        'ended' => context.l10n.adminEnded,
+        _ => context.l10n.adminUnknown,
       };
 
   /// Mirrors the Sonarr tile's progress grammar: green only when an ended

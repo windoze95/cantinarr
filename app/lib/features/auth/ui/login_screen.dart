@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/auth_messages.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
@@ -69,8 +71,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                const Text(
-                  'Sign in to your server',
+                Text(
+                  context.l10n.authSignInServer,
                   style: TextStyle(color: AppTheme.textSecondary, fontSize: 15),
                 ),
                 const SizedBox(height: 40),
@@ -78,8 +80,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 // Server URL
                 TextField(
                   controller: _serverUrlController,
-                  decoration: const InputDecoration(
-                    labelText: 'Server URL',
+                  decoration: InputDecoration(
+                    labelText: context.l10n.authServerUrl,
                     hintText: 'https://cantinarr.example.com',
                     prefixIcon: Icon(Icons.dns_outlined),
                   ),
@@ -92,8 +94,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 // Username
                 TextField(
                   controller: _usernameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Username',
+                  decoration: InputDecoration(
+                    labelText: context.l10n.authUsername,
                     prefixIcon: Icon(Icons.person_outline),
                   ),
                   textInputAction: TextInputAction.next,
@@ -105,7 +107,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 TextField(
                   controller: _passwordController,
                   decoration: InputDecoration(
-                    labelText: 'Password',
+                    labelText: context.l10n.authPassword,
                     prefixIcon: const Icon(Icons.lock_outline),
                     suffixIcon: IconButton(
                       icon: Icon(_obscurePassword
@@ -125,7 +127,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 if (error != null) ...[
                   const SizedBox(height: 8),
                   Text(
-                    error,
+                    localizeAuthMessage(context, error),
                     style: const TextStyle(color: AppTheme.error, fontSize: 13),
                     textAlign: TextAlign.center,
                   ),
@@ -148,7 +150,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               color: AppTheme.background,
                             ),
                           )
-                        : const Text('Sign In'),
+                        : Text(context.l10n.authSignIn),
                   ),
                 ),
               ],

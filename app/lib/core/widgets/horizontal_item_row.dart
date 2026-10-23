@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../layout/adaptive.dart';
 import '../theme/app_theme.dart';
@@ -56,17 +57,23 @@ class _HorizontalItemRowState<T> extends State<HorizontalItemRow<T>> {
     super.didUpdateWidget(oldWidget);
     final keyOf = widget.itemKey;
     final extent = widget.itemExtent;
-    if (keyOf != null && extent != null && _controller.hasClients &&
-        oldWidget.items.isNotEmpty && !identical(oldWidget.items, widget.items)) {
+    if (keyOf != null &&
+        extent != null &&
+        _controller.hasClients &&
+        oldWidget.items.isNotEmpty &&
+        !identical(oldWidget.items, widget.items)) {
       final offset = _controller.offset;
-      final index = (offset / extent).floor().clamp(0, oldWidget.items.length - 1);
+      final index =
+          (offset / extent).floor().clamp(0, oldWidget.items.length - 1);
       final anchor = keyOf(oldWidget.items[index]);
       final next = widget.items.indexWhere((item) => keyOf(item) == anchor);
       if (next >= 0 && next != index) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted || !_controller.hasClients || _controller.offset != offset) return;
-          _controller.jumpTo((offset + (next - index) * extent).clamp(
-              0.0, _controller.position.maxScrollExtent));
+          if (!mounted ||
+              !_controller.hasClients ||
+              _controller.offset != offset) return;
+          _controller.jumpTo((offset + (next - index) * extent)
+              .clamp(0.0, _controller.position.maxScrollExtent));
         });
       }
     }
@@ -174,7 +181,9 @@ class _HorizontalItemRowState<T> extends State<HorizontalItemRow<T>> {
               }
               final item = widget.items[index];
               return KeyedSubtree(
-                key: widget.itemKey == null ? null : ValueKey(widget.itemKey!(item)),
+                key: widget.itemKey == null
+                    ? null
+                    : ValueKey(widget.itemKey!(item)),
                 child: widget.itemBuilder(item),
               );
             },
@@ -183,14 +192,14 @@ class _HorizontalItemRowState<T> extends State<HorizontalItemRow<T>> {
             _ShelfArrow(
               alignment: Alignment.centerLeft,
               icon: Icons.chevron_left_rounded,
-              tooltip: 'Scroll backward',
+              tooltip: context.l10n.commonScrollBackward,
               onPressed: () => _scrollBy(-0.72),
             ),
           if (desktop && _canScrollForward)
             _ShelfArrow(
               alignment: Alignment.centerRight,
               icon: Icons.chevron_right_rounded,
-              tooltip: 'Scroll forward',
+              tooltip: context.l10n.commonScrollForward,
               onPressed: () => _scrollBy(0.72),
             ),
         ],

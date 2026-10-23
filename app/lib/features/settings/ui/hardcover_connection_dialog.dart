@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:dio/dio.dart';
@@ -83,8 +84,9 @@ class _HardcoverConnectionDialogState
       _accept(flow);
     } catch (e) {
       if (mounted) {
-        setState(() => _error =
-            'Could not start Hardcover sign-in. ${apiErrorMessage(e)}');
+        setState(() => _error = context.l10n
+            .settingsMessageCouldNotStartHardcoverSignInValue1(
+                (apiErrorMessage(e)).toString()));
       }
     } finally {
       if (mounted) setState(() => _starting = false);
@@ -133,8 +135,10 @@ class _HardcoverConnectionDialogState
       setState(() {
         if (missing) _flow = null;
         _error = missing
-            ? 'That sign-in is no longer available. The server may have restarted. Start again.'
-            : 'Could not check Hardcover yet. Retrying automatically. ${apiErrorMessage(e)}';
+            ? context.l10n.settingsThatSignInIsNoLongerAvailableThe
+            : context.l10n
+                .settingsMessageCouldNotCheckHardcoverYetRetryingAutomaticallyValue1(
+                    (apiErrorMessage(e)).toString());
       });
     } finally {
       _checking = false;
@@ -161,8 +165,9 @@ class _HardcoverConnectionDialogState
         _close(null);
         return;
       }
-      setState(() => _error =
-          'Could not cancel sign-in. Try Cancel again. ${apiErrorMessage(e)}');
+      setState(() => _error = context.l10n
+          .settingsMessageCouldNotCancelSignInTryCancelAgain(
+              (apiErrorMessage(e)).toString()));
     } finally {
       if (mounted) setState(() => _cancelling = false);
     }
@@ -184,7 +189,7 @@ class _HardcoverConnectionDialogState
     } catch (_) {}
     if (!opened && mounted) {
       setState(() => _error =
-          'Could not open the browser. Visit hardcover.app/link and enter the code below.');
+          context.l10n.settingsCouldNotOpenTheBrowserVisitHardcoverApp);
     }
   }
 
@@ -192,13 +197,13 @@ class _HardcoverConnectionDialogState
     try {
       await Clipboard.setData(ClipboardData(text: _flow!.userCode));
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Code copied.')));
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(context.l10n.settingsCodeCopied)));
       }
     } catch (_) {
       if (mounted) {
-        setState(
-            () => _error = 'Could not copy the code. You can select it below.');
+        setState(() =>
+            _error = context.l10n.settingsCouldNotCopyTheCodeYouCanSelect);
       }
     }
   }
@@ -215,13 +220,13 @@ class _HardcoverConnectionDialogState
       child: AlertDialog(
         constraints: const BoxConstraints(maxWidth: 520),
         scrollable: true,
-        title: const Text('Connect Hardcover'),
+        title: Text(context.l10n.settingsConnectHardcover),
         content: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
-                  'Approve this code on Hardcover to show trending books in Cantinarr.'),
+              Text(context
+                  .l10n.settingsApproveThisCodeOnHardcoverToShowTrending),
               if (_starting) ...[
                 const SizedBox(height: 20),
                 const Center(child: CircularProgressIndicator())
@@ -236,18 +241,22 @@ class _HardcoverConnectionDialogState
                 const SizedBox(height: 8),
                 const SelectableText('hardcover.app/link'),
                 const SizedBox(height: 12),
-                Text(
-                    'Waiting for approval. Code expires at ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(flow.expiresAt!.toLocal()))}. Cantinarr checks automatically.'),
+                Text(context.l10n
+                    .settingsMessageWaitingForApprovalCodeExpiresAtValue1Cantinarr(
+                        (MaterialLocalizations.of(context).formatTimeOfDay(
+                                TimeOfDay.fromDateTime(
+                                    flow.expiresAt!.toLocal())))
+                            .toString())),
                 const SizedBox(height: 12),
                 Wrap(spacing: 8, runSpacing: 8, children: [
                   FilledButton.icon(
                       onPressed: _cancelling ? null : _open,
                       icon: const Icon(Icons.open_in_new),
-                      label: const Text('Open Hardcover')),
+                      label: Text(context.l10n.settingsOpenHardcover)),
                   TextButton.icon(
                       onPressed: _cancelling ? null : _copy,
                       icon: const Icon(Icons.copy),
-                      label: const Text('Copy code')),
+                      label: Text(context.l10n.settingsCopyCode)),
                 ]),
               ],
               if (_error != null) ...[
@@ -259,10 +268,14 @@ class _HardcoverConnectionDialogState
             ]),
         actions: [
           if (!_starting && !pending)
-            TextButton(onPressed: _begin, child: const Text('Start again')),
+            TextButton(
+                onPressed: _begin,
+                child: Text(context.l10n.settingsStartAgain)),
           TextButton(
               onPressed: _cancelling ? null : _cancel,
-              child: Text(_cancelling ? 'Cancelling…' : 'Cancel')),
+              child: Text(_cancelling
+                  ? context.l10n.settingsCancelling
+                  : context.l10n.settingsCancel)),
         ],
       ),
     );

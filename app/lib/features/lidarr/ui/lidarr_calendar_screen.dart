@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
@@ -45,7 +46,7 @@ class _LidarrCalendarScreenState extends ConsumerState<LidarrCalendarScreen> {
     if (instanceId == null) {
       setState(() {
         _isLoading = false;
-        _error = 'No Lidarr instance configured';
+        _error = context.l10n.adminNoLidarrInstanceConfigured;
       });
       return;
     }
@@ -74,7 +75,7 @@ class _LidarrCalendarScreenState extends ConsumerState<LidarrCalendarScreen> {
       if (!mounted || gen != _loadGeneration) return;
       setState(() {
         _isLoading = false;
-        _error = 'Failed to load calendar: $e';
+        _error = context.l10n.adminFailedToLoadCalendar((e).toString());
       });
     }
   }
@@ -113,15 +114,15 @@ class _LidarrCalendarScreenState extends ConsumerState<LidarrCalendarScreen> {
         color: AppTheme.accent,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
-          children: const [
+          children: [
             SizedBox(height: 160),
             Icon(Icons.calendar_today_outlined,
                 size: 48, color: AppTheme.textSecondary),
             SizedBox(height: 12),
             Center(
-              child: Text('No upcoming releases',
-                  style: TextStyle(
-                      color: AppTheme.textSecondary, fontSize: 16)),
+              child: Text(context.l10n.adminNoUpcomingReleases,
+                  style:
+                      TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
             ),
           ],
         ),

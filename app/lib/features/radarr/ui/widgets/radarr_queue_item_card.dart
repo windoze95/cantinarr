@@ -1,43 +1,60 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/status_pill.dart';
 import '../../data/radarr_models.dart';
 
 /// Short status label for a queue item (e.g. "Import pending", "Downloading").
-String radarrQueueStatusLabel(RadarrQueueItem item) {
+String radarrQueueStatusLabel(RadarrQueueItem item,
+    {AppLocalizations? strings}) {
   if (item.trackedDownloadStatus == 'error' || item.status == 'failed') {
-    return 'Error';
+    return (strings ?? lookupAppLocalizations(const Locale('en'))).adminError;
   }
   switch (item.trackedDownloadState) {
     case 'importPending':
-      return 'Import pending';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminImportPending;
     case 'importing':
-      return 'Importing';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminImporting;
     case 'imported':
-      return 'Imported';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminImported;
     case 'importBlocked':
-      return 'Import blocked';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminImportBlocked;
     case 'failedPending':
-      return 'Failed';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminFailed2;
   }
-  if (item.trackedDownloadStatus == 'warning') return 'Warning';
+  if (item.trackedDownloadStatus == 'warning')
+    return (strings ?? lookupAppLocalizations(const Locale('en'))).adminWarning;
   switch (item.status) {
     case 'downloading':
-      return 'Downloading';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminDownloading;
     case 'paused':
-      return 'Paused';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminPaused;
     case 'queued':
-      return 'Queued';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminQueued;
     case 'completed':
-      return 'Completed';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminCompleted;
     case 'delay':
-      return 'Delayed';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminDelayed;
     case 'downloadClientUnavailable':
-      return 'Client unavailable';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminClientUnavailable;
     case 'warning':
-      return 'Warning';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminWarning;
     default:
-      return item.status.isEmpty ? 'Unknown' : item.status;
+      return item.status.isEmpty
+          ? (strings ?? lookupAppLocalizations(const Locale('en'))).adminUnknown
+          : item.status;
   }
 }
 
@@ -157,7 +174,7 @@ class RadarrQueueItemCard extends StatelessWidget {
                   onSelected: (value) {
                     if (value == 'remove') onRemove!();
                   },
-                  itemBuilder: (_) => const [
+                  itemBuilder: (_) => [
                     PopupMenuItem(
                       value: 'remove',
                       child: Row(
@@ -165,7 +182,7 @@ class RadarrQueueItemCard extends StatelessWidget {
                           Icon(Icons.delete_outline,
                               size: 18, color: AppTheme.error),
                           SizedBox(width: 8),
-                          Text('Remove'),
+                          Text(context.l10n.adminRemove),
                         ],
                       ),
                     ),
@@ -182,7 +199,9 @@ class RadarrQueueItemCard extends StatelessWidget {
               spacing: 6,
               runSpacing: 4,
               children: [
-                StatusPill(text: radarrQueueStatusLabel(item), color: statusColor),
+                StatusPill(
+                    text: radarrQueueStatusLabel(item, strings: context.l10n),
+                    color: statusColor),
                 StatusPill(
                   text: protocol.toUpperCase(),
                   color: protocol == 'torrent'
@@ -192,11 +211,13 @@ class RadarrQueueItemCard extends StatelessWidget {
                 if (item.quality != null)
                   StatusPill(text: item.quality!, color: AppTheme.accent),
                 if (item.indexer != null && item.indexer!.isNotEmpty)
-                  StatusPill(text: item.indexer!, color: AppTheme.textSecondary),
+                  StatusPill(
+                      text: item.indexer!, color: AppTheme.textSecondary),
                 if (item.downloadClient != null &&
                     item.downloadClient!.isNotEmpty)
                   StatusPill(
-                      text: item.downloadClient!, color: AppTheme.textSecondary),
+                      text: item.downloadClient!,
+                      color: AppTheme.textSecondary),
               ],
             ),
           ),
@@ -220,8 +241,10 @@ class RadarrQueueItemCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    '${(item.progress * 100).toStringAsFixed(1)}% • '
-                    '${item.downloadedFormatted} of ${item.sizeFormatted}',
+                    context.l10n.adminOf2(
+                        ((item.progress * 100).toStringAsFixed(1)).toString(),
+                        (item.downloadedFormatted).toString(),
+                        (item.sizeFormatted).toString()),
                     style: const TextStyle(
                         color: AppTheme.textSecondary, fontSize: 11),
                     overflow: TextOverflow.ellipsis,
@@ -272,8 +295,8 @@ class _IssuesBox extends StatelessWidget {
           Expanded(
             child: Text(
               text,
-              style: const TextStyle(
-                  color: AppTheme.textSecondary, fontSize: 11),
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
             ),
           ),
         ],
@@ -308,8 +331,9 @@ class _IssuesButton extends StatelessWidget {
             Expanded(
               child: Text(
                 count == 1
-                    ? '1 message — tap to resolve'
-                    : '$count messages — tap to resolve',
+                    ? context.l10n.admin1MessageTapToResolve
+                    : context.l10n
+                        .adminMessagesTapToResolve((count).toString()),
                 style: const TextStyle(
                     color: AppTheme.requested,
                     fontSize: 12,

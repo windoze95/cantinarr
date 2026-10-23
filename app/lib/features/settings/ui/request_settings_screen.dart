@@ -1,3 +1,5 @@
+import '../../discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import '../../request/ui/request_allowance_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -47,7 +49,7 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
 
   String _friendlyError(Object e) {
     final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
-    return m != null ? m.group(1)! : 'Something went wrong';
+    return m != null ? m.group(1)! : context.l10n.notificationSomethingWrong;
   }
 
   Future<void> _load() async {
@@ -87,7 +89,7 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
         _saving = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Saved')),
+        SnackBar(content: Text(context.l10n.settingsSaved)),
       );
     } catch (e) {
       if (!mounted) return;
@@ -110,7 +112,7 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
 
   Widget _buildPage(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Request Defaults')),
+      appBar: AppBar(title: Text(context.l10n.settingsRequestDefaults)),
       body: CenteredContent(
           child: _isLoading
               ? const Center(
@@ -122,12 +124,15 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text(_error ?? 'Something went wrong',
+                            Text(
+                                _error ??
+                                    context.l10n.notificationSomethingWrong,
                                 style: const TextStyle(color: AppTheme.error),
                                 textAlign: TextAlign.center),
                             const SizedBox(height: 12),
                             ElevatedButton(
-                                onPressed: _load, child: const Text('Retry')),
+                                onPressed: _load,
+                                child: Text(context.l10n.settingsRetry)),
                           ],
                         ),
                       ),
@@ -143,16 +148,17 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
       cacheExtent: SettingsHighlight.cacheExtentFor(widget.highlightId),
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
-        const Padding(
+        Padding(
           padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
           child: Text(
-            'These defaults apply to every user unless overridden per user. '
-            'Changes take effect on new requests.',
+            context.l10n.settingsTheseDefaultsApplyToEveryUserUnlessOverridden,
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
-        const Padding(padding: EdgeInsets.all(16), child: RequestAllowanceSection(editDefaults: true)),
-        const _SectionLabel('Approval'),
+        const Padding(
+            padding: EdgeInsets.all(16),
+            child: RequestAllowanceSection(editDefaults: true)),
+        _SectionLabel(context.l10n.settingsApproval),
         SettingsHighlight(
           anchorId: SettingsAnchors.requestsRequireApproval,
           highlightId: widget.highlightId,
@@ -160,24 +166,27 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
             value: edited.requireApproval,
             onChanged: (v) =>
                 setState(() => _edited = edited.copyWith(requireApproval: v)),
-            title: const Text(
-              'Require approval for new requests',
+            title: Text(
+              context.l10n.settingsRequireApprovalForNewRequests,
               style: TextStyle(
                   color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
             ),
-            subtitle: const Text(
-              'New requests wait in a queue for an admin to approve.',
+            subtitle: Text(
+              context.l10n.settingsNewRequestsWaitInAQueueForAn,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ),
         ),
-        const _SectionLabel('Seasons'),
-        if (ref.watch(tvMatchesAllowedProvider)) ListTile(
-          leading: const Icon(Icons.rule), title: const Text('TV matches'),
-          subtitle: const Text('Correct series and season matching, and review affected requests.'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => context.push('/settings/tv-matches'),
-        ),
+        _SectionLabel(context.l10n.settingsSeasons),
+        if (ref.watch(tvMatchesAllowedProvider))
+          ListTile(
+            leading: const Icon(Icons.rule),
+            title: Text(context.l10n.settingsTvMatches),
+            subtitle: Text(context
+                .l10n.settingsCorrectSeriesAndSeasonMatchingAndReviewAffected),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/settings/tv-matches'),
+          ),
         SettingsHighlight(
           anchorId: SettingsAnchors.requestsSeasonChoice,
           highlightId: widget.highlightId,
@@ -185,13 +194,13 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
             value: edited.allowSeasonChoice,
             onChanged: (v) =>
                 setState(() => _edited = edited.copyWith(allowSeasonChoice: v)),
-            title: const Text(
-              'Let users choose seasons',
+            title: Text(
+              context.l10n.settingsLetUsersChooseSeasons,
               style: TextStyle(
                   color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
             ),
-            subtitle: const Text(
-              'Allow users to pick which seasons to request for a show.',
+            subtitle: Text(
+              context.l10n.settingsAllowUsersToPickWhichSeasonsToRequest,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ),
@@ -200,8 +209,8 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
           anchorId: SettingsAnchors.requestsSeasonScope,
           highlightId: widget.highlightId,
           child: ListTile(
-            title: const Text(
-              'Default season scope',
+            title: Text(
+              context.l10n.settingsDefaultSeasonScope,
               style: TextStyle(
                   color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
             ),
@@ -214,7 +223,7 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
                 for (final c in SeasonScope.choices)
                   DropdownMenuItem<String>(
                     value: c.value,
-                    child: Text(c.label),
+                    child: Text(browseLabel(context, c.label)),
                   ),
               ],
               onChanged: (v) {
@@ -225,7 +234,7 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
             ),
           ),
         ),
-        const _SectionLabel('Quality'),
+        _SectionLabel(context.l10n.settingsQuality),
         SettingsHighlight(
           anchorId: SettingsAnchors.requestsQualityChoice,
           highlightId: widget.highlightId,
@@ -233,13 +242,13 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
             value: edited.allowQualityChoice,
             onChanged: (v) => setState(
                 () => _edited = edited.copyWith(allowQualityChoice: v)),
-            title: const Text(
-              'Let users choose quality',
+            title: Text(
+              context.l10n.settingsLetUsersChooseQuality,
               style: TextStyle(
                   color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
             ),
-            subtitle: const Text(
-              'Off by default. When off, users get the default profile below.',
+            subtitle: Text(
+              context.l10n.settingsOffByDefaultWhenOffUsersGetThe,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ),
@@ -248,7 +257,7 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
           anchorId: SettingsAnchors.requestsQualityRadarr,
           highlightId: widget.highlightId,
           child: _qualityTile(
-            label: 'Default Radarr quality',
+            label: context.l10n.settingsDefaultRadarrQuality,
             value: edited.defaultQualityRadarr,
             profiles: admin.radarrProfiles,
             onChanged: (v) => setState(
@@ -259,7 +268,7 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
           anchorId: SettingsAnchors.requestsQualitySonarr,
           highlightId: widget.highlightId,
           child: _qualityTile(
-            label: 'Default Sonarr quality',
+            label: context.l10n.settingsDefaultSonarrQuality,
             value: edited.defaultQualitySonarr,
             profiles: admin.sonarrProfiles,
             onChanged: (v) => setState(
@@ -286,7 +295,7 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
                         strokeWidth: 2,
                       ),
                     )
-                  : const Text('Save'),
+                  : Text(context.l10n.settingsSave),
             ),
           ),
         ),
@@ -314,9 +323,9 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
         underline: const SizedBox.shrink(),
         style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
         items: [
-          const DropdownMenuItem<int>(
+          DropdownMenuItem<int>(
             value: 0,
-            child: Text('Server default'),
+            child: Text(context.l10n.settingsServerDefault),
           ),
           for (final p in profiles)
             DropdownMenuItem<int>(

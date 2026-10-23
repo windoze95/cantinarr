@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -95,9 +96,9 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(switch (outcome) {
         MediaServerPasswordSheetOutcome.created =>
-          'Account created. Sign in with your new password.',
+          context.l10n.mediaAccountCreatedSignInWithYourNewPassword,
         MediaServerPasswordSheetOutcome.accountExists =>
-          'You already have an account here.',
+          context.l10n.mediaYouAlreadyHaveAnAccountHere,
       }),
     ));
     await _load();
@@ -114,9 +115,9 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(switch (outcome) {
         MediaServerSignInSheetOutcome.linked =>
-          'Account linked. Sign in with your usual password.',
+          context.l10n.mediaAccountLinkedSignInWithYourUsualPassword,
         MediaServerSignInSheetOutcome.accountExists =>
-          'You already have an account here.',
+          context.l10n.mediaYouAlreadyHaveAnAccountHere,
       }),
     ));
     await _load();
@@ -131,20 +132,27 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
     final who = state.username.isNotEmpty ? state.username : state.email;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text((switch (state.inviteState) {
-            'sent' => 'Signed in as $who. Invite sent. Check your email.',
-            'adopted' => 'Signed in as $who. Your access is set up.',
-            'unlinked' =>
-              'Signed in as $who. Your server connection stays unlinked; use Link my Plex account to reconnect it.',
-            'failed' =>
-              "Signed in as $who, but the invite couldn't be sent yet. "
-                  'It will be retried.',
-            'claimed' => 'Signed in as $who, but that Plex account is already '
-                'linked to another Cantinarr user here. Ask your admin.',
-            _ => 'Signed in as $who. Your admin has been notified.',
+            'sent' => context.l10n
+                .mediaSignedInAsValue0InviteSentCheckYourEmail(
+                    (who).toString()),
+            'adopted' => context.l10n
+                .mediaSignedInAsValue0YourAccessIsSetUp((who).toString()),
+            'unlinked' => context.l10n
+                .mediaSignedInAsValue0YourServerConnectionStaysUnlinkedUseLinkMyPlexAccountToReconnectIt(
+                    (who).toString()),
+            'failed' => context.l10n
+                .mediaSignedInAsValue0ButTheInviteCouldnTBeSentYetItWillBeRetried(
+                    (who).toString()),
+            'claimed' => context.l10n
+                .mediaSignedInAsValue0ButThatPlexAccountIsAlreadyLinkedToAnotherCantinarrUserHereAskYourAdmin(
+                    (who).toString()),
+            _ => context.l10n.mediaSignedInAsValue0YourAdminHasBeenNotified(
+                (who).toString()),
           }) +
           (state.identityError.isEmpty
               ? ''
-              : ' Plex sign-in was not linked: ${state.identityError}')),
+              : context.l10n.mediaPlexSignInWasNotLinkedValue0(
+                  (state.identityError).toString()))),
     ));
     // The profile's email changed; the ask card reads it from there, and a
     // grant that auto-approve added shows up in the config.
@@ -164,9 +172,9 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(switch (outcome) {
         MediaServerEmailSheetOutcome.requested =>
-          'Invite sent. Check your email, then accept it.',
+          context.l10n.mediaInviteSentCheckYourEmailThenAcceptIt,
         MediaServerEmailSheetOutcome.accountExists =>
-          'You already have access here.',
+          context.l10n.mediaYouAlreadyHaveAccessHere,
       }),
     ));
     // The profile's email changed too; the ask card reads it from there.
@@ -188,7 +196,8 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
           Future<void> submit() async {
             final email = controller.text.trim();
             if (!looksLikeEmail(email)) {
-              setDialogState(() => errorText = 'Enter a valid email address');
+              setDialogState(
+                  () => errorText = context.l10n.mediaEnterAValidEmailAddress);
               return;
             }
             setDialogState(() {
@@ -199,8 +208,8 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
               await ref.read(authProvider.notifier).setPlexEmail(email);
               if (dialogContext.mounted) Navigator.of(dialogContext).pop();
               if (!mounted) return;
-              ScaffoldMessenger.of(this.context).showSnackBar(const SnackBar(
-                content: Text('Thanks! Your admin has been notified.'),
+              ScaffoldMessenger.of(this.context).showSnackBar(SnackBar(
+                content: Text(context.l10n.mediaThanksYourAdminHasBeenNotified),
               ));
               // With auto-approve the grant and invite land within seconds:
               // re-read so the card flips to the invite.
@@ -212,19 +221,19 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
             } catch (_) {
               setDialogState(() {
                 saving = false;
-                errorText = "Couldn't send. Check your connection";
+                errorText = context.l10n.mediaCouldnTSendCheckYourConnection;
               });
             }
           }
 
           return AlertDialog(
-            title: const Text('Your Plex email'),
+            title: Text(context.l10n.mediaYourPlexEmail),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
-                  'Enter the email of your Plex account. Your admin sends the '
-                  'invite there.',
+                Text(
+                  context.l10n
+                      .mediaEnterTheEmailOfYourPlexAccountYourAdminSendsTheInviteThere,
                   style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                 ),
                 const SizedBox(height: 12),
@@ -236,7 +245,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
                   autocorrect: false,
                   textInputAction: TextInputAction.done,
                   decoration: InputDecoration(
-                    labelText: 'Email',
+                    labelText: context.l10n.mediaEmail,
                     hintText: 'you@example.com',
                     prefixIcon: const Icon(Icons.mail_outline),
                     errorText: errorText,
@@ -249,7 +258,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
               TextButton(
                 onPressed:
                     saving ? null : () => Navigator.of(dialogContext).pop(),
-                child: const Text('Cancel'),
+                child: Text(context.l10n.adminCancel),
               ),
               ElevatedButton(
                 onPressed: saving ? null : submit,
@@ -259,7 +268,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
                         height: 18,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Text('Send'),
+                    : Text(context.l10n.mediaSend),
               ),
             ],
           );
@@ -283,8 +292,9 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
               .contains(server.serviceType) &&
           ref.read(mediaAppLauncherProvider).videoAppFor(server.videoApps) ==
               VideoApp.infuse
-      ? 'Open in Infuse'
-      : 'Open ${mediaServerTypeLabel(server.serviceType)}';
+      ? context.l10n.mediaOpenInInfuse
+      : context.l10n.mediaOpenValue0(
+          (mediaServerTypeLabel(server.serviceType)).toString());
 
   Future<void> _open(MediaServerAccess server) async {
     final launcher = ref.read(mediaAppLauncherProvider);
@@ -298,7 +308,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
           );
     if (opened || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text("Couldn't open ${server.name}."),
+      content: Text(context.l10n.adminCouldnTOpen((server.name).toString())),
     ));
   }
 
@@ -307,8 +317,8 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
       await ref.read(mediaAccessGuideHiddenProvider.notifier).setHidden(hidden);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text("Couldn't save this preference on this device."),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(context.l10n.mediaCouldnTSaveThisPreferenceOnThisDevice),
       ));
     }
   }
@@ -358,9 +368,10 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
                 color: Colors.transparent,
                 child: SwitchListTile.adaptive(
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('Hide from main navigation'),
-                  subtitle: const Text(
-                    'You can always open this guide from Settings → Guides → Media server access.',
+                  title: Text(context.l10n.mediaHideFromMainNavigation),
+                  subtitle: Text(
+                    context.l10n
+                        .mediaYouCanAlwaysOpenThisGuideFromSettingsGuidesMediaServerAccess,
                   ),
                   value: ref.watch(mediaAccessGuideHiddenProvider),
                   onChanged: _setHidden,
@@ -400,12 +411,13 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text(
-            "Couldn't load your media servers.",
+          Text(
+            context.l10n.mediaCouldnTLoadYourMediaServers,
             style: TextStyle(color: AppTheme.textSecondary),
           ),
           const SizedBox(height: 16),
-          ElevatedButton(onPressed: _retry, child: const Text('Retry')),
+          ElevatedButton(
+              onPressed: _retry, child: Text(context.l10n.adminRetry)),
         ],
       ),
     );
@@ -423,11 +435,10 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
           const SizedBox(height: 12),
           Text(
             isAdmin
-                ? 'No media server is shared with your account yet. Open the '
-                    'instance under Settings and add yourself under User '
-                    'Access.'
-                : 'No media server is shared with you yet. Ask your admin '
-                    'for access.',
+                ? context.l10n
+                    .mediaNoMediaServerIsSharedWithYourAccountYetOpenTheInstanceUnderSettingsAndAddYourselfUnderUser
+                : context.l10n
+                    .mediaNoMediaServerIsSharedWithYouYetAskYourAdminForAccess,
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 14,
@@ -454,14 +465,16 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
     final activity = types.contains('audiobookshelf')
         ? types.length == 1
             ? 'listen'
-            : 'watch or listen'
+            : context.l10n.mediaWatchOrListen
         : 'watch';
     return [
       Text(
-        'Each server has its own account or invitation. Use the credentials '
-        'for that server, even when two servers use the same app. These '
-        'accounts are separate from your Cantinarr sign-in.'
-        '${types.contains('plex') ? ' For Plex, use the Plex account that accepted each invitation.' : ''}',
+        context.l10n
+            .mediaEachServerHasItsOwnAccountOrInvitationUseTheCredentialsForThatServerEvenWhenTwoServersUseT(
+                (types.contains('plex')
+                        ? ' For Plex, use the Plex account that accepted each invitation.'
+                        : '')
+                    .toString()),
         style: const TextStyle(
           color: AppTheme.textSecondary,
           fontSize: 14,
@@ -470,24 +483,25 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
       ),
       const SizedBox(height: 24),
       if (_failed) ...[
-        const Text(
-          'Could not refresh your media servers. The names and addresses below are from the last successful check.',
+        Text(
+          context.l10n
+              .mediaCouldNotRefreshYourMediaServersTheNamesAndAddressesBelowAreFromTheLastSuccessfulCheck,
           style: TextStyle(color: AppTheme.warning),
         ),
         TextButton.icon(
           onPressed: _retry,
           icon: const Icon(Icons.refresh),
-          label: const Text('Retry'),
+          label: Text(context.l10n.adminRetry),
         ),
         const SizedBox(height: 12),
       ],
       _SectionHeader(
         number: 1,
         title: onlyPlex
-            ? 'Your invite'
+            ? context.l10n.mediaYourInvite
             : servers.length > 1
-                ? 'Your accounts'
-                : 'Your account',
+                ? context.l10n.mediaYourAccounts
+                : context.l10n.mediaYourAccount,
       ),
       const SizedBox(height: 12),
       for (final server in servers)
@@ -510,27 +524,22 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
       ],
       if (types.any(VideoApps.serviceTypes.contains)) ...[
         const SizedBox(height: 24),
-        const _TipCard(
-          title: 'Choose your video app',
-          message:
-              'On iPhone and iPad, choose your media server’s app, Infuse, or '
-              'Browser in Settings → Account → Video apps, or follow your admin’s '
-              'default. Connect your servers inside Infuse first. Open in Infuse '
-              'finds a movie or show across its connected libraries; it cannot '
-              'select a particular server or copy. Cantinarr does not start '
-              'playback automatically. If Infuse cannot open, the original '
-              'server link opens in your browser. Android uses each service’s '
-              'app; web and desktop use the browser.',
+        _TipCard(
+          title: context.l10n.mediaChooseYourVideoApp,
+          message: context.l10n
+              .mediaOnIPhoneAndIPadChooseYourMediaServerSAppInfuseOrBrowserInSettingsAccountVideoAppsOrFollowY,
         ),
-        _guideLink('Get Infuse', 'https://firecore.com/infuse'),
+        _guideLink(context.l10n.mediaGetInfuse, 'https://firecore.com/infuse'),
       ],
       const SizedBox(height: 24),
       _TipCard(
-        title: 'Request here, $activity there',
-        message: 'Available means the downloaded files have arrived. Your '
-            'media server still needs to scan them before they appear. '
-            '${types.any((type) => type != 'audiobookshelf') ? 'On phones and tablets, a media app may open its home screen even from a verified Watch link. Choose the server and find the title there. ' : ''}'
-            'Missing something after a scan? Ask your admin.',
+        title: context.l10n.mediaRequestHereValue0There((activity).toString()),
+        message: context.l10n
+            .mediaAvailableMeansTheDownloadedFilesHaveArrivedYourMediaServerStillNeedsToScanThemBeforeTheyAp(
+                (types.any((type) => type != 'audiobookshelf')
+                        ? 'On phones and tablets, a media app may open its home screen even from a verified Watch link. Choose the server and find the title there. '
+                        : '')
+                    .toString()),
       ),
     ];
   }
@@ -554,14 +563,17 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
               style: const TextStyle(
                   color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
-          const Text('Access could not be verified',
+          Text(context.l10n.mediaAccessCouldNotBeVerified,
               style: TextStyle(color: AppTheme.warning)),
           const SizedBox(height: 8),
           if (server.account != null)
-            Text('Last known account: ${server.account!.username}',
+            Text(
+                context.l10n.mediaLastKnownAccountValue0(
+                    (server.account!.username).toString()),
                 style: const TextStyle(color: AppTheme.textSecondary)),
-          const Text(
-            'Retry to check your account and available actions. Opening the server does not confirm you still have access.',
+          Text(
+            context.l10n
+                .mediaRetryToCheckYourAccountAndAvailableActionsOpeningTheServerDoesNotConfirmYouStillHaveAccess,
             style: TextStyle(color: AppTheme.textSecondary),
           ),
           if (server.publicAddress.isNotEmpty) ...[
@@ -569,9 +581,10 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
             Text(server.publicAddress),
             Wrap(spacing: 8, children: [
               TextButton.icon(
-                onPressed: () => _copy(server.publicAddress, 'Address copied'),
+                onPressed: () => _copy(
+                    server.publicAddress, context.l10n.mediaAddressCopied),
                 icon: const Icon(Icons.copy, size: 16),
-                label: const Text('Copy address'),
+                label: Text(context.l10n.mediaCopyAddress),
               ),
               TextButton.icon(
                 onPressed: () => _open(server),
@@ -591,89 +604,82 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
       title: label,
       steps: switch (type) {
         'plex' => [
-            'Install the Plex app on your phone, TV, or computer, or open '
-                'app.plex.tv in your browser.',
-            'Your Plex invite arrives by email from Plex: open it and accept. '
-                'Pending invites are also under the bell icon at app.plex.tv.',
-            'Sign in to Plex with the same Plex account, then choose the '
-                'shared server and its libraries.',
-            'Remote video playback in supported apps requires the server '
-                'owner to have Plex Pass, or your account to have Plex Pass '
-                'or Remote Watch Pass. Check with your admin before paying.',
+            context.l10n
+                .mediaInstallThePlexAppOnYourPhoneTVOrComputerOrOpenAppPlexTvInYourBrowser,
+            context.l10n
+                .mediaYourPlexInviteArrivesByEmailFromPlexOpenItAndAcceptPendingInvitesAreAlsoUnderTheBellIconAt,
+            context.l10n
+                .mediaSignInToPlexWithTheSamePlexAccountThenChooseTheSharedServerAndItsLibraries,
+            context.l10n
+                .mediaRemoteVideoPlaybackInSupportedAppsRequiresTheServerOwnerToHavePlexPassOrYourAccountToHaveP,
             ..._videoPlaybackSteps(label),
           ],
         'jellyfin' || 'emby' => [
-            'Install the $label app for your phone, TV, or computer. The '
-                'download page lists the supported devices.',
-            'In the app, enter the sign-in address from the $label server’s '
-                'card above. You can also open that address in your browser.',
-            'Sign in with that server’s username and the password you chose '
-                'when creating the account, or your usual password if you '
-                'linked an existing account. Your admin can reset a forgotten password.',
+            context.l10n
+                .mediaInstallTheValue0AppForYourPhoneTVOrComputerTheDownloadPageListsTheSupportedDevices(
+                    (label).toString()),
+            context.l10n
+                .mediaInTheAppEnterTheSignInAddressFromTheValue0ServerSCardAboveYouCanAlsoOpenThatAddressInYourB(
+                    (label).toString()),
+            context.l10n
+                .mediaSignInWithThatServerSUsernameAndThePasswordYouChoseWhenCreatingTheAccountOrYourUsualPasswo,
             if (type == 'emby')
-              'Some Emby apps need a one-time unlock or Emby Premiere for '
-                  'full playback. Check the requirements for your device.',
+              context.l10n
+                  .mediaSomeEmbyAppsNeedAOneTimeUnlockOrEmbyPremiereForFullPlaybackCheckTheRequirementsForYourDevi,
             ..._videoPlaybackSteps(label),
           ],
         _ => [
-            'Open Audiobookshelf using the sign-in address in its card above '
-                'in your browser, or install an Audiobookshelf-compatible app.',
-            'In the app, enter that server’s sign-in address. Use the username '
-                'and password you created or linked for that Audiobookshelf server. '
-                'Your admin can reset a forgotten password.',
-            'You also need separate Chaptarr access to see and request books '
-                'in Cantinarr. Audiobookshelf access does not grant Chaptarr '
-                'access, or the other way around. Ask your admin for both.',
-            'Audiobookshelf needs to scan the audiobook library after a '
-                'download finishes.',
-            'Choose your listening app in Settings → Account → Listening apps, '
-                'or follow your admin’s default for this server. Install the '
-                'app and sign in there first.',
-            'On an available audiobook, Listen opens a verified copy in your '
-                'browser, a title search in ShelfPlayer, or the home screen '
-                'in TheShelf or the Audiobookshelf app. If several copies '
-                'match, choose the one you want. Playback does not start automatically.',
-            'Open is a general shortcut when a matching copy cannot be verified. '
-                'It does not mean the book is in the library. If your chosen app '
-                'cannot open, Cantinarr uses the browser. Web and desktop always '
-                'use the browser.',
+            context.l10n
+                .mediaOpenAudiobookshelfUsingTheSignInAddressInItsCardAboveInYourBrowserOrInstallAnAudiobookshel,
+            context.l10n
+                .mediaInTheAppEnterThatServerSSignInAddressUseTheUsernameAndPasswordYouCreatedOrLinkedForThatAud,
+            context.l10n
+                .mediaYouAlsoNeedSeparateChaptarrAccessToSeeAndRequestBooksInCantinarrAudiobookshelfAccessDoesNo,
+            context.l10n
+                .mediaAudiobookshelfNeedsToScanTheAudiobookLibraryAfterADownloadFinishes,
+            context.l10n
+                .mediaChooseYourListeningAppInSettingsAccountListeningAppsOrFollowYourAdminSDefaultForThisServer,
+            context.l10n
+                .mediaOnAnAvailableAudiobookListenOpensAVerifiedCopyInYourBrowserATitleSearchInShelfPlayerOrTheH,
+            context.l10n
+                .mediaOpenIsAGeneralShortcutWhenAMatchingCopyCannotBeVerifiedItDoesNotMeanTheBookIsInTheLibraryI,
           ],
       },
       links: switch (type) {
-        'plex' => const [
+        'plex' => [
             (
-              label: 'Download Plex apps',
+              label: context.l10n.mediaDownloadPlexApps,
               url: 'https://www.plex.tv/media-server-downloads/#plex-app'
             ),
             (
-              label: 'Plex remote playback requirements',
+              label: context.l10n.mediaPlexRemotePlaybackRequirements,
               url:
                   'https://support.plex.tv/articles/requirements-for-remote-playback-of-personal-media/'
             ),
           ],
-        'jellyfin' => const [
+        'jellyfin' => [
             (
-              label: 'Download Jellyfin apps',
+              label: context.l10n.mediaDownloadJellyfinApps,
               url: 'https://jellyfin.org/downloads/clients/'
             ),
           ],
-        'emby' => const [
+        'emby' => [
             (
-              label: 'Download Emby apps',
+              label: context.l10n.mediaDownloadEmbyApps,
               url: 'https://emby.media/download.html#emby-apps-and-devices'
             ),
             (
-              label: 'Emby app unlocks and Premiere',
+              label: context.l10n.mediaEmbyAppUnlocksAndPremiere,
               url: 'https://emby.media/premiere.html'
             ),
           ],
-        _ => const [
+        _ => [
             (
-              label: 'Download Audiobookshelf apps',
+              label: context.l10n.mediaDownloadAudiobookshelfApps,
               url: 'https://github.com/advplyr/audiobookshelf-app#readme'
             ),
             (
-              label: 'Compatible Audiobookshelf apps',
+              label: context.l10n.mediaCompatibleAudiobookshelfApps,
               url:
                   'https://audiobookshelf.org/docs/documentation/community/community-apps/'
             ),
@@ -683,10 +689,12 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
   }
 
   List<String> _videoPlaybackSteps(String label) => [
-        'After the library scan, Cantinarr offers Watch on $label when '
-            'it verifies a matching movie or show for your account.',
-        'An Open shortcut opens the app or sign-in address. It does not '
-            'confirm that a particular title is available on $label.',
+        context.l10n
+            .mediaAfterTheLibraryScanCantinarrOffersWatchOnValue0WhenItVerifiesAMatchingMovieOrShowForYourAc(
+                (label).toString()),
+        context.l10n
+            .mediaAnOpenShortcutOpensTheAppOrSignInAddressItDoesNotConfirmThatAParticularTitleIsAvailableOnV(
+                (label).toString()),
       ];
 
   /// A Plex server's share state: nothing yet (share your email), an invite
@@ -700,8 +708,12 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
         children: [
           Text(
             server.autoLinkSuppressed
-                ? 'Your account was unlinked from ${server.name}. Link it again explicitly to reconnect this server.'
-                : 'Your admin has offered access to ${server.name}. Sign in with Plex to link your account, or share the email of your Plex account.',
+                ? context.l10n
+                    .mediaYourAccountWasUnlinkedFromValue0LinkItAgainExplicitlyToReconnectThisServer(
+                        (server.name).toString())
+                : context.l10n
+                    .mediaYourAdminHasOfferedAccessToValue0SignInWithPlexToLinkYourAccountOrShareTheEmailOfYourPlexA(
+                        (server.name).toString()),
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 14,
@@ -714,13 +726,13 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
                 ? () => _requestInvite(server, plexEmail)
                 : _signInWithPlex,
             icon: const Icon(Icons.login, size: 18),
-            label: const Text('Link my Plex account'),
+            label: Text(context.l10n.mediaLinkMyPlexAccount),
           ),
           if (!server.autoLinkSuppressed)
             TextButton.icon(
               onPressed: () => _requestInvite(server, plexEmail),
               icon: const Icon(Icons.mail_outline, size: 18),
-              label: const Text('Share my Plex email'),
+              label: Text(context.l10n.mediaShareMyPlexEmail),
             ),
         ],
       );
@@ -739,9 +751,10 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Invite sent to ${account.username}. Accept it from the '
-                  'email Plex sent you, or under the bell icon at '
-                  'app.plex.tv, and ${server.name} appears in Plex.',
+                  context.l10n
+                      .mediaInviteSentToValue0AcceptItFromTheEmailPlexSentYouOrUnderTheBellIconAtAppPlexTvAndValue1App(
+                          (account.username).toString(),
+                          (server.name).toString()),
                   style: const TextStyle(
                     color: AppTheme.textSecondary,
                     fontSize: 14,
@@ -758,7 +771,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
               minimumSize: const Size(0, 32),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
-            child: const Text('Wrong email?'),
+            child: Text(context.l10n.mediaWrongEmail),
           ),
           if (!account.verified) _buildUnconfirmed(),
         ],
@@ -780,8 +793,10 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
               Expanded(
                 child: Text(
                   owner
-                      ? 'You own ${server.name}.'
-                      : '${server.name} is shared with ${account.username}',
+                      ? context.l10n.mediaYouOwnValue0((server.name).toString())
+                      : context.l10n.mediaValue0IsSharedWithValue1(
+                          (server.name).toString(),
+                          (account.username).toString()),
                   style: const TextStyle(
                     color: AppTheme.textPrimary,
                     fontWeight: FontWeight.w500,
@@ -793,7 +808,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
           if (owner) ...[
             const SizedBox(height: 4),
             Text(
-              'Signed in as ${account.username}',
+              context.l10n.mediaSignedInAsValue0((account.username).toString()),
               style: const TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 13,
@@ -804,7 +819,8 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
           const SizedBox(height: 8),
           if (server.publicAddress.isNotEmpty) ...[
             Text(
-              'Sign in at ${server.publicAddress}',
+              context.l10n
+                  .mediaSignInAtValue0((server.publicAddress).toString()),
               style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 13,
@@ -815,10 +831,10 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
               spacing: 8,
               children: [
                 TextButton.icon(
-                  onPressed: () =>
-                      _copy(server.publicAddress, 'Address copied'),
+                  onPressed: () => _copy(
+                      server.publicAddress, context.l10n.mediaAddressCopied),
                   icon: const Icon(Icons.copy, size: 16),
-                  label: const Text('Copy address'),
+                  label: Text(context.l10n.mediaCopyAddress),
                 ),
                 TextButton.icon(
                   onPressed: () => _open(server),
@@ -843,10 +859,9 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
         ? Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'This server has Plex. Sign in with Plex to ask for access, '
-                'or share the email of your Plex account; your admin gets a '
-                'notification either way.',
+              Text(
+                context.l10n
+                    .mediaThisServerHasPlexSignInWithPlexToAskForAccessOrShareTheEmailOfYourPlexAccountYourAdminGets,
                 style: TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 14,
@@ -857,12 +872,12 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
               ElevatedButton.icon(
                 onPressed: _signInWithPlex,
                 icon: const Icon(Icons.login, size: 18),
-                label: const Text('Sign in with Plex'),
+                label: Text(context.l10n.mediaSignInWithPlex),
               ),
               TextButton.icon(
                 onPressed: () => _askForPlexAccess(plexEmail),
                 icon: const Icon(Icons.mail_outline, size: 18),
-                label: const Text('Share my Plex email'),
+                label: Text(context.l10n.mediaShareMyPlexEmail),
               ),
             ],
           )
@@ -886,9 +901,9 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
                 ],
               ),
               const SizedBox(height: 8),
-              const Text(
-                'Your admin has been notified. Once they grant you Plex, '
-                'the invite goes to this address.',
+              Text(
+                context.l10n
+                    .mediaYourAdminHasBeenNotifiedOnceTheyGrantYouPlexTheInviteGoesToThisAddress,
                 style: TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 13,
@@ -905,7 +920,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
                       minimumSize: const Size(0, 32),
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
-                    child: const Text('Sign in with Plex'),
+                    child: Text(context.l10n.mediaSignInWithPlex),
                   ),
                   TextButton(
                     onPressed: () => _askForPlexAccess(plexEmail),
@@ -914,7 +929,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
                       minimumSize: const Size(0, 32),
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
-                    child: const Text('Change email'),
+                    child: Text(context.l10n.mediaChangeEmail),
                   ),
                 ],
               ),
@@ -923,7 +938,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
     return _card(Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('Plex · Request access',
+        Text(context.l10n.mediaPlexRequestAccess,
             style: TextStyle(
                 color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
         const SizedBox(height: 12),
@@ -933,7 +948,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
   }
 
   Widget _buildUnconfirmed() {
-    return const Padding(
+    return Padding(
       padding: EdgeInsets.only(top: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -945,7 +960,8 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
           SizedBox(width: 6),
           Expanded(
             child: Text(
-              "We couldn't confirm your server access just now. Try again or check with your admin.",
+              context.l10n
+                  .mediaWeCouldnTConfirmYourServerAccessJustNowTryAgainOrCheckWithYourAdmin,
               style: TextStyle(
                 color: AppTheme.warning,
                 fontSize: 12,
@@ -974,16 +990,16 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
       const SizedBox(height: 6),
       Text(
         account != null && !account.verified
-            ? 'Access could not be verified'
+            ? context.l10n.mediaAccessCouldNotBeVerified
             : account == null
                 ? (server.autoLinkSuppressed
-                    ? 'Account intentionally unlinked'
-                    : 'Account not linked')
+                    ? context.l10n.mediaAccountIntentionallyUnlinked
+                    : context.l10n.mediaAccountNotLinked)
                 : account.pending
-                    ? 'Awaiting invitation acceptance'
+                    ? context.l10n.mediaAwaitingInvitationAcceptance
                     : account.disabled
-                        ? 'Access disabled'
-                        : 'Access active',
+                        ? context.l10n.mediaAccessDisabled
+                        : context.l10n.mediaAccessActive,
         style: TextStyle(
           color: account != null && !account.verified
               ? AppTheme.warning
@@ -996,23 +1012,28 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
       const SizedBox(height: 12),
       Text(
         server.serviceType == 'plex'
-            ? 'Use your Plex account in Plex. Linking library access here does '
-                'not change how you sign in to Cantinarr.'
-            : 'Use your ${mediaServerTypeLabel(server.serviceType)} username '
-                'and password on ${server.name}. These credentials are separate '
-                'from signing in to Cantinarr.',
+            ? context.l10n
+                .mediaUseYourPlexAccountInPlexLinkingLibraryAccessHereDoesNotChangeHowYouSignInToCantinarr
+            : context.l10n
+                .mediaUseYourValue0UsernameAndPasswordOnValue1TheseCredentialsAreSeparateFromSigningInToCantinar(
+                    (mediaServerTypeLabel(server.serviceType)).toString(),
+                    (server.name).toString()),
         style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
       ),
       if (supported && account != null) ...[
         const SizedBox(height: 10),
         Text(
             account.accessSyncPending
-                ? 'Your server access change is pending. Cantinarr will retry.'
+                ? context
+                    .l10n.mediaYourServerAccessChangeIsPendingCantinarrWillRetry
                 : account.administrator
-                    ? 'Protected administrator account.'
+                    ? context.l10n.mediaProtectedAdministratorAccount
                     : account.manageAccess
-                        ? 'Your admin manages this account’s access through Cantinarr.'
-                        : 'Linked only. Your account’s access is managed on ${server.name}.',
+                        ? context.l10n
+                            .mediaYourAdminManagesThisAccountSAccessThroughCantinarr
+                        : context.l10n
+                            .mediaLinkedOnlyYourAccountSAccessIsManagedOnValue0(
+                                (server.name).toString()),
             style: TextStyle(
                 color: account.accessSyncPending
                     ? AppTheme.warning
@@ -1050,8 +1071,9 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            "There's already an account named $username on ${server.name}. "
-            "If it's yours, sign in with its password to link it.",
+            context.l10n
+                .mediaThereSAlreadyAnAccountNamedValue0OnValue1IfItSYoursSignInWithItsPasswordToLinkIt(
+                    (username).toString(), (server.name).toString()),
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 14,
@@ -1062,12 +1084,12 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
           ElevatedButton.icon(
             onPressed: () => _linkOwnAccount(server, username),
             icon: const Icon(Icons.login, size: 18),
-            label: Text(
-                'Link my ${mediaServerTypeLabel(server.serviceType)} account'),
+            label: Text(context.l10n.mediaLinkMyValue0Account(
+                (mediaServerTypeLabel(server.serviceType)).toString())),
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Not yours? Ask your admin.',
+          Text(
+            context.l10n.mediaNotYoursAskYourAdmin,
             style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
           ),
         ],
@@ -1077,8 +1099,9 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Your admin has offered access to ${server.name}. Create or link '
-            'your account to get started.',
+            context.l10n
+                .mediaYourAdminHasOfferedAccessToValue0CreateOrLinkYourAccountToGetStarted(
+                    (server.name).toString()),
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 14,
@@ -1089,14 +1112,14 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
           ElevatedButton.icon(
             onPressed: () => _createAccount(server, username),
             icon: const Icon(Icons.person_add_alt_1_outlined, size: 18),
-            label: Text(
-                'Create my ${mediaServerTypeLabel(server.serviceType)} account'),
+            label: Text(context.l10n.mediaCreateMyValue0Account(
+                (mediaServerTypeLabel(server.serviceType)).toString())),
           ),
           TextButton.icon(
             onPressed: () => _linkOwnAccount(server, username),
             icon: const Icon(Icons.login, size: 18),
-            label: Text(
-                'Link my ${mediaServerTypeLabel(server.serviceType)} account'),
+            label: Text(context.l10n.mediaLinkMyValue0Account(
+                (mediaServerTypeLabel(server.serviceType)).toString())),
           ),
         ],
       );
@@ -1112,10 +1135,12 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
           Expanded(
             child: Text(
               account.verified
-                  ? 'Your access to ${server.name} is turned off. Ask your admin '
-                      "if you think that's a mistake."
-                  : 'Your last known access to ${server.name} was turned off. '
-                      'Refresh to check again, or ask your admin.',
+                  ? context.l10n
+                      .mediaYourAccessToValue0IsTurnedOffAskYourAdminIfYouThinkThatSAMistake(
+                          (server.name).toString())
+                  : context.l10n
+                      .mediaYourLastKnownAccessToValue0WasTurnedOffRefreshToCheckAgainOrAskYourAdmin(
+                          (server.name).toString()),
               style: const TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 14,
@@ -1154,8 +1179,8 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Username',
+                    Text(
+                      context.l10n.mediaUsername,
                       style: TextStyle(
                           color: AppTheme.textSecondary, fontSize: 12),
                     ),
@@ -1170,14 +1195,15 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
                 ),
               ),
               IconButton(
-                tooltip: 'Copy username',
+                tooltip: context.l10n.mediaCopyUsername,
                 icon: const Icon(Icons.copy, size: 18),
-                onPressed: () => _copy(account.username, 'Username copied'),
+                onPressed: () =>
+                    _copy(account.username, context.l10n.mediaUsernameCopied),
               ),
             ],
           ),
           if (account.administrator) ...[
-            const Row(
+            Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Padding(
@@ -1188,7 +1214,8 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
                 SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    'Administrator account. Cantinarr never changes it.',
+                    context
+                        .l10n.mediaAdministratorAccountCantinarrNeverChangesIt,
                     style: TextStyle(
                       color: AppTheme.textSecondary,
                       fontSize: 12,
@@ -1202,7 +1229,8 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
           const SizedBox(height: 8),
           if (server.publicAddress.isNotEmpty) ...[
             Text(
-              'Sign in at ${server.publicAddress}',
+              context.l10n
+                  .mediaSignInAtValue0((server.publicAddress).toString()),
               style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 13,
@@ -1213,10 +1241,10 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
               spacing: 8,
               children: [
                 TextButton.icon(
-                  onPressed: () =>
-                      _copy(server.publicAddress, 'Address copied'),
+                  onPressed: () => _copy(
+                      server.publicAddress, context.l10n.mediaAddressCopied),
                   icon: const Icon(Icons.copy, size: 16),
-                  label: const Text('Copy address'),
+                  label: Text(context.l10n.mediaCopyAddress),
                 ),
                 TextButton.icon(
                   onPressed: () => _open(server),
@@ -1226,9 +1254,9 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
               ],
             ),
           ] else
-            const Text(
-              "Your admin hasn't shared the sign-in address yet. Ask them "
-              'where to sign in.',
+            Text(
+              context.l10n
+                  .mediaYourAdminHasnTSharedTheSignInAddressYetAskThemWhereToSignIn,
               style: TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 13,
@@ -1237,7 +1265,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
             ),
           if (!account.verified) ...[
             const SizedBox(height: 8),
-            const Row(
+            Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Padding(
@@ -1248,7 +1276,8 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide>
                 SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    "We couldn't confirm your server access just now. Try again or check with your admin.",
+                    context.l10n
+                        .mediaWeCouldnTConfirmYourServerAccessJustNowTryAgainOrCheckWithYourAdmin,
                     style: TextStyle(
                       color: AppTheme.warning,
                       fontSize: 12,

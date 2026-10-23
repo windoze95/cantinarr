@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/storage/library_view_preferences.dart';
@@ -27,18 +28,23 @@ class SonarrSeriesList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => LibraryCollection(
-    viewMode: viewMode, scrollKey: scrollKey, embedded: embedded,
-    emptyMessage: 'No series found', itemCount: series.length,
-    itemBuilder: (context, index) {
-      final show = series[index];
-      return _SeriesTile(
-        key: ValueKey(show.id), grid: viewMode == LibraryViewMode.grid,
-        show: show,
-        onOpen: onOpen == null ? null : () => onOpen!(show),
-        onAction: onAction == null ? null : (action) => onAction!(show, action),
+        viewMode: viewMode,
+        scrollKey: scrollKey,
+        embedded: embedded,
+        emptyMessage: context.l10n.adminNoSeriesFound,
+        itemCount: series.length,
+        itemBuilder: (context, index) {
+          final show = series[index];
+          return _SeriesTile(
+            key: ValueKey(show.id),
+            grid: viewMode == LibraryViewMode.grid,
+            show: show,
+            onOpen: onOpen == null ? null : () => onOpen!(show),
+            onAction:
+                onAction == null ? null : (action) => onAction!(show, action),
+          );
+        },
       );
-    },
-  );
 }
 
 class _SeriesTile extends StatelessWidget {
@@ -46,8 +52,12 @@ class _SeriesTile extends StatelessWidget {
   final SonarrSeries show;
   final VoidCallback? onOpen;
   final ValueChanged<LibraryAction>? onAction;
-  const _SeriesTile({super.key, required this.grid, required this.show,
-    this.onOpen, this.onAction});
+  const _SeriesTile(
+      {super.key,
+      required this.grid,
+      required this.show,
+      this.onOpen,
+      this.onAction});
 
   @override
   Widget build(BuildContext context) {
@@ -56,7 +66,8 @@ class _SeriesTile extends StatelessWidget {
     final episodeDetails = stats == null
         ? null
         : [
-            '${stats.episodeFileCount}/${stats.episodeCount} episodes',
+            context.l10n.adminEpisodes((stats.episodeFileCount).toString(),
+                (stats.episodeCount).toString()),
             if (!grid && stats.sizeOnDisk > 0) stats.sizeFormatted,
           ].join(' · ');
 
@@ -64,8 +75,12 @@ class _SeriesTile extends StatelessWidget {
       grid: grid,
       name: show.title,
       onTap: onOpen,
-      onLongPress: onAction == null ? null : () => showLibraryActionMenu(
-        context, title: show.title, actions: libraryActions('series', monitored: show.monitored), onSelected: onAction!),
+      onLongPress: onAction == null
+          ? null
+          : () => showLibraryActionMenu(context,
+              title: show.title,
+              actions: libraryActions('series', monitored: show.monitored),
+              onSelected: onAction!),
       artwork: CachedImage(
         url: show.posterUrl,
         fit: BoxFit.cover,
@@ -80,21 +95,23 @@ class _SeriesTile extends StatelessWidget {
             runSpacing: 4,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              if (!grid) Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                decoration: BoxDecoration(
-                  color: _statusColor.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  _statusText,
-                  style: TextStyle(
-                    color: _statusColor,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
+              if (!grid)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: _statusColor.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    _statusText(context),
+                    style: TextStyle(
+                      color: _statusColor,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ),
-              ),
               if (episodeDetails != null)
                 Text(
                   episodeDetails,
@@ -117,8 +134,12 @@ class _SeriesTile extends StatelessWidget {
           ],
         ],
       ),
-      actions: onAction == null ? null : LibraryActionMenu(
-        title: show.title, actions: libraryActions('series', monitored: show.monitored), onSelected: onAction!),
+      actions: onAction == null
+          ? null
+          : LibraryActionMenu(
+              title: show.title,
+              actions: libraryActions('series', monitored: show.monitored),
+              onSelected: onAction!),
     );
   }
 
@@ -130,12 +151,12 @@ class _SeriesTile extends StatelessWidget {
         _ => AppTheme.requested,
       };
 
-  String get _statusText => switch (show.status) {
-        'continuing' => 'Continuing',
-        'ended' => 'Ended',
-        'upcoming' => 'Upcoming',
-        'deleted' => 'Deleted',
-        _ => 'Unknown',
+  String _statusText(BuildContext context) => switch (show.status) {
+        'continuing' => context.l10n.adminContinuing,
+        'ended' => context.l10n.adminEnded,
+        'upcoming' => context.l10n.adminUpcoming,
+        'deleted' => context.l10n.adminDeleted,
+        _ => context.l10n.adminUnknown,
       };
 
   /// Sonarr's progress-bar grammar: green is reserved for ended series with

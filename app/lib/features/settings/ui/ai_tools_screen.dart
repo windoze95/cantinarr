@@ -1,3 +1,5 @@
+import 'settings_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
@@ -76,7 +78,10 @@ class _AiToolsScreenState extends ConsumerState<AiToolsScreen> {
       if (!mounted) return;
       setState(() => _debugPending = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to update AI debug logging: $e')),
+        SnackBar(
+            content: Text(context.l10n
+                .settingsMessageFailedToUpdateAiDebugLoggingValue1(
+                    (e).toString()))),
       );
     }
   }
@@ -109,8 +114,13 @@ class _AiToolsScreenState extends ConsumerState<AiToolsScreen> {
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content: Text(
-                'Failed to update ${tool.displayName}: ${e.toString().length > 80 ? '${e.toString().substring(0, 80)}...' : e}')),
+            content: Text(context.l10n
+                .settingsMessageFailedToUpdateValue1Value2(
+                    (tool.displayName).toString(),
+                    (e.toString().length > 80
+                            ? '${e.toString().substring(0, 80)}...'
+                            : e)
+                        .toString()))),
       );
     }
   }
@@ -118,7 +128,7 @@ class _AiToolsScreenState extends ConsumerState<AiToolsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('AI Tools')),
+      appBar: AppBar(title: Text(context.l10n.settingsAiTools)),
       body: CenteredContent(
           child: _isLoading
               ? const Center(
@@ -136,7 +146,7 @@ class _AiToolsScreenState extends ConsumerState<AiToolsScreen> {
                             const SizedBox(height: 12),
                             ElevatedButton(
                                 onPressed: _loadTools,
-                                child: const Text('Retry')),
+                                child: Text(context.l10n.settingsRetry)),
                           ],
                         ),
                       ),
@@ -148,14 +158,15 @@ class _AiToolsScreenState extends ConsumerState<AiToolsScreen> {
                         physics: const AlwaysScrollableScrollPhysics(),
                         // Build every child while a settings-search highlight
                         // needs to find its anchor (see SettingsHighlight).
-                        cacheExtent:
-                            SettingsHighlight.cacheExtentFor(widget.highlightId),
+                        cacheExtent: SettingsHighlight.cacheExtentFor(
+                            widget.highlightId),
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         children: [
-                          const Padding(
+                          Padding(
                             padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
                             child: Text(
-                              'Control which tools the AI assistant can use. Disabled tools are hidden from the assistant entirely.',
+                              context.l10n
+                                  .settingsControlWhichToolsTheAiAssistantCanUse,
                               style: TextStyle(
                                   color: AppTheme.textSecondary, fontSize: 13),
                             ),
@@ -172,11 +183,12 @@ class _AiToolsScreenState extends ConsumerState<AiToolsScreen> {
                           ),
                           const Divider(color: AppTheme.border),
                           if (_tools?.isEmpty ?? false)
-                            const Padding(
+                            Padding(
                               padding: EdgeInsets.all(24),
                               child: Center(
                                 child: Text(
-                                  'No AI tools reported by the server.',
+                                  context.l10n
+                                      .settingsNoAiToolsReportedByTheServer,
                                   style:
                                       TextStyle(color: AppTheme.textSecondary),
                                 ),
@@ -213,7 +225,8 @@ class _DebugLoggingTile extends StatelessWidget {
     final until = status.enabledUntil;
     final untilLabel = until == null
         ? null
-        : 'Ends ${TimeOfDay.fromDateTime(until).format(context)}';
+        : context.l10n.settingsMessageEndsValue1(
+            (TimeOfDay.fromDateTime(until).format(context)).toString());
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -232,8 +245,8 @@ class _DebugLoggingTile extends StatelessWidget {
             SwitchListTile(
               value: status.enabled,
               onChanged: pending ? null : onToggle,
-              title: const Text(
-                'AI Debug Logging',
+              title: Text(
+                context.l10n.settingsAiDebugLogging,
                 style: TextStyle(
                   color: AppTheme.textPrimary,
                   fontWeight: FontWeight.w600,
@@ -241,7 +254,7 @@ class _DebugLoggingTile extends StatelessWidget {
               ),
               subtitle: Text(
                 [
-                  status.remainingLabel,
+                  settingsDebugRemainingLabel(context, status),
                   if (untilLabel != null) untilLabel,
                 ].join(' • '),
                 style: const TextStyle(
@@ -252,9 +265,10 @@ class _DebugLoggingTile extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
               child: Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Text(
-                      'Temporarily logs AI prompts, tool arguments, and tool results on the server. It shuts off automatically.',
+                      context.l10n
+                          .settingsTemporarilyLogsAiPromptsToolArgumentsAndTool,
                       style: TextStyle(
                           color: AppTheme.textSecondary, fontSize: 12),
                     ),
@@ -263,7 +277,9 @@ class _DebugLoggingTile extends StatelessWidget {
                   OutlinedButton.icon(
                     onPressed: pending ? null : onExtend,
                     icon: const Icon(Icons.add, size: 16),
-                    label: Text(status.enabled ? '+1 hour' : '1 hour'),
+                    label: Text(status.enabled
+                        ? context.l10n.settings1Hour
+                        : context.l10n.settings1Hour2),
                   ),
                 ],
               ),
@@ -313,8 +329,8 @@ class _ToolTile extends StatelessWidget {
                 border:
                     Border.all(color: AppTheme.accent.withValues(alpha: 0.4)),
               ),
-              child: const Text(
-                'Admin only',
+              child: Text(
+                context.l10n.settingsAdminOnly,
                 style: TextStyle(
                   color: AppTheme.accent,
                   fontSize: 10,

@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -32,20 +33,21 @@ class DaySectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final locale = context.l10n.dateLocale;
     final diff = day.difference(today).inDays;
     final String label;
     String? secondary;
     if (diff == 0) {
-      label = 'Today';
-      secondary = DateFormat('EEE, MMM d').format(day);
+      label = context.l10n.commonToday;
+      secondary = DateFormat.MMMEd(locale).format(day);
     } else if (diff == 1) {
-      label = 'Tomorrow';
-      secondary = DateFormat('EEE, MMM d').format(day);
+      label = context.l10n.commonTomorrow;
+      secondary = DateFormat.MMMEd(locale).format(day);
     } else if (diff > 1 && diff < 7) {
-      label = DateFormat('EEEE').format(day);
-      secondary = DateFormat('MMM d').format(day);
+      label = DateFormat.EEEE(locale).format(day);
+      secondary = DateFormat.MMMd(locale).format(day);
     } else {
-      label = DateFormat('EEE, MMM d').format(day);
+      label = DateFormat.MMMEd(locale).format(day);
     }
 
     return Padding(

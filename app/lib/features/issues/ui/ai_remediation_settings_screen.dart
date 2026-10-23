@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/operations_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -61,7 +63,7 @@ class _AiRemediationSettingsScreenState
 
   String _friendlyError(Object e) {
     final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
-    return m != null ? m.group(1)! : 'Something went wrong';
+    return m != null ? m.group(1)! : context.l10n.opsSomethingWentWrongMessage;
   }
 
   Future<void> _load() async {
@@ -106,7 +108,7 @@ class _AiRemediationSettingsScreenState
     };
     if (_modelSelection == _customModel && modelOverride.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter a custom model ID')),
+        SnackBar(content: Text(context.l10n.opsEnterACustomModelID)),
       );
       return;
     }
@@ -131,7 +133,7 @@ class _AiRemediationSettingsScreenState
         _saving = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Saved')),
+        SnackBar(content: Text(context.l10n.opsSaved)),
       );
     } catch (e) {
       if (!mounted) return;
@@ -179,7 +181,7 @@ class _AiRemediationSettingsScreenState
 
   Widget _buildPage(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('AI Remediation')),
+      appBar: AppBar(title: Text(context.l10n.opsAIRemediation)),
       body: CenteredContent(
           child: _isLoading
               ? const Center(
@@ -192,13 +194,14 @@ class _AiRemediationSettingsScreenState
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
-                                _friendlyError(
-                                    _error ?? 'Something went wrong'),
+                                _friendlyError(_error ??
+                                    context.l10n.opsSomethingWentWrongMessage),
                                 style: const TextStyle(color: AppTheme.error),
                                 textAlign: TextAlign.center),
                             const SizedBox(height: 12),
                             ElevatedButton(
-                                onPressed: _load, child: const Text('Retry')),
+                                onPressed: _load,
+                                child: Text(context.l10n.opsRetry)),
                           ],
                         ),
                       ),
@@ -221,15 +224,10 @@ class _AiRemediationSettingsScreenState
       cacheExtent: SettingsHighlight.cacheExtentFor(widget.highlightId),
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
-        const Padding(
+        Padding(
           padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
           child: Text(
-            'Let the assistant investigate reported problems and propose fixes '
-            'for your approval. Read-only investigation never changes anything; '
-            'every mutation waits for an admin. This server-owned agent always '
-            'uses the admin shared provider, so runs count against its API quota '
-            'or shared OpenAI OAuth usage meter. Personal providers and per-user AI '
-            'access switches are never used.',
+            context.l10n.opsLetTheAssistantInvestigateReportedProblemsAnd,
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
@@ -241,9 +239,9 @@ class _AiRemediationSettingsScreenState
           ListTile(
             leading:
                 const Icon(Icons.rule_folder_outlined, color: AppTheme.accent),
-            title: const Text('Standing auto-approvals',
+            title: Text(context.l10n.opsStandingAutoApprovals,
                 style: TextStyle(color: AppTheme.textPrimary)),
-            subtitle: const Text('The fixes approved without paging you',
+            subtitle: Text(context.l10n.opsTheFixesApprovedWithoutPagingYou,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
             trailing: const Icon(Icons.chevron_right,
                 color: AppTheme.textSecondary, size: 18),
@@ -253,30 +251,31 @@ class _AiRemediationSettingsScreenState
         _anchor(
           SettingsAnchors.remediationFixes,
           ListTile(
-            leading: const Icon(Icons.build_circle_outlined,
-                color: AppTheme.accent),
-            title: const Text('Agent fixes',
+            leading:
+                const Icon(Icons.build_circle_outlined, color: AppTheme.accent),
+            title: Text(context.l10n.opsAgentFixes,
                 style: TextStyle(color: AppTheme.textPrimary)),
-            subtitle: const Text('Awaiting review, and everything already done',
+            subtitle: Text(
+                context.l10n.opsAwaitingReviewAndEverythingAlreadyDone,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
             trailing: const Icon(Icons.chevron_right,
                 color: AppTheme.textSecondary, size: 18),
             onTap: () => context.push('/agent-actions'),
           ),
         ),
-        const _SectionLabel('General'),
+        _SectionLabel(context.l10n.opsGeneral),
         _anchor(
           SettingsAnchors.remediationEnabled,
           SwitchListTile(
             value: s.enabled,
             onChanged: (v) => setState(() => _edited = s.copyWith(enabled: v)),
-            title: const Text(
-              'Enabled',
+            title: Text(
+              context.l10n.opsEnabled,
               style: TextStyle(
                   color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
             ),
-            subtitle: const Text(
-              'Master switch for the remediation assistant.',
+            subtitle: Text(
+              context.l10n.opsMasterSwitchForTheRemediationAssistant,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ),
@@ -287,14 +286,13 @@ class _AiRemediationSettingsScreenState
             value: s.autoDispatch,
             onChanged: (v) =>
                 setState(() => _edited = s.copyWith(autoDispatch: v)),
-            title: const Text(
-              'Auto-dispatch on detected problems',
+            title: Text(
+              context.l10n.opsAutoDispatchOnDetectedProblems,
               style: TextStyle(
                   color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
             ),
-            subtitle: const Text(
-              'Track detected problems quietly while Radarr or Sonarr retries, '
-              'then investigate only after the observation window.',
+            subtitle: Text(
+              context.l10n.opsTrackDetectedProblemsQuietlyWhileRadarrOr,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ),
@@ -305,13 +303,13 @@ class _AiRemediationSettingsScreenState
             value: s.allowReporting,
             onChanged: (v) =>
                 setState(() => _edited = s.copyWith(allowReporting: v)),
-            title: const Text(
-              'Allow problem reporting',
+            title: Text(
+              context.l10n.opsAllowProblemReporting,
               style: TextStyle(
                   color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
             ),
-            subtitle: const Text(
-              'Show a "Report a problem" button to users on media screens.',
+            subtitle: Text(
+              context.l10n.opsShowAReportAProblemButtonTo,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ),
@@ -322,14 +320,13 @@ class _AiRemediationSettingsScreenState
             value: s.markResolvedAsRead,
             onChanged: (v) =>
                 setState(() => _edited = s.copyWith(markResolvedAsRead: v)),
-            title: const Text(
-              'Mark resolved issues as read',
+            title: Text(
+              context.l10n.opsMarkResolvedIssuesAsRead,
               style: TextStyle(
                   color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
             ),
-            subtitle: const Text(
-              'Clear the unread dot when an issue resolves, instead of re-flagging '
-              'it for another look.',
+            subtitle: Text(
+              context.l10n.opsClearTheUnreadDotWhenAnIssue,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ),
@@ -337,13 +334,13 @@ class _AiRemediationSettingsScreenState
         _anchor(
           SettingsAnchors.remediationMode,
           ListTile(
-            title: const Text(
-              'Mode',
+            title: Text(
+              context.l10n.opsMode,
               style: TextStyle(
                   color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
             ),
-            subtitle: const Text(
-              'Whether the assistant may prepare a fix for an admin to review.',
+            subtitle: Text(
+              context.l10n.opsWhetherTheAssistantMayPrepareAFix,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
             trailing: DropdownButton<RemediationMode>(
@@ -355,7 +352,7 @@ class _AiRemediationSettingsScreenState
                 for (final a in RemediationMode.values)
                   DropdownMenuItem<RemediationMode>(
                     value: a,
-                    child: Text(a.label),
+                    child: Text(localizeOperationsLabel(context, a.label)),
                   ),
               ],
               onChanged: (v) {
@@ -365,13 +362,11 @@ class _AiRemediationSettingsScreenState
             ),
           ),
         ),
-        const _SectionLabel('Automatic recovery'),
-        const Padding(
+        _SectionLabel(context.l10n.opsAutomaticRecovery),
+        Padding(
           padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
           child: Text(
-            'Detected download problems stay silent while the arr may still '
-            'recover on its own. These timers decide when recovery has had '
-            'enough time and the issue should become actionable.',
+            context.l10n.opsDetectedDownloadProblemsStaySilentWhileThe,
             style: TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 13,
@@ -382,9 +377,8 @@ class _AiRemediationSettingsScreenState
         _anchor(
           SettingsAnchors.remediationWatchTime,
           _NumberTile(
-            label: 'Minimum watch time (minutes)',
-            help: 'Wait at least this long before any agent work, proposal, or '
-                'admin alert can begin.',
+            label: context.l10n.opsMinimumWatchTimeMinutes,
+            help: context.l10n.opsWaitAtLeastThisLongBeforeAny,
             value: s.observationMinMinutes,
             onChanged: (v) => setState(
               () => _edited = s.copyWith(observationMinMinutes: v),
@@ -394,9 +388,8 @@ class _AiRemediationSettingsScreenState
         _anchor(
           SettingsAnchors.remediationQuietTime,
           _NumberTile(
-            label: 'Quiet time after arr activity (minutes)',
-            help: 'Keep waiting while Radarr or Sonarr is retrying. Escalation '
-                'starts only after no new recovery activity for this long.',
+            label: context.l10n.opsQuietTimeAfterArrActivityMinutes,
+            help: context.l10n.opsKeepWaitingWhileRadarrOrSonarrIs,
             value: s.observationQuietMinutes,
             onChanged: (v) => setState(
               () => _edited = s.copyWith(observationQuietMinutes: v),
@@ -406,26 +399,23 @@ class _AiRemediationSettingsScreenState
         _anchor(
           SettingsAnchors.remediationSettleTime,
           _NumberTile(
-            label: 'Recovery settle time (minutes)',
-            help: 'When the failed queue item clears, allow imports and library '
-                'state this long to settle before deciding the outcome.',
+            label: context.l10n.opsRecoverySettleTimeMinutes,
+            help: context.l10n.opsWhenTheFailedQueueItemClearsAllow,
             value: s.observationSettleMinutes,
             onChanged: (v) => setState(
               () => _edited = s.copyWith(observationSettleMinutes: v),
             ),
           ),
         ),
-        const _SectionLabel('Shared AI'),
+        _SectionLabel(context.l10n.opsSharedAI),
         // The server synthesizes a default provider and model even when
         // nothing is set up, so only the live configured flag may claim a
         // provider exists.
         if (!_credentials!.ai.sharedConfigured) ...[
-          const Padding(
+          Padding(
             padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
             child: Text(
-              'No shared AI provider is set up yet. Remediation always runs '
-              'on the shared provider, so detected problems will wait instead '
-              'of being investigated until one is configured.',
+              context.l10n.opsNoSharedAIProviderIsSetUp,
               style: TextStyle(
                 color: AppTheme.warning,
                 fontSize: 13,
@@ -436,11 +426,11 @@ class _AiRemediationSettingsScreenState
           _anchor(
             SettingsAnchors.remediationModel,
             ListTile(
-              leading: const Icon(Icons.vpn_key_outlined,
-                  color: AppTheme.accent),
-              title: const Text('Set up the shared provider',
+              leading:
+                  const Icon(Icons.vpn_key_outlined, color: AppTheme.accent),
+              title: Text(context.l10n.opsSetUpTheSharedProvider,
                   style: TextStyle(color: AppTheme.textPrimary)),
-              subtitle: const Text('Admin > Providers & Credentials',
+              subtitle: Text(context.l10n.opsAdminProvidersCredentials,
                   style:
                       TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
               trailing: const Icon(Icons.chevron_right,
@@ -452,11 +442,10 @@ class _AiRemediationSettingsScreenState
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
             child: Text(
-              'Uses the shared ${_providerOption(_credentials!)?.label ?? _credentials!.ai.provider} '
-              'provider and credential from Admin > Providers & Credentials. '
-              'The shared model fallback preference also applies to this override. '
-              'The assistant model there is ${_credentials!.ai.model}. You can '
-              'choose a different model below for remediation only.',
+              context.l10n.opsSharedProviderDescription(
+                  _providerOption(_credentials!)?.label ??
+                      _credentials!.ai.provider,
+                  _credentials!.ai.model),
               style: const TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 13,
@@ -474,14 +463,15 @@ class _AiRemediationSettingsScreenState
                 ),
                 initialValue: _modelSelection,
                 isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Remediation model',
+                decoration: InputDecoration(
+                  labelText: context.l10n.opsRemediationModel,
                   isDense: true,
                 ),
                 items: [
                   DropdownMenuItem(
                     value: _sharedModel,
-                    child: Text('Use shared model (${_credentials!.ai.model})'),
+                    child: Text(
+                        context.l10n.opsSharedModel(_credentials!.ai.model)),
                   ),
                   ...?_providerOption(_credentials!)?.models.map(
                         (model) => DropdownMenuItem(
@@ -489,9 +479,9 @@ class _AiRemediationSettingsScreenState
                           child: Text(model.label),
                         ),
                       ),
-                  const DropdownMenuItem(
+                  DropdownMenuItem(
                     value: _customModel,
-                    child: Text('Custom model ID'),
+                    child: Text(context.l10n.opsCustomModelID),
                   ),
                 ],
                 onChanged: (value) {
@@ -507,19 +497,18 @@ class _AiRemediationSettingsScreenState
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
               child: TextField(
                 controller: _customModelController,
-                decoration: const InputDecoration(
-                  labelText: 'Custom model ID',
+                decoration: InputDecoration(
+                  labelText: context.l10n.opsCustomModelID,
                   helperText:
-                      'Saving runs a small response test before activation.',
+                      context.l10n.opsSavingRunsASmallResponseTestBefore,
                   isDense: true,
                 ),
               ),
             ),
-          const Padding(
+          Padding(
             padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Text(
-              'If the shared provider changes later, Cantinarr falls back to its '
-              'shared model until a remediation override is tested for the new provider.',
+              context.l10n.opsIfTheSharedProviderChangesLaterCantinarr,
               style: TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 12,
@@ -528,11 +517,11 @@ class _AiRemediationSettingsScreenState
             ),
           ),
         ],
-        const _SectionLabel('Limits'),
+        _SectionLabel(context.l10n.opsLimits),
         _anchor(
           SettingsAnchors.remediationMaxSteps,
           _NumberTile(
-            label: 'Max steps per run',
+            label: context.l10n.opsMaxStepsPerRun,
             value: s.maxSteps,
             onChanged: (v) => setState(() => _edited = s.copyWith(maxSteps: v)),
           ),
@@ -540,12 +529,8 @@ class _AiRemediationSettingsScreenState
         _anchor(
           SettingsAnchors.remediationMaxTurnTokens,
           _NumberTile(
-            label: 'Max output tokens per turn',
-            help: 'API-key providers receive this as a request cap. For shared '
-                'OpenAI OAuth, Cantinarr watches Codex usage reports and interrupts '
-                'the turn when reported output reaches the limit. Reports are '
-                'best-effort rather than a request-side hard cap and can arrive '
-                'after the model has already exceeded the boundary.',
+            label: context.l10n.opsMaxOutputTokensPerTurn,
+            help: context.l10n.opsAPIKeyProvidersReceiveThisAsA,
             value: s.maxTurnTokens,
             onChanged: (v) =>
                 setState(() => _edited = s.copyWith(maxTurnTokens: v)),
@@ -554,7 +539,7 @@ class _AiRemediationSettingsScreenState
         _anchor(
           SettingsAnchors.remediationMaxWallClock,
           _NumberTile(
-            label: 'Max wall-clock (seconds)',
+            label: context.l10n.opsMaxWallClockSeconds,
             value: s.maxWallClockSecs,
             onChanged: (v) =>
                 setState(() => _edited = s.copyWith(maxWallClockSecs: v)),
@@ -563,7 +548,7 @@ class _AiRemediationSettingsScreenState
         _anchor(
           SettingsAnchors.remediationDailyCap,
           _NumberTile(
-            label: 'Daily run cap',
+            label: context.l10n.opsDailyRunCap,
             value: s.dailyRunCap,
             onChanged: (v) =>
                 setState(() => _edited = s.copyWith(dailyRunCap: v)),
@@ -572,7 +557,7 @@ class _AiRemediationSettingsScreenState
         _anchor(
           SettingsAnchors.remediationUserWait,
           _NumberTile(
-            label: 'Wait for a user reply (hours)',
+            label: context.l10n.opsWaitForAUserReplyHours,
             value: s.maxUserWaitHours,
             onChanged: (v) =>
                 setState(() => _edited = s.copyWith(maxUserWaitHours: v)),
@@ -581,7 +566,7 @@ class _AiRemediationSettingsScreenState
         _anchor(
           SettingsAnchors.remediationBreakerGiveups,
           _NumberTile(
-            label: 'Failed auto investigations before pausing',
+            label: context.l10n.opsFailedAutoInvestigationsBeforePausing,
             value: s.circuitBreakerGiveups,
             onChanged: (v) =>
                 setState(() => _edited = s.copyWith(circuitBreakerGiveups: v)),
@@ -607,7 +592,7 @@ class _AiRemediationSettingsScreenState
                         strokeWidth: 2,
                       ),
                     )
-                  : const Text('Save'),
+                  : Text(context.l10n.opsSave),
             ),
           ),
         ),

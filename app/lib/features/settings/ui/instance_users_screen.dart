@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
@@ -59,7 +60,7 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
     } catch (_) {
       if (mounted) {
         setState(() {
-          _error = 'Could not load users and assignments. Try again.';
+          _error = context.l10n.settingsCouldNotLoadUsersAndAssignmentsTryAgain;
           _loading = false;
         });
       }
@@ -85,7 +86,9 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
     for (final instance in instances) {
       if (instance.id == id) return instance.name;
     }
-    return id.isEmpty ? 'None' : 'Unavailable instance';
+    return id.isEmpty
+        ? context.l10n.settingsNone
+        : context.l10n.settingsUnavailableInstance;
   }
 
   Future<void> _apply(bool add) async {
@@ -102,17 +105,24 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
       final confirmed = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
-                title: Text('Remove ${ids.length} users?'),
-                content: Text(
-                    'Remove ${widget.instanceName} from the selected users’ assignments? Administrators retain their management access. Other instance assignments stay in place.'
-                    '${preferences > 0 ? '\n\n$preferences saved preferences will be cleared. Their default will use a remaining assigned instance, if any.' : ''}'),
+                title: Text(context.l10n
+                    .settingsMessageRemoveValue1Users((ids.length).toString())),
+                content: Text(context.l10n
+                    .settingsMessageRemoveValue1FromTheSelectedUsersAssignmentsAdministrators(
+                        (widget.instanceName).toString(),
+                        (preferences > 0
+                                ? context.l10n
+                                    .settingsMessageValue1SavedPreferencesWillBeClearedTheirDefault(
+                                        (preferences).toString())
+                                : '')
+                            .toString())),
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(context, false),
-                      child: const Text('Cancel')),
+                      child: Text(context.l10n.settingsCancel)),
                   TextButton(
                       onPressed: () => Navigator.pop(context, true),
-                      child: const Text('Remove users'))
+                      child: Text(context.l10n.settingsRemoveUsers))
                 ],
               ));
       if (confirmed != true) return;
@@ -124,13 +134,16 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
       await ref.read(authProvider.notifier).refreshConfig();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('${add ? 'Added' : 'Removed'} ${ids.length} users')));
+          content: Text(context.l10n.settingsMessageValue1Value2Users(
+              (add ? context.l10n.settingsAdded : context.l10n.settingsRemoved)
+                  .toString(),
+              (ids.length).toString()))));
       await _load();
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content:
-                Text('Could not update assignments. Reload and try again.')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context
+                .l10n.settingsCouldNotUpdateAssignmentsReloadAndTryAgain)));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -166,7 +179,9 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
   Widget _userRow(UserSummary user) {
     final assigned = _assignments[user.id]?.assigned == true;
     final colors = Theme.of(context).colorScheme;
-    final status = assigned ? 'Assigned' : 'Unassigned';
+    final status = assigned
+        ? context.l10n.settingsAssigned
+        : context.l10n.settingsUnassigned;
     final color = assigned ? colors.tertiary : colors.onSurfaceVariant;
     void toggleSelection() => setState(() {
           if (!_selected.add(user.id)) _selected.remove(user.id);
@@ -176,9 +191,11 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
       key: ValueKey('assignment-${user.id}'),
       contentPadding: const EdgeInsets.symmetric(vertical: 8),
       leading: Tooltip(
-        message: 'Select ${user.username} for bulk changes',
+        message: context.l10n.settingsMessageSelectValue1ForBulkChanges(
+            (user.username).toString()),
         child: Checkbox(
-          semanticLabel: 'Select ${user.username} for bulk changes',
+          semanticLabel: context.l10n.settingsMessageSelectValue1ForBulkChanges(
+              (user.username).toString()),
           value: _selected.contains(user.id),
           onChanged: _saving ? null : (_) => toggleSelection(),
         ),
@@ -213,8 +230,13 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
           ]),
       subtitle: Padding(
         padding: const EdgeInsets.only(top: 6),
-        child: Text(
-            '${user.isAdmin ? 'Administrator · Can browse all instances.\n' : ''}Request destination: ${_instanceName(_assignments[user.id]?.effectiveDefaultId ?? '')}'),
+        child: Text(context.l10n.settingsMessageValue1RequestDestinationValue2(
+            (user.isAdmin
+                    ? context.l10n.settingsAdministratorCanBrowseAllInstancesN
+                    : '')
+                .toString(),
+            (_instanceName(_assignments[user.id]?.effectiveDefaultId ?? ''))
+                .toString())),
       ),
       onTap: _saving ? null : toggleSelection,
     );
@@ -231,7 +253,9 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
     final adminCount = matching.where((u) => u.isAdmin).length;
     final unassignedCount = matching.length - assignedCount;
     return Scaffold(
-      appBar: AppBar(title: Text('Manage users · ${widget.instanceName}')),
+      appBar: AppBar(
+          title: Text(context.l10n.settingsMessageManageUsersValue1(
+              (widget.instanceName).toString()))),
       body: CenteredContent(
           child: _loading
               ? const Center(child: CircularProgressIndicator())
@@ -239,12 +263,14 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
                   ? Center(
                       child: Column(mainAxisSize: MainAxisSize.min, children: [
                       Text(_error!),
-                      TextButton(onPressed: _load, child: const Text('Retry'))
+                      TextButton(
+                          onPressed: _load,
+                          child: Text(context.l10n.settingsRetry))
                     ]))
                   : ListView(padding: const EdgeInsets.all(16), children: [
                       TextField(
-                          decoration: const InputDecoration(
-                              labelText: 'Search users',
+                          decoration: InputDecoration(
+                              labelText: context.l10n.settingsSearchUsers,
                               prefixIcon: Icon(Icons.search)),
                           enabled: !_saving,
                           onChanged: (v) => setState(() {
@@ -254,63 +280,75 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
                       const SizedBox(height: 12),
                       Wrap(spacing: 16, runSpacing: 12, children: [
                         _filter(
-                            'Access',
+                            context.l10n.settingsAccess,
                             _access,
                             {
-                              'all': 'All users',
-                              'assigned': 'Assigned',
-                              'unassigned': 'Unassigned'
+                              'all': context.l10n.settingsAllUsers,
+                              'assigned': context.l10n.settingsAssigned,
+                              'unassigned': context.l10n.settingsUnassigned
                             },
                             (v) => _access = v),
                         _filter(
-                            'Role',
+                            context.l10n.settingsRole,
                             _role,
                             {
-                              'all': 'All roles',
-                              'user': 'User',
-                              'admin': 'Administrator'
+                              'all': context.l10n.settingsAllRoles,
+                              'user': context.l10n.settingsUser,
+                              'admin': context.l10n.settingsAdministrator
                             },
                             (v) => _role = v),
                         _filter(
-                            'Child account',
+                            context.l10n.settingsChildAccount,
                             _child,
                             {
-                              'all': 'All accounts',
-                              'yes': 'Children',
-                              'no': 'Adults'
+                              'all': context.l10n.settingsAllAccounts,
+                              'yes': context.l10n.settingsChildren,
+                              'no': context.l10n.settingsAdults
                             },
                             (v) => _child = v),
                         _filter(
-                            'SSO linked',
+                            context.l10n.settingsSsoLinked,
                             _sso,
                             {
-                              'all': 'All accounts',
-                              'yes': 'Linked',
-                              'no': 'Not linked'
+                              'all': context.l10n.settingsAllAccounts,
+                              'yes': context.l10n.settingsLinked,
+                              'no': context.l10n.settingsNotLinked
                             },
                             (v) => _sso = v),
                         _filter(
-                            'Invitation',
+                            context.l10n.settingsInvitation,
                             _invitation,
                             {
-                              'all': 'All accounts',
-                              'yes': 'Pending invitation',
-                              'no': 'No pending invitation'
+                              'all': context.l10n.settingsAllAccounts,
+                              'yes': context.l10n.settingsPendingInvitation,
+                              'no': context.l10n.settingsNoPendingInvitation
                             },
                             (v) => _invitation = v),
                       ]),
                       const SizedBox(height: 16),
-                      Text('Personal assignments to ${widget.instanceName}',
+                      Text(
+                          context.l10n
+                              .settingsMessagePersonalAssignmentsToValue1(
+                                  (widget.instanceName).toString()),
                           style: Theme.of(context).textTheme.titleMedium),
                       const SizedBox(height: 4),
-                      Text(
-                          '$assignedCount assigned · $unassignedCount unassigned · $adminCount ${adminCount == 1 ? 'administrator' : 'administrators'} in these results'),
+                      Text(context.l10n
+                          .settingsMessageValue1AssignedValue2UnassignedValue3Value4InThese(
+                              (assignedCount).toString(),
+                              (unassignedCount).toString(),
+                              (adminCount).toString(),
+                              (adminCount == 1
+                                      ? context.l10n.settingsAdministrator2
+                                      : context.l10n.settingsAdministrators)
+                                  .toString())),
                       const SizedBox(height: 12),
-                      const Text(
-                          'Select users for bulk changes. Checkboxes select rows; access changes only when you choose Add selected or Remove selected.'),
+                      Text(context.l10n
+                          .settingsSelectUsersForBulkChangesCheckboxesSelectRows),
                       const SizedBox(height: 8),
-                      Text(
-                          '${matching.length} matching · ${_selected.length} selected'),
+                      Text(context.l10n
+                          .settingsMessageValue1MatchingValue2Selected(
+                              (matching.length).toString(),
+                              (_selected.length).toString())),
                       Wrap(spacing: 8, children: [
                         TextButton(
                             onPressed: _saving
@@ -319,28 +357,34 @@ class _InstanceUsersScreenState extends ConsumerState<InstanceUsersScreen> {
                                       _selected
                                           .addAll(matching.map((u) => u.id));
                                     }),
-                            child: const Text('Select all matching')),
+                            child:
+                                Text(context.l10n.settingsSelectAllMatching)),
                         TextButton(
                             onPressed: _saving
                                 ? null
                                 : () => setState(_selected.clear),
-                            child: const Text('Clear selection')),
+                            child: Text(context.l10n.settingsClearSelection)),
                         FilledButton(
                             onPressed: _saving || addCount == 0
                                 ? null
                                 : () => _apply(true),
-                            child: Text('Add selected ($addCount)')),
+                            child: Text(context.l10n
+                                .settingsMessageAddSelectedValue1(
+                                    (addCount).toString()))),
                         OutlinedButton(
                             onPressed: _saving || removeCount == 0
                                 ? null
                                 : () => _apply(false),
-                            child: Text('Remove selected ($removeCount)')),
+                            child: Text(context.l10n
+                                .settingsMessageRemoveSelectedValue1(
+                                    (removeCount).toString()))),
                       ]),
                       if (_saving) const LinearProgressIndicator(),
                       if (matching.isEmpty)
-                        const Padding(
+                        Padding(
                             padding: EdgeInsets.all(24),
-                            child: Text('No users match these filters.')),
+                            child: Text(
+                                context.l10n.settingsNoUsersMatchTheseFilters)),
                       for (final user in matching) _userRow(user),
                     ])),
     );

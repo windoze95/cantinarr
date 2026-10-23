@@ -1,3 +1,5 @@
+import 'notification_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -70,7 +72,7 @@ class _PushNotificationsScreenState
 
   String _friendlyError(Object e) {
     final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
-    return m != null ? m.group(1)! : 'Something went wrong';
+    return m != null ? m.group(1)! : context.l10n.notificationSomethingWrong;
   }
 
   Future<void> _refreshAuthStatus() async {
@@ -118,7 +120,7 @@ class _PushNotificationsScreenState
       final result = await ref.read(pushServiceProvider).sendTest();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(describePushTest(result))),
+        SnackBar(content: Text(localizedDescribePushTest(context, result))),
       );
     } catch (e) {
       if (!mounted) return;
@@ -163,7 +165,7 @@ class _PushNotificationsScreenState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Push Notifications')),
+      appBar: AppBar(title: Text(context.l10n.settingsPushNotifications)),
       body: CenteredContent(
           child: _isLoading
               ? const Center(
@@ -180,7 +182,8 @@ class _PushNotificationsScreenState
                                 textAlign: TextAlign.center),
                             const SizedBox(height: 12),
                             ElevatedButton(
-                                onPressed: _load, child: const Text('Retry')),
+                                onPressed: _load,
+                                child: Text(context.l10n.settingsRetry)),
                           ],
                         ),
                       ),
@@ -205,10 +208,10 @@ class _PushNotificationsScreenState
       cacheExtent: SettingsHighlight.cacheExtentFor(widget.highlightId),
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
-        const Padding(
+        Padding(
           padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: Text(
-            'Choose which push notifications you receive on this account.',
+            context.l10n.notificationPreferencesHelp,
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
@@ -217,35 +220,30 @@ class _PushNotificationsScreenState
             anchorId: SettingsAnchors.notificationsEnabled,
             highlightId: widget.highlightId,
             child: SwitchListTile(
-              title: const Text('Receive push notifications'),
-              subtitle: const Text(
-                  'For this account on all devices connected to this server.'),
+              title: Text(context.l10n.notificationReceivePush),
+              subtitle: Text(context.l10n.notificationAllDevices),
               value: prefs.pushEnabled,
               onChanged: _saving || !prefs.supportsControls
                   ? null
                   : (value) => _save(prefs.copyWith(pushEnabled: value), prefs),
             )),
         if (!prefs.supportsControls)
-          const Padding(
+          Padding(
               padding: EdgeInsets.all(16),
-              child: Text(
-                  'Update your server to use the master switch and automatically approved request alerts.')),
+              child: Text(context.l10n.notificationUpdateServerControls)),
         if (!prefs.serverEnabled)
-          const Padding(
+          Padding(
               padding: EdgeInsets.all(16),
-              child: Text(
-                  'Push notifications are turned off by the server. Your choices are saved.')),
+              child: Text(context.l10n.notificationServerDisabledSaved)),
         if (prefs.serverEnabled && !prefs.pushEnabled)
-          const Padding(
+          Padding(
               padding: EdgeInsets.all(16),
-              child: Text(
-                  'Your push notifications are off. Your category choices are saved.')),
+              child: Text(context.l10n.notificationPersonalDisabledSaved)),
         if (isAdmin && prefs.supportsControls)
           ListTile(
             leading: const Icon(Icons.dns_outlined),
-            title: const Text('Server settings'),
-            subtitle: const Text(
-                'Choose which push notifications this server may send.'),
+            title: Text(context.l10n.notificationServerSettings),
+            subtitle: Text(context.l10n.notificationServerSettingsHelp),
             trailing: const Icon(Icons.chevron_right),
             onTap: _saving
                 ? null
@@ -254,13 +252,13 @@ class _PushNotificationsScreenState
                     if (mounted) await _load();
                   },
           ),
-        const _SectionHeader(title: 'My notifications'),
+        _SectionHeader(title: context.l10n.notificationMyNotifications),
         for (final category in pushCategories.where((c) => !c.admin))
           if ((category.service != 'chaptarr' || showBooks) &&
               (category.service != 'lidarr' || showMusic))
             _categoryToggle(category, prefs),
         if (isAdmin) ...[
-          const _SectionHeader(title: 'Administrator alerts'),
+          _SectionHeader(title: context.l10n.notificationAdminAlerts),
           for (final category in pushCategories.where((c) => c.admin))
             _categoryToggle(category, prefs),
         ],
@@ -282,7 +280,7 @@ class _PushNotificationsScreenState
         _authStatus == 'notDetermined' || _authStatus == 'ephemeral';
 
     return [
-      const _SectionHeader(title: 'Status'),
+      _SectionHeader(title: context.l10n.notificationStatus),
       _statusRow(),
       if (denied)
         Padding(
@@ -290,9 +288,8 @@ class _PushNotificationsScreenState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Notifications are turned off. Enable them in system settings '
-                'to receive push notifications.',
+              Text(
+                context.l10n.notificationPermissionHelp,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
               ),
               const SizedBox(height: 12),
@@ -300,7 +297,7 @@ class _PushNotificationsScreenState
                 onPressed: () =>
                     ref.read(pushServiceProvider).openSystemSettings(),
                 icon: const Icon(Icons.settings_outlined, size: 18),
-                label: const Text('Open system settings'),
+                label: Text(context.l10n.notificationOpenSystemSettings),
               ),
             ],
           ),
@@ -313,7 +310,7 @@ class _PushNotificationsScreenState
             child: ElevatedButton.icon(
               onPressed: canReceive && !_saving ? _enableNotifications : null,
               icon: const Icon(Icons.notifications_active_outlined, size: 18),
-              label: const Text('Allow on this device'),
+              label: Text(context.l10n.notificationAllowOnDevice),
             ),
           ),
         ),
@@ -333,7 +330,7 @@ class _PushNotificationsScreenState
                         strokeWidth: 2, color: AppTheme.accent),
                   )
                 : const Icon(Icons.send_outlined, size: 18),
-            label: const Text('Send test notification'),
+            label: Text(context.l10n.notificationSendTest),
           ),
         ),
       ),
@@ -351,21 +348,21 @@ class _PushNotificationsScreenState
       case 'provisional':
         icon = Icons.check_circle;
         color = AppTheme.available;
-        label = 'Granted';
+        label = context.l10n.notificationGranted;
         break;
       case 'denied':
         icon = Icons.cancel;
         color = AppTheme.error;
-        label = 'Denied';
+        label = context.l10n.notificationDenied;
         break;
       default:
         icon = Icons.help_outline;
         color = AppTheme.textSecondary;
-        label = 'Not yet requested';
+        label = context.l10n.notificationNotRequested;
     }
     return ListTile(
       leading: Icon(icon, color: color),
-      title: const Text('Notification permission',
+      title: Text(context.l10n.notificationPermission,
           style: TextStyle(
               color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),
       subtitle: Text(label, style: TextStyle(color: color, fontSize: 13)),
@@ -378,14 +375,14 @@ class _PushNotificationsScreenState
     final unsupported =
         category.key == 'request_auto_approved' && !prefs.supportsControls;
     final reason = unsupported
-        ? 'Update your server to use this notification.'
+        ? context.l10n.notificationUpdateServer
         : unavailable
-            ? 'Turned off by the server'
+            ? context.l10n.notificationServerOff
             : !prefs.pushEnabled
-                ? 'Your push notifications are off'
-                : category.subtitle;
+                ? context.l10n.notificationPersonalOff
+                : category.localizedSubtitle(context.l10n);
     return _toggle(
-        title: category.title,
+        title: category.localizedTitle(context.l10n),
         subtitle: reason,
         value: prefs.toJson()[category.key] as bool,
         onChanged: _saving || unavailable || unsupported || !prefs.pushEnabled

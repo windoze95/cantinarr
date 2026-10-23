@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../config/app_config.dart';
 import '../theme/app_theme.dart';
@@ -19,13 +20,17 @@ class MediaCard extends StatelessWidget {
 
   /// Reserve scaled title/subtitle height before statuses arrive, so a later
   /// Partial badge cannot resize a shelf or overflow enlarged text.
-  static double rowExtraHeight(BuildContext context, {required bool withSubtitle}) {
+  static double rowExtraHeight(BuildContext context,
+      {required bool withSubtitle}) {
     final scaler = MediaQuery.textScalerOf(context);
-    final titleExtra = (scaler.scale(12.5) - 12.5).clamp(0, double.infinity) * 2 * 1.22;
+    final titleExtra =
+        (scaler.scale(12.5) - 12.5).clamp(0, double.infinity) * 2 * 1.22;
     final subtitleExtra = withSubtitle
-        ? (scaler.scale(11) - 11).clamp(0, double.infinity) * 1.4 : 0;
+        ? (scaler.scale(11) - 11).clamp(0, double.infinity) * 1.4
+        : 0;
     return (withSubtitle ? subtitleRowExtraHeight : plainRowExtraHeight) +
-        titleExtra + subtitleExtra;
+        titleExtra +
+        subtitleExtra;
   }
 
   final Object id;
@@ -82,17 +87,18 @@ class MediaCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final imageUrl = AppConfig.tmdbPosterForDisplay(posterPath,
-        width * MediaQuery.devicePixelRatioOf(context) * 1.025);
+    final imageUrl = AppConfig.tmdbPosterForDisplay(
+        posterPath, width * MediaQuery.devicePixelRatioOf(context) * 1.025);
 
     final semantics = [
       title,
       if (subtitle != null) subtitle!,
       if (statusLabel != null)
-        is4K ? '${statusLabel!} in 4K' : statusLabel!
+        is4K ? context.l10n.commonStatus4k(statusLabel!) : statusLabel!
       else if (is4K)
         '4K',
-      if (rating != null && rating! > 0) 'Rated ${rating!.toStringAsFixed(1)}',
+      if (rating != null && rating! > 0)
+        context.l10n.commonRated(rating!.toStringAsFixed(1)),
     ].join(', ');
 
     return Semantics(
@@ -173,7 +179,8 @@ class _InteractiveMediaCardState extends State<_InteractiveMediaCard> {
     // padding and 1px border. The 4K text stays capped but remains centered.
     final bottomBadgeHeight =
         (MediaQuery.textScalerOf(context).scale(10.5) * 1.45)
-            .clamp(12.0, double.infinity) + 10;
+                .clamp(12.0, double.infinity) +
+            10;
 
     return AnimatedScale(
       scale: emphasized && !reduceMotion ? 1.025 : 1,
@@ -257,7 +264,8 @@ class _InteractiveMediaCardState extends State<_InteractiveMediaCard> {
                               right: 7,
                               child: Container(
                                 constraints: BoxConstraints(
-                                  maxWidth: (widget.width - 14).clamp(1, double.infinity),
+                                  maxWidth: (widget.width - 14)
+                                      .clamp(1, double.infinity),
                                 ),
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 8,
@@ -293,7 +301,8 @@ class _InteractiveMediaCardState extends State<_InteractiveMediaCard> {
                               bottom: 7,
                               child: Container(
                                 height: bottomBadgeHeight,
-                                padding: const EdgeInsets.symmetric(horizontal: 7),
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 7),
                                 decoration: BoxDecoration(
                                   color: AppTheme.background
                                       .withValues(alpha: 0.82),
@@ -340,7 +349,8 @@ class _InteractiveMediaCardState extends State<_InteractiveMediaCard> {
                                 child: Container(
                                   key: const ValueKey('media-card-4k'),
                                   height: bottomBadgeHeight,
-                                  padding: const EdgeInsets.symmetric(horizontal: 5),
+                                  padding:
+                                      const EdgeInsets.symmetric(horizontal: 5),
                                   decoration: BoxDecoration(
                                     color: AppTheme.background
                                         .withValues(alpha: 0.82),

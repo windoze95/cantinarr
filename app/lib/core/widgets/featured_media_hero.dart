@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/shell_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 
 import '../../features/discover/data/tmdb_models.dart';
@@ -48,7 +50,7 @@ class _FeaturedMediaHeroState extends State<FeaturedMediaHero> {
 
     return Semantics(
       button: true,
-      label: 'View ${widget.item.title} details',
+      label: context.l10n.commonViewDetails(widget.item.title),
       excludeSemantics: true,
       onTap: widget.onTap,
       child: AnimatedScale(
@@ -133,7 +135,8 @@ class _FeaturedMediaHeroState extends State<FeaturedMediaHero> {
                       children: [
                         _HeroPill(
                           icon: Icons.auto_awesome_rounded,
-                          label: widget.eyebrow.toUpperCase(),
+                          label: localizeShellLabel(context, widget.eyebrow)
+                              .toUpperCase(),
                           foreground: AppTheme.background,
                           background: AppTheme.accent,
                         ),
@@ -207,7 +210,7 @@ class _FeaturedMediaHeroState extends State<FeaturedMediaHero> {
                                   color: AppTheme.textPrimary,
                                   borderRadius: BorderRadius.circular(99),
                                 ),
-                                child: const Row(
+                                child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Icon(
@@ -217,7 +220,7 @@ class _FeaturedMediaHeroState extends State<FeaturedMediaHero> {
                                     ),
                                     SizedBox(width: 7),
                                     Text(
-                                      'Explore',
+                                      context.l10n.commonExplore,
                                       style: TextStyle(
                                         color: AppTheme.background,
                                         fontWeight: FontWeight.w800,
@@ -230,7 +233,7 @@ class _FeaturedMediaHeroState extends State<FeaturedMediaHero> {
                               if (year != null) ...[
                                 const SizedBox(width: 12),
                                 Text(
-                                  '${widget.item.mediaType.displayName}  /  $year',
+                                  '${localizeShellLabel(context, widget.item.mediaType.displayName)}  /  $year',
                                   style: Theme.of(context)
                                       .textTheme
                                       .labelMedium

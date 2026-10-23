@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -123,11 +124,11 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
     final provider = _provider;
     final model = _selectedModel();
     if (provider == null || model == null) {
-      _message('Choose a model or enter a custom model ID.');
+      _message(context.l10n.settingsChooseAModelOrEnterACustomModel);
       return;
     }
     if (saveKey && _apiKeyController.text.trim().isEmpty) {
-      _message('Enter an API key first.');
+      _message(context.l10n.settingsEnterAnApiKeyFirst);
       return;
     }
 
@@ -146,10 +147,12 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
       _draft.markSaved(_draftValues);
       await _refresh();
       _message(
-        'Personal ${settings.providerLabel(provider)} settings saved.',
+        context.l10n.settingsMessagePersonalValue1SettingsSaved(
+            (settings.providerLabel(provider)).toString()),
       );
     } catch (error) {
-      _message(_friendlyError(error, 'Could not update personal AI access.'));
+      _message(_friendlyError(
+          error, context.l10n.settingsCouldNotUpdatePersonalAiAccess));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -159,20 +162,20 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text('Remove ${settings.providerLabel(provider)} key?'),
-        content: const Text(
-          'The key will be deleted. If this is your selected personal '
-          'provider, AI will stop rather than silently use included access.',
+        title: Text(context.l10n.settingsMessageRemoveValue1Key(
+            (settings.providerLabel(provider)).toString())),
+        content: Text(
+          context.l10n.settingsTheKeyWillBeDeletedIfThisIs,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.settingsCancel),
           ),
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child:
-                const Text('Remove', style: TextStyle(color: AppTheme.error)),
+            child: Text(context.l10n.settingsRemove,
+                style: TextStyle(color: AppTheme.error)),
           ),
         ],
       ),
@@ -183,9 +186,11 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
     try {
       await ref.read(aiSettingsServiceProvider).deleteApiKey(provider);
       await _refresh();
-      _message('${settings.providerLabel(provider)} key removed.');
+      _message(context.l10n.settingsMessageValue1KeyRemoved(
+          (settings.providerLabel(provider)).toString()));
     } catch (error) {
-      _message(_friendlyError(error, 'Could not remove the API key.'));
+      _message(
+          _friendlyError(error, context.l10n.settingsCouldNotRemoveTheApiKey));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -197,9 +202,11 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
       await ref.read(aiSettingsServiceProvider).useIncluded();
       await _refresh();
       if (mounted) setState(() => _personalExpanded = false);
-      _message('Included AI selected. Your personal credentials were kept.');
+      _message(context
+          .l10n.settingsIncludedAiSelectedYourPersonalCredentialsWereKept);
     } catch (error) {
-      _message(_friendlyError(error, 'Could not select included AI.'));
+      _message(
+          _friendlyError(error, context.l10n.settingsCouldNotSelectIncludedAi));
     } finally {
       if (mounted) setState(() => _clearing = false);
     }
@@ -251,12 +258,12 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
     final settings = ref.watch(aiSettingsProvider);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('AI Access'),
+        title: Text(context.l10n.settingsAiAccess),
         actions: [
           IconButton(
             onPressed: () => ref.invalidate(aiSettingsProvider),
             icon: const Icon(Icons.refresh_rounded),
-            tooltip: 'Refresh AI access',
+            tooltip: context.l10n.settingsRefreshAiAccess,
           ),
         ],
       ),
@@ -278,9 +285,8 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
   }
 
   Widget _buildSettings(AiSettings settings) {
-    final includedActive =
-        settings.effective.source == AiAccessSource.shared &&
-            settings.effective.available;
+    final includedActive = settings.effective.source == AiAccessSource.shared &&
+        settings.effective.available;
     return ListView(
       // Build every child while a settings-search highlight needs to find
       // its anchor (see SettingsHighlight).
@@ -347,9 +353,9 @@ class _EffectiveSourcePanel extends StatelessWidget {
             ? AppTheme.warning
             : AppTheme.signal;
     final sourceLabel = switch (effective.source) {
-      AiAccessSource.personal => 'Personal',
-      AiAccessSource.shared => 'Included',
-      AiAccessSource.none => 'No active source',
+      AiAccessSource.personal => context.l10n.settingsPersonal,
+      AiAccessSource.shared => context.l10n.settingsIncluded,
+      AiAccessSource.none => context.l10n.settingsNoActiveSource,
     };
     final provider = effective.provider.isEmpty
         ? ''
@@ -381,7 +387,9 @@ class _EffectiveSourcePanel extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  effective.available ? 'POWERING YOUR ASSISTANT' : 'AI SOURCE',
+                  effective.available
+                      ? context.l10n.settingsPoweringYourAssistant
+                      : context.l10n.settingsAiSource,
                   style: TextStyle(
                     color: color,
                     fontSize: 10,
@@ -407,9 +415,9 @@ class _EffectiveSourcePanel extends StatelessWidget {
                 ],
                 if (personalBroken) ...[
                   const SizedBox(height: 9),
-                  const Text(
-                    'Your personal choice needs attention. Cantinarr did not '
-                    'fall back to the server account.',
+                  Text(
+                    context.l10n
+                        .settingsYourPersonalChoiceNeedsAttentionCantinarrDidNot,
                     style: TextStyle(
                       color: AppTheme.warning,
                       fontSize: 13,
@@ -419,7 +427,7 @@ class _EffectiveSourcePanel extends StatelessWidget {
                 ] else if (!effective.available) ...[
                   const SizedBox(height: 9),
                   Text(
-                    _reasonCopy(effective.reason),
+                    _reasonCopy(context, effective.reason),
                     style: const TextStyle(
                       color: AppTheme.textSecondary,
                       fontSize: 13,
@@ -491,9 +499,11 @@ class _PersonalSourcePanel extends StatelessWidget {
     final collapsible = onToggleCollapsed != null;
     final header = _SourceHeader(
       icon: Icons.person_outline_rounded,
-      eyebrow: 'PERSONAL',
-      title: 'Your provider',
-      status: active ? 'Selected' : 'Optional override',
+      eyebrow: context.l10n.settingsPersonal2,
+      title: context.l10n.settingsYourProvider,
+      status: active
+          ? context.l10n.settingsSelected
+          : context.l10n.settingsOptionalOverride,
       active: active,
       trailing: collapsible
           ? Icon(
@@ -514,11 +524,9 @@ class _PersonalSourcePanel extends StatelessWidget {
             children: [
               header,
               const SizedBox(height: 7),
-              const Text(
-                'Included AI already powers your assistant, so a personal '
-                'provider is not needed. Tap to set one up anyway.',
-                style:
-                    TextStyle(color: AppTheme.textSecondary, height: 1.42),
+              Text(
+                context.l10n.settingsIncludedAiAlreadyPowersYourAssistantSoA,
+                style: TextStyle(color: AppTheme.textSecondary, height: 1.42),
               ),
             ],
           ),
@@ -540,9 +548,8 @@ class _PersonalSourcePanel extends StatelessWidget {
           else
             header,
           const SizedBox(height: 7),
-          const Text(
-            'A personal provider takes priority over included AI. Keys and '
-            'OAuth authorizations stay encrypted on your Cantinarr server.',
+          Text(
+            context.l10n.settingsAPersonalProviderTakesPriorityOverIncludedAi,
             style: TextStyle(color: AppTheme.textSecondary, height: 1.42),
           ),
           const SizedBox(height: 16),
@@ -565,8 +572,8 @@ class _PersonalSourcePanel extends StatelessWidget {
               key: ValueKey('personal-model-${option.id}-$modelValue'),
               initialValue: modelValue,
               isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'Model',
+              decoration: InputDecoration(
+                labelText: context.l10n.settingsModel,
                 isDense: true,
               ),
               items: [
@@ -578,7 +585,7 @@ class _PersonalSourcePanel extends StatelessWidget {
                 ),
                 DropdownMenuItem(
                   value: customModelValue,
-                  child: const Text('Custom model ID'),
+                  child: Text(context.l10n.settingsCustomModelId),
                 ),
               ],
               onChanged: (value) {
@@ -589,8 +596,8 @@ class _PersonalSourcePanel extends StatelessWidget {
               const SizedBox(height: 12),
               TextField(
                 controller: customModelController,
-                decoration: const InputDecoration(
-                  labelText: 'Custom model ID',
+                decoration: InputDecoration(
+                  labelText: context.l10n.settingsCustomModelId,
                   isDense: true,
                 ),
               ),
@@ -612,10 +619,11 @@ class _PersonalSourcePanel extends StatelessWidget {
                 enableSuggestions: false,
                 autocorrect: false,
                 decoration: InputDecoration(
-                  labelText: '${option.label} API key',
+                  labelText: context.l10n
+                      .settingsMessageValue1ApiKey((option.label).toString()),
                   hintText: configured
-                      ? 'Enter a new key to replace the saved one'
-                      : 'Paste a personal API key',
+                      ? context.l10n.settingsEnterANewKeyToReplaceTheSaved
+                      : context.l10n.settingsPasteAPersonalApiKey,
                   prefixIcon: const Icon(Icons.key_rounded),
                   isDense: true,
                 ),
@@ -633,8 +641,9 @@ class _PersonalSourcePanel extends StatelessWidget {
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : const Icon(Icons.lock_outline_rounded, size: 18),
-                      label: Text(
-                          configured ? 'Replace key & use' : 'Save key & use'),
+                      label: Text(configured
+                          ? context.l10n.settingsReplaceKeyUse
+                          : context.l10n.settingsSaveKeyUse),
                     ),
                   ),
                   if (configured) ...[
@@ -643,7 +652,8 @@ class _PersonalSourcePanel extends StatelessWidget {
                       onPressed: saving ? null : () => onDeleteKey(option.id),
                       icon: const Icon(Icons.delete_outline_rounded),
                       color: AppTheme.error,
-                      tooltip: 'Remove ${option.label} key',
+                      tooltip: context.l10n.settingsMessageRemoveValue1Key2(
+                          (option.label).toString()),
                     ),
                   ],
                 ],
@@ -652,7 +662,8 @@ class _PersonalSourcePanel extends StatelessWidget {
                 const SizedBox(height: 8),
                 OutlinedButton(
                   onPressed: saving ? null : onUseConfigured,
-                  child: Text('Use saved ${option.label} key'),
+                  child: Text(context.l10n.settingsMessageUseSavedValue1Key(
+                      (option.label).toString())),
                 ),
               ],
             ],
@@ -664,12 +675,12 @@ class _PersonalSourcePanel extends StatelessWidget {
             if (configured && activeThisProvider)
               OutlinedButton(
                 onPressed: saving ? null : onUseConfigured,
-                child: const Text('Save personal AI settings'),
+                child: Text(context.l10n.settingsSavePersonalAiSettings),
               ),
             const SizedBox(height: 10),
-            const Text(
-              'New provider, model, and credential selections require one small response test. '
-              'A failed save keeps your previous active settings.',
+            Text(
+              context.l10n
+                  .settingsNewProviderModelAndCredentialSelectionsRequireOne,
               style: TextStyle(
                 color: AppTheme.textMuted,
                 fontSize: 12,
@@ -713,7 +724,8 @@ class _OAuthActions extends StatelessWidget {
       return ElevatedButton.icon(
         onPressed: onManage,
         icon: const Icon(Icons.open_in_browser_rounded, size: 18),
-        label: Text('Connect personal $brand'),
+        label: Text(context.l10n
+            .settingsMessageConnectPersonalValue1((brand).toString())),
       );
     }
     return Column(
@@ -722,13 +734,15 @@ class _OAuthActions extends StatelessWidget {
         OutlinedButton.icon(
           onPressed: onManage,
           icon: const Icon(Icons.manage_accounts_outlined, size: 18),
-          label: Text('Manage personal $brand'),
+          label: Text(context.l10n
+              .settingsMessageManagePersonalValue1((brand).toString())),
         ),
         if (!active) ...[
           const SizedBox(height: 8),
           ElevatedButton(
             onPressed: saving ? null : onUse,
-            child: Text('Use personal $brand'),
+            child: Text(context.l10n
+                .settingsMessageUsePersonalValue1((brand).toString())),
           ),
         ],
       ],
@@ -753,17 +767,17 @@ class _IncludedSourcePanel extends StatelessWidget {
     final selected = settings.effective.source == AiAccessSource.shared;
     final active = selected && settings.effective.available;
     final provider = shared.config.provider.isEmpty
-        ? 'No provider selected'
+        ? context.l10n.settingsNoProviderSelected
         : settings.providerLabel(shared.config.provider);
     final status = !shared.granted
-        ? 'Not included'
+        ? context.l10n.settingsNotIncluded
         : active
-            ? 'Active'
+            ? context.l10n.settingsActive
             : selected && shared.configured
-                ? 'Unavailable'
+                ? context.l10n.settingsUnavailable
                 : shared.configured
-                    ? 'Ready'
-                    : 'Needs admin setup';
+                    ? context.l10n.settingsReady
+                    : context.l10n.settingsNeedsAdminSetup;
 
     return AppPanel(
       accentColor: active
@@ -776,8 +790,8 @@ class _IncludedSourcePanel extends StatelessWidget {
         children: [
           _SourceHeader(
             icon: Icons.family_restroom_rounded,
-            eyebrow: 'INCLUDED',
-            title: 'Provided by this server',
+            eyebrow: context.l10n.settingsIncluded2,
+            title: context.l10n.settingsProvidedByThisServer,
             status: status,
             active: active,
           ),
@@ -800,13 +814,12 @@ class _IncludedSourcePanel extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             !shared.granted
-                ? 'Your admin has not included shared AI access for this '
-                    'Cantinarr account. You can still use any personal provider.'
+                ? context.l10n.settingsYourAdminHasNotIncludedSharedAiAccess
                 : shared.configured
-                    ? 'Use the server provider without adding a personal key. '
-                        'Your saved personal credentials are kept for later.'
-                    : 'Your account is included, but the server provider is not '
-                        'ready. Ask an admin to finish its setup.',
+                    ? context
+                        .l10n.settingsUseTheServerProviderWithoutAddingAPersonal
+                    : context
+                        .l10n.settingsYourAccountIsIncludedButTheServerProvider,
             style: const TextStyle(color: AppTheme.textSecondary, height: 1.42),
           ),
           if (shared.granted && !selected) ...[
@@ -820,7 +833,7 @@ class _IncludedSourcePanel extends StatelessWidget {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.group_outlined, size: 18),
-              label: const Text('Use included access'),
+              label: Text(context.l10n.settingsUseIncludedAccess),
             ),
           ],
         ],
@@ -919,12 +932,13 @@ class _LoadError extends StatelessWidget {
             const Icon(Icons.cloud_off_outlined,
                 color: AppTheme.textSecondary, size: 42),
             const SizedBox(height: 12),
-            const Text(
-              'Could not load AI access settings.',
+            Text(
+              context.l10n.settingsCouldNotLoadAiAccessSettings,
               style: TextStyle(color: AppTheme.textSecondary),
             ),
             const SizedBox(height: 12),
-            OutlinedButton(onPressed: onRetry, child: const Text('Retry')),
+            OutlinedButton(
+                onPressed: onRetry, child: Text(context.l10n.settingsRetry)),
           ],
         ),
       ),
@@ -932,29 +946,28 @@ class _LoadError extends StatelessWidget {
   }
 }
 
-String _reasonCopy(String reason) => switch (reason) {
+String _reasonCopy(BuildContext context, String reason) => switch (reason) {
       'shared_access_disabled' =>
-        'Add a personal provider, or ask your admin to include AI access.',
+        context.l10n.settingsAddAPersonalProviderOrAskYourAdmin,
       'shared_credential_missing' =>
-        'Included access is enabled, but the server provider needs setup.',
+        context.l10n.settingsIncludedAccessIsEnabledButTheServerProvider,
       'personal_credential_missing' =>
-        'The selected personal API key is missing.',
+        context.l10n.settingsTheSelectedPersonalApiKeyIsMissing,
       'personal_codex_disconnected' =>
-        'The selected personal OpenAI OAuth account needs to be connected.',
+        context.l10n.settingsTheSelectedPersonalOpenaiOauthAccountNeedsTo,
       'shared_codex_disconnected' =>
-        'Included OpenAI OAuth needs the server admin to connect its shared account.',
+        context.l10n.settingsIncludedOpenaiOauthNeedsTheServerAdminTo,
       'codex_unavailable' =>
-        'OpenAI OAuth is configured, but its Codex runtime is unavailable on this server.',
+        context.l10n.settingsOpenaiOauthIsConfiguredButItsCodexRuntime,
       'personal_grok_disconnected' =>
-        'The selected personal xAI Grok account needs to be connected.',
+        context.l10n.settingsTheSelectedPersonalXaiGrokAccountNeedsTo,
       'shared_grok_disconnected' =>
-        'Included xAI Grok needs the server admin to connect its shared account.',
+        context.l10n.settingsIncludedXaiGrokNeedsTheServerAdminTo,
       'grok_unavailable' =>
-        'xAI Grok OAuth is unavailable on this server right now.',
+        context.l10n.settingsXaiGrokOauthIsUnavailableOnThisServer,
       'storage_error' =>
-        'Cantinarr could not read the saved AI credentials. Ask the admin to '
-            'check the server logs and encryption key.',
-      _ => 'Choose a personal provider or use included access.',
+        context.l10n.settingsCantinarrCouldNotReadTheSavedAiCredentials,
+      _ => context.l10n.settingsChooseAPersonalProviderOrUseIncludedAccess,
     };
 
 String _friendlyError(Object error, String fallback) {

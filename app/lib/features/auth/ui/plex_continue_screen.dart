@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/auth_messages.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -52,8 +54,7 @@ class _PlexContinueScreenState extends ConsumerState<PlexContinueScreen> {
             widget.uri.queryParameters['purpose'] ??
             'login';
         if (server == null || server.isEmpty) {
-          throw StateError(
-              'No Plex sign-in is waiting. Return to sign-in and try again.');
+          throw StateError(context.l10n.authNoPendingPlex);
         }
         pending = await ref
             .read(authProvider.notifier)
@@ -71,7 +72,7 @@ class _PlexContinueScreenState extends ConsumerState<PlexContinueScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = oidcError(e);
+          _error = oidcError(e, context: context);
           _starting = false;
         });
       }
@@ -82,7 +83,7 @@ class _PlexContinueScreenState extends ConsumerState<PlexContinueScreen> {
     try {
       await ref.read(plexAuthServiceProvider).reopen();
     } catch (e) {
-      if (mounted) setState(() => _error = oidcError(e));
+      if (mounted) setState(() => _error = oidcError(e, context: context));
     }
   }
 
@@ -98,7 +99,8 @@ class _PlexContinueScreenState extends ConsumerState<PlexContinueScreen> {
             purpose == 'link' ? '/settings/sso-account' : '/dashboard/movies');
       }
     } catch (e) {
-      if (mounted && !_cancelled) setState(() => _error = oidcError(e));
+      if (mounted && !_cancelled)
+        setState(() => _error = oidcError(e, context: context));
       _timer?.cancel(); // Check now retries transient failures without a loop.
     } finally {
       if (mounted) setState(() => _checking = false);
@@ -124,11 +126,11 @@ class _PlexContinueScreenState extends ConsumerState<PlexContinueScreen> {
         },
         child: Scaffold(
             appBar: AppBar(
-                title: const Text('Continue with Plex'),
+                title: Text(context.l10n.authContinuePlex),
                 leading: IconButton(
                     onPressed: _cancel,
                     icon: const Icon(Icons.close),
-                    tooltip: 'Cancel')),
+                    tooltip: context.l10n.authCancel)),
             body: Center(
               child: SingleChildScrollView(
                   padding: const EdgeInsets.all(24),
@@ -136,19 +138,18 @@ class _PlexContinueScreenState extends ConsumerState<PlexContinueScreen> {
                       constraints: const BoxConstraints(maxWidth: 460),
                       child: Column(mainAxisSize: MainAxisSize.min, children: [
                         if (_starting) const CircularProgressIndicator(),
-                        const Text(
-                            'Approve Cantinarr in your Plex browser, then return here.'),
+                        Text(context.l10n.authApprovePlex),
                         if (_pending != null) ...[
                           const SizedBox(height: 12),
                           Text(_pending!.server, textAlign: TextAlign.center),
                           Text(_pending!.purpose == 'link'
-                              ? 'Linking your Plex sign-in'
-                              : 'Signing in to Cantinarr'),
+                              ? context.l10n.authLinkingPlex
+                              : context.l10n.authSigningIn),
                         ],
                         if (_error != null)
                           Padding(
                               padding: const EdgeInsets.symmetric(vertical: 16),
-                              child: Text(_error!,
+                              child: Text(localizeAuthMessage(context, _error!),
                                   style: TextStyle(
                                       color: Theme.of(context)
                                           .colorScheme
@@ -156,18 +157,21 @@ class _PlexContinueScreenState extends ConsumerState<PlexContinueScreen> {
                         const SizedBox(height: 20),
                         FilledButton(
                             onPressed: _starting ? null : _open,
-                            child: const Text('Reopen Plex')),
+                            child: Text(context.l10n.authReopenPlex)),
                         OutlinedButton(
                             onPressed: _starting || _checking ? null : _check,
-                            child: Text(_checking ? 'Checking…' : 'Check now')),
+                            child: Text(_checking
+                                ? context.l10n.authChecking
+                                : context.l10n.authCheckNow)),
                         if (_error != null)
                           TextButton(
                               onPressed: _starting || _checking
                                   ? null
                                   : () => _begin(retry: true),
-                              child: const Text('Retry sign-in')),
+                              child: Text(context.l10n.authRetrySignIn)),
                         TextButton(
-                            onPressed: _cancel, child: const Text('Cancel')),
+                            onPressed: _cancel,
+                            child: Text(context.l10n.authCancel)),
                       ]))),
             )),
       );

@@ -1,3 +1,5 @@
+import 'media_access_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -60,9 +62,8 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
       }
       setState(() => _starting = false);
       if (widget.instanceId != null && requested == null) {
-        setState(
-            () => _startError = 'This media server is no longer configured. '
-                'Choose another server or connect one.');
+        setState(() => _startError = context.l10n
+            .mediaThisMediaServerIsNoLongerConfiguredChooseAnotherServerOrConnectOne);
       } else if (requested != null || servers.length == 1) {
         _chooseServer(requested ?? servers.single);
       }
@@ -70,7 +71,7 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
       if (mounted) {
         setState(() {
           _starting = false;
-          _startError = 'Could not load the connected media servers.';
+          _startError = context.l10n.mediaCouldNotLoadTheConnectedMediaServers;
         });
       }
     }
@@ -122,7 +123,7 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
       await context.push('/settings/instance/new', extra: {
         'service_type': 'plex',
         'service_type_prompt':
-            'Choose Plex, Jellyfin, Emby, or Audiobookshelf.',
+            context.l10n.mediaChoosePlexJellyfinEmbyOrAudiobookshelf,
         'refresh_config_after_return': true,
       });
       if (!mounted) return;
@@ -130,9 +131,8 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
       if (mounted) await _start();
     } catch (_) {
       if (mounted) {
-        setState(() =>
-            _startError = 'Could not refresh the connected media servers. '
-                'Their latest configuration is unknown.');
+        setState(() => _startError = context.l10n
+            .mediaCouldNotRefreshTheConnectedMediaServersTheirLatestConfigurationIsUnknown);
       }
     }
   }
@@ -151,8 +151,9 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
-            title: Text(
-                product == null ? 'Import users' : 'Import $product users')),
+            title: Text(product == null
+                ? context.l10n.mediaImportUsers
+                : context.l10n.mediaImportValue0Users((product).toString()))),
         body: _starting
             ? const Center(child: CircularProgressIndicator())
             : controller == null
@@ -170,17 +171,15 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (_startError != null) _message(_startError!, error: true),
-              Text('Choose a media server',
+              Text(context.l10n.mediaChooseAMediaServer,
                   style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: AppTheme.spaceSm),
-              const Text(
-                  'Import accounts from Plex, Jellyfin, Emby, or Audiobookshelf. '
-                  'Choose which accounts get a new Cantinarr user and which belong '
-                  'to an existing user.'),
+              Text(context.l10n
+                  .mediaImportAccountsFromPlexJellyfinEmbyOrAudiobookshelfChooseWhichAccountsGetANewCantinarrUserA),
               const SizedBox(height: AppTheme.spaceLg),
               if (servers.isEmpty) ...[
-                const Text(
-                    'Connect a media server before importing its users.'),
+                Text(context
+                    .l10n.mediaConnectAMediaServerBeforeImportingItsUsers),
                 const SizedBox(height: AppTheme.spaceMd),
               ],
               for (final server in servers)
@@ -194,7 +193,7 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
               OutlinedButton.icon(
                   onPressed: _connectServer,
                   icon: const Icon(Icons.add),
-                  label: const Text('Connect a media server')),
+                  label: Text(context.l10n.mediaConnectAMediaServer)),
             ],
           ))
         ],
@@ -227,8 +226,9 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
           SliverPadding(
               padding: EdgeInsets.all(padding),
               sliver: SliverToBoxAdapter(
-                  child: Text(
-                      '${controller.server.name} reported no accounts to import.')))
+                  child: Text(context.l10n
+                      .mediaValue0ReportedNoAccountsToImport(
+                          (controller.server.name).toString()))))
         else ...[
           SliverPadding(
               padding: EdgeInsets.fromLTRB(padding, 16, padding, 8),
@@ -236,29 +236,30 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
                   child: Column(children: [
                 TextField(
                   controller: _search,
-                  decoration: const InputDecoration(
-                      labelText: 'Search accounts',
+                  decoration: InputDecoration(
+                      labelText: context.l10n.mediaSearchAccounts,
                       prefixIcon: Icon(Icons.search)),
                   onChanged: (_) => setState(() {}),
                 ),
                 Row(children: [
                   Expanded(
-                      child: Text(
-                          '${controller.selectedIncompleteCount} to import · '
-                          '${MediaUserImportController.maxSelection} maximum')),
+                      child: Text(context.l10n.mediaValue0ToImportValue1Maximum(
+                          (controller.selectedIncompleteCount).toString(),
+                          (MediaUserImportController.maxSelection)
+                              .toString()))),
                   TextButton(
                       onPressed: controller.busy || controller.reconciling
                           ? null
                           : () => controller.selectAll(visible),
-                      child: const Text('Select all')),
+                      child: Text(context.l10n.mediaSelectAll)),
                   TextButton(
                       onPressed: controller.busy || controller.reconciling
                           ? null
                           : controller.clearSelection,
-                      child: const Text('Clear')),
+                      child: Text(context.l10n.mediaClear)),
                 ]),
                 if (visible.isEmpty)
-                  const Text('No accounts match this search.'),
+                  Text(context.l10n.mediaNoAccountsMatchThisSearch),
               ]))),
           SliverPadding(
               padding: EdgeInsets.symmetric(horizontal: padding),
@@ -283,14 +284,14 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
                         child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.person_add_alt_1),
                 label: Text(controller.busy
-                    ? 'Importing accounts…'
+                    ? context.l10n.mediaImportingAccounts
                     : controller.successfulUserIds.isNotEmpty &&
                             controller.selectedIncompleteCount == 0
-                        ? 'Selected accounts imported'
+                        ? context.l10n.mediaSelectedAccountsImported
                         : controller.selected
                                 .any((c) => !c.complete && c.result != null)
-                            ? 'Retry selected incomplete accounts'
-                            : 'Import selected accounts'),
+                            ? context.l10n.mediaRetrySelectedIncompleteAccounts
+                            : context.l10n.mediaImportSelectedAccounts),
               ),
               if (controller.successfulUserIds.isNotEmpty)
                 OutlinedButton.icon(
@@ -317,7 +318,7 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
                           }
                         },
                   icon: const Icon(Icons.video_library_outlined),
-                  label: const Text('Assign request libraries'),
+                  label: Text(context.l10n.mediaAssignRequestLibraries),
                 ),
             ]),
           )),
@@ -330,25 +331,27 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
       Text(controller.server.name,
           style: Theme.of(context).textTheme.titleLarge),
       const SizedBox(height: 8),
-      Text(controller.submitted ? 'Results and next steps' : 'Choose accounts'),
+      Text(controller.submitted
+          ? context.l10n.mediaResultsAndNextSteps
+          : context.l10n.mediaChooseAccounts),
       const SizedBox(height: 8),
       if (controller.successfulUserIds.isNotEmpty) ...[
-        const Text('Review Cantinarr sign-in, request permissions, and media '
-            'access below. Use Assign request libraries for checked users.'),
+        Text(context.l10n
+            .mediaReviewCantinarrSignInRequestPermissionsAndMediaAccessBelowUseAssignRequestLibrariesForChec),
         const SizedBox(height: 8),
       ],
-      Text('Importing links accounts from $product to Cantinarr users. '
-          'It does not confirm that sign-in, requests, or playback are ready. '
-          'Existing users must be selected explicitly.'),
+      Text(context.l10n
+          .mediaImportingLinksAccountsFromValue0ToCantinarrUsersItDoesNotConfirmThatSignInRequestsOrPlayba(
+              (product).toString())),
       if (product != 'Plex')
         Padding(
             padding: const EdgeInsets.only(top: 8),
-            child: Text(
-                'Their $product password does not become a Cantinarr password.')),
+            child: Text(context.l10n
+                .mediaTheirValue0PasswordDoesNotBecomeACantinarrPassword(
+                    (product).toString()))),
       if (!controller.supportsExplicitLinking)
-        _message(
-            'Update the Cantinarr server to import users safely with explicit '
-            'account linking. This app will not automatically match existing usernames.'),
+        _message(context.l10n
+            .mediaUpdateTheCantinarrServerToImportUsersSafelyWithExplicitAccountLinkingThisAppWillNotAutomat),
       if (!controller.submitted)
         Align(
             alignment: Alignment.centerLeft,
@@ -361,14 +364,14 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
                           _controller = null;
                         }),
                 icon: const Icon(Icons.swap_horiz),
-                label: const Text('Choose another server'))),
+                label: Text(context.l10n.mediaChooseAnotherServer))),
       if (controller.supportsManagement)
         ExpansionTile(
           tilePadding: EdgeInsets.zero,
-          title: const Text('Remote access management'),
+          title: Text(context.l10n.mediaRemoteAccessManagement),
           subtitle: Text(controller.manageAccess
-              ? 'Manage selected accounts'
-              : 'Off: preserve existing server access'),
+              ? context.l10n.mediaManageSelectedAccounts
+              : context.l10n.mediaOffPreserveExistingServerAccess),
           children: [
             CheckboxListTile(
               contentPadding: EdgeInsets.zero,
@@ -376,16 +379,16 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
               onChanged: controller.busy || controller.submitted
                   ? null
                   : (value) => controller.setManagement(value == true),
-              title: const Text('Manage imported accounts through Cantinarr'),
-              subtitle: const Text('Enables these accounts now. Removing their '
-                  'Cantinarr grant or deleting the user will turn off server access. '
-                  'Existing libraries stay the same. Administrators are protected.'),
+              title: Text(
+                  context.l10n.mediaManageImportedAccountsThroughCantinarr),
+              subtitle: Text(context.l10n
+                  .mediaEnablesTheseAccountsNowRemovingTheirCantinarrGrantOrDeletingTheUserWillTurnOffServerAccess),
               controlAffinity: ListTileControlAffinity.leading,
             )
           ],
         ),
       if (controller.error != null) ...[
-        _message(controller.error!, error: true),
+        _message(mediaAccessLabel(context, controller.error!), error: true),
         TextButton(
             onPressed: controller.busy || controller.reconciling
                 ? null
@@ -393,15 +396,15 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
                     ? controller.reconcile
                     : controller.load,
             child: Text(controller.submitted
-                ? 'Check current state'
-                : 'Refresh accounts')),
+                ? context.l10n.mediaCheckCurrentState
+                : context.l10n.mediaRefreshAccounts)),
       ] else if (controller.submitted)
         TextButton.icon(
             onPressed: controller.busy || controller.reconciling
                 ? null
                 : controller.reconcile,
             icon: const Icon(Icons.refresh),
-            label: const Text('Check current state')),
+            label: Text(context.l10n.mediaCheckCurrentState)),
     ]);
   }
 
@@ -411,7 +414,7 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
     final result = choice.result;
     final linkedOwner = choice.account == null
         ? null
-        : controller.ownerName(choice.account!.userId);
+        : _ownerName(context, controller, choice.account!.userId);
     return Card(
         key: ValueKey('account-${remote.id}'),
         child: Padding(
@@ -425,42 +428,52 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
                   style: const TextStyle(color: AppTheme.textPrimary)),
               subtitle: Text(
                   [
-                    if (!choice.listed) 'No longer listed by the media server',
+                    if (!choice.listed)
+                      context.l10n.mediaNoLongerListedByTheMediaServer,
                     if (choice.mappingUnavailable)
-                      'The selected Cantinarr user is no longer available. Choose another user.',
-                    if (remote.isAdministrator) 'Protected administrator',
+                      context.l10n
+                          .mediaTheSelectedCantinarrUserIsNoLongerAvailableChooseAnotherUser,
+                    if (remote.isAdministrator)
+                      context.l10n.mediaProtectedAdministrator,
                     if (remote.isDisabled &&
                         choice.account == null &&
                         result == null)
                       controller.submitted
-                          ? 'Last listed as disabled'
-                          : 'Disabled on server',
+                          ? context.l10n.mediaLastListedAsDisabled
+                          : context.l10n.mediaDisabledOnServer,
                     if (remote.pending &&
                         choice.account == null &&
                         result == null)
                       controller.submitted
-                          ? 'Last listed with a pending invitation'
-                          : 'Awaiting invitation acceptance',
+                          ? context.l10n.mediaLastListedWithAPendingInvitation
+                          : context.l10n.mediaAwaitingInvitationAcceptance,
                     if (choice.alreadyLinked)
                       controller.accountsCurrent
-                          ? 'Already linked to $linkedOwner'
-                          : 'Last known link to $linkedOwner',
-                    if (choice.complete) 'Imported as ${result!.username}',
+                          ? context.l10n.mediaAlreadyLinkedToValue0(
+                              (linkedOwner).toString())
+                          : context.l10n.mediaLastKnownLinkToValue0(
+                              (linkedOwner).toString()),
+                    if (choice.complete)
+                      context.l10n
+                          .mediaImportedAsValue0((result!.username).toString()),
                     if (!controller.accountsCurrent &&
                         (choice.account != null || result != null))
-                      'Server access unconfirmed',
+                      context.l10n.mediaServerAccessUnconfirmed,
                     if (controller.accountsCurrent && choice.account != null)
-                      choice.account!.accessLabel,
+                      mediaAccessLabel(context, choice.account!.accessLabel),
                     if (controller.accountsCurrent &&
                         choice.complete &&
                         choice.account == null)
-                      'No current media-account link',
+                      context.l10n.mediaNoCurrentMediaAccountLink,
                     if (!choice.alreadyLinked && !choice.complete)
                       choice.targetUserId != null
-                          ? 'Link to ${controller.ownerName(choice.targetUserId!)}'
+                          ? context.l10n.mediaLinkToValue0((_ownerName(
+                                  context, controller, choice.targetUserId!))
+                              .toString())
                           : choice.requiresMapping
-                              ? 'Username exists. Choose its user explicitly.'
-                              : 'Create a new Cantinarr user',
+                              ? context.l10n
+                                  .mediaUsernameExistsChooseItsUserExplicitly
+                              : context.l10n.mediaCreateANewCantinarrUser,
                   ].join(' · '),
                   style: const TextStyle(color: AppTheme.textSecondary)),
               value: choice.complete
@@ -485,24 +498,27 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
             if (!choice.complete && !choice.alreadyLinked && !choice.uncertain)
               if (result?.userId != null)
                 Text(result!.created
-                    ? 'User ${result.username} was created. Retrying completes the '
-                        'link for this user and keeps their invitation.'
-                    : 'Continue linking to ${result.username}. Retrying keeps '
-                        'this selected Cantinarr user.')
+                    ? context.l10n
+                        .mediaUserValue0WasCreatedRetryingCompletesTheLinkForThisUserAndKeepsTheirInvitation(
+                            (result.username).toString())
+                    : context.l10n
+                        .mediaContinueLinkingToValue0RetryingKeepsThisSelectedCantinarrUser(
+                            (result.username).toString()))
               else
                 DropdownButtonFormField<int>(
                   key: ValueKey('mapping-${remote.id}-${choice.targetUserId}'),
                   initialValue: choice.targetUserId,
                   isExpanded: true,
-                  decoration:
-                      const InputDecoration(labelText: 'Link to existing user'),
+                  decoration: InputDecoration(
+                      labelText: context.l10n.mediaLinkToExistingUser),
                   hint: Text(choice.requiresMapping
-                      ? 'Choose a Cantinarr user'
-                      : 'Create new user (default)'),
+                      ? context.l10n.mediaChooseACantinarrUser
+                      : context.l10n.mediaCreateNewUserDefault),
                   items: [
                     if (!choice.requiresMapping)
-                      const DropdownMenuItem(
-                          value: -1, child: Text('Create new user')),
+                      DropdownMenuItem(
+                          value: -1,
+                          child: Text(context.l10n.mediaCreateNewUser)),
                     for (final user in controller.users)
                       DropdownMenuItem(
                           value: user.id,
@@ -516,15 +532,15 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
                 ),
             if (choice.uncertain)
               _message(
-                  'Outcome unknown. Check current state '
-                  'before retrying this account.',
+                  context.l10n
+                      .mediaOutcomeUnknownCheckCurrentStateBeforeRetryingThisAccount,
                   error: true),
             if (result != null && !choice.complete)
               _message(_outcome(result), error: true),
             if (result?.userId != null) ...[
               if (result!.plexIdentityError.isNotEmpty)
-                _message(
-                    'Media account linked. Plex sign-in needs identity review.'),
+                _message(context
+                    .l10n.mediaMediaAccountLinkedPlexSignInNeedsIdentityReview),
               const SizedBox(height: 4),
               TextButton.icon(
                   onPressed: () => setState(() {
@@ -535,12 +551,13 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
                   icon: Icon(_expanded.contains(remote.id)
                       ? Icons.expand_less
                       : Icons.expand_more),
-                  label: const Text('Sign-in and access next steps')),
+                  label: Text(context.l10n.mediaSignInAndAccessNextSteps)),
               if (_expanded.contains(remote.id))
                 if (controller.busy || controller.reconciling)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.all(16),
-                    child: Text('Checking current sign-in and access status…'),
+                    child: Text(
+                        context.l10n.mediaCheckingCurrentSignInAndAccessStatus),
                   )
                 else
                   UserOnboardingStatus(
@@ -558,23 +575,24 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
                     await controller.reconcile();
                     if (mounted) setState(() => _statusVersion++);
                   },
-                  child: const Text('Open user access')),
+                  child: Text(context.l10n.mediaOpenUserAccess)),
             ],
           ]),
         ));
   }
 
   String _outcome(MediaServerImportResult result) => switch (result.error) {
-        'username_conflict' =>
-          'The username now exists. Select the intended Cantinarr user explicitly.',
+        'username_conflict' => context.l10n
+            .mediaTheUsernameNowExistsSelectTheIntendedCantinarrUserExplicitly,
         'already_linked' =>
-          'This account is now linked to another user. Review its owner.',
-        'not_found' => 'This account is no longer listed on the media server.',
-        'user_has_account' =>
-          'The selected Cantinarr user already has an account on this server.',
-        'user_failed' => 'The Cantinarr user could not be created.',
-        _ =>
-          'The account link is incomplete. Select it to retry only the unfinished step.',
+          context.l10n.mediaThisAccountIsNowLinkedToAnotherUserReviewItsOwner,
+        'not_found' =>
+          context.l10n.mediaThisAccountIsNoLongerListedOnTheMediaServer,
+        'user_has_account' => context
+            .l10n.mediaTheSelectedCantinarrUserAlreadyHasAnAccountOnThisServer,
+        'user_failed' => context.l10n.mediaTheCantinarrUserCouldNotBeCreated,
+        _ => context.l10n
+            .mediaTheAccountLinkIsIncompleteSelectItToRetryOnlyTheUnfinishedStep,
       };
 
   Widget _message(String message, {bool error = false}) => Padding(
@@ -584,3 +602,8 @@ class _MediaUserImportScreenState extends ConsumerState<MediaUserImportScreen> {
                 color: error ? AppTheme.error : AppTheme.textSecondary)),
       );
 }
+
+String _ownerName(BuildContext context, MediaUserImportController controller,
+        int userId) =>
+    controller.users.where((user) => user.id == userId).firstOrNull?.username ??
+    context.l10n.mediaUserNumber(userId);

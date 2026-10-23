@@ -54,14 +54,16 @@ List<TitleFact> movieFacts(MovieDetail detail) {
 /// The Details lines for a show. Status always earns a line when TMDB has
 /// one: whether a show is still returning, ended, or canceled is the first
 /// thing a viewer wants to know about it.
-List<TitleFact> tvFacts(TVDetail detail, {DateTime? now}) => [
+List<TitleFact> tvFacts(TVDetail detail, {DateTime? now, String? dateLocale}) =>
+    [
       if (_present(detail.status) case final status?)
         TitleFact('Status', status),
       if (tvPremiereDate(detail) case final date?)
         TitleFact(
           date.isBefore(tvCalendarDay(now ?? DateTime.now()))
-              ? 'First aired' : 'Premiere',
-          formatReleaseDate(date),
+              ? 'First aired'
+              : 'Premiere',
+          formatReleaseDate(date, locale: dateLocale),
         ),
       if (joinNames(detail.createdBy.map((c) => c.name)) case final names?)
         TitleFact('Created by', names),
@@ -174,7 +176,9 @@ List<CrewSection> crewSections(Iterable<CrewMember> crew) {
         rows[index] = CrewMember(
           id: existing.id,
           name: existing.name,
-          job: existing.job.isEmpty ? member.job : '${existing.job}, ${member.job}',
+          job: existing.job.isEmpty
+              ? member.job
+              : '${existing.job}, ${member.job}',
           department: department,
           profilePath: existing.profilePath ?? member.profilePath,
         );

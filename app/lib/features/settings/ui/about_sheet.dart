@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
@@ -70,7 +71,8 @@ class AboutSheet extends ConsumerWidget {
           if (serverVersion != null && serverVersion.isNotEmpty) ...[
             const SizedBox(height: 2),
             Text(
-              'Server $serverVersion',
+              context.l10n
+                  .settingsMessageServerValue1((serverVersion).toString()),
               style: const TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 12,
@@ -87,9 +89,8 @@ class AboutSheet extends ConsumerWidget {
             semanticLabel: 'The Movie Database (TMDB)',
           ),
           const SizedBox(height: AppTheme.spaceSm),
-          const Text(
-            'This product uses the TMDB API but is not endorsed '
-            'or certified by TMDB.',
+          Text(
+            context.l10n.settingsTmdbDisclaimer,
             textAlign: TextAlign.center,
             style: TextStyle(
               color: AppTheme.textSecondary,

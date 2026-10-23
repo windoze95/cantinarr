@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
@@ -63,12 +64,12 @@ class _MediaServerPasswordSheetState
     if (_busy) return;
     final password = _passwordController.text;
     if (password.length < _minLength) {
-      setState(
-          () => _error = 'Password must be at least $_minLength characters.');
+      setState(() => _error = context.l10n
+          .mediaPasswordMustBeAtLeastValue0Characters((_minLength).toString()));
       return;
     }
     if (password != _confirmController.text) {
-      setState(() => _error = 'Passwords do not match.');
+      setState(() => _error = context.l10n.mediaPasswordsDoNotMatch);
       return;
     }
     setState(() {
@@ -102,8 +103,8 @@ class _MediaServerPasswordSheetState
     }
   }
 
-  static const _genericFailure =
-      "Couldn't create the account. Try again in a moment, or ask your admin.";
+  String get _genericFailure =>
+      context.l10n.mediaCouldnTCreateTheAccountTryAgainInAMomentOrAskYourAdmin;
 
   /// Requester-voice copy per refusal. The server's fixed messages are
   /// safe, but the user needs to know what to do next: sign in with the
@@ -112,12 +113,15 @@ class _MediaServerPasswordSheetState
   String _describe(MediaAccessException e) {
     final name = widget.server.name;
     if (e.isTransport) {
-      return "Couldn't reach the server. Check your connection and try again.";
+      return context
+          .l10n.mediaCouldnTReachTheServerCheckYourConnectionAndTryAgain;
     }
     if (e.code == 'name_taken') {
-      return 'The name ${widget.username} is already taken on $name. If that '
-          "account is yours, go back and tap 'Link my ${mediaServerTypeLabel(widget.server.serviceType)} account' to "
-          'sign in with its password. Otherwise ask your admin.';
+      return context.l10n
+          .mediaTheNameValue0IsAlreadyTakenOnValue1IfThatAccountIsYoursGoBackAndTapLinkMyValue2AccountToSi(
+              (widget.username).toString(),
+              (name).toString(),
+              (mediaServerTypeLabel(widget.server.serviceType)).toString());
     }
     switch (e.status) {
       case 400:
@@ -126,10 +130,11 @@ class _MediaServerPasswordSheetState
         if (e.code.isEmpty && e.message.toLowerCase().contains('password')) {
           return e.message;
         }
-        return "$name doesn't accept your username as an account name. Ask "
-            'your admin to link an account for you.';
+        return context.l10n
+            .mediaValue0DoesnTAcceptYourUsernameAsAnAccountNameAskYourAdminToLinkAnAccountForYou(
+                (name).toString());
       case 403:
-        return 'That server is not available to you.';
+        return context.l10n.mediaThatServerIsNotAvailableToYou;
       default:
         return _genericFailure;
     }
@@ -154,7 +159,7 @@ class _MediaServerPasswordSheetState
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Create your $product account',
+                context.l10n.mediaCreateYourValue0Account((product).toString()),
                 style: const TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 20,
@@ -163,9 +168,9 @@ class _MediaServerPasswordSheetState
               ),
               const SizedBox(height: AppTheme.spaceSm),
               Text(
-                "You'll sign in to $name as ${widget.username} with the "
-                "password you choose here. Cantinarr doesn't keep it, so "
-                "pick one you'll remember.",
+                context.l10n
+                    .mediaYouLlSignInToValue0AsValue1WithThePasswordYouChooseHereCantinarrDoesnTKeepItSoPickOneYouLl(
+                        (name).toString(), (widget.username).toString()),
                 style: const TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 14,
@@ -183,10 +188,12 @@ class _MediaServerPasswordSheetState
                 autofillHints: const [AutofillHints.newPassword],
                 textInputAction: TextInputAction.next,
                 decoration: InputDecoration(
-                  labelText: 'Password',
+                  labelText: context.l10n.mediaPassword,
                   prefixIcon: const Icon(Icons.lock_outline),
                   suffixIcon: IconButton(
-                    tooltip: _obscure ? 'Show password' : 'Hide password',
+                    tooltip: _obscure
+                        ? context.l10n.mediaShowPassword
+                        : context.l10n.mediaHidePassword,
                     icon: Icon(
                         _obscure ? Icons.visibility : Icons.visibility_off),
                     onPressed: () => setState(() => _obscure = !_obscure),
@@ -203,8 +210,8 @@ class _MediaServerPasswordSheetState
                 autofillHints: const [AutofillHints.newPassword],
                 textInputAction: TextInputAction.done,
                 onSubmitted: (_) => _submit(),
-                decoration: const InputDecoration(
-                  labelText: 'Confirm password',
+                decoration: InputDecoration(
+                  labelText: context.l10n.mediaConfirmPassword,
                   prefixIcon: Icon(Icons.lock_outline),
                 ),
               ),
@@ -237,7 +244,7 @@ class _MediaServerPasswordSheetState
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: Colors.black),
                       )
-                    : const Text('Create account'),
+                    : Text(context.l10n.mediaCreateAccount),
               ),
             ],
           ),

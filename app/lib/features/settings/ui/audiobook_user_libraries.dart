@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -25,9 +26,9 @@ class AudiobookUserLibraries extends StatelessWidget {
       this.enabled = true,
       this.unavailableReason});
 
-  String name(String id) =>
+  String name(BuildContext context, String id) =>
       libraries.where((l) => l.id == id).map((l) => l.name).firstOrNull ??
-      'Unknown library ($id)';
+      context.l10n.settingsMessageUnknownLibraryValue1((id).toString());
 
   @override
   Widget build(BuildContext context) {
@@ -40,13 +41,15 @@ class AudiobookUserLibraries extends StatelessWidget {
           if (!enabled)
             Text(
                 unavailableReason ??
-                    'Enable account management in Settings → Users to change libraries here.',
+                    context.l10n
+                        .settingsEnableAccountManagementInSettingsUsersToChange,
                 style: const TextStyle(
                     color: AppTheme.textSecondary, fontSize: 12))
           else ...[
             InputDecorator(
                 decoration: InputDecoration(
-                    labelText: 'Libraries for $username',
+                    labelText: context.l10n.settingsMessageLibrariesForValue1(
+                        (username).toString()),
                     contentPadding: const EdgeInsets.symmetric(
                         horizontal: 12, vertical: 4)),
                 child: DropdownButtonHideUnderline(
@@ -55,15 +58,19 @@ class AudiobookUserLibraries extends StatelessWidget {
                   isExpanded: true,
                   items: [
                     if (keepExisting)
-                      const DropdownMenuItem(
+                      DropdownMenuItem(
                           value: 'keep',
-                          child: Text('Keep current ABS libraries')),
-                    const DropdownMenuItem(
-                        value: 'default', child: Text('Use server default')),
-                    const DropdownMenuItem(
-                        value: 'all', child: Text('All libraries')),
-                    const DropdownMenuItem(
-                        value: 'selected', child: Text('Choose libraries')),
+                          child: Text(
+                              context.l10n.settingsKeepCurrentAbsLibraries)),
+                    DropdownMenuItem(
+                        value: 'default',
+                        child: Text(context.l10n.settingsUseServerDefault)),
+                    DropdownMenuItem(
+                        value: 'all',
+                        child: Text(context.l10n.settingsAllLibraries)),
+                    DropdownMenuItem(
+                        value: 'selected',
+                        child: Text(context.l10n.settingsChooseLibraries)),
                   ],
                   onChanged: (value) {
                     if (value == null || value == 'keep') return;
@@ -77,7 +84,8 @@ class AudiobookUserLibraries extends StatelessWidget {
             const SizedBox(height: 6),
             if (mode == 'selected') ...[
               if (libraries.isEmpty)
-                const Text('Load this server’s libraries to choose access.'),
+                Text(context
+                    .l10n.settingsLoadThisServerSLibrariesToChooseAccess),
               for (final id in {
                 ...libraries.map((l) => l.id),
                 ...policy.libraryIds
@@ -88,7 +96,7 @@ class AudiobookUserLibraries extends StatelessWidget {
                       contentPadding: EdgeInsets.zero,
                       dense: true,
                       controlAffinity: ListTileControlAffinity.leading,
-                      title: Text(name(id)),
+                      title: Text(name(context, id)),
                       value: policy.libraryIds.contains(id),
                       onChanged: (checked) {
                         final next = policy.libraryIds.toSet();
@@ -99,22 +107,25 @@ class AudiobookUserLibraries extends StatelessWidget {
                       },
                     )),
               if (policy.libraryIds.isEmpty)
-                const Text('Choose at least one library.',
+                Text(context.l10n.settingsChooseAtLeastOneLibrary,
                     style: TextStyle(color: AppTheme.error)),
             ] else
               Text(
                   mode == 'keep'
-                      ? 'The account keeps its current library permissions.'
+                      ? context.l10n
+                          .settingsTheAccountKeepsItsCurrentLibraryPermissions
                       : mode == 'all' || ids.isEmpty
-                          ? 'All libraries, including libraries added later.'
-                          : ids.map(name).join(', '),
+                          ? context.l10n
+                              .settingsAllLibrariesIncludingLibrariesAddedLater
+                          : ids.map((id) => name(context, id)).join(', '),
                   style: const TextStyle(
                       color: AppTheme.textSecondary, fontSize: 12)),
           ],
           if (policy.syncPending)
-            const Padding(
+            Padding(
                 padding: EdgeInsets.only(top: 6),
-                child: Text('Library change pending. Cantinarr will retry.',
+                child: Text(
+                    context.l10n.settingsLibraryChangePendingCantinarrWillRetry,
                     style: TextStyle(
                         color: AppTheme.textSecondary, fontSize: 12))),
         ]));

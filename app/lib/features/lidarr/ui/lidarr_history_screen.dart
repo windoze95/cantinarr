@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -59,7 +60,7 @@ class _LidarrHistoryScreenState extends ConsumerState<LidarrHistoryScreen> {
     if (service == null) {
       setState(() {
         _isLoading = false;
-        _error = 'No Lidarr instance configured';
+        _error = context.l10n.adminNoLidarrInstanceConfigured;
       });
       return;
     }
@@ -79,7 +80,7 @@ class _LidarrHistoryScreenState extends ConsumerState<LidarrHistoryScreen> {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _error = 'Failed to load history: $e';
+        _error = context.l10n.adminFailedToLoadHistory2((e).toString());
       });
     }
   }
@@ -127,12 +128,12 @@ class _LidarrHistoryScreenState extends ConsumerState<LidarrHistoryScreen> {
         color: AppTheme.accent,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
-          children: const [
+          children: [
             SizedBox(height: 160),
             Icon(Icons.history, size: 48, color: AppTheme.textSecondary),
             SizedBox(height: 12),
             Center(
-              child: Text('No history yet',
+              child: Text(context.l10n.adminNoHistoryYet,
                   style:
                       TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
             ),
@@ -172,7 +173,9 @@ class _LidarrHistoryScreenState extends ConsumerState<LidarrHistoryScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (showHeader && record.date != null)
-                _DayHeader(label: _dayLabel(record.date!.toLocal())),
+                _DayHeader(
+                    label: _dayLabel(record.date!.toLocal(),
+                        strings: context.l10n)),
               _HistoryTile(record: record),
             ],
           );
@@ -189,90 +192,117 @@ bool _sameDay(DateTime? a, DateTime? b) {
   return la.year == lb.year && la.month == lb.month && la.day == lb.day;
 }
 
-String _dayLabel(DateTime localDate) {
+String _dayLabel(DateTime localDate, {AppLocalizations? strings}) {
   final now = DateTime.now();
   final today = DateTime(now.year, now.month, now.day);
   final day = DateTime(localDate.year, localDate.month, localDate.day);
   final diff = today.difference(day).inDays;
-  if (diff == 0) return 'Today';
-  if (diff == 1) return 'Yesterday';
+  if (diff == 0)
+    return (strings ?? lookupAppLocalizations(const Locale('en'))).adminToday;
+  if (diff == 1)
+    return (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminYesterday;
   if (localDate.year == now.year) {
-    return DateFormat('EEEE, MMM d').format(localDate);
+    return ((strings?.localeName ?? 'en') == 'en'
+        ? DateFormat('EEEE, MMM d', 'en_US')
+        : DateFormat.MMMMEEEEd(strings!.dateLocale)).format(localDate);
   }
-  return DateFormat('MMM d, yyyy').format(localDate);
+  return DateFormat.yMMMd(strings?.dateLocale ?? 'en_US').format(localDate);
 }
 
-String _timeLabel(DateTime? date) {
+String _timeLabel(DateTime? date, {AppLocalizations? strings}) {
   if (date == null) return '';
   final local = date.toLocal();
   final diff = DateTime.now().difference(local);
   if (_sameDay(local, DateTime.now())) {
-    if (diff.inMinutes < 1) return 'just now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    return '${diff.inHours}h ago';
+    if (diff.inMinutes < 1)
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminJustNow2;
+    if (diff.inMinutes < 60)
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminMAgo((diff.inMinutes).toString());
+    return (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminHAgo((diff.inHours).toString());
   }
-  return DateFormat('h:mm a').format(local);
+  return DateFormat.jm(strings?.dateLocale ?? 'en_US').format(local);
 }
 
 /// Icon, colour and label for a Lidarr history event type.
 ({IconData icon, Color color, String label}) lidarrHistoryEventStyle(
-    String eventType) {
+    String eventType,
+    {AppLocalizations? strings}) {
   switch (eventType) {
     case 'grabbed':
       return (
         icon: Icons.download_outlined,
         color: AppTheme.downloading,
-        label: 'Grabbed'
+        label:
+            (strings ?? lookupAppLocalizations(const Locale('en'))).adminGrabbed
       );
     case 'trackFileImported':
       return (
         icon: Icons.check_circle_outline,
         color: AppTheme.available,
-        label: 'Imported'
+        label: (strings ?? lookupAppLocalizations(const Locale('en')))
+            .adminImported
       );
     case 'downloadImported':
       return (
         icon: Icons.check_circle_outline,
         color: AppTheme.available,
-        label: 'Download imported'
+        label: (strings ?? lookupAppLocalizations(const Locale('en')))
+            .adminDownloadImported
       );
     case 'downloadFailed':
       return (
         icon: Icons.error_outline,
         color: AppTheme.error,
-        label: 'Download failed'
+        label: (strings ?? lookupAppLocalizations(const Locale('en')))
+            .adminDownloadFailed
       );
     case 'trackFileDeleted':
       return (
         icon: Icons.delete_outline,
         color: AppTheme.error,
-        label: 'File deleted'
+        label: (strings ?? lookupAppLocalizations(const Locale('en')))
+            .adminFileDeleted
       );
     case 'trackFileRenamed':
       return (
         icon: Icons.drive_file_rename_outline,
         color: AppTheme.accent,
-        label: 'Renamed'
+        label:
+            (strings ?? lookupAppLocalizations(const Locale('en'))).adminRenamed
       );
     case 'trackFileRetagged':
       return (
         icon: Icons.sell_outlined,
         color: AppTheme.accent,
-        label: 'Retagged'
+        label: (strings ?? lookupAppLocalizations(const Locale('en')))
+            .adminRetagged
       );
     case 'albumImportIncomplete':
       return (
         icon: Icons.warning_amber_rounded,
         color: AppTheme.requested,
-        label: 'Import incomplete'
+        label: (strings ?? lookupAppLocalizations(const Locale('en')))
+            .adminImportIncomplete
       );
     case 'downloadIgnored':
-      return (icon: Icons.block, color: AppTheme.unavailable, label: 'Ignored');
+      return (
+        icon: Icons.block,
+        color: AppTheme.unavailable,
+        label:
+            (strings ?? lookupAppLocalizations(const Locale('en'))).adminIgnored
+      );
     default:
       return (
         icon: Icons.history,
         color: AppTheme.textSecondary,
-        label: eventType.isEmpty ? 'Unknown' : eventType
+        label: eventType.isEmpty
+            ? (strings ?? lookupAppLocalizations(const Locale('en')))
+                .adminUnknown
+            : eventType
       );
   }
 }
@@ -306,7 +336,8 @@ class _HistoryTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = lidarrHistoryEventStyle(record.eventType);
+    final style =
+        lidarrHistoryEventStyle(record.eventType, strings: context.l10n);
     final subtitleParts = [
       style.label,
       if (record.quality != null && record.quality!.isNotEmpty) record.quality!,
@@ -337,7 +368,7 @@ class _HistoryTile extends StatelessWidget {
         style: TextStyle(color: style.color, fontSize: 12),
       ),
       trailing: Text(
-        _timeLabel(record.date),
+        _timeLabel(record.date, strings: context.l10n),
         style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
       ),
     );

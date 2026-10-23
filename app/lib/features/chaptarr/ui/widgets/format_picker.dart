@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/app_sheet.dart';
@@ -50,10 +51,15 @@ IconData chaptarrFormatIcon(BookFormat f) => switch (f) {
       BookFormat.unknown => Icons.help_outline,
     };
 
-String chaptarrFormatLabel(BookFormat f) => switch (f) {
-      BookFormat.audiobook => 'Audiobook',
-      BookFormat.ebook => 'eBook',
-      BookFormat.unknown => 'Unknown format',
+String chaptarrFormatLabel(BookFormat f, {AppLocalizations? strings}) =>
+    switch (f) {
+      BookFormat.audiobook =>
+        (strings ?? lookupAppLocalizations(const Locale('en'))).adminAudiobook,
+      BookFormat.ebook =>
+        (strings ?? lookupAppLocalizations(const Locale('en'))).adminEBook,
+      BookFormat.unknown =>
+        (strings ?? lookupAppLocalizations(const Locale('en')))
+            .adminUnknownFormat,
     };
 
 class _FormatPickerSheet extends StatelessWidget {
@@ -68,8 +74,8 @@ class _FormatPickerSheet extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Which format?',
+          Text(
+            context.l10n.adminWhichFormat,
             style: TextStyle(
               color: AppTheme.textPrimary,
               fontSize: 18,
@@ -85,7 +91,8 @@ class _FormatPickerSheet extends StatelessWidget {
                 leading: Icon(chaptarrFormatIcon(group.first.format),
                     color: AppTheme.accent),
                 title: Text(
-                  chaptarrFormatLabel(group.first.format),
+                  chaptarrFormatLabel(group.first.format,
+                      strings: context.l10n),
                   style: const TextStyle(
                     color: AppTheme.textPrimary,
                     fontWeight: FontWeight.w600,
@@ -93,7 +100,7 @@ class _FormatPickerSheet extends StatelessWidget {
                 ),
                 subtitle: group.length > 1
                     ? Text(
-                        '${group.length} records',
+                        context.l10n.adminRecords((group.length).toString()),
                         style: const TextStyle(
                           color: AppTheme.textSecondary,
                           fontSize: 12,
@@ -119,15 +126,16 @@ class _RecordPickerSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final format = chaptarrFormatLabel(records.first.format);
+    final format =
+        chaptarrFormatLabel(records.first.format, strings: context.l10n);
     return AppSheet(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Which record?',
+          Text(
+            context.l10n.adminWhichRecord,
             style: TextStyle(
               color: AppTheme.textPrimary,
               fontSize: 18,
@@ -136,7 +144,8 @@ class _RecordPickerSheet extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            '$format has more than one library record. Choose the exact one to search.',
+            context.l10n
+                .adminHasMoreThanOneLibraryRecordChoose((format).toString()),
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 13,
@@ -152,14 +161,14 @@ class _RecordPickerSheet extends StatelessWidget {
                 leading: Icon(chaptarrFormatIcon(record.format),
                     color: AppTheme.accent),
                 title: Text(
-                  'Record #${record.id}',
+                  context.l10n.adminRecord((record.id).toString()),
                   style: const TextStyle(
                     color: AppTheme.textPrimary,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 subtitle: Text(
-                  bookFileStatusLine(record).text,
+                  bookFileStatusLine(record, strings: context.l10n).text,
                   style: const TextStyle(
                     color: AppTheme.textSecondary,
                     fontSize: 12,

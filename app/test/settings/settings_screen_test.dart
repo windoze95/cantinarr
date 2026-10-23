@@ -1,3 +1,5 @@
+import 'package:cantinarr/core/storage/locale_preferences.dart';
+import 'package:cantinarr/l10n/app_localizations.dart';
 import 'dart:convert';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
@@ -38,6 +40,41 @@ void main() {
     );
   });
 
+  testWidgets(
+      'language choice persists and returns to system on a narrow screen',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final container = await _pumpSettings(
+      tester,
+      _settings(source: AiAccessSource.none),
+      localized: true,
+    );
+    await _dragSettingsUntilFound(tester, find.text('Language'));
+    await tester.tap(find.text('Language'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Français'));
+    await tester.pumpAndSettle();
+    expect(container.read(appLocaleProvider), const Locale('fr'));
+    expect((await SharedPreferences.getInstance()).getString('app_language'),
+        'fr');
+    expect(find.text('Paramètres'), findsOneWidget);
+    expect(find.text('Langue'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.text('Langue'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Langue du système').last);
+    await tester.pumpAndSettle();
+    expect(container.read(appLocaleProvider), isNull);
+    expect((await SharedPreferences.getInstance()).containsKey('app_language'),
+        isFalse);
+    expect(find.text('Settings'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('the Account tile names a kids account and its limits',
       (tester) async {
     await _pumpSettings(
@@ -71,6 +108,7 @@ void main() {
   testWidgets('shows the effective included provider', (tester) async {
     await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
 
+    await _dragSettingsUntilFound(tester, find.text('AI Access'));
     expect(find.text('AI Access'), findsOneWidget);
     expect(find.text('Included · OpenAI'), findsOneWidget);
     expect(find.byType(AttentionMenuVisibilitySwitch), findsNothing);
@@ -85,6 +123,8 @@ void main() {
       _settings(source: AiAccessSource.personal, available: false),
     );
 
+    await _dragSettingsUntilFound(
+        tester, find.text('Personal AI needs attention'));
     expect(find.text('Personal AI needs attention'), findsOneWidget);
     expect(find.text('Included · OpenAI'), findsNothing);
   });
@@ -93,6 +133,7 @@ void main() {
       (tester) async {
     await _pumpSettings(tester, _settings(source: AiAccessSource.none));
 
+    await _dragSettingsUntilFound(tester, find.text('AI Access'));
     expect(find.text('AI Access'), findsOneWidget);
     expect(find.text('Add a personal provider'), findsOneWidget);
   });
@@ -568,6 +609,7 @@ Future<ProviderContainer> _pumpSettings(
   Map<String, dynamic>? setupStatus,
   List<ServiceInstance> instances = const [],
   UserProfile? user,
+  bool localized = false,
 }) async {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   dio.httpClientAdapter = _SettingsAdapter(setupStatus: setupStatus);
@@ -583,7 +625,16 @@ Future<ProviderContainer> _pumpSettings(
   await tester.pumpWidget(
     UncontrolledProviderScope(
       container: container,
-      child: const MaterialApp(home: SettingsScreen()),
+      child: localized
+          ? Consumer(
+              builder: (context, ref, _) => MaterialApp(
+                    locale: ref.watch(appLocaleProvider),
+                    localizationsDelegates:
+                        AppLocalizations.localizationsDelegates,
+                    supportedLocales: AppLocalizations.supportedLocales,
+                    home: const SettingsScreen(),
+                  ))
+          : const MaterialApp(home: SettingsScreen()),
     ),
   );
   await tester.pumpAndSettle();

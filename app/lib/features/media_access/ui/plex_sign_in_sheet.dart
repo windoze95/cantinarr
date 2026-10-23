@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -84,7 +85,7 @@ class _PlexSignInSheetState extends ConsumerState<PlexSignInSheet> {
       if (!mounted) return;
       setState(() {
         _starting = false;
-        _error = "Couldn't reach plex.tv. Try again.";
+        _error = context.l10n.mediaCouldnTReachPlexTvTryAgain;
       });
       return;
     }
@@ -96,20 +97,21 @@ class _PlexSignInSheetState extends ConsumerState<PlexSignInSheet> {
   /// Says which side failed: the server without this route (a build from
   /// before the Plex sign-in), the server unable to reach plex.tv, or no
   /// answer from the server at all.
-  static String _beginFailure(MediaAccessException e) {
+  String _beginFailure(MediaAccessException e) {
     if (e.isTransport) {
-      return "Couldn't reach the server. Check your connection and try again.";
+      return context
+          .l10n.mediaCouldnTReachTheServerCheckYourConnectionAndTryAgain;
     }
     switch (e.status) {
       case 404:
-        return "This server doesn't support signing in with Plex yet. Ask "
-            'your admin to update it.';
+        return context.l10n
+            .mediaThisServerDoesnTSupportSigningInWithPlexYetAskYourAdminToUpdateIt;
       case 502:
-        return "Your server couldn't reach plex.tv. Try again in a moment.";
+        return context.l10n.mediaYourServerCouldnTReachPlexTvTryAgainInAMoment;
       case 429:
-        return 'Too many attempts. Wait a minute and try again.';
+        return context.l10n.mediaTooManyAttemptsWaitAMinuteAndTryAgain;
       default:
-        return "Couldn't reach plex.tv. Try again.";
+        return context.l10n.mediaCouldnTReachPlexTvTryAgain;
     }
   }
 
@@ -131,8 +133,8 @@ class _PlexSignInSheetState extends ConsumerState<PlexSignInSheet> {
       if (!mounted) return;
       if (!state.linked) {
         if (!silent) {
-          setState(
-              () => _hint = 'Not approved yet. Finish signing in on plex.tv.');
+          setState(() =>
+              _hint = context.l10n.mediaNotApprovedYetFinishSigningInOnPlexTv);
         }
         return;
       }
@@ -144,16 +146,16 @@ class _PlexSignInSheetState extends ConsumerState<PlexSignInSheet> {
         _timer?.cancel();
         setState(() {
           _pinId = null;
-          _error = 'The sign-in expired. Start again.';
+          _error = context.l10n.mediaTheSignInExpiredStartAgain;
         });
       } else if (!silent) {
         setState(() => _hint = e.isTransport
-            ? "Couldn't reach the server. Check your connection."
-            : "Couldn't reach plex.tv. Try again.");
+            ? context.l10n.mediaCouldnTReachTheServerCheckYourConnection
+            : context.l10n.mediaCouldnTReachPlexTvTryAgain);
       }
     } catch (_) {
       if (!silent && mounted) {
-        setState(() => _hint = "Couldn't reach plex.tv. Try again.");
+        setState(() => _hint = context.l10n.mediaCouldnTReachPlexTvTryAgain);
       }
     } finally {
       _checking = false;
@@ -173,8 +175,8 @@ class _PlexSignInSheetState extends ConsumerState<PlexSignInSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Sign in with Plex',
+          Text(
+            context.l10n.mediaSignInWithPlex,
             style: TextStyle(
               color: AppTheme.textPrimary,
               fontSize: 20,
@@ -182,10 +184,9 @@ class _PlexSignInSheetState extends ConsumerState<PlexSignInSheet> {
             ),
           ),
           const SizedBox(height: AppTheme.spaceSm),
-          const Text(
-            'Approve the sign-in on the plex.tv page that just opened, with '
-            'the Plex account you watch with. Cantinarr reads the email of '
-            'that account, signs itself out again, and keeps no token.',
+          Text(
+            context.l10n
+                .mediaApproveTheSignInOnThePlexTvPageThatJustOpenedWithThePlexAccountYouWatchWithCantinarrReadsT,
             style: TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 14,
@@ -209,11 +210,11 @@ class _PlexSignInSheetState extends ConsumerState<PlexSignInSheet> {
               children: [
                 OutlinedButton(
                   onPressed: _begin,
-                  child: const Text('Start again'),
+                  child: Text(context.l10n.mediaStartAgain),
                 ),
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
+                  child: Text(context.l10n.adminCancel),
                 ),
               ],
             ),
@@ -229,7 +230,9 @@ class _PlexSignInSheetState extends ConsumerState<PlexSignInSheet> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    _starting ? 'Opening plex.tv.' : 'Waiting for approval.',
+                    _starting
+                        ? context.l10n.mediaOpeningPlexTv
+                        : context.l10n.mediaWaitingForApproval,
                     style: const TextStyle(
                         color: AppTheme.textSecondary, fontSize: 13),
                   ),
@@ -254,16 +257,16 @@ class _PlexSignInSheetState extends ConsumerState<PlexSignInSheet> {
               children: [
                 OutlinedButton(
                   onPressed: _pinId == null ? null : () => _check(),
-                  child: const Text("I've approved, check now"),
+                  child: Text(context.l10n.mediaIVeApprovedCheckNow),
                 ),
                 if (_url != null)
                   OutlinedButton(
                     onPressed: _open,
-                    child: const Text('Reopen plex.tv'),
+                    child: Text(context.l10n.mediaReopenPlexTv),
                   ),
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
+                  child: Text(context.l10n.adminCancel),
                 ),
               ],
             ),

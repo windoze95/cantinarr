@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -37,7 +38,7 @@ class BookLinkChips extends StatelessWidget {
             avatar: const Icon(Icons.open_in_new,
                 size: 14, color: AppTheme.textSecondary),
             label: Text(link.label, style: const TextStyle(fontSize: 12)),
-            tooltip: 'Open on ${link.label}',
+            tooltip: context.l10n.adminOpenOn((link.label).toString()),
             backgroundColor: AppTheme.surfaceVariant,
             side: const BorderSide(color: AppTheme.border),
             materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -60,7 +61,7 @@ class BookLinkChips extends StatelessWidget {
     }
     if (opened) return;
     messenger?.showSnackBar(SnackBar(
-      content: Text("Couldn't open ${link.label}."),
+      content: Text(context.l10n.adminCouldnTOpen((link.label).toString())),
     ));
   }
 }

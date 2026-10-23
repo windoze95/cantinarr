@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -88,19 +89,19 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
     final q = widget.queueItem;
     if (q != null) {
       return (
-        label: sonarrQueueStatusLabel(q),
+        label: sonarrQueueStatusLabel(q, strings: context.l10n),
         color: sonarrQueueStatusColor(q)
       );
     }
     final e = widget.episode;
     if (!e.hasFile) {
       return e.hasAired
-          ? (label: 'Missing', color: AppTheme.error)
-          : (label: 'Unaired', color: AppTheme.downloading);
+          ? (label: context.l10n.adminMissing, color: AppTheme.error)
+          : (label: context.l10n.adminUnaired, color: AppTheme.downloading);
     }
     final met = !(e.episodeFile?.qualityCutoffNotMet ?? false);
     return (
-      label: 'Downloaded',
+      label: context.l10n.adminDownloaded,
       color: met ? AppTheme.available : AppTheme.requested
     );
   }
@@ -122,7 +123,7 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            e.title ?? 'Episode ${e.episodeNumber}',
+            e.title ?? context.l10n.adminEpisode((e.episodeNumber).toString()),
             style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 20,
@@ -133,9 +134,13 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
             Text(DateFormat('MMMM d, yyyy').format(airDate),
                 style: const TextStyle(
                     color: AppTheme.textSecondary, fontSize: 13)),
-          Text('${seasonText(e.seasonNumber)} • Episode ${e.episodeNumber}',
-              style: const TextStyle(
-                  color: AppTheme.textSecondary, fontSize: 13)),
+          Text(
+              context.l10n.adminEpisode2(
+                  (seasonText(e.seasonNumber, strings: context.l10n))
+                      .toString(),
+                  (e.episodeNumber).toString()),
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
           const SizedBox(height: 12),
           StatusPill(text: status.label, color: status.color),
           if (e.overview != null && e.overview!.isNotEmpty) ...[
@@ -143,9 +148,7 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
             Text(
               e.overview!,
               style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 14,
-                  height: 1.4),
+                  color: AppTheme.textPrimary, fontSize: 14, height: 1.4),
             ),
           ],
           if (downloadsEnabled && e.hasFile && e.episodeFileId > 0) ...[
@@ -155,7 +158,7 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
               child: MediaDownloadButton(
                 instanceId: widget.instanceId,
                 fileId: e.episodeFileId,
-                label: 'Download episode',
+                label: context.l10n.adminDownloadEpisode,
                 outlined: true,
                 reportedPath: e.episodeFile?.path,
               ),
@@ -168,13 +171,12 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
               child: QueueItemCard(
                 item: widget.queueItem!,
                 primaryTitle: widget.queueItem!.title,
-                onShowIssues:
-                    widget.queueItem!.hasIssues ? _openDoctor : null,
+                onShowIssues: widget.queueItem!.hasIssues ? _openDoctor : null,
               ),
             ),
           ],
           const SizedBox(height: 16),
-          const Text('History',
+          Text(context.l10n.adminHistory,
               style: TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 13,
@@ -192,7 +194,7 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
                   },
                   icon: const Icon(Icons.search,
                       size: 18, color: AppTheme.available),
-                  label: const Text('Automatic',
+                  label: Text(context.l10n.adminAutomatic,
                       style: TextStyle(color: AppTheme.textPrimary)),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: AppTheme.border),
@@ -211,7 +213,7 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
                   },
                   icon: const Icon(Icons.person_outline,
                       size: 18, color: AppTheme.available),
-                  label: const Text('Interactive',
+                  label: Text(context.l10n.adminInteractive,
                       style: TextStyle(color: AppTheme.textPrimary)),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: AppTheme.border),
@@ -270,7 +272,7 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
       );
     }
     if (_history.isEmpty) {
-      return const Text('No history yet.',
+      return Text(context.l10n.adminNoHistoryYet2,
           style: TextStyle(color: AppTheme.textSecondary, fontSize: 13));
     }
     return Column(
@@ -279,46 +281,61 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
   }
 }
 
-String seasonText(int seasonNumber) =>
-    seasonNumber == 0 ? 'Specials' : 'Season $seasonNumber';
+String seasonText(int seasonNumber, {AppLocalizations? strings}) =>
+    seasonNumber == 0
+        ? (strings ?? lookupAppLocalizations(const Locale('en'))).adminSpecials
+        : (strings ?? lookupAppLocalizations(const Locale('en')))
+            .adminSeason((seasonNumber).toString());
 
-String _historyEventLabel(SonarrHistoryRecord r) {
+String _historyEventLabel(SonarrHistoryRecord r, {AppLocalizations? strings}) {
   switch (r.eventType) {
     case 'grabbed':
       final indexer = r.indexer;
       return indexer != null && indexer.isNotEmpty
-          ? 'Grabbed from $indexer'
-          : 'Grabbed';
+          ? (strings ?? lookupAppLocalizations(const Locale('en')))
+              .adminGrabbedFrom((indexer).toString())
+          : (strings ?? lookupAppLocalizations(const Locale('en')))
+              .adminGrabbed;
     case 'downloadFolderImported':
-      return 'Imported';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminImported;
     case 'downloadFailed':
-      return 'Download failed';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminDownloadFailed;
     case 'episodeFileDeleted':
-      return 'File deleted';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminFileDeleted;
     case 'episodeFileRenamed':
-      return 'File renamed';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminFileRenamed;
     case 'downloadIgnored':
-      return 'Download ignored';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminDownloadIgnored;
     default:
-      return r.eventType.isEmpty ? 'Event' : r.eventType;
+      return r.eventType.isEmpty
+          ? (strings ?? lookupAppLocalizations(const Locale('en'))).adminEvent
+          : r.eventType;
   }
 }
 
-String _historyTime(DateTime? date) {
+String _historyTime(DateTime? date, {AppLocalizations? strings}) {
   if (date == null) return '';
   final local = date.toLocal();
   final diff = DateTime.now().difference(local);
   final String rel;
   if (diff.inMinutes < 1) {
-    rel = 'Just now';
+    rel = (strings ?? lookupAppLocalizations(const Locale('en'))).adminJustNow;
   } else if (diff.inMinutes < 60) {
-    rel = '${diff.inMinutes}m ago';
+    rel = (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminMAgo((diff.inMinutes).toString());
   } else if (diff.inHours < 24) {
-    rel = '${diff.inHours}h ago';
+    rel = (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminHAgo((diff.inHours).toString());
   } else if (diff.inDays < 30) {
-    rel = '${diff.inDays}d ago';
+    rel = (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminDAgo((diff.inDays).toString());
   } else {
-    rel = DateFormat('MMM d, yyyy').format(local);
+    rel = DateFormat.yMMMd(strings?.dateLocale ?? 'en_US').format(local);
   }
   return '$rel • ${DateFormat('MMM d, yyyy • h:mm a').format(local)}';
 }
@@ -337,7 +354,7 @@ class _HistoryTile extends StatelessWidget {
           Text(
             record.sourceTitle.isNotEmpty
                 ? record.sourceTitle
-                : _historyEventLabel(record),
+                : _historyEventLabel(record, strings: context.l10n),
             style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 13,
@@ -346,11 +363,11 @@ class _HistoryTile extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 2),
-          Text(_historyTime(record.date),
+          Text(_historyTime(record.date, strings: context.l10n),
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
           const SizedBox(height: 2),
-          Text(_historyEventLabel(record),
+          Text(_historyEventLabel(record, strings: context.l10n),
               style: const TextStyle(color: AppTheme.requested, fontSize: 12)),
         ],
       ),

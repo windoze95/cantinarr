@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -332,7 +334,9 @@ class _RequesterAlbumDetailScreenState
     if (track == null || track.title.isEmpty) return file.fileName;
     final number =
         track.absoluteTrackNumber > 0 ? '${track.absoluteTrackNumber}. ' : '';
-    final disc = track.mediumNumber > 1 ? 'Disc ${track.mediumNumber} · ' : '';
+    final disc = track.mediumNumber > 1
+        ? context.l10n.detailDiscNumber(track.mediumNumber)
+        : '';
     return '$disc$number${track.title}';
   }
 
@@ -347,8 +351,8 @@ class _RequesterAlbumDetailScreenState
           appBar: _appBar(context),
           body: Center(
               child: Text(access.needsUpdate(_instanceId)
-                  ? adminCatalogUpdateMessage
-                  : 'Music is not available for this account.')));
+                  ? browseLabel(context, adminCatalogUpdateMessage)
+                  : context.l10n.browseMusicIsNotAvailableForThisAccount)));
     }
     ref.listen(libraryChangedEventsProvider, (_, next) {
       if (next.hasValue) _refreshMusicTruth();
@@ -381,7 +385,7 @@ class _RequesterAlbumDetailScreenState
           }
           context.go('/dashboard/music');
         }),
-        title: const Text('Album details'),
+        title: Text(context.l10n.browseAlbumDetails),
       );
 
   Widget _resolved(List<OwnedAlbum> titles) {
@@ -515,7 +519,7 @@ class _RequesterAlbumDetailScreenState
               [
                 if (year > 0) '$year',
                 if (albumType.isNotEmpty) albumType,
-                if (trackCount > 0) '$trackCount tracks',
+                if (trackCount > 0) context.l10n.detailTrackCount(trackCount),
               ].join(' · '),
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
@@ -534,8 +538,10 @@ class _RequesterAlbumDetailScreenState
               foreignId: widget.foreignId,
               title: title,
               instanceId: instanceId,
-              requestLibraries: requestLibraries(ref.watch(authProvider).valueOrNull?.connection, 'lidarr'),
-              defaultRequestLibraryId: defaultRequestLibrary(ref.watch(authProvider).valueOrNull?.connection, 'lidarr'),
+              requestLibraries: requestLibraries(
+                  ref.watch(authProvider).valueOrNull?.connection, 'lidarr'),
+              defaultRequestLibraryId: defaultRequestLibrary(
+                  ref.watch(authProvider).valueOrNull?.connection, 'lidarr'),
               chooseRequestLibrary: true,
               searchTerm: widget.searchTerm,
               service: _requestService,
@@ -550,9 +556,9 @@ class _RequesterAlbumDetailScreenState
               instanceId: instanceId,
               choices: _trackDownloadChoices(),
               label: _trackFiles.length == 1
-                  ? 'Download track'
-                  : 'Download tracks',
-              sheetTitle: 'Download a track',
+                  ? context.l10n.browseDownloadTrack
+                  : context.l10n.browseDownloadTracks,
+              sheetTitle: context.l10n.browseDownloadATrack,
               outlined: true,
             ),
           ],
@@ -587,7 +593,7 @@ class _RequesterAlbumDetailScreenState
           ],
           if (overview.isNotEmpty) ...[
             const SizedBox(height: 24),
-            Text('About this album',
+            Text(context.l10n.browseAboutThisAlbum,
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(
@@ -611,8 +617,8 @@ class _RequesterAlbumDetailScreenState
           children: [
             const Icon(Icons.album, size: 48, color: AppTheme.textSecondary),
             const SizedBox(height: 12),
-            const Text(
-              'Album details could not be loaded.',
+            Text(
+              context.l10n.browseAlbumDetailsCouldNotBeLoaded,
               textAlign: TextAlign.center,
               style: TextStyle(color: AppTheme.textSecondary),
             ),
@@ -620,7 +626,7 @@ class _RequesterAlbumDetailScreenState
             if (_metadataFailed) _metadataRetry(),
             OutlinedButton(
               onPressed: () => context.go('/dashboard/music'),
-              child: const Text('Browse Music'),
+              child: Text(context.l10n.browseBrowseMusic),
             ),
           ],
         ),
@@ -639,7 +645,7 @@ class _RequesterAlbumDetailScreenState
                 _resolveMetadata(++_loadGeneration);
               },
         icon: const Icon(Icons.refresh),
-        label: const Text('Retry album details'),
+        label: Text(context.l10n.browseRetryAlbumDetails),
       );
 }
 

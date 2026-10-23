@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
@@ -20,7 +21,7 @@ class SeeAllButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Semantics(
       button: true,
-      label: 'See all $rowTitle',
+      label: context.l10n.commonSeeAllNamed(rowTitle),
       excludeSemantics: true,
       child: TextButton(
         onPressed: onPressed,
@@ -31,11 +32,11 @@ class SeeAllButton extends StatelessWidget {
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           visualDensity: VisualDensity.compact,
         ),
-        child: const Row(
+        child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'See all',
+              context.l10n.commonSeeAll,
               style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
             ),
             SizedBox(width: 2),

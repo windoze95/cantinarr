@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
@@ -51,9 +52,8 @@ class RequestStatusSheet extends StatelessWidget {
 
           // Status message
           Text(
-            _statusMessage,
-            style: const TextStyle(
-                color: AppTheme.textSecondary, fontSize: 15),
+            _statusMessage(context),
+            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 15),
             textAlign: TextAlign.center,
           ),
 
@@ -61,8 +61,8 @@ class RequestStatusSheet extends StatelessWidget {
             const SizedBox(height: 12),
             Text(
               additionalInfo!,
-              style: const TextStyle(
-                  color: AppTheme.textSecondary, fontSize: 13),
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
               textAlign: TextAlign.center,
             ),
           ],
@@ -71,39 +71,41 @@ class RequestStatusSheet extends StatelessWidget {
     );
   }
 
-  String get _statusMessage {
+  String _statusMessage(BuildContext context) {
     final blocked = seasons.where((s) => s.hasRequestIssue).toList();
     if (blocked.isNotEmpty) {
-      final scope = _seasonsPhrase(blocked.map((s) => s.seasonNumber).toList());
+      final scope =
+          _seasonsPhrase(context, blocked.map((s) => s.seasonNumber).toList());
       final next = seasons.any((s) => s.isRequestable)
-          ? 'You can request the other seasons below.'
-          : 'No seasons can currently be requested.';
-      return '$scope ${blocked.length == 1 ? 'needs' : 'need'} attention. '
-          'Check the season notes for details. $next';
+          ? context.l10n.browseYouCanRequestTheOtherSeasonsBelow
+          : context.l10n.browseNoSeasonsCanCurrentlyBeRequested;
+      return context.l10n
+          .requestBlockedSeasonNotes(scope, blocked.length, next);
     }
     return switch (status) {
-        RequestStatus.unavailable =>
-          'This title is not yet on the server. Tap Request to add it!',
-        RequestStatus.pending =>
-          'Your request is awaiting approval from an administrator. You\'ll be notified once it\'s reviewed.',
-        RequestStatus.denied =>
-          'An administrator declined this request. You can request it again.',
-        RequestStatus.requested =>
-          'Your request has been received! The server is searching for this title and will start downloading it soon.',
-        RequestStatus.downloading =>
-          'Great news! This title is currently downloading and should be available shortly.',
-        RequestStatus.available =>
-          'This title is ready to watch! Open Plex or Infuse to start streaming.',
-        RequestStatus.partial => _partialMessage,
-      };
+      RequestStatus.unavailable =>
+        context.l10n.browseThisTitleIsNotYetOnTheServerTapRequestToAddIt,
+      RequestStatus.pending => context.l10n
+          .browseYourRequestIsAwaitingApprovalFromAnAdministratorYouLlBeNotifiedOnceItSReviewed,
+      RequestStatus.denied => context
+          .l10n.browseAnAdministratorDeclinedThisRequestYouCanRequestItAgain,
+      RequestStatus.requested => context.l10n
+          .browseYourRequestHasBeenReceivedTheServerIsSearchingForThisTitleAndWillStartDownloadingItSoon,
+      RequestStatus.downloading => context.l10n
+          .browseGreatNewsThisTitleIsCurrentlyDownloadingAndShouldBeAvailableShortly,
+      RequestStatus.available => context
+          .l10n.browseThisTitleIsReadyToWatchOpenPlexOrInfuseToStartStreaming,
+      RequestStatus.partial => _partialMessage(context),
+    };
   }
 
   /// For a partial title, name the gap using the per-season breakdown, e.g.
   /// "Seasons 1-3 ready; Season 4 downloading. You can request the rest."
   /// Falls back to a generic line when no season detail is available.
-  String get _partialMessage {
+  String _partialMessage(BuildContext context) {
     if (seasons.isEmpty) {
-      return 'Some episodes are available. You can request the remaining ones.';
+      return context
+          .l10n.browseSomeEpisodesAreAvailableYouCanRequestTheRemainingOnes;
     }
     final ready = <int>[];
     final downloading = <int>[];
@@ -121,22 +123,26 @@ class RequestStatusSheet extends StatelessWidget {
       }
     }
     final parts = <String>[];
-    if (ready.isNotEmpty) parts.add('${_seasonsPhrase(ready)} ready');
+    if (ready.isNotEmpty)
+      parts.add(
+          context.l10n.requestSeasonsReady(_seasonsPhrase(context, ready)));
     if (downloading.isNotEmpty) {
-      parts.add('${_seasonsPhrase(downloading)} downloading');
+      parts.add(context.l10n
+          .requestSeasonsDownloading(_seasonsPhrase(context, downloading)));
     }
     if (parts.isEmpty) {
-      return 'Some episodes are available. You can request the remaining ones.';
+      return context
+          .l10n.browseSomeEpisodesAreAvailableYouCanRequestTheRemainingOnes;
     }
     final base = '${parts.join('; ')}.';
     return missing.isNotEmpty
-        ? '$base You can request the remaining seasons below.'
+        ? context.l10n.requestRemainingSeasons(base)
         : base;
   }
 
   /// Renders a sorted season-number list as "Season 4" or "Seasons 1-3" /
   /// "Seasons 1, 3, 5", collapsing contiguous runs into ranges.
-  String _seasonsPhrase(List<int> numbers) {
+  String _seasonsPhrase(BuildContext context, List<int> numbers) {
     final sorted = [...numbers]..sort();
     final ranges = <String>[];
     var start = sorted.first;
@@ -153,7 +159,9 @@ class RequestStatusSheet extends StatelessWidget {
         prev = sorted[i];
       }
     }
-    final noun = sorted.length == 1 ? 'Season' : 'Seasons';
+    final noun = sorted.length == 1
+        ? context.l10n.browseSeason
+        : context.l10n.browseSeasons;
     return '$noun ${ranges.join(', ')}';
   }
 }
@@ -171,10 +179,7 @@ class _StatusIcon extends StatelessWidget {
       RequestStatus.requested => (Icons.hourglass_top, AppTheme.requested),
       RequestStatus.downloading => (Icons.downloading, AppTheme.downloading),
       RequestStatus.available => (Icons.check_circle, AppTheme.available),
-      RequestStatus.partial => (
-          Icons.pie_chart,
-          AppTheme.requested
-        ),
+      RequestStatus.partial => (Icons.pie_chart, AppTheme.requested),
     };
 
     return Container(

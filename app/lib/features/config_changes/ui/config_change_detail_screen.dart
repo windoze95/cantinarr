@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/operations_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -121,7 +123,7 @@ class _ConfigChangeDetailScreenState
         _error = null;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Previous settings restored.')),
+        SnackBar(content: Text(context.l10n.opsPreviousSettingsRestored)),
       );
       context.replace('/settings/change-history/${restored.id}');
     } catch (_) {
@@ -131,9 +133,9 @@ class _ConfigChangeDetailScreenState
       await _load();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Could not confirm whether settings were restored. The current state was refreshed.',
+            context.l10n.opsCouldNotConfirmWhetherSettingsWereRestored,
           ),
         ),
       );
@@ -144,22 +146,22 @@ class _ConfigChangeDetailScreenState
 
   String _friendlyError(Object error) {
     final match = RegExp(r'"error":"([^"]+)"').firstMatch(error.toString());
-    return match?.group(1) ?? 'Could not load this change.';
+    return match?.group(1) ?? context.l10n.opsCouldNotLoadThisChange;
   }
 
   @override
   Widget build(BuildContext context) {
     final change = _change;
     return Scaffold(
-      appBar: AppBar(title: const Text('Change details')),
+      appBar: AppBar(title: Text(context.l10n.opsChangeDetails)),
       body: _loading
           ? const Center(
               child: CircularProgressIndicator(color: AppTheme.accent),
             )
           : change == null
               ? FullScreenError(
-                  title: 'Change unavailable',
-                  message: _error ?? 'Could not load this change.',
+                  title: context.l10n.opsChangeUnavailable,
+                  message: _error ?? context.l10n.opsCouldNotLoadThisChange,
                   onRetry: _load,
                 )
               : RefreshIndicator(
@@ -174,8 +176,8 @@ class _ConfigChangeDetailScreenState
                         if (_error != null) ...[
                           const SizedBox(height: 12),
                           ErrorBanner(
-                            message:
-                                "Couldn't refresh this change. Current settings may be out of date.",
+                            message: context.l10n
+                                .opsCouldnTRefreshThisChangeCurrentSettings,
                             onRetry: _load,
                           ),
                         ],
@@ -183,8 +185,9 @@ class _ConfigChangeDetailScreenState
                         _CurrentStatusBanner(change: change),
                         const SizedBox(height: 22),
                         SectionHeader(
-                          eyebrow: 'Comparison',
-                          title: change.comparisonTitle,
+                          eyebrow: context.l10n.opsComparison,
+                          title: localizeOperationsLabel(
+                              context, change.comparisonTitle),
                         ),
                         const SizedBox(height: 12),
                         if (change.changes.isEmpty)
@@ -215,8 +218,8 @@ class _ConfigChangeDetailScreenState
                                             ),
                                           )
                                         : const Icon(Icons.restore_rounded),
-                                    label: const Text(
-                                      'Restore previous settings',
+                                    label: Text(
+                                      context.l10n.opsRestorePreviousSettings,
                                     ),
                                   )
                                 : change.isAppliedRestore
@@ -225,16 +228,17 @@ class _ConfigChangeDetailScreenState
                                         icon: const Icon(
                                           Icons.history_rounded,
                                         ),
-                                        label: const Text(
-                                          'Previous settings restored',
+                                        label: Text(
+                                          context.l10n
+                                              .opsPreviousSettingsRestoredMessage,
                                         ),
                                       )
                                     : OutlinedButton.icon(
-                                        onPressed:
-                                            _restoring ? null : _restore,
+                                        onPressed: _restoring ? null : _restore,
                                         icon: const Icon(Icons.lock_outline),
-                                        label: const Text(
-                                          'Why restore is unavailable',
+                                        label: Text(
+                                          context
+                                              .l10n.opsWhyRestoreIsUnavailable,
                                         ),
                                       ),
                           ),
@@ -329,7 +333,7 @@ class _CurrentStatusBanner extends StatelessWidget {
     };
     return Semantics(
       liveRegion: true,
-      label: configCurrentStatusLabel(change),
+      label: configCurrentStatusLabel(context, change),
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.all(14),
@@ -348,7 +352,7 @@ class _CurrentStatusBanner extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    configCurrentStatusLabel(change),
+                    configCurrentStatusLabel(context, change),
                     style: TextStyle(
                       color: color,
                       fontSize: 13,
@@ -400,7 +404,7 @@ class _FieldComparisonCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            field.label,
+            localizeOperationsLabel(context, field.label),
             style: const TextStyle(
               color: AppTheme.textPrimary,
               fontSize: 13,
@@ -410,30 +414,39 @@ class _FieldComparisonCard extends StatelessWidget {
           const SizedBox(height: 12),
           LayoutBuilder(builder: (context, constraints) {
             final currentValue = field.hasCurrent
-                ? formatConfigValue(field.current)
+                ? localizedConfigValue(context, field.current)
                 : change.currentStatus == ConfigCurrentStatus.matchesApplied
-                    ? formatConfigValue(field.after)
-                    : 'Unavailable';
+                    ? localizedConfigValue(context, field.after)
+                    : context.l10n.opsUnavailable;
             final currentNote =
-                field.currentStateLabelFor(change.recordedValueLabel) ??
+                (field.currentStateLabelFor(change.recordedValueLabel) == null
+                        ? null
+                        : localizeOperationsLabel(
+                            context,
+                            field.currentStateLabelFor(
+                                change.recordedValueLabel)!)) ??
                     switch (change.currentStatus) {
-                  ConfigCurrentStatus.matchesApplied =>
-                    change.recordedValueMatchLabel,
-                  ConfigCurrentStatus.different => 'Different',
-                  ConfigCurrentStatus.unavailable => 'Could not verify',
-                  _ => 'Not verified',
-                };
+                      ConfigCurrentStatus.matchesApplied =>
+                        localizeOperationsLabel(
+                            context, change.recordedValueMatchLabel),
+                      ConfigCurrentStatus.different =>
+                        context.l10n.opsDifferent,
+                      ConfigCurrentStatus.unavailable =>
+                        context.l10n.opsCouldNotVerify,
+                      _ => context.l10n.opsNotVerified,
+                    };
             final values = [
               _ComparisonValue(
-                label: 'Before',
-                value: formatConfigValue(field.before),
+                label: context.l10n.opsBefore,
+                value: localizedConfigValue(context, field.before),
               ),
               _ComparisonValue(
-                label: change.recordedValueLabel,
-                value: formatConfigValue(field.after),
+                label:
+                    localizeOperationsLabel(context, change.recordedValueLabel),
+                value: localizedConfigValue(context, field.after),
               ),
               _ComparisonValue(
-                label: 'Current',
+                label: context.l10n.opsCurrent,
                 value: currentValue,
                 note: currentNote,
               ),
@@ -522,15 +535,16 @@ class _ChangeMetadata extends StatelessWidget {
   Widget build(BuildContext context) {
     final when = change.completedAt ?? change.createdAt;
     final actor = change.actorName.trim().isEmpty
-        ? change.sourceLabel
-        : '${change.actorName.trim()} through ${change.sourceLabel}';
+        ? localizeOperationsLabel(context, change.sourceLabel)
+        : context.l10n.opsActorThrough(change.actorName.trim(),
+            localizeOperationsLabel(context, change.sourceLabel));
     return AppPanel(
       padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Change record',
+          Text(
+            context.l10n.opsChangeRecord,
             style: TextStyle(
               color: AppTheme.textPrimary,
               fontSize: 13,
@@ -538,16 +552,18 @@ class _ChangeMetadata extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 9),
-          _MetadataRow(label: 'Initiated by', value: actor),
+          _MetadataRow(label: context.l10n.opsInitiatedBy, value: actor),
           if (when != null)
             _MetadataRow(
-              label: 'Recorded',
-              value: DateFormat('MMM d, y · h:mm a').format(when),
+              label: context.l10n.opsRecorded,
+              value: DateFormat.yMMMd(context.l10n.dateLocale)
+                  .add_jm()
+                  .format(when),
             ),
-          _MetadataRow(label: 'Change ID', value: '#${change.id}'),
+          _MetadataRow(label: context.l10n.opsChangeID, value: '#${change.id}'),
           if (change.parentId != null)
             _MetadataRow(
-              label: 'Restores change',
+              label: context.l10n.opsRestoresChange,
               value: '#${change.parentId}',
             ),
         ],
@@ -603,8 +619,8 @@ class _NoComparison extends StatelessWidget {
           borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
           border: Border.all(color: AppTheme.border),
         ),
-        child: const Text(
-          'No field comparison was recorded for this change.',
+        child: Text(
+          context.l10n.opsNoFieldComparisonWasRecordedForThis,
           style: TextStyle(color: AppTheme.textSecondary),
         ),
       );

@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
@@ -141,7 +143,8 @@ class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
       if (mounted && generation == _generation && read == _savedRead) {
         setState(() {
           _checking = false;
-          _refreshError = 'Saved request updates could not be checked.';
+          _refreshError =
+              context.l10n.browseSavedRequestUpdatesCouldNotBeChecked;
         });
       }
     }
@@ -163,36 +166,36 @@ class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
   String get _label {
     final owned = _sameLibrary ? widget.ownership : null;
     if (_live?.isKnown == true && _live?.status == RequestStatus.available) {
-      return 'Available';
+      return context.l10n.browseAvailable;
     }
     if (owned?.status == 'available' ||
         (owned?.status == null && owned?.downloaded == true)) {
-      return 'Available';
+      return context.l10n.browseAvailable;
     }
     if (_live?.isKnown == true && _live?.status == RequestStatus.downloading) {
-      return 'Downloading';
+      return context.l10n.browseDownloading;
     }
     if (_active.any((d) => d['state'] == 'approval') ||
         _submitted == RequestStatus.pending ||
         (_live?.isKnown == true && _live?.status == RequestStatus.pending)) {
-      return 'Waiting for approval';
+      return context.l10n.browseWaitingForApproval;
     }
     if (_active.any((d) => {'attention', 'needs_match'}.contains(d['state']))) {
-      return 'Needs attention';
+      return context.l10n.browseNeedsAttention;
     }
-    if (_active.isNotEmpty) return 'Requested';
+    if (_active.isNotEmpty) return context.l10n.browseRequested;
     if (_live?.isKnown == true && _live?.status == RequestStatus.requested ||
         owned?.monitored == true) {
-      return 'Requested';
+      return context.l10n.browseRequested;
     }
     if (_submitted != null && _submitted != RequestStatus.denied) {
-      return 'Requested';
+      return context.l10n.browseRequested;
     }
     if (_deliveries.any((d) => d['state'] == 'complete') &&
         _live?.isKnown != true) {
-      return 'Requested';
+      return context.l10n.browseRequested;
     }
-    return 'Request';
+    return context.l10n.browseRequest;
   }
 
   Future<void> _perform({String? action, int? requestId}) async {
@@ -255,8 +258,8 @@ class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
       }
     } catch (_) {
       if (mounted && generation == _generation) {
-        setState(() => _error =
-            'The request outcome could not be confirmed. Try refreshing its saved status.');
+        setState(() => _error = context.l10n
+            .browseTheRequestOutcomeCouldNotBeConfirmedTryRefreshingItsSavedStatus);
       }
     } finally {
       if (mounted && generation == _generation) setState(() => _busy = false);
@@ -266,37 +269,39 @@ class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
   @override
   Widget build(BuildContext context) {
     final label = _label;
-    final available = label == 'Available';
+    final available = label == context.l10n.browseAvailable;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       if (widget.chooseRequestLibrary && _requestLibraryId != null)
         Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: Text(
-                'Request library: ${requestLibraryName(widget.requestLibraries, _instanceId)}')),
+            child: Text(context.l10n.requestLibraryName(requestLibraryName(
+                context, widget.requestLibraries, _instanceId)))),
       SizedBox(
           height: 54,
           child: FilledButton.icon(
-            onPressed: !_busy && !_checking && label == 'Request'
-                ? () => _perform()
-                : null,
+            onPressed:
+                !_busy && !_checking && label == context.l10n.browseRequest
+                    ? () => _perform()
+                    : null,
             icon: Icon(available
                 ? Icons.check_circle
-                : label == 'Needs attention'
+                : label == context.l10n.browseNeedsAttention
                     ? Icons.error_outline
-                    : label == 'Request'
+                    : label == context.l10n.browseRequest
                         ? Icons.add
                         : Icons.hourglass_top),
             label: Text(_busy
-                ? 'Saving…'
+                ? context.l10n.browseSaving
                 : _checking && _receipt == null
-                    ? 'Checking request…'
+                    ? context.l10n.browseCheckingRequest
                     : label),
           )),
       if (_active.isNotEmpty && !available)
         Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Text(
-                _active.first['message'] as String? ?? 'Your request is saved.',
+                _active.first['message'] as String? ??
+                    context.l10n.browseYourRequestIsSaved,
                 style: Theme.of(context).textTheme.bodySmall)),
       if (_active.isNotEmpty)
         Wrap(spacing: 12, children: [
@@ -311,23 +316,24 @@ class _AlbumRequestPanelState extends State<AlbumRequestPanel> {
                   onPressed: _busy
                       ? null
                       : () => _perform(action: 'retry', requestId: id),
-                  child: const Text('Try again')),
+                  child: Text(context.l10n.browseTryAgain)),
             if (_active
                 .any((d) => d['request_id'] == id && d['can_cancel'] == true))
               TextButton(
                   onPressed: _busy
                       ? null
                       : () => _perform(action: 'cancel', requestId: id),
-                  child: const Text('Cancel request')),
+                  child: Text(context.l10n.browseCancelRequest)),
           ]
         ]),
       if (_error != null)
-        Text(_error!, style: const TextStyle(color: AppTheme.error)),
+        Text(browseLabel(context, _error!),
+            style: const TextStyle(color: AppTheme.error)),
       if (_refreshError != null || _live?.isKnown == false)
         TextButton(
             onPressed: _refresh,
             child: Text(_refreshError ??
-                'Library availability could not be checked. Retry')),
+                context.l10n.browseLibraryAvailabilityCouldNotBeCheckedRetry)),
     ]);
   }
 }

@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
@@ -72,7 +73,7 @@ class _LidarrArtistScreenState extends ConsumerState<LidarrArtistScreen> {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _error = 'Failed to load artist: $e';
+        _error = context.l10n.adminFailedToLoadArtist((e).toString());
       });
     }
   }
@@ -90,12 +91,13 @@ class _LidarrArtistScreenState extends ConsumerState<LidarrArtistScreen> {
       });
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(target
-              ? 'Monitoring "${album.title}"'
-              : 'Stopped monitoring "${album.title}"')));
+              ? context.l10n.adminMonitoring((album.title).toString())
+              : context.l10n
+                  .adminStoppedMonitoring((album.title).toString()))));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to update: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(context.l10n.adminFailedToUpdate((e).toString()))));
     } finally {
       if (mounted) setState(() => _togglingAlbums.remove(album.id));
     }
@@ -135,24 +137,33 @@ class _LidarrArtistScreenState extends ConsumerState<LidarrArtistScreen> {
     try {
       await _service.searchAlbums([album.id]);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Search started for "${album.title}"')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              context.l10n.adminSearchStartedFor((album.title).toString()))));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to start search: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text(context.l10n.adminFailedToStartSearch((e).toString()))));
     }
   }
 
   void _showActions() {
     final artist = _artist;
     if (artist == null) return;
-    showArtistActions(context, service: _service,
-      settings: LibrarySettingsService(dio: ref.read(backendClientProvider),
-        instanceId: widget.instanceId, kind: LibrarySettingsKind.artist, id: artist.id),
-      instanceId: widget.instanceId, artist: artist,
-      onChanged: () { if (mounted) _load(); },
-      onRemoved: () { if (mounted) Navigator.of(context).pop(); });
+    showArtistActions(context,
+        service: _service,
+        settings: LibrarySettingsService(
+            dio: ref.read(backendClientProvider),
+            instanceId: widget.instanceId,
+            kind: LibrarySettingsKind.artist,
+            id: artist.id),
+        instanceId: widget.instanceId,
+        artist: artist, onChanged: () {
+      if (mounted) _load();
+    }, onRemoved: () {
+      if (mounted) Navigator.of(context).pop();
+    });
   }
 
   @override
@@ -160,10 +171,16 @@ class _LidarrArtistScreenState extends ConsumerState<LidarrArtistScreen> {
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(
-        title: Text(_artist?.artistName ?? widget.artistName ?? 'Artist'),
+        title: Text(_artist?.artistName ??
+            widget.artistName ??
+            context.l10n.adminArtist),
         backgroundColor: AppTheme.background,
-        actions: [IconButton(onPressed: _artist == null ? null : _showActions,
-          icon: const Icon(Icons.more_vert), tooltip: 'Artist actions')],
+        actions: [
+          IconButton(
+              onPressed: _artist == null ? null : _showActions,
+              icon: const Icon(Icons.more_vert),
+              tooltip: context.l10n.adminArtistActions)
+        ],
       ),
       body: AppAmbientBackground(child: _buildBody()),
     );
@@ -179,8 +196,8 @@ class _LidarrArtistScreenState extends ConsumerState<LidarrArtistScreen> {
     }
     final artist = _artist;
     if (artist == null) {
-      return const Center(
-        child: Text('Artist not found',
+      return Center(
+        child: Text(context.l10n.adminArtistNotFound,
             style: TextStyle(color: AppTheme.textSecondary)),
       );
     }
@@ -203,10 +220,10 @@ class _LidarrArtistScreenState extends ConsumerState<LidarrArtistScreen> {
               onInteractiveSearch: () => _interactiveSearch(album),
             ),
           if (_albums.isEmpty)
-            const Padding(
+            Padding(
               padding: EdgeInsets.only(top: 32),
               child: Center(
-                child: Text('No albums for this artist',
+                child: Text(context.l10n.adminNoAlbumsForThisArtist,
                     style: TextStyle(color: AppTheme.textSecondary)),
               ),
             ),
@@ -336,13 +353,12 @@ class _AlbumCard extends StatelessWidget {
                 Text(
                   [
                     if (album.year > 0) '${album.year}',
-                    if (album.albumType != null &&
-                        album.albumType!.isNotEmpty)
+                    if (album.albumType != null && album.albumType!.isNotEmpty)
                       album.albumType!,
-                    _availabilityLabel(stats),
+                    _availabilityLabel(context, stats),
                   ].where((part) => part.isNotEmpty).join(' • '),
-                  style: TextStyle(
-                      color: _availabilityColor(stats), fontSize: 12),
+                  style:
+                      TextStyle(color: _availabilityColor(stats), fontSize: 12),
                 ),
               ],
             ),
@@ -350,13 +366,13 @@ class _AlbumCard extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.search,
                 color: AppTheme.textSecondary, size: 20),
-            tooltip: 'Find automatically',
+            tooltip: context.l10n.adminFindAutomatically,
             onPressed: onSearch,
           ),
           IconButton(
             icon: const Icon(Icons.manage_search,
                 color: AppTheme.textSecondary, size: 20),
-            tooltip: 'Choose a download',
+            tooltip: context.l10n.adminChooseADownload,
             onPressed: onInteractiveSearch,
           ),
           toggling
@@ -379,8 +395,9 @@ class _AlbumCard extends StatelessWidget {
                         : AppTheme.textSecondary,
                     size: 22,
                   ),
-                  tooltip:
-                      album.monitored ? 'Stop monitoring' : 'Monitor album',
+                  tooltip: album.monitored
+                      ? context.l10n.adminStopMonitoring
+                      : context.l10n.adminMonitorAlbum,
                   onPressed: onToggleMonitored,
                 ),
         ],
@@ -388,12 +405,17 @@ class _AlbumCard extends StatelessWidget {
     );
   }
 
-  String _availabilityLabel(LidarrAlbumStatistics? stats) {
+  String _availabilityLabel(
+      BuildContext context, LidarrAlbumStatistics? stats) {
     if (stats == null || stats.trackCount <= 0) {
-      return album.hasFiles ? 'On disk' : 'No files';
+      return album.hasFiles
+          ? context.l10n.adminOnDisk
+          : context.l10n.adminNoFiles;
     }
-    if (album.isComplete) return '${stats.trackCount} tracks · complete';
-    return '${stats.trackFileCount} of ${stats.trackCount} tracks';
+    if (album.isComplete)
+      return context.l10n.adminTracksComplete((stats.trackCount).toString());
+    return context.l10n.adminOfTracks(
+        (stats.trackFileCount).toString(), (stats.trackCount).toString());
   }
 
   Color _availabilityColor(LidarrAlbumStatistics? stats) {

@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
@@ -64,7 +65,7 @@ class _RadarrReleasesScreenState extends ConsumerState<RadarrReleasesScreen> {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _error = 'Release search failed: $e';
+        _error = context.l10n.adminReleaseSearchFailed((e).toString());
       });
     }
   }
@@ -100,10 +101,10 @@ class _RadarrReleasesScreenState extends ConsumerState<RadarrReleasesScreen> {
   }
 
   String _sortLabel(_ReleaseSort sort) => switch (sort) {
-        _ReleaseSort.smart => 'Default',
-        _ReleaseSort.seeders => 'Seeders',
-        _ReleaseSort.size => 'Size',
-        _ReleaseSort.age => 'Age',
+        _ReleaseSort.smart => context.l10n.adminDefault,
+        _ReleaseSort.seeders => context.l10n.adminSeeders,
+        _ReleaseSort.size => context.l10n.adminSize,
+        _ReleaseSort.age => context.l10n.adminAge,
       };
 
   void _onSortSelected(_ReleaseSort sort) {
@@ -124,7 +125,7 @@ class _RadarrReleasesScreenState extends ConsumerState<RadarrReleasesScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.surface,
-        title: const Text('Grab Release'),
+        title: Text(context.l10n.adminGrabRelease),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -135,23 +136,24 @@ class _RadarrReleasesScreenState extends ConsumerState<RadarrReleasesScreen> {
             if (release.rejected && release.rejections.isNotEmpty) ...[
               const SizedBox(height: 12),
               Text(
-                'This release was rejected:\n'
-                '${release.rejections.map((r) => '• $r').join('\n')}',
+                context.l10n.adminThisReleaseWasRejected(
+                    (release.rejections.map((r) => '• $r').join('\n'))
+                        .toString()),
                 style: const TextStyle(color: AppTheme.requested, fontSize: 12),
               ),
             ],
             const SizedBox(height: 12),
-            const Text('Send this release to the download client?',
+            Text(context.l10n.adminSendThisReleaseToTheDownloadClient,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
           ],
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+              child: Text(context.l10n.adminCancel)),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Grab'),
+            child: Text(context.l10n.adminGrab),
           ),
         ],
       ),
@@ -163,14 +165,15 @@ class _RadarrReleasesScreenState extends ConsumerState<RadarrReleasesScreen> {
       await _service.grabRelease(
           guid: release.guid, indexerId: release.indexerId);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Release sent to download client')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(context.l10n.adminReleaseSentToDownloadClient)));
       Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
       setState(() => _isGrabbing = false);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to grab release: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text(context.l10n.adminFailedToGrabRelease((e).toString()))));
     }
   }
 
@@ -183,7 +186,7 @@ class _RadarrReleasesScreenState extends ConsumerState<RadarrReleasesScreen> {
         title: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Interactive Search'),
+            Text(context.l10n.adminInteractiveSearch),
             Text(
               widget.movieTitle,
               style: const TextStyle(
@@ -199,7 +202,7 @@ class _RadarrReleasesScreenState extends ConsumerState<RadarrReleasesScreen> {
           PopupMenuButton<_ReleaseSort>(
             icon: const Icon(Icons.sort, color: AppTheme.textPrimary),
             color: AppTheme.surfaceVariant,
-            tooltip: 'Sort releases',
+            tooltip: context.l10n.adminSortReleases,
             onSelected: _onSortSelected,
             itemBuilder: (_) => _ReleaseSort.values
                 .map((s) => PopupMenuItem(
@@ -227,7 +230,7 @@ class _RadarrReleasesScreenState extends ConsumerState<RadarrReleasesScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.refresh, color: AppTheme.textPrimary),
-            tooltip: 'Search again',
+            tooltip: context.l10n.adminSearchAgain2,
             onPressed: _isLoading ? null : _search,
           ),
         ],
@@ -248,19 +251,19 @@ class _RadarrReleasesScreenState extends ConsumerState<RadarrReleasesScreen> {
 
   Widget _buildBody() {
     if (_isLoading) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             CircularProgressIndicator(color: AppTheme.accent),
             SizedBox(height: 20),
-            Text('Searching indexers...',
+            Text(context.l10n.adminSearchingIndexers,
                 style: TextStyle(
                     color: AppTheme.textPrimary,
                     fontSize: 16,
                     fontWeight: FontWeight.w500)),
             SizedBox(height: 6),
-            Text('This can take up to a minute.',
+            Text(context.l10n.adminThisCanTakeUpToAMinute,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
           ],
         ),
@@ -277,11 +280,11 @@ class _RadarrReleasesScreenState extends ConsumerState<RadarrReleasesScreen> {
             const Icon(Icons.search_off,
                 size: 48, color: AppTheme.textSecondary),
             const SizedBox(height: 12),
-            const Text('No releases found',
+            Text(context.l10n.adminNoReleasesFound,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
             const SizedBox(height: 20),
             ElevatedButton(
-                onPressed: _search, child: const Text('Search Again')),
+                onPressed: _search, child: Text(context.l10n.adminSearchAgain)),
           ],
         ),
       );
@@ -387,7 +390,7 @@ class _ReleaseTile extends StatelessWidget {
                       const Icon(Icons.warning_amber_rounded,
                           size: 14, color: AppTheme.requested),
                       const SizedBox(width: 4),
-                      const Text('Rejected',
+                      Text(context.l10n.adminRejected,
                           style: TextStyle(
                               color: AppTheme.requested,
                               fontSize: 12,

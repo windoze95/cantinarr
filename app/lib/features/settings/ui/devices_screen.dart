@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -44,7 +45,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
       });
     } catch (e) {
       setState(() {
-        _error = 'Failed to load devices';
+        _error = context.l10n.settingsFailedToLoadDevices;
         _isLoading = false;
       });
     }
@@ -54,22 +55,24 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Revoke Device'),
+        title: Text(context.l10n.settingsRevokeDevice),
         content: Text(
-          'Revoke "${device.deviceName}" (${device.username})? '
-          'The device will lose access within 15 minutes.',
+          context.l10n.settingsMessageRevokeValue1Value2(
+                  (device.deviceName).toString(),
+                  (device.username).toString()) +
+              context.l10n.settingsTheDeviceWillLoseAccessWithin15Minutes,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.settingsCancel),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.error,
             ),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Revoke'),
+            child: Text(context.l10n.settingsRevoke),
           ),
         ],
       ),
@@ -82,13 +85,15 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
       await _loadDevices();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Device revoked')),
+          SnackBar(content: Text(context.l10n.settingsDeviceRevoked)),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to revoke device: $e')),
+          SnackBar(
+              content: Text(context.l10n
+                  .settingsMessageFailedToRevokeDeviceValue1((e).toString()))),
         );
       }
     }
@@ -97,7 +102,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Connected Devices')),
+      appBar: AppBar(title: Text(context.l10n.settingsConnectedDevices)),
       body: CenteredContent(child: _buildBody()),
     );
   }
@@ -116,7 +121,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
             const SizedBox(height: 16),
             ElevatedButton(
               onPressed: _loadDevices,
-              child: const Text('Retry'),
+              child: Text(context.l10n.settingsRetry),
             ),
           ],
         ),
@@ -125,9 +130,9 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
 
     final devices = _devices ?? [];
     if (devices.isEmpty) {
-      return const Center(
+      return Center(
         child: Text(
-          'No connected devices',
+          context.l10n.settingsNoConnectedDevices,
           style: TextStyle(color: AppTheme.textSecondary),
         ),
       );
@@ -206,7 +211,8 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                       ],
                     ),
                     subtitle: Text(
-                      'Last seen ${_formatTime(device.lastSeenAt)}',
+                      context.l10n.settingsMessageLastSeenValue1(
+                          (_formatTime(device.lastSeenAt)).toString()),
                       style: const TextStyle(
                         color: AppTheme.textSecondary,
                         fontSize: 13,
@@ -234,8 +240,8 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
         color: AppTheme.accent.withValues(alpha: 0.16),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: const Text(
-        'This device',
+      child: Text(
+        context.l10n.settingsThisDevice,
         style: TextStyle(
           color: AppTheme.accent,
           fontSize: 11,
@@ -263,10 +269,15 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
       final now = DateTime.now();
       final diff = now.difference(dt);
 
-      if (diff.inMinutes < 1) return 'just now';
-      if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-      if (diff.inHours < 24) return '${diff.inHours}h ago';
-      if (diff.inDays < 7) return '${diff.inDays}d ago';
+      if (diff.inMinutes < 1) return context.l10n.settingsJustNow;
+      if (diff.inMinutes < 60)
+        return context.l10n
+            .settingsMessageValue1MAgo((diff.inMinutes).toString());
+      if (diff.inHours < 24)
+        return context.l10n
+            .settingsMessageValue1HAgo((diff.inHours).toString());
+      if (diff.inDays < 7)
+        return context.l10n.settingsMessageValue1DAgo((diff.inDays).toString());
 
       return DateFormat.yMMMd().format(dt);
     } catch (_) {

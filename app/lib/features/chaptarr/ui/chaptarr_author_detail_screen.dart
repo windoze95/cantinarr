@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
@@ -80,7 +81,7 @@ class _ChaptarrAuthorDetailScreenState
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _error = 'Failed to load author: $e';
+        _error = context.l10n.adminFailedToLoadAuthor((e).toString());
       });
     }
   }
@@ -107,20 +108,25 @@ class _ChaptarrAuthorDetailScreenState
             candidate.groupKey == primary.groupKey && candidate.monitored);
         movedSections = wasMonitored != isMonitored;
       });
-      final format = chaptarrFormatLabel(primary.format);
+      final format = chaptarrFormatLabel(primary.format, strings: context.l10n);
       final message = movedSections
           ? target
-              ? '${primary.title} moved to Tracked books'
-              : '${primary.title} moved out of Tracked books'
+              ? context.l10n
+                  .adminMovedToTrackedBooks((primary.title).toString())
+              : context.l10n
+                  .adminMovedOutOfTrackedBooks((primary.title).toString())
           : target
-              ? 'Tracking $format for ${primary.title}'
-              : 'Stopped tracking $format for ${primary.title}';
+              ? context.l10n.adminTrackingFor(
+                  (format).toString(), (primary.title).toString())
+              : context.l10n.adminStoppedTrackingFor(
+                  (format).toString(), (primary.title).toString());
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(message)));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not change tracking: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text(context.l10n.adminCouldNotChangeTracking((e).toString()))));
     } finally {
       if (mounted) setState(() => _togglingBooks.removeAll(ids));
     }
@@ -156,8 +162,8 @@ class _ChaptarrAuthorDetailScreenState
   Widget _bookCard(List<ChaptarrBook> records) => _BookCard(
         key: ValueKey('book:${records.first.groupKey}'),
         records: records,
-        cover: chaptarrImageSource(
-            ref, records.first.coverUrl, widget.instanceId),
+        cover:
+            chaptarrImageSource(ref, records.first.coverUrl, widget.instanceId),
         togglingIds: _togglingBooks,
         addingKeys: _addingFormats,
         onTap: () => _openBookGroup(records),
@@ -178,7 +184,7 @@ class _ChaptarrAuthorDetailScreenState
     final primary = records.first;
     final foreignBookId = primary.foreignBookId;
     if (foreignBookId == null || foreignBookId.isEmpty) return;
-    final label = chaptarrFormatLabel(format);
+    final label = chaptarrFormatLabel(format, strings: context.l10n);
     final key = _addKey(records, format);
     setState(() => _addingFormats.add(key));
     try {
@@ -191,7 +197,7 @@ class _ChaptarrAuthorDetailScreenState
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(
-            'Could not track $label. Check this author’s library path and profiles.',
+            context.l10n.adminCouldNotTrackCheckThisAuthorS((label).toString()),
           ),
         ));
         return;
@@ -210,13 +216,14 @@ class _ChaptarrAuthorDetailScreenState
       ));
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content:
-              Text('Tracking $label — searching for ${primary.title}…')));
+          content: Text(context.l10n.adminTrackingSearchingFor(
+              (label).toString(), (primary.title).toString()))));
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not track $label: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(context.l10n
+              .adminCouldNotTrack((label).toString(), (e).toString()))));
     } finally {
       if (mounted) setState(() => _addingFormats.remove(key));
     }
@@ -225,17 +232,25 @@ class _ChaptarrAuthorDetailScreenState
   void _showActions() {
     final author = _author;
     if (author == null) return;
-    showAuthorActions(context, service: _service,
-      settings: LibrarySettingsService(dio: ref.read(backendClientProvider),
-        instanceId: widget.instanceId, kind: LibrarySettingsKind.author, id: author.id),
-      instanceId: widget.instanceId, author: author,
-      onChanged: () { if (mounted) _load(); },
-      onRemoved: () { if (mounted) Navigator.of(context).pop(); });
+    showAuthorActions(context,
+        service: _service,
+        settings: LibrarySettingsService(
+            dio: ref.read(backendClientProvider),
+            instanceId: widget.instanceId,
+            kind: LibrarySettingsKind.author,
+            id: author.id),
+        instanceId: widget.instanceId,
+        author: author, onChanged: () {
+      if (mounted) _load();
+    }, onRemoved: () {
+      if (mounted) Navigator.of(context).pop();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final title = _author?.authorName ?? widget.authorName ?? 'Author';
+    final title =
+        _author?.authorName ?? widget.authorName ?? context.l10n.adminAuthor;
     final groupedBooks = _groupedBooks();
     final monitoredBooks = <List<ChaptarrBook>>[];
     final otherBooks = <List<ChaptarrBook>>[];
@@ -255,11 +270,13 @@ class _ChaptarrAuthorDetailScreenState
         backgroundColor: AppTheme.background,
         title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
-          IconButton(onPressed: _author == null ? null : _showActions,
-            icon: const Icon(Icons.more_vert), tooltip: 'Author actions'),
+          IconButton(
+              onPressed: _author == null ? null : _showActions,
+              icon: const Icon(Icons.more_vert),
+              tooltip: context.l10n.adminAuthorActions),
           IconButton(
             icon: const Icon(Icons.refresh, color: AppTheme.textPrimary),
-            tooltip: 'Refresh',
+            tooltip: context.l10n.adminRefresh,
             onPressed: _isLoading ? null : _load,
           ),
         ],
@@ -278,19 +295,21 @@ class _ChaptarrAuthorDetailScreenState
                       if (_author != null) _AuthorSummaryCard(author: _author!),
                       const SizedBox(height: 4),
                       if (monitoredBooks.isNotEmpty) ...[
-                        const _BookSectionHeading(title: 'Tracked books'),
+                        _BookSectionHeading(
+                            title: context.l10n.adminTrackedBooks),
                         ...monitoredBooks.map(_bookCard),
                       ],
                       if (otherBooks.isNotEmpty) ...[
                         if (monitoredBooks.isNotEmpty)
-                          const _BookSectionHeading(title: 'Other books'),
+                          _BookSectionHeading(
+                              title: context.l10n.adminOtherBooks),
                         ...otherBooks.map(_bookCard),
                       ],
                       if (_books.isEmpty && !_isLoading)
-                        const Padding(
+                        Padding(
                           padding: EdgeInsets.all(32),
                           child: Center(
-                            child: Text('No books',
+                            child: Text(context.l10n.adminNoBooks,
                                 style:
                                     TextStyle(color: AppTheme.textSecondary)),
                           ),
@@ -349,13 +368,14 @@ class _AvailabilityLine extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = stats;
     if (s == null || s.bookCount == 0) {
-      return const Text('0% • 0/0 Books Available',
+      return Text(context.l10n.admin000BooksAvailable,
           style: TextStyle(color: AppTheme.textSecondary, fontSize: 13));
     }
     final pct = (s.bookFileCount / s.bookCount * 100).round();
     final complete = s.bookFileCount >= s.bookCount;
     return Text(
-      '$pct% • ${s.bookFileCount}/${s.bookCount} Books Available',
+      context.l10n.adminBooksAvailable((pct).toString(),
+          (s.bookFileCount).toString(), (s.bookCount).toString()),
       style: TextStyle(
         color: complete ? AppTheme.available : AppTheme.error,
         fontSize: 13,
@@ -435,7 +455,7 @@ class _BookCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final primary = records.first;
-    final status = groupedBookStatusLine(records);
+    final status = groupedBookStatusLine(records, strings: context.l10n);
     return InkWell(
       onTap: onTap,
       child: Container(
@@ -514,7 +534,7 @@ class _BookCard extends StatelessWidget {
             : null;
     final busy =
         formatRecords.any((record) => togglingIds.contains(record.id)) ||
-        addingKeys.contains('${records.first.groupKey}:${format.index}');
+            addingKeys.contains('${records.first.groupKey}:${format.index}');
     return _FormatControl(
       format: format,
       records: formatRecords,
@@ -550,15 +570,15 @@ class _FormatControl extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final label = chaptarrFormatLabel(format);
+    final label = chaptarrFormatLabel(format, strings: context.l10n);
     final monitored = records.any((record) => record.monitored);
     final blocked = blockedReason != null;
     return Tooltip(
       message: blocked
           ? blockedReason!
           : monitored
-              ? 'Stop tracking $label'
-              : 'Track $label',
+              ? context.l10n.adminStopTracking((label).toString())
+              : context.l10n.adminTrack((label).toString()),
       // Tap an existing record to toggle its monitoring; tap an empty bookmark
       // with no record to start monitoring that format (which creates it).
       child: InkWell(
@@ -592,8 +612,8 @@ class _FormatControl extends StatelessWidget {
                         color: blocked
                             ? AppTheme.requested
                             : monitored
-                            ? AppTheme.accent
-                            : AppTheme.textSecondary,
+                                ? AppTheme.accent
+                                : AppTheme.textSecondary,
                       ),
               ],
             ),

@@ -1,3 +1,5 @@
+import 'package:intl/intl.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -141,7 +143,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
         : _selectedModel;
     if (_selectedModel == _customModelValue && selectedModel.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter a custom model ID')),
+        SnackBar(content: Text(context.l10n.settingsEnterACustomModelId)),
       );
       return;
     }
@@ -170,7 +172,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       final localBaseUrl = _localBaseUrlController.text.trim();
       if (localBaseUrl.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Enter the server base URL')),
+          SnackBar(content: Text(context.l10n.settingsEnterTheServerBaseUrl)),
         );
         return;
       }
@@ -197,7 +199,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
 
     if (creds.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No changes to save')),
+        SnackBar(content: Text(context.l10n.settingsNoChangesToSave)),
       );
       return;
     }
@@ -228,7 +230,9 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              aiChanged ? 'AI test passed. Settings saved.' : 'Settings saved',
+              aiChanged
+                  ? context.l10n.settingsAiTestPassedSettingsSaved
+                  : context.l10n.settingsSettingsSaved,
             ),
           ),
         );
@@ -254,17 +258,20 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Remove $label?'),
-        content: Text(message ?? 'This will disable the $label integration.'),
+        title:
+            Text(context.l10n.settingsMessageRemoveValue1((label).toString())),
+        content: Text(message ??
+            context.l10n.settingsMessageThisWillDisableTheValue1Integration(
+                (label).toString())),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.settingsCancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child:
-                const Text('Remove', style: TextStyle(color: AppTheme.error)),
+            child: Text(context.l10n.settingsRemove,
+                style: TextStyle(color: AppTheme.error)),
           ),
         ],
       ),
@@ -278,13 +285,17 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       ref.read(authProvider.notifier).refreshConfig();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$label credential removed')),
+          SnackBar(
+              content: Text(context.l10n
+                  .settingsMessageValue1CredentialRemoved((label).toString()))),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to remove: $e')),
+          SnackBar(
+              content: Text(context.l10n
+                  .settingsMessageFailedToRemoveValue1((e).toString()))),
         );
       }
     }
@@ -369,7 +380,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     }
     final match =
         RegExp(r'"error"\s*:\s*"([^"]+)"').firstMatch(error.toString());
-    return match?.group(1) ?? 'Failed to save settings.';
+    return match?.group(1) ?? context.l10n.settingsFailedToSaveSettings;
   }
 
   AiProviderOption? _providerFor(
@@ -424,7 +435,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
 
   Widget _buildPage(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Providers & Credentials')),
+      appBar: AppBar(title: Text(context.l10n.settingsProvidersCredentials)),
       body: CenteredContent(
           child: _isLoading
               ? const Center(
@@ -439,7 +450,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                           const SizedBox(height: 12),
                           ElevatedButton(
                               onPressed: _loadStatus,
-                              child: const Text('Retry')),
+                              child: Text(context.l10n.settingsRetry)),
                         ],
                       ),
                     )
@@ -450,10 +461,9 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                           SettingsHighlight.cacheExtentFor(widget.highlightId),
                       padding: const EdgeInsets.all(16),
                       children: [
-                        const Text(
-                          'Server credentials are write-only. Users you include '
-                          'can use the selected AI provider; personal providers '
-                          'always take priority.',
+                        Text(
+                          context.l10n
+                              .settingsServerCredentialsAreWriteOnlyUsersYouInclude,
                           style: TextStyle(
                               color: AppTheme.textSecondary, fontSize: 13),
                         ),
@@ -501,29 +511,33 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                             DropdownButtonFormField<String>(
                               key: const ValueKey('openai-reasoning-effort'),
                               initialValue: _openaiReasoningEffort,
-                              decoration: const InputDecoration(
-                                labelText: 'OpenAI reasoning effort',
-                                helperText:
-                                    'How much the model thinks before '
-                                    'answering. Auto keeps the model\'s own '
-                                    'default; None is fastest on local '
-                                    'models.',
+                              decoration: InputDecoration(
+                                labelText:
+                                    context.l10n.settingsOpenaiReasoningEffort,
+                                helperText: context.l10n
+                                    .settingsHowMuchTheModelThinksBeforeAnsweringAuto,
                                 helperMaxLines: 3,
                                 isDense: true,
                               ),
-                              items: const [
+                              items: [
                                 DropdownMenuItem(
-                                    value: '', child: Text('Auto')),
+                                    value: '',
+                                    child: Text(context.l10n.settingsAuto)),
                                 DropdownMenuItem(
-                                    value: 'none', child: Text('None')),
+                                    value: 'none',
+                                    child: Text(context.l10n.settingsNone)),
                                 DropdownMenuItem(
-                                    value: 'minimal', child: Text('Minimal')),
+                                    value: 'minimal',
+                                    child: Text(context.l10n.settingsMinimal)),
                                 DropdownMenuItem(
-                                    value: 'low', child: Text('Low')),
+                                    value: 'low',
+                                    child: Text(context.l10n.settingsLow)),
                                 DropdownMenuItem(
-                                    value: 'medium', child: Text('Medium')),
+                                    value: 'medium',
+                                    child: Text(context.l10n.settingsMedium)),
                                 DropdownMenuItem(
-                                    value: 'high', child: Text('High')),
+                                    value: 'high',
+                                    child: Text(context.l10n.settingsHigh)),
                               ],
                               onChanged: (value) => setState(
                                   () => _openaiReasoningEffort = value ?? ''),
@@ -537,14 +551,11 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                             TextField(
                               key: const ValueKey('local-openai-base-url'),
                               controller: _localBaseUrlController,
-                              decoration: const InputDecoration(
-                                labelText: 'Server base URL',
+                              decoration: InputDecoration(
+                                labelText: context.l10n.settingsServerBaseUrl,
                                 hintText: 'http://llm-host:11434/v1',
-                                helperText:
-                                    'Required. Your OpenAI-compatible server '
-                                    '(llama.cpp, vLLM, Ollama), reached from '
-                                    'the Cantinarr server, not from this '
-                                    'device.',
+                                helperText: context.l10n
+                                    .settingsRequiredYourOpenaiCompatibleServerLlamaCppVllm,
                                 helperMaxLines: 3,
                                 isDense: true,
                               ),
@@ -558,28 +569,32 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                               key: const ValueKey(
                                   'local-openai-reasoning-effort'),
                               initialValue: _localReasoningEffort,
-                              decoration: const InputDecoration(
-                                labelText: 'Reasoning effort',
-                                helperText:
-                                    'How much the model thinks before '
-                                    'answering. None is fastest on local '
-                                    'models.',
+                              decoration: InputDecoration(
+                                labelText: context.l10n.settingsReasoningEffort,
+                                helperText: context.l10n
+                                    .settingsHowMuchTheModelThinksBeforeAnsweringNone,
                                 helperMaxLines: 3,
                                 isDense: true,
                               ),
-                              items: const [
+                              items: [
                                 DropdownMenuItem(
-                                    value: '', child: Text('Auto')),
+                                    value: '',
+                                    child: Text(context.l10n.settingsAuto)),
                                 DropdownMenuItem(
-                                    value: 'none', child: Text('None')),
+                                    value: 'none',
+                                    child: Text(context.l10n.settingsNone)),
                                 DropdownMenuItem(
-                                    value: 'minimal', child: Text('Minimal')),
+                                    value: 'minimal',
+                                    child: Text(context.l10n.settingsMinimal)),
                                 DropdownMenuItem(
-                                    value: 'low', child: Text('Low')),
+                                    value: 'low',
+                                    child: Text(context.l10n.settingsLow)),
                                 DropdownMenuItem(
-                                    value: 'medium', child: Text('Medium')),
+                                    value: 'medium',
+                                    child: Text(context.l10n.settingsMedium)),
                                 DropdownMenuItem(
-                                    value: 'high', child: Text('High')),
+                                    value: 'high',
+                                    child: Text(context.l10n.settingsHigh)),
                               ],
                               onChanged: (value) => setState(
                                   () => _localReasoningEffort = value ?? ''),
@@ -648,13 +663,13 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                         _anchor(
                           SettingsAnchors.credentialsAnthropic,
                           CredentialSection(
-                            title: 'Anthropic (AI)',
-                            description:
-                                'Shared Claude API key for included AI usage',
+                            title: context.l10n.settingsAnthropicAi,
+                            description: context.l10n
+                                .settingsSharedClaudeApiKeyForIncludedAiUsage,
                             isConfigured:
                                 _status?.isConfigured('anthropic_key') ?? false,
                             controller: _anthropicController,
-                            hint: 'Anthropic API key',
+                            hint: context.l10n.settingsAnthropicApiKey,
                             onDelete: () =>
                                 _deleteCredential('anthropic_key', 'Anthropic'),
                           ),
@@ -664,13 +679,13 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                           _anchor(
                             SettingsAnchors.credentialsOpenAi,
                             CredentialSection(
-                              title: 'OpenAI (AI)',
-                              description:
-                                  'Shared OpenAI API key for included AI usage',
+                              title: context.l10n.settingsOpenaiAi,
+                              description: context.l10n
+                                  .settingsSharedOpenaiApiKeyForIncludedAiUsage,
                               isConfigured:
                                   _status?.isConfigured('openai_key') ?? false,
                               controller: _openAIController,
-                              hint: 'OpenAI API key',
+                              hint: context.l10n.settingsOpenaiApiKey,
                               onDelete: () =>
                                   _deleteCredential('openai_key', 'OpenAI'),
                             ),
@@ -679,13 +694,13 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                           _anchor(
                             SettingsAnchors.credentialsGemini,
                             CredentialSection(
-                              title: 'Google Gemini (AI)',
-                              description:
-                                  'Shared Gemini API key for included AI usage',
+                              title: context.l10n.settingsGoogleGeminiAi,
+                              description: context.l10n
+                                  .settingsSharedGeminiApiKeyForIncludedAiUsage,
                               isConfigured:
                                   _status?.isConfigured('gemini_key') ?? false,
                               controller: _geminiController,
-                              hint: 'Gemini API key',
+                              hint: context.l10n.settingsGeminiApiKey,
                               onDelete: () => _deleteCredential(
                                   'gemini_key', 'Google Gemini'),
                             ),
@@ -694,30 +709,30 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                           _anchor(
                             SettingsAnchors.credentialsGrok,
                             CredentialSection(
-                              title: 'xAI Grok (AI)',
-                              description:
-                                  'Shared xAI API key for included AI usage',
+                              title: context.l10n.settingsXaiGrokAi,
+                              description: context.l10n
+                                  .settingsSharedXaiApiKeyForIncludedAiUsage,
                               isConfigured:
                                   _status?.isConfigured('grok_key') ?? false,
                               controller: _grokController,
-                              hint: 'xAI API key',
+                              hint: context.l10n.settingsXaiApiKey,
                               onDelete: () =>
                                   _deleteCredential('grok_key', 'xAI Grok'),
                             ),
                           ),
                           const SizedBox(height: 20),
                           CredentialSection(
-                            title: 'Local server (AI)',
-                            description:
-                                'Optional key or proxy token for the local '
-                                'OpenAI-compatible server; most need none',
+                            title: context.l10n.settingsLocalServerAi,
+                            description: context.l10n
+                                .settingsOptionalKeyOrProxyTokenForTheLocal,
                             isConfigured:
                                 _status?.isConfigured('local_openai_key') ??
                                     false,
                             controller: _localKeyController,
-                            hint: 'Optional API key',
+                            hint: context.l10n.settingsOptionalApiKey,
                             onDelete: () => _deleteCredential(
-                                'local_openai_key', 'Local server'),
+                                'local_openai_key',
+                                context.l10n.settingsLocalServer),
                           ),
                         ],
                         const SizedBox(height: 32),
@@ -739,7 +754,9 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                                   const SizedBox(width: 9),
                                 ],
                                 Text(
-                                  _isTestingAI ? 'Testing & saving…' : 'Save',
+                                  _isTestingAI
+                                      ? context.l10n.settingsTestingSaving
+                                      : context.l10n.settingsSave,
                                 ),
                               ],
                             ),
@@ -777,11 +794,11 @@ class _AISelectionSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (providers.isEmpty) {
-      return const Column(
+      return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'AI Model',
+            context.l10n.settingsAiModel,
             style: TextStyle(
               color: AppTheme.textPrimary,
               fontSize: 16,
@@ -790,7 +807,8 @@ class _AISelectionSection extends StatelessWidget {
           ),
           SizedBox(height: 4),
           Text(
-            'Update the server container to configure OpenAI, Gemini, and AI model selection. This server only supports the legacy Anthropic AI key.',
+            context
+                .l10n.settingsUpdateTheServerContainerToConfigureOpenaiGemini,
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ],
@@ -810,9 +828,9 @@ class _AISelectionSection extends StatelessWidget {
       children: [
         Row(
           children: [
-            const Expanded(
+            Expanded(
               child: Text(
-                'AI Model',
+                context.l10n.settingsAiModel,
                 style: TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 16,
@@ -832,10 +850,10 @@ class _AISelectionSection extends StatelessWidget {
               ),
               child: Text(
                 usesOAuth
-                    ? 'Shared account'
+                    ? context.l10n.settingsSharedAccount
                     : isSelectedProviderConfigured
-                        ? 'Key set'
-                        : 'Key missing',
+                        ? context.l10n.settingsKeySet
+                        : context.l10n.settingsKeyMissing,
                 style: TextStyle(
                   color: usesOAuth
                       ? AppTheme.signal
@@ -853,9 +871,10 @@ class _AISelectionSection extends StatelessWidget {
         Text(
           usesOAuth
               ? (providerValue == 'grok_oauth'
-                  ? 'Connect one server xAI Grok account for users with included access.'
-                  : 'Connect one server OpenAI OAuth account for users with included access.')
-              : 'Select the server provider and model for included access.',
+                  ? context.l10n.settingsConnectOneServerXaiGrokAccountForUsers
+                  : context
+                      .l10n.settingsConnectOneServerOpenaiOauthAccountForUsers)
+              : context.l10n.settingsSelectTheServerProviderAndModelForIncluded,
           style: const TextStyle(
             color: AppTheme.textSecondary,
             fontSize: 13,
@@ -866,8 +885,8 @@ class _AISelectionSection extends StatelessWidget {
           key: ValueKey('ai-provider-$providerValue'),
           initialValue: providerValue,
           isExpanded: true,
-          decoration: const InputDecoration(
-            labelText: 'Provider',
+          decoration: InputDecoration(
+            labelText: context.l10n.settingsProvider,
             isDense: true,
           ),
           items: providers
@@ -885,8 +904,8 @@ class _AISelectionSection extends StatelessWidget {
           key: ValueKey('ai-model-$providerValue-$modelValue'),
           initialValue: modelValue,
           isExpanded: true,
-          decoration: const InputDecoration(
-            labelText: 'Model',
+          decoration: InputDecoration(
+            labelText: context.l10n.settingsModel,
             isDense: true,
           ),
           items: [
@@ -896,7 +915,7 @@ class _AISelectionSection extends StatelessWidget {
                 )),
             DropdownMenuItem(
               value: customModelValue,
-              child: const Text('Custom model ID'),
+              child: Text(context.l10n.settingsCustomModelId),
             ),
           ],
           onChanged: (value) {
@@ -907,8 +926,8 @@ class _AISelectionSection extends StatelessWidget {
           const SizedBox(height: 12),
           TextField(
             controller: customModelController,
-            decoration: const InputDecoration(
-              hintText: 'Provider model ID',
+            decoration: InputDecoration(
+              hintText: context.l10n.settingsProviderModelId,
               isDense: true,
             ),
           ),
@@ -952,16 +971,19 @@ class _LocalProxyOptInSection extends StatelessWidget {
         key: const ValueKey('local-openai-use-proxy'),
         value: enabled,
         onChanged: onChanged,
-        title: const Text(
-          'Route through the outbound proxy',
+        title: Text(
+          context.l10n.settingsRouteThroughTheOutboundProxy,
           style: TextStyle(
             color: AppTheme.textPrimary,
             fontWeight: FontWeight.w600,
           ),
         ),
         subtitle: Text(
-          'Turn this on when the endpoint is on the internet instead of your '
-          'own network. ${proxyConfigured ? 'A server on your own network is always dialed directly.' : 'No outbound proxy is set yet, so add one under Settings > Outbound Proxy first.'}',
+          context.l10n.settingsMessageTurnThisOnWhenTheEndpointIsOn(
+              (proxyConfigured
+                      ? context.l10n.settingsAServerOnYourOwnNetworkIsAlways
+                      : context.l10n.settingsNoOutboundProxyIsSetYetSoAdd)
+                  .toString()),
           style: const TextStyle(
             color: AppTheme.textSecondary,
             fontSize: 12,
@@ -990,7 +1012,8 @@ class _AIHealthCheckSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final lastTest = lastCheckedAt == null
         ? ''
-        : '\nLast tested ${_shortDate(lastCheckedAt!)}.';
+        : context.l10n.settingsMessageLastTestedValue1(
+            (_shortDate(context, lastCheckedAt!)).toString());
     return Material(
       color: AppTheme.surfaceVariant.withValues(alpha: 0.45),
       shape: RoundedRectangleBorder(
@@ -1002,18 +1025,16 @@ class _AIHealthCheckSection extends StatelessWidget {
         key: const ValueKey('ai-health-check-toggle'),
         value: enabled,
         onChanged: onChanged,
-        title: const Text(
-          'Daily shared-model test',
+        title: Text(
+          context.l10n.settingsDailySharedModelTest,
           style: TextStyle(
             color: AppTheme.textPrimary,
             fontWeight: FontWeight.w600,
           ),
         ),
         subtitle: Text(
-          'Runs one small message and response turn every $intervalHours hours. '
-          'A failure opens an admin issue. Turn this off to eliminate '
-          'background AI usage; provider and model saves still always run '
-          'their own test.$lastTest',
+          context.l10n.settingsMessageRunsOneSmallMessageAndResponseTurnEvery(
+              (intervalHours).toString(), (lastTest).toString()),
           style: const TextStyle(
             color: AppTheme.textSecondary,
             fontSize: 12,
@@ -1024,11 +1045,10 @@ class _AIHealthCheckSection extends StatelessWidget {
     );
   }
 
-  String _shortDate(DateTime value) {
-    final local = value.toLocal();
-    final minute = local.minute.toString().padLeft(2, '0');
-    return '${local.month}/${local.day}/${local.year} '
-        '${local.hour}:$minute';
+  String _shortDate(BuildContext context, DateTime value) {
+    return DateFormat.yMd(context.l10n.dateLocale)
+        .add_Hm()
+        .format(value.toLocal());
   }
 }
 
@@ -1049,7 +1069,7 @@ class _SharedCodexPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Row(
+          Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Icon(Icons.warning_amber_rounded, color: AppTheme.warning),
@@ -1059,7 +1079,7 @@ class _SharedCodexPanel extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Shared OpenAI OAuth allowance',
+                      context.l10n.settingsSharedOpenaiOauthAllowance,
                       style: TextStyle(
                         color: AppTheme.textPrimary,
                         fontWeight: FontWeight.w700,
@@ -1067,12 +1087,8 @@ class _SharedCodexPanel extends StatelessWidget {
                     ),
                     SizedBox(height: 5),
                     Text(
-                      'Prompts and tool context from every enabled user use '
-                      'one ChatGPT account and one Codex meter. Activity is '
-                      'attributable to that account, and any subscription or '
-                      'usage costs remain with it. ChatGPT accounts are '
-                      'intended for one person; enable only people or devices '
-                      'you control.',
+                      context.l10n
+                          .settingsPromptsAndToolContextFromEveryEnabledUser,
                       style: TextStyle(
                         color: AppTheme.textSecondary,
                         fontSize: 13,
@@ -1095,10 +1111,10 @@ class _SharedCodexPanel extends StatelessWidget {
             ),
             label: Text(
               connected
-                  ? 'Manage shared OpenAI OAuth'
+                  ? context.l10n.settingsManageSharedOpenaiOauth
                   : status.hasError
-                      ? 'Retry shared OpenAI OAuth status'
-                      : 'Connect shared OpenAI OAuth',
+                      ? context.l10n.settingsRetrySharedOpenaiOauthStatus
+                      : context.l10n.settingsConnectSharedOpenaiOauth,
             ),
           ),
         ],
@@ -1124,7 +1140,7 @@ class _SharedGrokPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Row(
+          Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Icon(Icons.warning_amber_rounded, color: AppTheme.warning),
@@ -1134,7 +1150,7 @@ class _SharedGrokPanel extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Shared xAI Grok allowance',
+                      context.l10n.settingsSharedXaiGrokAllowance,
                       style: TextStyle(
                         color: AppTheme.textPrimary,
                         fontWeight: FontWeight.w700,
@@ -1142,12 +1158,8 @@ class _SharedGrokPanel extends StatelessWidget {
                     ),
                     SizedBox(height: 5),
                     Text(
-                      'Prompts and tool context from every enabled user use '
-                      'one xAI account and its Grok subscription allowance. '
-                      'Activity is attributable to that account, and any '
-                      'subscription or usage costs remain with it. xAI '
-                      'accounts are intended for one person; enable only '
-                      'people or devices you control.',
+                      context.l10n
+                          .settingsPromptsAndToolContextFromEveryEnabledUser2,
                       style: TextStyle(
                         color: AppTheme.textSecondary,
                         fontSize: 13,
@@ -1170,10 +1182,10 @@ class _SharedGrokPanel extends StatelessWidget {
             ),
             label: Text(
               connected
-                  ? 'Manage shared xAI Grok'
+                  ? context.l10n.settingsManageSharedXaiGrok
                   : status.hasError
-                      ? 'Retry shared xAI Grok status'
-                      : 'Connect shared xAI Grok',
+                      ? context.l10n.settingsRetrySharedXaiGrokStatus
+                      : context.l10n.settingsConnectSharedXaiGrok,
             ),
           ),
         ],
@@ -1208,12 +1220,13 @@ class _SharedApiCostNotice extends StatelessWidget {
           Expanded(
             child: Text(
               selfHosted
-                  ? 'Included requests go to the configured server '
-                      'endpoint. Costs depend on that server, not on a '
-                      'hosted provider.'
-                  : 'Included requests use the server $provider key. Usage '
-                      'counts against its paid quota and may create provider '
-                      'charges.',
+                  ? context.l10n
+                      .settingsIncludedRequestsGoToTheConfiguredServerEndpoint
+                  : context.l10n
+                          .settingsMessageIncludedRequestsUseTheServerValue1KeyUsage(
+                              (provider).toString()) +
+                      context
+                          .l10n.settingsCountsAgainstItsPaidQuotaAndMayCreate,
               style: const TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 13,

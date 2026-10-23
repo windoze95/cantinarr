@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../logic/saved_servers_provider.dart';
 
@@ -33,7 +34,7 @@ class ServerBadge extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall),
                 const SizedBox(height: 4),
-                Text('Change server',
+                Text(context.l10n.authChangeServer,
                     style: Theme.of(context)
                         .textTheme
                         .labelMedium
@@ -68,7 +69,8 @@ class SavedServerPicker extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('Saved servers', style: Theme.of(context).textTheme.titleSmall),
+        Text(context.l10n.authSavedServers,
+            style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 8),
         for (final (index, server) in servers.indexed)
           Padding(
@@ -93,15 +95,17 @@ class SavedServerPicker extends StatelessWidget {
                     if (server.name != null)
                       Text(server.url,
                           maxLines: 2, overflow: TextOverflow.ellipsis),
-                    if (index == 0) const Text('Last used'),
-                    if (server.url == selectedUrl) const Text('Selected'),
+                    if (index == 0) Text(context.l10n.authLastUsed),
+                    if (server.url == selectedUrl)
+                      Text(context.l10n.authSelected),
                   ],
                 ),
                 trailing: PopupMenuButton<String>(
-                  tooltip: 'Options for ${server.label}',
+                  tooltip: context.l10n.authServerOptions(server.label),
                   onSelected: (_) => onForget(server),
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'forget', child: Text('Forget')),
+                  itemBuilder: (_) => [
+                    PopupMenuItem(
+                        value: 'forget', child: Text(context.l10n.authForget)),
                   ],
                 ),
               ),

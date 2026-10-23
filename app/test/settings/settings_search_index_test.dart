@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/app_localizations.dart';
+import 'package:flutter/widgets.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/features/settings/data/settings_search_index.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -60,6 +62,37 @@ const _routableSettingsPaths = {
 };
 
 void main() {
+  test('French search resolves translated labels and keeps routes and gates',
+      () {
+    final french = lookupAppLocalizations(const Locale('fr'));
+    final language =
+        searchSettingsIndex('lang français', _userGates, localizations: french)
+            .singleWhere((entry) => entry.id == 'root.language');
+    expect(language.title, 'Langue');
+    expect(language.route, '/settings');
+    expect(language.anchorId, 'root.language');
+
+    final users =
+        searchSettingsIndex('utilisateurs', _adminGates, localizations: french)
+            .singleWhere((entry) => entry.id == 'screen.users');
+    expect(users.title, 'Utilisateurs');
+    expect(users.route, '/settings/users');
+    expect(
+        searchSettingsIndex('utilisateurs', _userGates, localizations: french)
+            .any((entry) => entry.id == 'screen.users'),
+        isFalse);
+
+    final password =
+        searchSettingsIndex('mot de passe', _adminGates, localizations: french)
+            .singleWhere((entry) => entry.id == 'screen.password');
+    expect(password.title, 'Mot de passe');
+    expect(password.route, '/settings/password');
+    expect(
+        searchSettingsIndex('mot de passe', _userGates, localizations: french)
+            .any((entry) => entry.id == 'screen.password'),
+        isFalse);
+  });
+
   test('Apple TVs require an admin and server capability', () {
     final entry =
         settingsSearchIndex.singleWhere((e) => e.id == 'screen.apple-tvs');

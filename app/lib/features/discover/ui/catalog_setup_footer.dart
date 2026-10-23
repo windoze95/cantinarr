@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -39,15 +41,15 @@ class _CatalogSetupFooterState extends ConsumerState<CatalogSetupFooter> {
       saved = true;
     } catch (_) {
       if (mounted) {
-        setState(() => _error = 'Could not hide this tab. Try again.');
+        setState(() => _error = context.l10n.browseCouldNotHideThisTabTryAgain);
       }
     } finally {
       try {
         await auth.resumeConfigRefresh();
       } catch (_) {
         if (mounted && saved) {
-          setState(
-              () => _error = 'Saved, but could not refresh tabs. Try again.');
+          setState(() =>
+              _error = context.l10n.browseSavedButCouldNotRefreshTabsTryAgain);
         }
       }
       if (mounted) setState(() => _saving = false);
@@ -72,7 +74,7 @@ class _CatalogSetupFooterState extends ConsumerState<CatalogSetupFooter> {
                 MediaQuery.textScalerOf(context).scale(14) > 20;
             final setup = CatalogSetupButton(
                 serviceType: catalog.serviceType,
-                label: 'Set up ${catalog.serviceName}');
+                label: context.l10n.browseSetUpService(catalog.serviceName));
             final hide = OutlinedButton.icon(
               onPressed: canHide && !_saving ? _hide : null,
               icon: _saving
@@ -81,22 +83,25 @@ class _CatalogSetupFooterState extends ConsumerState<CatalogSetupFooter> {
                       height: 16,
                       child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.visibility_off_outlined),
-              label: Text(_saving ? 'Hiding…' : 'Hide this tab'),
+              label: Text(_saving
+                  ? context.l10n.browseHiding
+                  : context.l10n.browseHideThisTab),
             );
             return Column(mainAxisSize: MainAxisSize.min, children: [
-              const Text(
-                  'Hiding this tab affects everyone on this server. '
-                  'After setup, it appears for users assigned to its service.',
+              Text(
+                  context.l10n
+                      .browseHidingThisTabAffectsEveryoneOnThisServerBrowseAfterSetupItAppearsForUsersAssignedToItsService,
                   style:
                       TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
               if (!canHide)
-                const Padding(
-                    padding: EdgeInsets.only(top: 6),
-                    child: Text(discoverVisibilityUpdateMessage)),
+                Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                        browseLabel(context, discoverVisibilityUpdateMessage))),
               if (_error != null)
                 Padding(
                     padding: const EdgeInsets.only(top: 6),
-                    child: Text(_error!,
+                    child: Text(browseLabel(context, _error!),
                         style: const TextStyle(color: AppTheme.error))),
               const SizedBox(height: 8),
               if (stacked)

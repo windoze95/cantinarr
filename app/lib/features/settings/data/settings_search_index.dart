@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/app_localizations.dart';
+
 import 'package:flutter/material.dart';
 
 import '../../../core/models/user_profile.dart';
@@ -125,6 +127,19 @@ class SettingsSearchEntry {
     this.anchorId,
   });
 
+  /// Localized display copy, while retaining stable routes, anchors and gates.
+  SettingsSearchEntry localized(AppLocalizations l10n) => SettingsSearchEntry(
+        id: id,
+        title: _settingsSearchLabel(l10n, title),
+        icon: icon,
+        route: route,
+        screenTitle: _settingsSearchLabel(l10n, screenTitle),
+        section: _settingsSearchLabel(l10n, section),
+        keywords: keywords,
+        gate: gate,
+        anchorId: anchorId,
+      );
+
   /// Where the setting lives, for result subtitles: 'Screen › Section'.
   String get breadcrumb =>
       section.isEmpty ? screenTitle : '$screenTitle › $section';
@@ -134,6 +149,16 @@ class SettingsSearchEntry {
 // Screen-level entries (the root tiles that open other screens), then the
 // root's own rows and action tiles, in the root ListView's visual order.
 const List<SettingsSearchEntry> _rootEntries = [
+  SettingsSearchEntry(
+    id: 'root.language',
+    title: 'Language',
+    icon: Icons.language,
+    route: '/settings',
+    screenTitle: 'Settings',
+    keywords: ['language', 'locale', 'english', 'french', 'français', 'langue'],
+    gate: gateEveryone,
+    anchorId: 'root.language',
+  ),
   SettingsSearchEntry(
     id: 'screen.setup-checklist',
     title: 'Setup Checklist',
@@ -1645,6 +1670,7 @@ List<SettingsSearchEntry> searchSettingsIndex(
   String query,
   SettingsSearchGates gates, {
   List<SettingsSearchEntry> index = settingsSearchIndex,
+  AppLocalizations? localizations,
 }) {
   final q = query.trim().toLowerCase();
   if (q.isEmpty) return const [];
@@ -1656,18 +1682,152 @@ List<SettingsSearchEntry> searchSettingsIndex(
 
   for (final entry in index) {
     if (!entry.gate(gates)) continue;
-    final title = entry.title.toLowerCase();
-    final primary = '$title ${entry.keywords.join(' ').toLowerCase()}';
+    final localized =
+        localizations == null ? entry : entry.localized(localizations);
+    final title = localized.title.toLowerCase();
+    final primary =
+        '$title ${entry.title.toLowerCase()} ${entry.keywords.join(' ').toLowerCase()}';
     final haystack =
-        '$primary ${entry.screenTitle.toLowerCase()} ${entry.section.toLowerCase()}';
+        '$primary ${localized.screenTitle.toLowerCase()} ${localized.section.toLowerCase()} ${entry.screenTitle.toLowerCase()} ${entry.section.toLowerCase()}';
     if (!terms.every(haystack.contains)) continue;
     if (title.contains(q)) {
-      titleHits.add(entry);
+      titleHits.add(localized);
     } else if (terms.any(primary.contains)) {
-      keywordHits.add(entry);
+      keywordHits.add(localized);
     } else {
-      contextHits.add(entry);
+      contextHits.add(localized);
     }
   }
   return [...titleHits, ...keywordHits, ...contextHits];
 }
+
+String _settingsSearchLabel(AppLocalizations l10n, String label) =>
+    switch (label) {
+      'Language' => l10n.settingsLanguage,
+      'Settings' => l10n.settingsTitle,
+      'Setup Checklist' => l10n.settingsSetupChecklist,
+      'Sign out' => l10n.settingsSignOut,
+      'Server' => l10n.settingsServer,
+      'Linked sign-in' => l10n.settingsLinkedSignIn,
+      'Account' => l10n.settingsAccount,
+      'Password' => l10n.settingsPassword,
+      'Video apps' => l10n.settingsVideoApps,
+      'Listening apps' => l10n.settingsListeningApps,
+      'Passkeys' => l10n.settingsPasskeys,
+      'AI Access' => l10n.settingsAiAccess,
+      'Request allowance' => l10n.settingsRequestAllowance,
+      'Discover' => l10n.settingsDiscover,
+      'Modules' => l10n.settingsModules,
+      'My reports' => l10n.settingsMyReports,
+      'Add Instance' => l10n.settingsAddInstance,
+      'Users' => l10n.settingsUsers,
+      'Admin' => l10n.settingsAdmin,
+      'Plex sign-in' => l10n.settingsPlexSignIn,
+      'Single sign-on' => l10n.settingsSingleSignOn,
+      'External Address' => l10n.settingsExternalAddress,
+      'Seerr-compatible API' => l10n.settingsSeerrApi,
+      'Outbound Proxy' => l10n.settingsOutboundProxy,
+      'Connected Devices' => l10n.settingsConnectedDevices,
+      'Apple TVs' => l10n.settingsAppleTVs,
+      'Providers & Credentials' => l10n.settingsProvidersCredentials,
+      'AI Tools' => l10n.settingsAiTools,
+      'AI Remediation' => l10n.settingsAiRemediation,
+      'Agent Auto-Approvals' => l10n.settingsAgentApprovals,
+      'Configuration History' => l10n.settingsConfigurationHistory,
+      'Request Settings' => l10n.settingsRequestSettings,
+      'Discord Notifications' => l10n.settingsDiscordNotifications,
+      'Notifications' => l10n.settingsNotifications,
+      'Server Discord Notifications' => l10n.settingsServerDiscordNotifications,
+      'Update Portal' => l10n.settingsUpdatePortal,
+      'Approvals' => l10n.settingsApprovals,
+      'Needs attention menu' => l10n.settingsAttentionMenu,
+      'Issues' => l10n.settingsIssues,
+      'Agent fixes' => l10n.settingsAgentFixes,
+      'Profile approvals' => l10n.settingsProfileApprovals,
+      'Push Notifications' => l10n.settingsPushNotifications,
+      'Media server access' => l10n.settingsMediaServerAccess,
+      'Guides' => l10n.settingsGuides,
+      'About' => l10n.settingsAbout,
+      'Get the phone app' => l10n.settingsPhoneApp,
+      'Request a feature' => l10n.settingsRequestFeature,
+      'Donate' => l10n.settingsDonate,
+      'Require approval for new requests' =>
+        l10n.settingsRequireApprovalForNewRequests,
+      'Request Defaults' => l10n.settingsRequestDefaults,
+      'Approval' => l10n.settingsApproval,
+      'Let users choose seasons' => l10n.settingsLetUsersChooseSeasons,
+      'Seasons' => l10n.settingsSeasons,
+      'Default season scope' => l10n.settingsDefaultSeasonScope,
+      'Let users choose quality' => l10n.settingsLetUsersChooseQuality,
+      'Quality' => l10n.settingsQuality,
+      'Default Radarr quality' => l10n.settingsDefaultRadarrQuality,
+      'Default Sonarr quality' => l10n.settingsDefaultSonarrQuality,
+      'Standing auto-approvals' => l10n.settingsStandingAutoApprovals,
+      'Enabled' => l10n.settingsEnabled,
+      'General' => l10n.settingsGeneral,
+      'Auto-dispatch on detected problems' =>
+        l10n.settingsAutoDispatchOnDetectedProblems,
+      'Allow problem reporting' => l10n.settingsAllowProblemReporting,
+      'Mark resolved issues as read' => l10n.settingsMarkResolvedIssuesAsRead,
+      'Mode' => l10n.settingsMode,
+      'Minimum watch time (minutes)' => l10n.settingsMinimumWatchTimeMinutes,
+      'Automatic recovery' => l10n.settingsAutomaticRecovery,
+      'Quiet time after arr activity (minutes)' =>
+        l10n.settingsQuietTimeAfterArrActivityMinutes,
+      'Recovery settle time (minutes)' =>
+        l10n.settingsRecoverySettleTimeMinutes,
+      'Remediation model' => l10n.settingsRemediationModel,
+      'Shared AI' => l10n.settingsSharedAi,
+      'Max steps per run' => l10n.settingsMaxStepsPerRun,
+      'Limits' => l10n.settingsLimits,
+      'Max output tokens per turn' => l10n.settingsMaxOutputTokensPerTurn,
+      'Max wall-clock (seconds)' => l10n.settingsMaxWallClockSeconds,
+      'Daily run cap' => l10n.settingsDailyRunCap,
+      'Wait for a user reply (hours)' => l10n.settingsWaitForAUserReplyHours,
+      'Failed auto investigations before pausing' =>
+        l10n.settingsFailedAutoInvestigationsBeforePausing,
+      'Receive push notifications' => l10n.notificationReceivePush,
+      'Request approved or denied' => l10n.notificationRequestDecision,
+      'New movie available' => l10n.notificationNewMovie,
+      'New episodes available' => l10n.notificationNewEpisodes,
+      'New book available' => l10n.notificationNewBook,
+      'New music available' => l10n.notificationNewMusic,
+      'Problem resolved' => l10n.notificationProblemResolved,
+      'New requests to review' => l10n.notificationRequestsToReview,
+      'Automatically approved requests' => l10n.notificationAutoApproved,
+      'Problem reports' => l10n.notificationProblemReports,
+      'Fixes to review' => l10n.notificationFixesToReview,
+      'Weekly agent summary' => l10n.notificationWeeklySummary,
+      'Plex access requests' => l10n.notificationPlexAccessRequests,
+      'Quality upgrades' => l10n.notificationQualityUpgrades,
+      'Server Push Notifications' => l10n.notificationServerPush,
+      'Allow push notifications' => l10n.notificationAllowPush,
+      'Reported problems resolved' => l10n.notificationReportedProblemsResolved,
+      'AI Model' => l10n.settingsAiModel,
+      'OpenAI reasoning effort' => l10n.settingsOpenaiReasoningEffort,
+      'Daily shared-model test' => l10n.settingsDailySharedModelTest,
+      'Anthropic (AI)' => l10n.settingsAnthropicAi,
+      'OpenAI (AI)' => l10n.settingsOpenaiAi,
+      'Google Gemini (AI)' => l10n.settingsGoogleGeminiAi,
+      'xAI Grok (AI)' => l10n.settingsXaiGrokAi,
+      'Only show English-language titles' =>
+        l10n.settingsOnlyShowEnglishLanguageTitles,
+      'Show 4K badges' => l10n.settingsShow4KBadges,
+      'Covers' => l10n.settingsCovers,
+      'Hide Movies when Radarr isn\'t connected' =>
+        l10n.settingsHideMoviesWhenRadarrIsnTConnected,
+      'Discover tabs' => l10n.settingsDiscoverTabs,
+      'Hide TV Shows when Sonarr isn\'t connected' =>
+        l10n.settingsHideTvShowsWhenSonarrIsnTConnected,
+      'Hide Books when Chaptarr isn\'t connected' =>
+        l10n.settingsHideBooksWhenChaptarrIsnTConnected,
+      'Hide Music when Lidarr isn\'t connected' =>
+        l10n.settingsHideMusicWhenLidarrIsnTConnected,
+      'Credentials' => l10n.settingsCredentials,
+      'AI Debug Logging' => l10n.settingsAiDebugLogging,
+      'Provided by this server' => l10n.settingsProvidedByThisServer,
+      'Included' => l10n.settingsIncluded,
+      'Your provider' => l10n.settingsYourProvider,
+      'Personal' => l10n.settingsPersonal,
+      _ => label,
+    };

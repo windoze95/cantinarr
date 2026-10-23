@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -72,7 +73,7 @@ class _PendingAgentActionsScreenState
 
   String _friendlyError(Object e) {
     final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
-    return m != null ? m.group(1)! : 'Something went wrong';
+    return m != null ? m.group(1)! : context.l10n.opsSomethingWentWrongMessage;
   }
 
   Future<void> _load() async {
@@ -110,10 +111,9 @@ class _PendingAgentActionsScreenState
   /// The proposals currently offering decision controls — the exact set the
   /// awaiting tab renders as actionable, and therefore the only ids "Approve
   /// all" may submit.
-  List<AgentAction> get _decidableActions =>
-      (_actions ?? const <AgentAction>[])
-          .where((a) => a.canTakeAction)
-          .toList();
+  List<AgentAction> get _decidableActions => (_actions ?? const <AgentAction>[])
+      .where((a) => a.canTakeAction)
+      .toList();
 
   /// Approve every reviewed proposal in one request. The id list is captured
   /// before the confirmation dialog, so a proposal that parks while the admin
@@ -136,22 +136,22 @@ class _PendingAgentActionsScreenState
       builder: (dialogContext) => AlertDialog(
         backgroundColor: AppTheme.surface,
         title: Text(
-          'Approve all ${ids.length} fixes?',
+          context.l10n.opsApproveAllCount(ids.length.toString()),
           style: const TextStyle(color: AppTheme.textPrimary),
         ),
         content: Text(
-          'Cantinarr will apply all ${ids.length} fixes awaiting review, one '
-          'at a time, in the connected media services shown on their cards. '
-          'Each fix runs at most once, and a fix whose download already '
-          'recovered or whose state changed is skipped. This cannot be '
-          'undone from Cantinarr.'
-          '${destructiveHeld > 0 ? '\n\n$destructiveHeld fix(es) that delete imported files are NOT included — each needs its own approval.' : ''}',
+          context.l10n.opsBatchApprovalDescription(
+              ids.length.toString(),
+              destructiveHeld > 0
+                  ? context.l10n
+                      .opsBatchDestructiveExcluded(destructiveHeld.toString())
+                  : ''),
           style: const TextStyle(color: AppTheme.textSecondary),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.opsCancel),
           ),
           ElevatedButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
@@ -159,7 +159,7 @@ class _PendingAgentActionsScreenState
               backgroundColor: AppTheme.available,
               foregroundColor: AppTheme.background,
             ),
-            child: const Text('Approve all'),
+            child: Text(context.l10n.opsApproveAll),
           ),
         ],
       ),
@@ -175,7 +175,7 @@ class _PendingAgentActionsScreenState
       if (!mounted) return;
       // The server runs the batch to completion even when this response is
       // lost, so never claim nothing happened; the reload shows the truth.
-      _showSnack('Could not confirm the results. Refresh to see what ran.');
+      _showSnack(context.l10n.opsCouldNotConfirmTheResultsRefreshTo);
     } finally {
       if (mounted) setState(() => _batchBusy = false);
     }
@@ -189,16 +189,17 @@ class _PendingAgentActionsScreenState
     final skipped = results.where((r) => r.skipped).length;
     final attention = results.where((r) => r.needsAttention).length;
     if (results.isNotEmpty && applied == results.length) {
-      return 'All $applied fixes applied.';
+      return context.l10n.opsAllFixesApplied(applied.toString());
     }
     final parts = <String>[
-      if (applied > 0) '$applied applied',
-      if (skipped > 0) '$skipped skipped',
-      if (attention > 0) '$attention need${attention == 1 ? 's' : ''} attention',
+      if (applied > 0) context.l10n.opsAppliedBatchCount(applied.toString()),
+      if (skipped > 0) context.l10n.opsSkippedBatchCount(skipped.toString()),
+      if (attention > 0)
+        context.l10n.opsAttentionBatchCount(attention),
     ];
     return parts.isEmpty
-        ? 'No fixes were applied.'
-        : 'Approve all: ${parts.join(' · ')}.';
+        ? context.l10n.opsNoFixesWereApplied
+        : context.l10n.opsApproveAllSummary(parts.join(' · '));
   }
 
   void _showSnack(String message) {
@@ -222,7 +223,7 @@ class _PendingAgentActionsScreenState
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Agent fixes'),
+        title: Text(context.l10n.opsAgentFixes),
         actions: [
           if (showApproveAll)
             Padding(
@@ -237,7 +238,7 @@ class _PendingAgentActionsScreenState
                             strokeWidth: 2, color: AppTheme.available),
                       )
                     : const Icon(Icons.done_all, size: 18),
-                label: const Text('Approve all'),
+                label: Text(context.l10n.opsApproveAll),
                 style: TextButton.styleFrom(
                   foregroundColor: AppTheme.available,
                 ),
@@ -253,15 +254,15 @@ class _PendingAgentActionsScreenState
               child: SizedBox(
                 width: double.infinity,
                 child: SegmentedButton<_AgentActionsTab>(
-                  segments: const [
+                  segments: [
                     ButtonSegment(
                       value: _AgentActionsTab.awaitingReview,
-                      label: Text('Awaiting review'),
+                      label: Text(context.l10n.opsAwaitingReview),
                       icon: Icon(Icons.fact_check_outlined),
                     ),
                     ButtonSegment(
                       value: _AgentActionsTab.history,
-                      label: Text('History'),
+                      label: Text(context.l10n.opsHistory),
                       icon: Icon(Icons.history),
                     ),
                   ],
@@ -276,8 +277,7 @@ class _PendingAgentActionsScreenState
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
                 child: IssueRefreshBanner(
-                  message:
-                      "Couldn't refresh agent fixes. Showing the last update.",
+                  message: context.l10n.opsCouldnTRefreshAgentFixesShowingThe,
                   onRetry: _load,
                 ),
               ),
@@ -300,8 +300,10 @@ class _PendingAgentActionsScreenState
                                     Center(
                                       child: Text(
                                         _tab == _AgentActionsTab.awaitingReview
-                                            ? 'No fixes awaiting review.'
-                                            : 'No agent-fix history yet.',
+                                            ? context
+                                                .l10n.opsNoFixesAwaitingReview
+                                            : context
+                                                .l10n.opsNoAgentFixHistoryYet,
                                         style: const TextStyle(
                                             color: AppTheme.textSecondary),
                                       ),
@@ -343,9 +345,9 @@ class _PendingAgentActionsScreenState
     final thatDay = DateTime(local.year, local.month, local.day);
     final startOfToday = DateTime(today.year, today.month, today.day);
     final diff = startOfToday.difference(thatDay).inDays;
-    if (diff == 0) return 'Today';
-    if (diff == 1) return 'Yesterday';
-    return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}';
+    if (diff == 0) return context.l10n.opsToday;
+    if (diff == 1) return context.l10n.opsYesterday;
+    return MaterialLocalizations.of(context).formatMediumDate(local);
   }
 
   Widget _buildGroupedList(List<AgentAction> actions) {
@@ -384,7 +386,7 @@ class _PendingAgentActionsScreenState
         final issueId = order[index];
         final group = groups[issueId]!;
         final title = group.first.issueTitle.isEmpty
-            ? 'Issue #$issueId'
+            ? context.l10n.opsIssueNumberVariable(issueId.toString())
             : group.first.issueTitle;
         final dayHeader = dayForGroup[issueId];
         return Column(
@@ -473,7 +475,8 @@ class _ErrorView extends StatelessWidget {
                 style: const TextStyle(color: AppTheme.error),
                 textAlign: TextAlign.center),
             const SizedBox(height: 12),
-            ElevatedButton(onPressed: onRetry, child: const Text('Retry')),
+            ElevatedButton(
+                onPressed: onRetry, child: Text(context.l10n.opsRetry)),
           ],
         ),
       ),

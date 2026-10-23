@@ -1,3 +1,6 @@
+import 'settings_labels.dart';
+import 'package:cantinarr/core/storage/locale_preferences.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import '../../request/logic/request_quota_provider.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -88,8 +91,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final audiobookshelfVisible = connection?.mediaServerInstances
             .any((instance) => instance.serviceType == 'audiobookshelf') ??
         false;
-    final videoServersVisible = connection?.mediaServerInstances
-        .any((instance) => VideoApps.serviceTypes.contains(instance.serviceType)) ?? false;
+    final videoServersVisible = connection?.mediaServerInstances.any(
+            (instance) =>
+                VideoApps.serviceTypes.contains(instance.serviceType)) ??
+        false;
     final gates = SettingsSearchGates(
       user: user,
       chaptarrEnabled: connection?.services.chaptarr ?? false,
@@ -105,7 +110,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final searching = _query.trim().isNotEmpty;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(title: Text(context.l10n.settingsTitle)),
       body: CenteredContent(
           child: ListView(
         // Build every child while a settings-search highlight needs to find
@@ -126,12 +131,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 autocorrect: false,
                 textInputAction: TextInputAction.search,
                 decoration: InputDecoration(
-                  hintText: 'Search all settings',
+                  hintText: context.l10n.settingsSearchAll,
                   prefixIcon: const Icon(Icons.search),
                   suffixIcon: _searchController.text.isEmpty
                       ? null
                       : IconButton(
-                          tooltip: 'Clear settings search',
+                          tooltip: context.l10n.settingsClearSearch,
                           icon: const Icon(Icons.close_rounded),
                           onPressed: () {
                             _searchController.clear();
@@ -146,13 +151,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ..._searchResults(context, gates)
           else ...[
             // Server connection
-            const _SectionHeader(title: 'Server'),
+            _SectionHeader(title: context.l10n.settingsServer),
             // One live row: which server, its address, and whether the
             // session is connected — the dot carries the status.
             _SettingsTile(
               icon: Icons.dns_outlined,
               title: connection?.serverName ?? 'Cantinarr',
-              subtitle: connection?.serverUrl ?? 'Not connected',
+              subtitle:
+                  connection?.serverUrl ?? context.l10n.settingsNotConnected,
               trailing: Icon(
                 Icons.circle,
                 size: 12,
@@ -166,96 +172,111 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             // connect screen while a session exists).
             _SettingsTile(
               icon: Icons.logout,
-              title: 'Sign out',
-              subtitle: 'Disconnect this device from the server',
+              title: context.l10n.settingsSignOut,
+              subtitle: context.l10n.settingsDisconnectDevice,
               onTap: () => _confirmSignOut(context),
             ),
 
             const SizedBox(height: 16),
 
+            SettingsHighlight(
+              anchorId: 'root.language',
+              highlightId: _activeHighlight,
+              child: _SettingsTile(
+                icon: Icons.language,
+                title: context.l10n.settingsLanguage,
+                subtitle: switch (ref.watch(appLocaleProvider)?.languageCode) {
+                  'en' => 'English',
+                  'fr' => 'Français',
+                  _ => context.l10n.settingsSystemLanguage,
+                },
+                onTap: () => _showLanguageDialog(context),
+              ),
+            ),
+
             // Account
-            const _SectionHeader(title: 'Account'),
+            _SectionHeader(title: context.l10n.settingsAccount),
             _SettingsTile(
               icon: Icons.person_outline,
-              title: user?.username ?? 'Unknown',
-              subtitle: _accountSubtitle(user),
+              title: user?.username ?? context.l10n.settingsUnknown,
+              subtitle: _accountSubtitle(context, user),
             ),
             _SettingsTile(
               icon: Icons.link,
-              title: 'Linked sign-in',
-              subtitle: 'Manage single sign-on and Plex identities',
+              title: context.l10n.settingsLinkedSignIn,
+              subtitle: context.l10n.settingsLinkedSignInDescription,
               onTap: () => context.push('/settings/sso-account'),
             ),
             if (user?.canUsePassword == true)
               _SettingsTile(
                 icon: Icons.lock_outline,
-                title: 'Password',
+                title: context.l10n.settingsPassword,
                 subtitle: user?.hasPassword == null
-                    ? 'Set a password for sign-in & MCP'
+                    ? context.l10n.settingsSetPassword
                     : (user!.hasPassword!
-                        ? 'Change your sign-in password'
-                        : 'Add a password for sign-in & MCP'),
+                        ? context.l10n.settingsChangePassword
+                        : context.l10n.settingsAddPassword),
                 onTap: () => context.push('/settings/password'),
               ),
             if (user?.canUsePasskey == true)
               _SettingsTile(
                 icon: Icons.fingerprint,
-                title: 'Passkeys',
-                subtitle: 'Manage passkey sign-in methods',
+                title: context.l10n.settingsPasskeys,
+                subtitle: context.l10n.settingsManagePasskeys,
                 onTap: () => context.push('/settings/passkeys'),
               ),
             if (user?.hasPermission('ai:chat') == true)
               _SettingsTile(
                 icon: Icons.auto_awesome_outlined,
-                title: 'AI Access',
-                subtitle: _aiAccessSubtitle(aiSettings),
+                title: context.l10n.settingsAiAccess,
+                subtitle: _aiAccessSubtitle(context, aiSettings),
                 onTap: () => context.push('/settings/ai'),
               ),
             if (videoServersVisible)
               _SettingsTile(
                 icon: Icons.video_library_outlined,
-                title: 'Video apps',
-                subtitle: 'Choose video apps for iPhone and iPad',
+                title: context.l10n.settingsVideoApps,
+                subtitle: context.l10n.settingsVideoAppsDescription,
                 onTap: () => context.push('/settings/video-apps'),
               ),
             if (audiobookshelfVisible)
               _SettingsTile(
                 icon: Icons.headphones_outlined,
-                title: 'Listening apps',
-                subtitle: 'Choose audiobook apps for iPhone, iPad and Android',
+                title: context.l10n.settingsListeningApps,
+                subtitle: context.l10n.settingsListeningAppsDescription,
                 onTap: () => context.push('/settings/listening-apps'),
               ),
             if (ref.watch(requestQuotasSupportedProvider))
               _SettingsTile(
                 icon: Icons.data_usage,
-                title: 'Request allowance',
+                title: context.l10n.settingsRequestAllowance,
                 onTap: () => context.push('/settings/request-allowance'),
               ),
 
             const SizedBox(height: 16),
 
             // Modules (dynamic, instance-based)
-            const _SectionHeader(title: 'Modules'),
+            _SectionHeader(title: context.l10n.settingsModules),
             // Discover leads: it mirrors the drawer (above the libraries)
             // and stays anchored while the instance list below it changes.
             if (user?.isAdmin == true)
               _SettingsTile(
                 icon: Icons.explore_outlined,
-                title: 'Discover',
-                subtitle: 'Row sources, language filter, TMDB and Trakt',
+                title: context.l10n.settingsDiscover,
+                subtitle: context.l10n.settingsDiscoverDescription,
                 onTap: () => context.push('/settings/discovery'),
               ),
             if (instances.isEmpty)
-              const _SettingsTile(
+              _SettingsTile(
                 icon: Icons.info_outline,
-                title: 'No instances configured',
-                subtitle: 'Connect a service to enable requests and library tools',
+                title: context.l10n.settingsNoInstances,
+                subtitle: context.l10n.settingsConnectService,
               ),
             ...instances.map((inst) => _SettingsTile(
                   icon: _serviceIcon(inst.serviceType),
                   title: inst.name,
                   subtitle:
-                      '${_serviceLabel(inst.serviceType)}${inst.isDefault ? ' (Default)' : ''}',
+                      '${_serviceLabel(inst.serviceType)}${inst.isDefault ? context.l10n.settingsDefault2 : ''}',
                   trailing: const Icon(
                     Icons.circle,
                     size: 12,
@@ -280,67 +301,68 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             if (user?.isAdmin != true)
               _SettingsTile(
                 icon: Icons.flag_outlined,
-                title: 'My reports',
-                subtitle: 'Problems you reported and how they ended',
+                title: context.l10n.settingsMyReports,
+                subtitle: context.l10n.settingsMyReportsDescription,
                 onTap: () => context.push('/issues'),
               ),
             if (user?.isAdmin == true)
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: OutlinedButton.icon(
                   onPressed: () async {
                     final result =
                         await context.push<bool>('/settings/instance/new');
                     if (result != true || !context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Instance added.')),
+                      SnackBar(
+                          content: Text(context.l10n.settingsInstanceAdded)),
                     );
                   },
                   icon: const Icon(Icons.add),
-                  label: const Text('Add Instance'),
+                  label: Text(context.l10n.settingsAddInstance),
                 ),
               ),
 
             // Admin section
             if (user?.isAdmin == true) ...[
               const SizedBox(height: 16),
-              const _SectionHeader(title: 'Admin'),
+              _SectionHeader(title: context.l10n.settingsAdmin),
               // People and access first: users (inviting lives there now),
               // the address their invite links are built from, their
               // devices, then the AI/config stack.
               _SettingsTile(
                 icon: Icons.people_outline,
-                title: 'Users',
-                subtitle: 'Manage accounts, roles, and invites',
+                title: context.l10n.settingsUsers,
+                subtitle: context.l10n.settingsManageUsers,
                 onTap: () => context.push('/settings/users'),
               ),
               _SettingsTile(
                   icon: Icons.play_arrow,
-                  title: 'Plex sign-in',
-                  subtitle:
-                      'Sign-in, automatic signup and existing account review',
+                  title: context.l10n.settingsPlexSignIn,
+                  subtitle: context.l10n.settingsPlexSignInDescription,
                   onTap: () => context.push('/settings/plex-auth')),
               _SettingsTile(
                 icon: Icons.login,
-                title: 'Single sign-on',
-                subtitle: 'Identity provider, account creation and sign-in policy',
+                title: context.l10n.settingsSingleSignOn,
+                subtitle: context.l10n.settingsSingleSignOnDescription,
                 onTap: () => context.push('/settings/oidc'),
               ),
               _SettingsTile(
                 icon: Icons.public,
-                title: 'External Address',
+                title: context.l10n.settingsExternalAddress,
                 subtitle: (externalAddress?.isNotEmpty ?? false)
                     ? externalAddress!
-                    : 'Address invite links use outside your network',
+                    : context.l10n.settingsInviteAddress,
                 onTap: () =>
                     _showExternalAddressDialog(context, externalAddress ?? ''),
               ),
               _SettingsTile(
                 icon: Icons.vpn_lock_outlined,
-                title: 'Outbound Proxy',
+                title: context.l10n.settingsOutboundProxy,
                 subtitle: (outboundProxy?.url.isNotEmpty ?? false)
                     ? outboundProxy!.url
-                    : 'Route internet traffic through a proxy',
+                    : context.l10n.settingsOutboundProxyDescription,
                 onTap: () => _showOutboundProxyDialog(
                   context,
                   outboundProxy ?? OutboundProxySettings.empty,
@@ -348,65 +370,65 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
               _SettingsTile(
                 icon: Icons.hub_outlined,
-                title: 'Seerr-compatible API',
-                subtitle: 'Let Maintainerr and other apps read requests',
+                title: context.l10n.settingsSeerrApi,
+                subtitle: context.l10n.settingsSeerrApiDescription,
                 onTap: () => context.push('/settings/seerr-api'),
               ),
               _SettingsTile(
                 icon: Icons.devices,
-                title: 'Connected Devices',
-                subtitle: 'Manage all connected devices',
+                title: context.l10n.settingsConnectedDevices,
+                subtitle: context.l10n.settingsManageDevices,
                 onTap: () => context.push('/settings/devices'),
               ),
               if (connection?.appleTvRemote == true)
                 _SettingsTile(
                   icon: Icons.tv,
-                  title: 'Apple TVs',
-                  subtitle: 'Pair TVs and choose who can open titles in Infuse',
+                  title: context.l10n.settingsAppleTVs,
+                  subtitle: context.l10n.settingsAppleTVsDescription,
                   onTap: () => context.push('/settings/apple-tvs'),
                 ),
               _SettingsTile(
                 icon: Icons.key_outlined,
-                title: 'Providers & Credentials',
-                subtitle: 'Included AI providers and models',
+                title: context.l10n.settingsProvidersCredentials,
+                subtitle: context.l10n.settingsIncludedProviders,
                 onTap: () => context.push('/settings/credentials'),
               ),
               _SettingsTile(
                 icon: Icons.handyman_outlined,
-                title: 'AI Tools',
-                subtitle: 'Enable or disable assistant tools',
+                title: context.l10n.settingsAiTools,
+                subtitle: context.l10n.settingsAiToolsDescription,
                 onTap: () => context.push('/settings/ai-tools'),
               ),
               _SettingsTile(
                 icon: Icons.auto_fix_high_outlined,
-                title: 'AI Remediation',
-                subtitle: 'Problem reporting and auto-fix assistant',
+                title: context.l10n.settingsAiRemediation,
+                subtitle: context.l10n.settingsAiRemediationDescription,
                 onTap: () => context.push('/settings/ai-remediation'),
               ),
               _SettingsTile(
                 icon: Icons.rule_outlined,
-                title: 'Agent Auto-Approvals',
-                subtitle: 'Standing rules that approve repeat fixes',
+                title: context.l10n.settingsAgentApprovals,
+                subtitle: context.l10n.settingsAgentApprovalsDescription,
                 onTap: () => context.push('/settings/agent-approval-rules'),
               ),
               _SettingsTile(
                 icon: Icons.manage_history_outlined,
-                title: 'Configuration History',
-                subtitle: 'Review AI/MCP profile and custom-format changes',
+                title: context.l10n.settingsConfigurationHistory,
+                subtitle: context.l10n.settingsConfigurationHistoryDescription,
                 onTap: () => context.push('/settings/change-history'),
               ),
               _SettingsTile(
                 icon: Icons.tune,
-                title: 'Request Settings',
-                subtitle: 'Approval, season, and quality defaults',
+                title: context.l10n.settingsRequestSettings,
+                subtitle: context.l10n.settingsRequestSettingsDescription,
                 onTap: () => context.push('/settings/request-settings'),
               ),
               _SettingsTile(
                 icon: Icons.open_in_new,
-                title: 'Update Portal',
+                title: context.l10n.settingsUpdatePortal,
                 subtitle: (updateStatus?.managementUrl.isNotEmpty ?? false)
                     ? updateStatus!.managementUrl
-                    : 'Link your container manager for update prompts',
+                    : context.l10n.settingsUpdatePortalDescription,
                 onTap: () => _showManagementUrlDialog(
                   context,
                   updateStatus?.managementUrl ?? '',
@@ -420,24 +442,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             SettingsHighlight(
               anchorId: SettingsAnchors.rootNotifications,
               highlightId: _activeHighlight,
-              child: const _SectionHeader(title: 'Notifications'),
+              child: _SectionHeader(title: context.l10n.settingsNotifications),
             ),
             _SettingsTile(
               icon: Icons.notifications_outlined,
-              title: 'Push Notifications',
-              subtitle: 'Choose which push notifications you receive',
+              title: context.l10n.settingsPushNotifications,
+              subtitle: context.l10n.settingsPushNotificationsDescription,
               onTap: () => context.push('/settings/push-notifications'),
             ),
             _SettingsTile(
               icon: Icons.notifications_active_outlined,
-              title: 'Discord Notifications',
-              subtitle: 'Choose your Discord mentions and event updates',
+              title: context.l10n.settingsDiscordNotifications,
+              subtitle: context.l10n.settingsDiscordNotificationsDescription,
               onTap: () => context.push('/settings/discord-notifications'),
             ),
 
             if (user?.isAdmin == true) ...[
               const SizedBox(height: 16),
-              const _SectionHeader(title: 'Needs attention menu'),
+              _SectionHeader(title: context.l10n.settingsAttentionMenu),
               SettingsHighlight(
                 anchorId: SettingsAnchors.rootAttentionApprovals,
                 highlightId: _activeHighlight,
@@ -478,11 +500,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             // (or a Plex server can be asked for): the guide's content comes
             // from the server, so without one there is nothing to open.
             if (mediaServersVisible) ...[
-              const _SectionHeader(title: 'Guides'),
+              _SectionHeader(title: context.l10n.settingsGuides),
               _SettingsTile(
                 icon: Icons.live_tv_outlined,
-                title: 'Media server access',
-                subtitle: 'Get your access and see where to sign in',
+                title: context.l10n.settingsMediaServerAccess,
+                subtitle: context.l10n.settingsMediaServerAccessDescription,
                 onTap: () => context.push('/media-servers'),
               ),
             ],
@@ -490,7 +512,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             const SizedBox(height: 16),
 
             // About
-            const _SectionHeader(title: 'About'),
+            _SectionHeader(title: context.l10n.settingsAbout),
             _SettingsTile(
               icon: Icons.info_outline,
               title: 'Cantinarr',
@@ -503,8 +525,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             if (phoneAppsVisible)
               _SettingsTile(
                 icon: Icons.smartphone,
-                title: 'Get the phone app',
-                subtitle: 'iPhone and Android, with push notifications',
+                title: context.l10n.settingsPhoneApp,
+                subtitle: context.l10n.settingsPhoneAppDescription,
                 onTap: () => showAppSheet(
                   context,
                   builder: (_) => const PhoneAppsSheet(),
@@ -513,7 +535,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             _SettingsTile(
               icon: Icons.code,
               title: 'GitHub',
-              subtitle: 'Source code, issues, and releases',
+              subtitle: context.l10n.settingsSourceDescription,
               onTap: () => launchUrl(
                 Uri.parse(_githubUrl),
                 mode: LaunchMode.externalApplication,
@@ -522,7 +544,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             _SettingsTile(
               icon: Icons.forum_outlined,
               title: 'Discord',
-              subtitle: 'Questions, help, and news from other users',
+              subtitle: context.l10n.settingsDiscordDescription,
               onTap: () => launchUrl(
                 Uri.parse(_discordUrl),
                 mode: LaunchMode.externalApplication,
@@ -530,8 +552,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
             _SettingsTile(
               icon: Icons.how_to_vote_outlined,
-              title: 'Request a feature',
-              subtitle: 'Vote on the roadmap — no account needed',
+              title: context.l10n.settingsRequestFeature,
+              subtitle: context.l10n.settingsRoadmapDescription,
               onTap: () => launchUrl(
                 Uri.parse(_roadmapUrl),
                 mode: LaunchMode.externalApplication,
@@ -540,8 +562,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             if (_donateVisible)
               _SettingsTile(
                 icon: Icons.favorite_outline,
-                title: 'Donate',
-                subtitle: 'Support Cantinarr on GitHub Sponsors',
+                title: context.l10n.settingsDonate,
+                subtitle: context.l10n.settingsDonateDescription,
                 onTap: () => launchUrl(
                   Uri.parse(_donateUrl),
                   mode: LaunchMode.externalApplication,
@@ -559,7 +581,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// subtitle says where each setting lives, or an empty state that owns up
   /// to gating.
   List<Widget> _searchResults(BuildContext context, SettingsSearchGates gates) {
-    final results = searchSettingsIndex(_query, gates);
+    final results =
+        searchSettingsIndex(_query, gates, localizations: context.l10n);
     if (results.isEmpty) {
       return [
         Padding(
@@ -570,15 +593,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   size: 40, color: AppTheme.textMuted),
               const SizedBox(height: 12),
               Text(
-                'No settings match "${_query.trim()}"',
+                context.l10n.settingsMessageNoSettingsMatchValue1(
+                    (_query.trim()).toString()),
                 style: const TextStyle(
                     color: AppTheme.textPrimary, fontWeight: FontWeight.w600),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 6),
-              const Text(
-                'Try another word. Results only include settings your '
-                'account can see.',
+              Text(
+                context.l10n.settingsSearchHelp,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                 textAlign: TextAlign.center,
               ),
@@ -606,9 +629,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       context.push(
         Uri(
           path: entry.route,
-          queryParameters: entry.anchorId == null
-              ? null
-              : {'highlight': entry.anchorId},
+          queryParameters:
+              entry.anchorId == null ? null : {'highlight': entry.anchorId},
         ).toString(),
       );
       return;
@@ -616,6 +638,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     // Action tiles on the root screen run their own handler; results with an
     // anchor dismiss search and reveal their row in place.
     switch (entry.id) {
+      case 'root.language':
+        _showLanguageDialog(context);
+        return;
       case 'root.sign-out':
         _confirmSignOut(context);
         return;
@@ -641,20 +666,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         showAppSheet(context, builder: (_) => const AboutSheet());
         return;
       case 'root.github':
-        launchUrl(Uri.parse(_githubUrl),
-            mode: LaunchMode.externalApplication);
+        launchUrl(Uri.parse(_githubUrl), mode: LaunchMode.externalApplication);
         return;
       case 'root.discord':
-        launchUrl(Uri.parse(_discordUrl),
-            mode: LaunchMode.externalApplication);
+        launchUrl(Uri.parse(_discordUrl), mode: LaunchMode.externalApplication);
         return;
       case 'root.roadmap':
-        launchUrl(Uri.parse(_roadmapUrl),
-            mode: LaunchMode.externalApplication);
+        launchUrl(Uri.parse(_roadmapUrl), mode: LaunchMode.externalApplication);
         return;
       case 'root.donate':
-        launchUrl(Uri.parse(_donateUrl),
-            mode: LaunchMode.externalApplication);
+        launchUrl(Uri.parse(_donateUrl), mode: LaunchMode.externalApplication);
         return;
     }
     _searchController.clear();
@@ -664,26 +685,59 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     });
   }
 
+  Future<void> _showLanguageDialog(BuildContext context) async {
+    final selected = ref.read(appLocaleProvider)?.languageCode ?? 'system';
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: Text(dialogContext.l10n.settingsLanguage),
+        children: [
+          for (final option in [
+            ('system', dialogContext.l10n.settingsSystemLanguage),
+            ('en', 'English'),
+            ('fr', 'Français'),
+          ])
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(dialogContext, option.$1),
+              child: Row(children: [
+                Expanded(child: Text(option.$2)),
+                if (selected == option.$1)
+                  const Icon(Icons.check, color: AppTheme.accent),
+              ]),
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
+            child: Text(dialogContext.l10n.settingsDeviceLanguageHelp,
+                style: const TextStyle(color: AppTheme.textSecondary)),
+          ),
+        ],
+      ),
+    );
+    if (choice == null || !mounted) return;
+    await ref.read(appLocaleProvider.notifier).setLocale(
+          choice == 'system' ? null : Locale(choice),
+        );
+  }
+
   Future<void> _confirmSignOut(BuildContext context) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Sign Out'),
-        content: const Text(
-          'This device will be disconnected. To sign back in you may need '
-          'a new connect link, or your password or passkey.',
+        title: Text(context.l10n.settingsSignOutTitle),
+        content: Text(
+          context.l10n.settingsSignOutWarning,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.settingsCancel),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.error,
             ),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Sign out'),
+            child: Text(context.l10n.settingsSignOut),
           ),
         ],
       ),
@@ -707,23 +761,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           hasChanges: () => controller.text != current,
           isSaving: saving,
           child: AlertDialog(
-            title: const Text('External Address'),
+            title: Text(context.l10n.settingsExternalAddress),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
-                  'The address other people use to reach this server, like a '
-                  'reverse proxy domain or a public IP. Invite links and '
-                  'passkey links are built from it. Leave blank to build links '
-                  'from the address your own app connects with, which usually '
-                  'only works on your network.',
+                Text(
+                  context.l10n.settingsExternalAddressHelp,
                   style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                 ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: controller,
-                  decoration: const InputDecoration(
-                    labelText: 'External address',
+                  decoration: InputDecoration(
+                    labelText: context.l10n.settingsExternalAddressLabel,
                     hintText: 'https://cantinarr.example.com',
                     prefixIcon: Icon(Icons.public),
                   ),
@@ -736,7 +786,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(dialogContext).maybePop(),
-                child: const Text('Cancel'),
+                child: Text(context.l10n.settingsCancel),
               ),
               ElevatedButton(
                 onPressed: saving
@@ -754,7 +804,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           setDialogState(() => saving = false);
                           if (dialogContext.mounted) {
                             ScaffoldMessenger.of(dialogContext).showSnackBar(
-                              SnackBar(content: Text('Failed to save: $e')),
+                              SnackBar(
+                                  content: Text(context.l10n
+                                      .settingsMessageFailedToSaveValue1(
+                                          (e).toString()))),
                             );
                           }
                         }
@@ -765,7 +818,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         height: 18,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Text('Save'),
+                    : Text(context.l10n.settingsSave),
               ),
             ],
           ),
@@ -796,25 +849,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           hasChanges: () => controller.text != current,
           isSaving: saving,
           child: AlertDialog(
-            title: const Text('Update Portal'),
+            title: Text(context.l10n.settingsUpdatePortal),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
-                  'Optional. When set, an in-app prompt to update the server '
-                  'links here so you can apply the update in your own container '
-                  'manager (e.g. an Unraid Docker page or Portainer). The link '
-                  'opens on your '
-                  'devices, so use an address they can reach — a cluster-internal '
-                  'name only the server resolves won\'t work from a phone. Leave '
-                  'blank to clear.',
+                Text(
+                  context.l10n.settingsUpdatePortalHelp,
                   style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                 ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: controller,
-                  decoration: const InputDecoration(
-                    labelText: 'Portal URL',
+                  decoration: InputDecoration(
+                    labelText: context.l10n.settingsPortalUrl,
                     hintText: 'http://tower.local/Docker',
                     prefixIcon: Icon(Icons.open_in_new),
                   ),
@@ -827,7 +874,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(dialogContext).maybePop(),
-                child: const Text('Cancel'),
+                child: Text(context.l10n.settingsCancel),
               ),
               ElevatedButton(
                 onPressed: saving
@@ -845,7 +892,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           setDialogState(() => saving = false);
                           if (dialogContext.mounted) {
                             ScaffoldMessenger.of(dialogContext).showSnackBar(
-                              SnackBar(content: Text('Failed to save: $e')),
+                              SnackBar(
+                                  content: Text(context.l10n
+                                      .settingsMessageFailedToSaveValue1(
+                                          (e).toString()))),
                             );
                           }
                         }
@@ -856,7 +906,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         height: 18,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Text('Save'),
+                    : Text(context.l10n.settingsSave),
               ),
             ],
           ),
@@ -927,7 +977,7 @@ class _OutboundProxyDialogState extends ConsumerState<_OutboundProxyDialog> {
       setState(() {
         _testing = false;
         _testSucceeded = true;
-        _testResult = 'Proxy works: TMDB reached through it.';
+        _testResult = context.l10n.settingsProxyWorks;
       });
     } catch (e) {
       if (!mounted) return;
@@ -952,7 +1002,9 @@ class _OutboundProxyDialogState extends ConsumerState<_OutboundProxyDialog> {
       if (!mounted) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to save: ${apiErrorMessage(e)}')),
+        SnackBar(
+            content: Text(context.l10n.settingsMessageFailedToSaveValue1(
+                (apiErrorMessage(e)).toString()))),
       );
     }
   }
@@ -973,26 +1025,21 @@ class _OutboundProxyDialogState extends ConsumerState<_OutboundProxyDialog> {
 
   Widget _buildDialog(BuildContext context, bool busy) {
     return AlertDialog(
-      title: const Text('Outbound Proxy'),
+      title: Text(context.l10n.settingsOutboundProxy),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
-              "Optional. Send this server's internet traffic (TMDB, Trakt, "
-              'hosted AI providers, plex.tv, the update check, the push relay) '
-              'through a proxy, for example a VPN-tunnelled Privoxy on the '
-              'same host. Your arr instances, download clients, Jellyfin, '
-              'Emby, and a local AI endpoint always connect directly. Leave '
-              'the address blank to clear.',
+            Text(
+              context.l10n.settingsProxyHelp,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: _addressController,
-              decoration: const InputDecoration(
-                labelText: 'Proxy address',
+              decoration: InputDecoration(
+                labelText: context.l10n.settingsProxyAddress,
                 hintText: 'http://proxy:8118',
                 prefixIcon: Icon(Icons.vpn_lock_outlined),
               ),
@@ -1004,8 +1051,8 @@ class _OutboundProxyDialogState extends ConsumerState<_OutboundProxyDialog> {
             const SizedBox(height: 12),
             TextField(
               controller: _usernameController,
-              decoration: const InputDecoration(
-                labelText: 'Username (optional)',
+              decoration: InputDecoration(
+                labelText: context.l10n.settingsOptionalUsername,
               ),
               autocorrect: false,
               textInputAction: TextInputAction.next,
@@ -1015,9 +1062,9 @@ class _OutboundProxyDialogState extends ConsumerState<_OutboundProxyDialog> {
             TextField(
               controller: _passwordController,
               decoration: InputDecoration(
-                labelText: 'Password',
+                labelText: context.l10n.settingsPassword,
                 helperText: widget.current.hasPassword
-                    ? 'Leave blank to keep the saved password'
+                    ? context.l10n.settingsSavedPassword
                     : null,
               ),
               obscureText: true,
@@ -1041,8 +1088,7 @@ class _OutboundProxyDialogState extends ConsumerState<_OutboundProxyDialog> {
                 Text(
                   _testResult!,
                   style: TextStyle(
-                    color:
-                        _testSucceeded ? AppTheme.available : AppTheme.error,
+                    color: _testSucceeded ? AppTheme.available : AppTheme.error,
                     fontSize: 13,
                   ),
                   textAlign: TextAlign.center,
@@ -1054,12 +1100,12 @@ class _OutboundProxyDialogState extends ConsumerState<_OutboundProxyDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).maybePop(),
-          child: const Text('Cancel'),
+          child: Text(context.l10n.settingsCancel),
         ),
         // Nothing to test without an address; the server would only say so.
         TextButton(
           onPressed: busy || _url.isEmpty ? null : _test,
-          child: const Text('Test'),
+          child: Text(context.l10n.settingsTest),
         ),
         ElevatedButton(
           onPressed: busy ? null : _save,
@@ -1069,7 +1115,7 @@ class _OutboundProxyDialogState extends ConsumerState<_OutboundProxyDialog> {
                   height: 18,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Text('Save'),
+              : Text(context.l10n.settingsSave),
         ),
       ],
     );
@@ -1149,38 +1195,38 @@ String _serviceLabel(String serviceType) {
 
 /// The role line under the username. A kids account says so, with its
 /// limits when the profile carries them, in the account's own words.
-String _accountSubtitle(UserProfile? user) {
-  if (user == null) return 'User';
-  if (user.isAdmin) return 'Administrator';
+String _accountSubtitle(BuildContext context, UserProfile? user) {
+  if (user == null) return context.l10n.settingsUser;
+  if (user.isAdmin) return context.l10n.settingsAdministrator;
   if (user.child) {
     final limits = user.contentLimits;
-    if (limits == null) return 'Kids account';
-    return 'Kids account · movies up to ${limits.maxMovieRating} · '
-        'shows up to ${limits.maxTvRating}';
+    if (limits == null) return context.l10n.settingsKidsAccount;
+    return context.l10n.settingsMessageKidsAccountMoviesUpToValue1ShowsUp(
+        (limits.maxMovieRating).toString(), (limits.maxTvRating).toString());
   }
-  return 'User';
+  return context.l10n.settingsUser;
 }
 
-String _aiAccessSubtitle(AiSettings? settings) {
-  if (settings == null) return 'Choose personal or included AI';
+String _aiAccessSubtitle(BuildContext context, AiSettings? settings) {
+  if (settings == null) return context.l10n.settingsChooseAi;
   final effective = settings.effective;
   final provider = effective.provider.isEmpty
       ? ''
       : settings.providerLabel(effective.provider);
   if (effective.source == AiAccessSource.personal) {
     return effective.available
-        ? 'Personal · $provider'
-        : 'Personal AI needs attention';
+        ? context.l10n.settingsMessagePersonalValue1((provider).toString())
+        : context.l10n.settingsPersonalAiAttention;
   }
   if (effective.source == AiAccessSource.shared) {
     return effective.available
-        ? 'Included · $provider'
-        : 'Included AI unavailable';
+        ? context.l10n.settingsMessageIncludedValue1((provider).toString())
+        : context.l10n.settingsIncludedAiUnavailable;
   }
   if (settings.shared.granted) {
-    return 'Included access needs server setup';
+    return context.l10n.settingsIncludedAiSetup;
   }
-  return 'Add a personal provider';
+  return context.l10n.settingsAddPersonalProvider;
 }
 
 const _githubUrl = 'https://github.com/windoze95/cantinarr';
@@ -1237,20 +1283,21 @@ Widget _setupChecklistTile(BuildContext context, SetupStatus? status) {
   if (status == null) {
     return _SettingsTile(
       icon: Icons.checklist_outlined,
-      title: 'Setup Checklist',
-      subtitle: 'See which features are configured',
+      title: context.l10n.settingsSetupChecklist,
+      subtitle: context.l10n.settingsConfiguredFeatures,
       onTap: open,
     );
   }
-  final tail = ' of ${status.effectiveTotal} features configured';
+  final tail = context.l10n.settingsMessageOfValue1FeaturesConfigured(
+      (status.effectiveTotal).toString());
   if (status.isComplete) {
     return _SettingsTile(
       icon: Icons.checklist_outlined,
-      title: 'Setup Checklist',
-      subtitle: status.summary,
+      title: context.l10n.settingsSetupChecklist,
+      subtitle: settingsSetupSummary(context, status),
       subtitleSpans: [
         TextSpan(
-            text: status.summary,
+            text: settingsSetupSummary(context, status),
             style: const TextStyle(color: AppTheme.available)),
       ],
       onTap: open,
@@ -1258,7 +1305,7 @@ Widget _setupChecklistTile(BuildContext context, SetupStatus? status) {
   }
   return _SettingsTile(
     icon: Icons.checklist_outlined,
-    title: 'Setup Checklist',
+    title: context.l10n.settingsSetupChecklist,
     subtitle: '${status.configured}$tail',
     subtitleSpans: [
       TextSpan(
@@ -1324,22 +1371,22 @@ class _SettingsTile extends StatelessWidget {
           subtitle: subtitle == null && subtitleSpans == null
               ? null
               : subtitleSpans == null
-              ? Text(
-                  subtitle!,
-                  style: const TextStyle(
-                    color: AppTheme.textSecondary,
-                    fontSize: 13,
-                  ),
-                )
-              : Text.rich(
-                  TextSpan(
-                    style: const TextStyle(
-                      color: AppTheme.textSecondary,
-                      fontSize: 13,
+                  ? Text(
+                      subtitle!,
+                      style: const TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 13,
+                      ),
+                    )
+                  : Text.rich(
+                      TextSpan(
+                        style: const TextStyle(
+                          color: AppTheme.textSecondary,
+                          fontSize: 13,
+                        ),
+                        children: subtitleSpans,
+                      ),
                     ),
-                    children: subtitleSpans,
-                  ),
-                ),
           trailing: trailing ??
               (onTap != null
                   ? const Icon(

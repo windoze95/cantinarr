@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -20,7 +21,7 @@ class NativeBookSearchButton extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) => TextButton.icon(
         icon: const Icon(Icons.search),
-        label: const Text('Search books'),
+        label: Text(context.l10n.browseSearchBooks),
         onPressed: () {
           ref.read(bookDiscoverySearchSeedProvider.notifier).state =
               (query: title, instanceId: instanceId);
@@ -35,7 +36,7 @@ class BookCatalogRetiredScreen extends ConsumerWidget {
   const BookCatalogRetiredScreen({super.key, this.title = '', this.instanceId});
   @override
   Widget build(BuildContext context, WidgetRef ref) => Scaffold(
-        appBar: AppBar(title: const Text('Book details')),
+        appBar: AppBar(title: Text(context.l10n.browseBookDetails)),
         body: Center(
             child: Padding(
                 padding: const EdgeInsets.all(24),
@@ -46,8 +47,9 @@ class BookCatalogRetiredScreen extends ConsumerWidget {
                       Text(title,
                           style: Theme.of(context).textTheme.titleLarge),
                     const SizedBox(height: 16),
-                    const Text(
-                        'Open Library book discovery has retired. Search your Chaptarr library and select the book to request.',
+                    Text(
+                        context.l10n
+                            .browseOpenLibraryBookDiscoveryHasRetiredSearchYourChaptarrLibraryAndSelectTheBookToRequest,
                         textAlign: TextAlign.center),
                     const SizedBox(height: 16),
                     NativeBookSearchButton(

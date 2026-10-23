@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/operations_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -9,7 +11,8 @@ import '../../discover/data/tmdb_models.dart';
 import '../data/apple_tv_service.dart';
 
 class AppleTVOpenButton extends ConsumerStatefulWidget {
-  const AppleTVOpenButton({super.key, required this.mediaType, required this.tmdbId});
+  const AppleTVOpenButton(
+      {super.key, required this.mediaType, required this.tmdbId});
   final MediaType mediaType;
   final int tmdbId;
 
@@ -26,11 +29,13 @@ class _AppleTVOpenButtonState extends ConsumerState<AppleTVOpenButton>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
   }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) ref.invalidate(appleTVsProvider);
@@ -42,21 +47,32 @@ class _AppleTVOpenButtonState extends ConsumerState<AppleTVOpenButton>
     final auth = ref.read(authProvider).valueOrNull;
     final mediaType = widget.mediaType;
     final tmdbId = widget.tmdbId;
-    final tv = devices.length == 1 ? devices.single : await showAppSheet<AppleTV>(
-      context, builder: (context) => AppSheet(child: Column(
-        mainAxisSize: MainAxisSize.min, children: [
-          Text('Open on Apple TV', style: Theme.of(context).textTheme.titleLarge),
-          for (final tv in devices) ListTile(leading: const Icon(Icons.tv),
-            title: Text(tv.name), onTap: () => Navigator.pop(context, tv)),
-          const SizedBox(height: 16),
-        ],
-      )),
-    );
+    final tv = devices.length == 1
+        ? devices.single
+        : await showAppSheet<AppleTV>(
+            context,
+            builder: (context) => AppSheet(
+                child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(context.l10n.opsOpenOnAppleTV,
+                    style: Theme.of(context).textTheme.titleLarge),
+                for (final tv in devices)
+                  ListTile(
+                      leading: const Icon(Icons.tv),
+                      title: Text(tv.name),
+                      onTap: () => Navigator.pop(context, tv)),
+                const SizedBox(height: 16),
+              ],
+            )),
+          );
     if (!mounted) return;
     final selectedAuth = ref.read(authProvider).valueOrNull;
-    if (tv == null || selectedAuth?.user?.id != auth?.user?.id ||
+    if (tv == null ||
+        selectedAuth?.user?.id != auth?.user?.id ||
         selectedAuth?.connection?.serverUrl != auth?.connection?.serverUrl ||
-        widget.mediaType != mediaType || widget.tmdbId != tmdbId) {
+        widget.mediaType != mediaType ||
+        widget.tmdbId != tmdbId) {
       setState(() => _sending = false);
       return;
     }
@@ -67,15 +83,21 @@ class _AppleTVOpenButtonState extends ConsumerState<AppleTVOpenButton>
       final current = ref.read(authProvider).valueOrNull;
       if (current?.user?.id != auth?.user?.id ||
           current?.connection?.serverUrl != auth?.connection?.serverUrl ||
-          widget.mediaType != mediaType || widget.tmdbId != tmdbId) {
+          widget.mediaType != mediaType ||
+          widget.tmdbId != tmdbId) {
         return;
       }
-      await showAppSheet<void>(context, builder: (_) => _HandoffSheet(
-        tv: tv, handoff: result, service: service,
-      ));
+      await showAppSheet<void>(context,
+          builder: (_) => _HandoffSheet(
+                tv: tv,
+                handoff: result,
+                service: service,
+              ));
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(appleTVError(error))));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content:
+                Text(localizeOperationsLabel(context, appleTVError(error)))));
       }
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -85,7 +107,8 @@ class _AppleTVOpenButtonState extends ConsumerState<AppleTVOpenButton>
   @override
   Widget build(BuildContext context) {
     final auth = ref.watch(authProvider).valueOrNull;
-    if (auth?.connection?.appleTvRemote != true || auth?.user == null ||
+    if (auth?.connection?.appleTvRemote != true ||
+        auth?.user == null ||
         auth!.user!.child) {
       return const SizedBox.shrink();
     }
@@ -93,26 +116,31 @@ class _AppleTVOpenButtonState extends ConsumerState<AppleTVOpenButton>
     return tvs.when(
       skipLoadingOnReload: false,
       data: (list) {
-        if (!list.supported || list.devices.isEmpty) return const SizedBox.shrink();
+        if (!list.supported || list.devices.isEmpty)
+          return const SizedBox.shrink();
         return TextButton.icon(
           onPressed: _sending ? null : () => _open(list.devices),
           icon: const Icon(Icons.tv, size: 17),
-          label: Text(_sending ? 'Sending to TV…' : list.devices.length == 1
-            ? 'Open on ${list.devices.single.name}' : 'Open on Apple TV'),
+          label: Text(_sending
+              ? context.l10n.opsSendingToTV
+              : list.devices.length == 1
+                  ? context.l10n.opsOpenNamedTv(list.devices.single.name)
+                  : context.l10n.opsOpenOnAppleTV),
         );
       },
       loading: () => const SizedBox.shrink(),
       error: (_, __) => TextButton.icon(
         onPressed: () => ref.invalidate(appleTVsProvider),
         icon: const Icon(Icons.refresh, size: 17),
-        label: const Text('Couldn’t load Apple TVs · Retry'),
+        label: Text(context.l10n.opsCouldnTLoadAppleTVsRetry),
       ),
     );
   }
 }
 
 class _HandoffSheet extends StatefulWidget {
-  const _HandoffSheet({required this.tv, required this.handoff, required this.service});
+  const _HandoffSheet(
+      {required this.tv, required this.handoff, required this.service});
   final AppleTV tv;
   final AppleTVHandoff handoff;
   final AppleTVService service;
@@ -134,41 +162,63 @@ class _HandoffSheetState extends State<_HandoffSheet> {
       if (mounted) setState(() {});
     });
   }
+
   @override
-  void dispose() { _timer?.cancel(); super.dispose(); }
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
 
   Future<void> _confirm() async {
     if (_used || _expired) return;
-    setState(() { _used = true; _sending = true; });
+    setState(() {
+      _used = true;
+      _sending = true;
+    });
     try {
       await widget.service.confirm(widget.tv.id, widget.handoff.id);
       if (mounted) Navigator.pop(context);
     } catch (error) {
-      if (mounted) setState(() => _error = appleTVError(error));
+      if (mounted)
+        setState(() =>
+            _error = localizeOperationsLabel(context, appleTVError(error)));
     } finally {
       if (mounted) setState(() => _sending = false);
     }
   }
 
   @override
-  Widget build(BuildContext context) => AppSheet(child: Column(
-    mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text('Sent to ${widget.tv.name}', style: Theme.of(context).textTheme.titleLarge),
-      const SizedBox(height: 12),
-      const Text('Check your TV. If it asks “Open in Infuse”, use Confirm Open. '
-        'If the title is already open, tap Done.'),
-      const SizedBox(height: 8),
-      const Text('Infuse uses the libraries connected on that TV.'),
-      if (_error != null) Padding(padding: const EdgeInsets.only(top: 12),
-        child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error))),
-      const SizedBox(height: 16),
-      Wrap(spacing: 12, children: [
-        FilledButton(onPressed: _used || _expired ? null : _confirm,
-          child: Text(_sending ? 'Confirming…' : _expired ? 'Confirmation expired' : 'Confirm Open')),
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Done')),
-      ]),
-      const SizedBox(height: 24),
-    ],
-  ));
+  Widget build(BuildContext context) => AppSheet(
+          child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(context.l10n.opsSentNamedTv(widget.tv.name),
+              style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 12),
+          Text(context.l10n.opsCheckYourTVIfItAsksOpen),
+          const SizedBox(height: 8),
+          Text(context.l10n.opsInfuseUsesTheLibrariesConnectedOnThat),
+          if (_error != null)
+            Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(_error!,
+                    style:
+                        TextStyle(color: Theme.of(context).colorScheme.error))),
+          const SizedBox(height: 16),
+          Wrap(spacing: 12, children: [
+            FilledButton(
+                onPressed: _used || _expired ? null : _confirm,
+                child: Text(_sending
+                    ? context.l10n.opsConfirming
+                    : _expired
+                        ? context.l10n.opsConfirmationExpired
+                        : context.l10n.opsConfirmOpen)),
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(context.l10n.opsDone)),
+          ]),
+          const SizedBox(height: 24),
+        ],
+      ));
 }

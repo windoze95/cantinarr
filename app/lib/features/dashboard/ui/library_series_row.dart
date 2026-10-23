@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -52,7 +54,7 @@ class LibrarySeriesRow extends ConsumerWidget {
               horizontal: viewportWidth >= 900 ? 24 : 16,
             ),
             child: SectionHeader(
-              title: 'Series',
+              title: context.l10n.browseSeries,
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -61,10 +63,10 @@ class LibrarySeriesRow extends ConsumerWidget {
                     total: page?.total ?? series.length,
                   ),
                   SectionSortMenu<SeriesSort>(
-                    tooltip: 'Sort series',
+                    tooltip: context.l10n.browseSortSeries,
                     options: SeriesSort.values,
                     selected: ref.watch(bookSeriesSortProvider),
-                    labelOf: (option) => option.label,
+                    labelOf: (option) => browseLabel(context, option.label),
                     onSelected: (next) =>
                         ref.read(bookSeriesSortProvider.notifier).state = next,
                   ),
@@ -142,7 +144,7 @@ class SeriesStackCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final count = series.countLabel;
+    final count = browseLabel(context, series.countLabel);
     final coverHeight = width * 1.5;
     return SizedBox(
       width: totalWidth(width),
@@ -198,8 +200,7 @@ class SeriesStackCard extends StatelessWidget {
       clipBehavior: Clip.none,
       children: [
         // Back to front, so the earliest book ends up on top.
-        for (var i = drawn - 1; i >= 0; i--)
-          _layer(i, step, coverHeight),
+        for (var i = drawn - 1; i >= 0; i--) _layer(i, step, coverHeight),
       ],
     );
   }

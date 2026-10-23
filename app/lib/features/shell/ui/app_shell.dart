@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/shell_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -654,14 +656,14 @@ class _AppShellState extends ConsumerState<AppShell>
           controller: _searchController,
           focusNode: _searchFocusNode,
           hintText: isAiReady
-              ? 'Ask the AI anything...'
+              ? context.l10n.shellAskAnything
               : (booksTab
-                  ? 'Search books or authors...'
+                  ? context.l10n.shellSearchBooks
                   : (musicTab
-                      ? 'Search albums or artists...'
+                      ? context.l10n.shellSearchMusic
                       : (hasAi
-                          ? 'Search or ask AI...'
-                          : 'Search by title or person...'))),
+                          ? context.l10n.shellSearchOrAsk
+                          : context.l10n.shellSearchTitlesPeople))),
           aiEnabled: hasAi,
           contextIcon: contextIcon,
           onSubmitted: _submitSearchBar,
@@ -757,8 +759,8 @@ class _AppShellState extends ConsumerState<AppShell>
                   ),
                 ),
                 tooltip: pendingApprovals > 0
-                    ? '$pendingApprovals approval${pendingApprovals == 1 ? '' : 's'} waiting'
-                    : 'Open navigation',
+                    ? context.l10n.shellApprovalCount(pendingApprovals)
+                    : context.l10n.shellOpenNavigation,
                 onPressed: () {
                   _dismissKeyboard();
                   // The waiting count only moves on events; a grant that
@@ -791,7 +793,7 @@ class _AppShellState extends ConsumerState<AppShell>
               smallSize: 9,
               child: const Icon(Icons.menu),
             ),
-            tooltip: 'Open navigation',
+            tooltip: context.l10n.shellOpenNavigation,
             onPressed: () {
               _dismissKeyboard();
               _scaffoldKey.currentState?.openDrawer();
@@ -801,7 +803,7 @@ class _AppShellState extends ConsumerState<AppShell>
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              _secondaryRouteLabel(widget.currentPath).toUpperCase(),
+              _secondaryRouteLabel(context, widget.currentPath).toUpperCase(),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
@@ -911,8 +913,8 @@ class _AppShellState extends ConsumerState<AppShell>
                                       const SizedBox(height: 8),
                                       Text(
                                         _searchController.text.trim().isNotEmpty
-                                            ? 'Press send to ask AI'
-                                            : 'Type anything, then press send',
+                                            ? context.l10n.shellPressSendAi
+                                            : context.l10n.shellTypeSend,
                                         style: const TextStyle(
                                           color: AppTheme.textSecondary,
                                           fontSize: 14,
@@ -1136,17 +1138,18 @@ class _AppShellState extends ConsumerState<AppShell>
     );
   }
 
-  static String _secondaryRouteLabel(String path) {
-    if (path.startsWith('/browse/')) return 'Browse';
-    if (path.startsWith('/detail/')) return 'Media details';
-    if (path.startsWith('/settings')) return 'Settings';
-    if (path == '/approvals/history') return 'Request history';
-    if (path.startsWith('/approvals')) return 'Approvals';
-    if (path.startsWith('/issues')) return 'Issues';
-    if (path.startsWith('/agent-')) return 'Agent workspace';
-    if (path.startsWith('/assistant')) return 'AI assistant';
-    if (path.startsWith('/setup')) return 'Setup';
-    if (path.startsWith('/media-servers')) return 'Media server access';
+  static String _secondaryRouteLabel(BuildContext context, String path) {
+    if (path.startsWith('/browse/')) return context.l10n.shellBrowse;
+    if (path.startsWith('/detail/')) return context.l10n.shellMediaDetails;
+    if (path.startsWith('/settings')) return context.l10n.shellSettings;
+    if (path == '/approvals/history') return context.l10n.shellRequestHistory;
+    if (path.startsWith('/approvals')) return context.l10n.shellApprovals;
+    if (path.startsWith('/issues')) return context.l10n.shellIssues;
+    if (path.startsWith('/agent-')) return context.l10n.shellAgentWorkspace;
+    if (path.startsWith('/assistant')) return context.l10n.shellAiAssistant;
+    if (path.startsWith('/setup')) return context.l10n.shellSetup;
+    if (path.startsWith('/media-servers'))
+      return context.l10n.shellMediaServerAccess;
     return 'Cantinarr';
   }
 
@@ -1203,7 +1206,7 @@ class _AppShellState extends ConsumerState<AppShell>
       if (showApprovals)
         _AttentionEntry(
           icon: Icons.fact_check_outlined,
-          title: 'Approvals',
+          title: context.l10n.shellApprovals,
           semanticsIdentifier: 'nav-action-approvals',
           count: pendingApprovals,
           route: '/approvals',
@@ -1211,7 +1214,7 @@ class _AppShellState extends ConsumerState<AppShell>
       if (showIssues)
         _AttentionEntry(
           icon: Icons.flag_outlined,
-          title: 'Issues',
+          title: context.l10n.shellIssues,
           semanticsIdentifier: 'nav-action-issues',
           count: openIssues,
           route: '/issues',
@@ -1219,7 +1222,7 @@ class _AppShellState extends ConsumerState<AppShell>
       if (showAgentFixes)
         _AttentionEntry(
           icon: Icons.build_circle_outlined,
-          title: 'Agent fixes',
+          title: context.l10n.shellAgentFixes,
           semanticsIdentifier: 'nav-action-agent-fixes',
           count: pendingAgentActions,
           route: '/agent-actions',
@@ -1228,7 +1231,7 @@ class _AppShellState extends ConsumerState<AppShell>
       if (showProfileApprovals)
         _AttentionEntry(
           icon: Icons.tune,
-          title: 'Profile approvals',
+          title: context.l10n.shellProfileApprovals,
           semanticsIdentifier: 'nav-action-profile-approvals',
           count: pendingProfileProposals,
           route: '/settings/profile-approvals',
@@ -1239,7 +1242,7 @@ class _AppShellState extends ConsumerState<AppShell>
       if (plexInvitesWaiting > 0)
         _AttentionEntry(
           icon: Icons.play_circle_outline,
-          title: 'Plex invites',
+          title: context.l10n.shellPlexInvites,
           semanticsIdentifier: 'nav-action-plex-invites',
           count: plexInvitesWaiting,
           route: '/settings/users',
@@ -1249,7 +1252,7 @@ class _AppShellState extends ConsumerState<AppShell>
       if (showSetupReminder)
         _AttentionEntry(
           icon: Icons.checklist_outlined,
-          title: 'Setup checklist',
+          title: context.l10n.shellSetupChecklist,
           semanticsIdentifier: 'nav-action-setup-checklist',
           count: setupRemaining,
           route: '/setup',
@@ -1284,43 +1287,49 @@ class _AppShellState extends ConsumerState<AppShell>
       // stored id is passed through so the sentinel can be marked active.
       final isDownloads = module.type == ModuleType.downloads;
       final hasDownloadBadge = isDownloads &&
-          ref.watch(authProvider).valueOrNull?.connection?.downloadsActivity == true;
+          ref.watch(authProvider).valueOrNull?.connection?.downloadsActivity ==
+              true;
       final activeInstanceId = isDownloads
           ? instanceState.activeDownloadInstanceId
           : activeInstance?.id;
 
       final item = _DrawerItem(
         icon: module.icon,
-        title: module.label,
+        title: localizeShellLabel(context, module.label),
         semanticsIdentifier: 'nav-module-${module.type.name}',
         selected: isActive,
         trailingFlex: hasDownloadBadge && selectorInstances.length > 1 ? 3 : 2,
         trailing: hasDownloadBadge || selectorInstances.length > 1
             ? Row(mainAxisSize: MainAxisSize.min, children: [
-          if (hasDownloadBadge)
-            const DownloadsMenuBadge(),
-          if (selectorInstances.length > 1) Flexible(child: _InstanceSelector(
-                appName: module.label,
-                instances: selectorInstances,
-                activeInstanceId: activeInstanceId,
-                aggregateOption: isDownloads
-                    ? (id: allDownloadInstancesId, label: 'All')
-                    : null,
-                onSelected: (instanceId) {
-                  if (isOverlay) Navigator.pop(context);
-                  _navigateToModule(
-                    context,
-                    module,
-                    instanceId: instanceId,
-                  );
-                  if (module.type != ModuleType.assistant) {
-                    ref
-                        .read(moduleProvider.notifier)
-                        .setActiveModule(module.type);
-                  }
-                },
-              )),
-        ]) : null,
+                if (hasDownloadBadge) const DownloadsMenuBadge(),
+                if (selectorInstances.length > 1)
+                  Flexible(
+                      child: _InstanceSelector(
+                    appName: localizeShellLabel(context, module.label),
+                    instances: selectorInstances,
+                    activeInstanceId: activeInstanceId,
+                    aggregateOption: isDownloads
+                        ? (
+                            id: allDownloadInstancesId,
+                            label: context.l10n.shellAll
+                          )
+                        : null,
+                    onSelected: (instanceId) {
+                      if (isOverlay) Navigator.pop(context);
+                      _navigateToModule(
+                        context,
+                        module,
+                        instanceId: instanceId,
+                      );
+                      if (module.type != ModuleType.assistant) {
+                        ref
+                            .read(moduleProvider.notifier)
+                            .setActiveModule(module.type);
+                      }
+                    },
+                  )),
+              ])
+            : null,
         onTap: () {
           if (isOverlay) Navigator.pop(context);
           _navigateToModule(
@@ -1343,7 +1352,8 @@ class _AppShellState extends ConsumerState<AppShell>
           ? (module.type == ModuleType.dashboard
               ? discoveryAccess.pages
               : module.type == ModuleType.downloads && !isAdmin
-                  ? const <ModulePage>[] : modulePagesFor(module.type))
+                  ? const <ModulePage>[]
+                  : modulePagesFor(module.type))
           : const <ModulePage>[];
       if (pages.isEmpty) return item;
 
@@ -1410,8 +1420,8 @@ class _AppShellState extends ConsumerState<AppShell>
                             ),
                       ),
                       const SizedBox(height: 3),
-                      const Text(
-                        'How you doing, you old pirate?',
+                      Text(
+                        context.l10n.shellPirateGreeting,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -1449,7 +1459,7 @@ class _AppShellState extends ConsumerState<AppShell>
                 if (isAdmin && attentionEntries.isNotEmpty) ...[
                   _DrawerItem(
                     icon: Icons.notifications_active_outlined,
-                    title: 'Needs attention',
+                    title: context.l10n.shellNeedsAttention,
                     semanticsIdentifier: 'nav-action-needs-attention',
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -1514,7 +1524,7 @@ class _AppShellState extends ConsumerState<AppShell>
           if (assistantModule != null)
             _DrawerItem(
               icon: assistantModule.icon,
-              title: assistantModule.label,
+              title: localizeShellLabel(context, assistantModule.label),
               semanticsIdentifier: 'nav-action-ai-assistant',
               onTap: () {
                 if (isOverlay) Navigator.pop(context);
@@ -1524,7 +1534,8 @@ class _AppShellState extends ConsumerState<AppShell>
           if (mediaAccessGuideVisible)
             _DrawerItem(
               icon: Icons.live_tv_outlined,
-              title: mediaServerGuideTitle(mediaAccessGuideTypes),
+              title: localizeShellLabel(
+                  context, mediaServerGuideTitle(mediaAccessGuideTypes)),
               semanticsIdentifier: 'nav-action-media-servers',
               onTap: () {
                 if (isOverlay) Navigator.pop(context);
@@ -1533,7 +1544,7 @@ class _AppShellState extends ConsumerState<AppShell>
             ),
           _DrawerItem(
             icon: Icons.settings,
-            title: 'Settings',
+            title: context.l10n.shellSettings,
             semanticsIdentifier: 'nav-action-settings',
             onTap: () {
               if (isOverlay) Navigator.pop(context);
@@ -1720,7 +1731,8 @@ class _DrawerItem extends StatelessWidget {
         ),
         child: Semantics(
           identifier: semanticsIdentifier,
-          label: e2eWebSemanticsEnabled ? 'Navigate to $title' : null,
+          label:
+              e2eWebSemanticsEnabled ? context.l10n.shellNavigate(title) : null,
           button: e2eWebSemanticsEnabled,
           selected: e2eWebSemanticsEnabled ? selected : null,
           excludeSemantics: e2eWebSemanticsEnabled,
@@ -1874,7 +1886,7 @@ class _DrawerSubItem extends StatelessWidget {
               color: selected ? AppTheme.signal : AppTheme.textMuted,
             ),
             title: Text(
-              page.label,
+              localizeShellLabel(context, page.label),
               style: TextStyle(
                 fontSize: 13,
                 color: selected ? AppTheme.textPrimary : AppTheme.textSecondary,
@@ -1927,7 +1939,7 @@ class _InstanceSelector extends StatelessWidget {
     final activeName = aggregateActive ? aggregate.label : activeInstance.name;
 
     return PopupMenuButton<String>(
-      tooltip: 'Choose $appName instance',
+      tooltip: context.l10n.shellChooseInstance(appName),
       color: AppTheme.surface,
       onSelected: onSelected,
       itemBuilder: (context) => [
@@ -2079,7 +2091,7 @@ class _AskAiPill extends StatelessWidget {
                 ),
               ],
             ),
-            child: const Padding(
+            child: Padding(
               padding: EdgeInsets.symmetric(horizontal: 12, vertical: 7),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -2091,7 +2103,7 @@ class _AskAiPill extends StatelessWidget {
                   ),
                   SizedBox(width: 6),
                   Text(
-                    'Ask AI',
+                    context.l10n.shellAskAi,
                     style: TextStyle(
                       color: AppTheme.signal,
                       fontSize: 11.5,

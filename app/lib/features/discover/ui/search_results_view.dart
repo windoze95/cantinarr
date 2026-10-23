@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shimmer/shimmer.dart';
@@ -52,13 +54,13 @@ class SearchResultsView extends StatelessWidget {
                 size: 48, color: AppTheme.textSecondary),
             const SizedBox(height: 12),
             Text(
-              'No results for "$query"',
+              context.l10n.browseNoResultsForQuery(query),
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 16),
             ),
             const SizedBox(height: 4),
-            const Text(
-              'Try a different search term',
+            Text(
+              context.l10n.browseTryADifferentSearchTerm,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ],
@@ -85,7 +87,7 @@ class SearchResultsView extends StatelessWidget {
             resolveTVStatus: resolveTVStatus,
             legacyStatus: libraryStatus[(item.mediaType, item.id)],
             builder: (status) => _SearchResultTile(
-              item: item, status: status, onTap: onResultTap),
+                item: item, status: status, onTap: onResultTap),
           );
           final triggerIndex = results.length > 5 ? results.length - 5 : 0;
           if (onLoadMore != null && index == triggerIndex) {
@@ -242,7 +244,7 @@ class _SearchResultTile extends StatelessWidget {
 
     return _resultSurface(
       context,
-      semanticLabel: 'View ${item.title}, person',
+      semanticLabel: context.l10n.browseViewPerson(item.title),
       onPressed: () {
         onTap?.call();
         showPersonDetailSheet(
@@ -282,8 +284,8 @@ class _SearchResultTile extends StatelessWidget {
                     style: _titleStyle,
                   ),
                   const SizedBox(height: 3),
-                  const Text(
-                    'Person',
+                  Text(
+                    context.l10n.browsePerson,
                     style: TextStyle(
                       color: AppTheme.textSecondary,
                       fontSize: 12,
@@ -310,10 +312,14 @@ class _SearchResultTile extends StatelessWidget {
 
     return _resultSurface(
       context,
-      semanticLabel: 'View ${item.title}, ${item.mediaType.displayName}'
-          '${status == null ? '' : ', ${status!.label}'}'
-          '${status?.is4K == true ? ' in 4K' : ''}'
-          '${status?.episodeSubtitle == null ? '' : ', ${status!.episodeSubtitle}'}',
+      semanticLabel: [
+        context.l10n.browseViewTitle(
+            item.title, browseLabel(context, item.mediaType.displayName)),
+        if (status != null) browseLabel(context, status!.label),
+        if (status?.is4K == true) context.l10n.browseIn4K.trim(),
+        if (status?.episodeSubtitle != null)
+          browseLabel(context, status!.episodeSubtitle!)
+      ].join(', '),
       onPressed: () {
         onTap?.call();
         context.push('/detail/${item.mediaType.name}/${item.id}');
@@ -373,19 +379,29 @@ class _SearchResultTile extends StatelessWidget {
                       // Year + library status + rating
                       Row(
                         children: [
-                          Expanded(child: Wrap(
-                            spacing: 6, runSpacing: 4,
+                          Expanded(
+                              child: Wrap(
+                            spacing: 6,
+                            runSpacing: 4,
                             crossAxisAlignment: WrapCrossAlignment.center,
                             children: [
-                              if (year != null) Text(year,
-                                style: const TextStyle(
-                                  color: AppTheme.textSecondary, fontSize: 12)),
-                              if (status != null) _Chip(
-                                label: status!.label, color: status!.color,
-                                backgroundColor: status!.color.withValues(alpha: 0.15)),
-                              if (status?.is4K == true) _Chip(
-                                label: '4K', color: AppTheme.textPrimary,
-                                backgroundColor: AppTheme.textPrimary.withValues(alpha: 0.08)),
+                              if (year != null)
+                                Text(year,
+                                    style: const TextStyle(
+                                        color: AppTheme.textSecondary,
+                                        fontSize: 12)),
+                              if (status != null)
+                                _Chip(
+                                    label: browseLabel(context, status!.label),
+                                    color: status!.color,
+                                    backgroundColor:
+                                        status!.color.withValues(alpha: 0.15)),
+                              if (status?.is4K == true)
+                                _Chip(
+                                    label: '4K',
+                                    color: AppTheme.textPrimary,
+                                    backgroundColor: AppTheme.textPrimary
+                                        .withValues(alpha: 0.08)),
                             ],
                           )),
                           if (item.voteAverage != null &&

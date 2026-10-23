@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -40,7 +42,8 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
   Future<void> _refresh() async {
     await Future.wait([
       ref.read(tvDiscoverProvider.notifier).bootstrap(),
-      ref.read(librarySnapshotProvider.notifier)
+      ref
+          .read(librarySnapshotProvider.notifier)
           .refresh(force: true, type: MediaType.tv),
     ]);
   }
@@ -91,111 +94,116 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
           color: AppTheme.accent,
           child: Stack(children: [
             ListView(
-            key: PageStorageKey(('discover-tv', scope)),
-            padding: const EdgeInsets.only(bottom: 24),
-            children: [
-              if (discover.featured.isNotEmpty)
-                FeaturedMediaHero(
-                  item: discover.featured.first,
-                  eyebrow: 'Series spotlight',
-                  onTap: () => context.push(
-                    '/detail/tv/${discover.featured.first.id}',
+              key: PageStorageKey(('discover-tv', scope)),
+              padding: const EdgeInsets.only(bottom: 24),
+              children: [
+                if (discover.featured.isNotEmpty)
+                  FeaturedMediaHero(
+                    item: discover.featured.first,
+                    eyebrow: context.l10n.browseSeriesSpotlight,
+                    onTap: () => context.push(
+                      '/detail/tv/${discover.featured.first.id}',
+                    ),
                   ),
-                ),
-              CategoryRow(
-                paginationRevision: discover.refreshRevision,
-                key: const PageStorageKey('featured'),
-                title: discover.featuredTitle,
-                items: discover.featured.skip(1).toList(growable: false),
-                isLoading: discover.isLoadingFeatured,
-                isTvRow: true,
-                resolveTVStatus: true,
-                libraryStatus: libraryStatus,
-                onSeeAll: discover.featuredSource.isEmpty
-                    ? null
-                    : () => _seeAll(BrowseFeed.featured, discover.featuredTitle),
-              ),
-              // Every row below grows as it is scrolled toward its end; the
-              // headline row above is the one server-capped page.
-              if (discover.onTheAir.isNotEmpty)
                 CategoryRow(
                   paginationRevision: discover.refreshRevision,
-                  key: const PageStorageKey('Airing This Week'),
-                  title: 'Airing This Week',
-                  items: discover.onTheAir,
-                  isLoading: discover.isLoadingOnTheAir,
+                  key: const PageStorageKey('featured'),
+                  title: browseLabel(context, discover.featuredTitle),
+                  items: discover.featured.skip(1).toList(growable: false),
+                  isLoading: discover.isLoadingFeatured,
                   isTvRow: true,
                   resolveTVStatus: true,
                   libraryStatus: libraryStatus,
-                  onLoadMore: (_) => discoverNotifier.loadMoreOnTheAir(),
-                  onSeeAll: () => _seeAll(BrowseFeed.onTheAir, 'Airing This Week'),
+                  onSeeAll: discover.featuredSource.isEmpty
+                      ? null
+                      : () =>
+                          _seeAll(BrowseFeed.featured, discover.featuredTitle),
                 ),
-              if (discover.topRated.isNotEmpty)
-                CategoryRow(
-                  paginationRevision: discover.refreshRevision,
-                  key: const PageStorageKey('Top Rated'),
-                  title: 'Top Rated',
-                  items: discover.topRated,
-                  isLoading: discover.isLoadingTopRated,
-                  isTvRow: true,
-                  resolveTVStatus: true,
-                  libraryStatus: libraryStatus,
-                  onLoadMore: (_) => discoverNotifier.loadMoreTopRated(),
-                  onSeeAll: () => _seeAll(BrowseFeed.topRated, 'Top Rated'),
-                ),
-              if (discover.upcoming.isNotEmpty)
-                CategoryRow(
-                  paginationRevision: discover.refreshRevision,
-                  key: const PageStorageKey('Coming Soon'),
-                  title: 'Coming Soon',
-                  items: discover.upcoming,
-                  isLoading: discover.isLoadingUpcoming,
-                  isTvRow: true,
-                  resolveTVStatus: true,
-                  libraryStatus: libraryStatus,
-                  onLoadMore: (_) => discoverNotifier.loadMoreUpcoming(),
-                  onSeeAll: () => _seeAll(BrowseFeed.upcoming, 'Coming Soon'),
-                ),
-              if (discover.anticipated.isNotEmpty)
-                CategoryRow(
-                  paginationRevision: discover.refreshRevision,
-                  key: const PageStorageKey('Most Anticipated'),
-                  title: 'Most Anticipated',
-                  items: discover.anticipated,
-                  isLoading: discover.isLoadingAnticipated,
-                  isTvRow: true,
-                  resolveTVStatus: true,
-                  libraryStatus: libraryStatus,
-                  onLoadMore: (_) => discoverNotifier.loadMoreAnticipated(),
-                  onSeeAll: () =>
-                      _seeAll(BrowseFeed.anticipated, 'Most Anticipated'),
-                ),
-              GenreChipStrip(genres: discover.genres, mediaType: MediaType.tv),
+                // Every row below grows as it is scrolled toward its end; the
+                // headline row above is the one server-capped page.
+                if (discover.onTheAir.isNotEmpty)
+                  CategoryRow(
+                    paginationRevision: discover.refreshRevision,
+                    key: const PageStorageKey('Airing This Week'),
+                    title: context.l10n.browseAiringThisWeek,
+                    items: discover.onTheAir,
+                    isLoading: discover.isLoadingOnTheAir,
+                    isTvRow: true,
+                    resolveTVStatus: true,
+                    libraryStatus: libraryStatus,
+                    onLoadMore: (_) => discoverNotifier.loadMoreOnTheAir(),
+                    onSeeAll: () =>
+                        _seeAll(BrowseFeed.onTheAir, 'Airing This Week'),
+                  ),
+                if (discover.topRated.isNotEmpty)
+                  CategoryRow(
+                    paginationRevision: discover.refreshRevision,
+                    key: const PageStorageKey('Top Rated'),
+                    title: context.l10n.browseTopRated,
+                    items: discover.topRated,
+                    isLoading: discover.isLoadingTopRated,
+                    isTvRow: true,
+                    resolveTVStatus: true,
+                    libraryStatus: libraryStatus,
+                    onLoadMore: (_) => discoverNotifier.loadMoreTopRated(),
+                    onSeeAll: () => _seeAll(BrowseFeed.topRated, 'Top Rated'),
+                  ),
+                if (discover.upcoming.isNotEmpty)
+                  CategoryRow(
+                    paginationRevision: discover.refreshRevision,
+                    key: const PageStorageKey('Coming Soon'),
+                    title: context.l10n.browseComingSoon,
+                    items: discover.upcoming,
+                    isLoading: discover.isLoadingUpcoming,
+                    isTvRow: true,
+                    resolveTVStatus: true,
+                    libraryStatus: libraryStatus,
+                    onLoadMore: (_) => discoverNotifier.loadMoreUpcoming(),
+                    onSeeAll: () => _seeAll(BrowseFeed.upcoming, 'Coming Soon'),
+                  ),
+                if (discover.anticipated.isNotEmpty)
+                  CategoryRow(
+                    paginationRevision: discover.refreshRevision,
+                    key: const PageStorageKey('Most Anticipated'),
+                    title: context.l10n.browseMostAnticipated,
+                    items: discover.anticipated,
+                    isLoading: discover.isLoadingAnticipated,
+                    isTvRow: true,
+                    resolveTVStatus: true,
+                    libraryStatus: libraryStatus,
+                    onLoadMore: (_) => discoverNotifier.loadMoreAnticipated(),
+                    onSeeAll: () =>
+                        _seeAll(BrowseFeed.anticipated, 'Most Anticipated'),
+                  ),
+                GenreChipStrip(
+                    genres: discover.genres, mediaType: MediaType.tv),
 
-              // Sonarr library rows (same style as discovery)
-              if (_recentlyDownloaded.isNotEmpty || _isLoadingLibrary)
-                _buildRow(
-                  title: 'Recently Downloaded',
-                  items: _recentlyDownloaded,
-                  instanceId: _recentInstanceId,
-                  statusLabel: 'Downloaded',
-                  statusColor: AppTheme.available,
-                ),
-              if (_airingNext.isNotEmpty || _isLoadingLibrary)
-                _buildRow(
-                  title: 'Airing Next',
-                  items: _airingNext,
-                  instanceId: _airingInstanceId,
-                  statusLabel: 'Airing',
-                  statusColor: AppTheme.downloading,
-                ),
-            ],
-          ),
+                // Sonarr library rows (same style as discovery)
+                if (_recentlyDownloaded.isNotEmpty || _isLoadingLibrary)
+                  _buildRow(
+                    title: context.l10n.browseRecentlyDownloaded,
+                    items: _recentlyDownloaded,
+                    instanceId: _recentInstanceId,
+                    statusLabel: context.l10n.browseDownloaded,
+                    statusColor: AppTheme.available,
+                  ),
+                if (_airingNext.isNotEmpty || _isLoadingLibrary)
+                  _buildRow(
+                    title: context.l10n.browseAiringNext,
+                    items: _airingNext,
+                    instanceId: _airingInstanceId,
+                    statusLabel: context.l10n.browseAiring,
+                    statusColor: AppTheme.downloading,
+                  ),
+              ],
+            ),
             if (discover.failedRows.isNotEmpty || library.seriesFailed)
               Align(
                 alignment: Alignment.bottomCenter,
-                child: SafeArea(child: ErrorBanner(
-                  message: 'Some titles could not be loaded. Retry to check for updates.',
+                child: SafeArea(
+                    child: ErrorBanner(
+                  message: context.l10n
+                      .browseSomeTitlesCouldNotBeLoadedRetryToCheckForUpdates,
                   onRetry: _refresh,
                 )),
               ),
@@ -242,7 +250,8 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
             itemKey: (item) => item.id,
             itemExtent: cardWidth + 14,
             isLoading: _isLoadingLibrary,
-            height: cardWidth * 1.5 + MediaCard.rowExtraHeight(context, withSubtitle: true),
+            height: cardWidth * 1.5 +
+                MediaCard.rowExtraHeight(context, withSubtitle: true),
             itemBuilder: (series) => TVLibraryLink(
               instanceId: instanceId,
               seriesId: series.id,

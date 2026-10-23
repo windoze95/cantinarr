@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -68,16 +69,19 @@ class EmptyDiscoverScreen extends ConsumerWidget {
                   Icon(Icons.explore_outlined,
                       size: 48, color: theme.colorScheme.onSurfaceVariant),
                   const SizedBox(height: 16),
-                  Text('No Discover tabs to show',
+                  Text(context.l10n.browseNoDiscoverTabsToShow,
                       style: theme.textTheme.titleLarge,
                       textAlign: TextAlign.center),
                   const SizedBox(height: 8),
                   Text(
                     isAdmin
                         ? needsAssignments
-                            ? 'Assign a library to your account in Users to show its Discover page.'
-                            : 'Show a tab in Discover settings or connect a service to start browsing.'
-                        : 'No Discover tabs are available for your account.',
+                            ? context.l10n
+                                .browseAssignALibraryToYourAccountInUsersToShowItsDiscoverPage
+                            : context.l10n
+                                .browseShowATabInDiscoverSettingsOrConnectAServiceToStartBrowsing
+                        : context.l10n
+                            .browseNoDiscoverTabsAreAvailableForYourAccount,
                     textAlign: TextAlign.center,
                   ),
                   if (isAdmin) ...[
@@ -87,8 +91,8 @@ class EmptyDiscoverScreen extends ConsumerWidget {
                           ? '/settings/users'
                           : '/settings/discovery'),
                       child: Text(needsAssignments
-                          ? 'Manage users'
-                          : 'Discover settings'),
+                          ? context.l10n.browseManageUsers
+                          : context.l10n.browseDiscoverSettings),
                     ),
                   ],
                 ],

@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -109,15 +110,18 @@ class _DownloadsHistoryScreenState
         sources.every((source) => _histories[source.id] == null);
     if (sources.isEmpty) {
       return FullScreenError(
-          message: 'No download client configured', onRetry: _load);
+          message: context.l10n.adminNoDownloadClientConfigured,
+          onRetry: _load);
     }
     if (nothingLoaded && failedSources.length == sources.length) {
       final message = sources.length == 1
-          ? 'Failed to load history: ${_sourceErrors[sources.single.id]}'
-          : 'Failed to load history:\n${[
+          ? context.l10n.adminFailedToLoadHistory2(
+              (_sourceErrors[sources.single.id]).toString())
+          : context.l10n.adminFailedToLoadHistory(([
               for (final source in failedSources)
                 '${source.name}: ${_sourceErrors[source.id]}'
-            ].join('\n')}';
+            ].join('\n'))
+              .toString());
       return FullScreenError(message: message, onRetry: _load);
     }
 
@@ -147,12 +151,12 @@ class _DownloadsHistoryScreenState
               color: AppTheme.accent,
               child: ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                children: const [
+                children: [
                   SizedBox(height: 160),
                   Icon(Icons.history, size: 48, color: AppTheme.textSecondary),
                   SizedBox(height: 12),
                   Center(
-                    child: Text('No history yet',
+                    child: Text(context.l10n.adminNoHistoryYet,
                         style: TextStyle(
                             color: AppTheme.textSecondary, fontSize: 16)),
                   ),
@@ -232,9 +236,9 @@ class _HistoryErrorBanner extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Not responding: ${names.join(', ')}',
-              style: const TextStyle(
-                  color: AppTheme.textSecondary, fontSize: 12),
+              context.l10n.adminNotResponding((names.join(', ')).toString()),
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -244,36 +248,53 @@ class _HistoryErrorBanner extends StatelessWidget {
   }
 }
 
-String _relativeTime(DateTime? date) {
+String _relativeTime(DateTime? date, {AppLocalizations? strings}) {
   if (date == null) return '';
   final local = date.toLocal();
   final diff = DateTime.now().difference(local);
-  if (diff.inMinutes < 1) return 'just now';
-  if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-  if (diff.inHours < 24) return '${diff.inHours}h ago';
-  if (diff.inDays < 7) return '${diff.inDays}d ago';
+  if (diff.inMinutes < 1)
+    return (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminJustNow2;
+  if (diff.inMinutes < 60)
+    return (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminMAgo((diff.inMinutes).toString());
+  if (diff.inHours < 24)
+    return (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminHAgo((diff.inHours).toString());
+  if (diff.inDays < 7)
+    return (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminDAgo((diff.inDays).toString());
   if (local.year == DateTime.now().year) {
-    return DateFormat('MMM d').format(local);
+    return DateFormat.MMMd(strings?.dateLocale ?? 'en_US').format(local);
   }
-  return DateFormat('MMM d, yyyy').format(local);
+  return DateFormat.yMMMd(strings?.dateLocale ?? 'en_US').format(local);
 }
 
 ({IconData icon, Color color, String label}) _historyStyle(
-    DownloadHistoryItem item) {
+    DownloadHistoryItem item,
+    {AppLocalizations? strings}) {
   if (item.isFailed) {
-    return (icon: Icons.error_outline, color: AppTheme.error, label: 'Failed');
+    return (
+      icon: Icons.error_outline,
+      color: AppTheme.error,
+      label:
+          (strings ?? lookupAppLocalizations(const Locale('en'))).adminFailed2
+    );
   }
   if (item.isCompleted) {
     return (
       icon: Icons.check_circle_outline,
       color: AppTheme.available,
-      label: 'Completed'
+      label:
+          (strings ?? lookupAppLocalizations(const Locale('en'))).adminCompleted
     );
   }
   return (
     icon: Icons.history,
     color: AppTheme.textSecondary,
-    label: item.status.isEmpty ? 'Unknown' : item.status
+    label: item.status.isEmpty
+        ? (strings ?? lookupAppLocalizations(const Locale('en'))).adminUnknown
+        : item.status
   );
 }
 
@@ -287,7 +308,7 @@ class _HistoryTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = _historyStyle(item);
+    final style = _historyStyle(item, strings: context.l10n);
     final subtitleParts = [
       style.label,
       if (item.sizeBytes > 0) item.sizeFormatted,
@@ -318,7 +339,7 @@ class _HistoryTile extends StatelessWidget {
       style: TextStyle(color: style.color, fontSize: 12),
     );
     final trailing = Text(
-      _relativeTime(item.completedAt),
+      _relativeTime(item.completedAt, strings: context.l10n),
       style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
     );
 

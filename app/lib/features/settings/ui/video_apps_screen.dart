@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -41,11 +42,13 @@ class _VideoAppsScreenState extends ConsumerState<VideoAppsScreen>
   Widget build(BuildContext context) {
     final auth = ref.watch(authProvider).valueOrNull;
     final available = auth?.connection?.mediaServerInstances
-        .map((server) => server.serviceType).toSet() ?? const <String>{};
+            .map((server) => server.serviceType)
+            .toSet() ??
+        const <String>{};
     final services = VideoApps.serviceTypes.where(available.contains).toList();
     final preferences = ref.watch(videoAppPreferencesProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Video apps')),
+      appBar: AppBar(title: Text(context.l10n.settingsVideoApps)),
       body: CenteredContent(
         child: preferences.when(
           skipLoadingOnReload: false,
@@ -60,7 +63,7 @@ class _VideoAppsScreenState extends ConsumerState<VideoAppsScreen>
             child: TextButton.icon(
               onPressed: () => ref.invalidate(videoAppPreferencesProvider),
               icon: const Icon(Icons.refresh),
-              label: const Text("Couldn't load video apps · Retry"),
+              label: Text(context.l10n.settingsVideoAppsLoadError),
             ),
           ),
         ),
@@ -70,8 +73,11 @@ class _VideoAppsScreenState extends ConsumerState<VideoAppsScreen>
 }
 
 class _PreferencesForm extends ConsumerStatefulWidget {
-  const _PreferencesForm({super.key, required this.apps, required this.services,
-    required this.refreshing});
+  const _PreferencesForm(
+      {super.key,
+      required this.apps,
+      required this.services,
+      required this.refreshing});
   final Map<String, VideoApps> apps;
   final List<String> services;
   final bool refreshing;
@@ -98,8 +104,8 @@ class _PreferencesFormState extends ConsumerState<_PreferencesForm> {
     } catch (_) {
       if (!mounted) return;
       setState(() => _formVersion++);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text("Couldn't save your video apps. Try again."),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(context.l10n.settingsVideoAppsSaveError),
       ));
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -108,52 +114,47 @@ class _PreferencesFormState extends ConsumerState<_PreferencesForm> {
 
   @override
   Widget build(BuildContext context) => ListView(
-    padding: const EdgeInsets.all(16),
-    children: [
-      const Text('Choose which app Cantinarr opens for movies and shows on '
-          'iPhone and iPad. Your choices follow your account on this Cantinarr server.'),
-      const SizedBox(height: 8),
-      const Text('Use admin default follows each shared server’s settings. '
-          'Your choice overrides every server of that service type.'),
-      if (widget.services.isEmpty) ...[
-        const SizedBox(height: 24),
-        const Text('No video servers are configured for your account.'),
-      ],
-      for (final service in widget.services) ...[
-        const SizedBox(height: 24),
-        Text(mediaServerTypeLabel(service),
-            style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        VideoAppField(
-          key: ValueKey('$service:$_formVersion'),
-          serviceType: service,
-          value: widget.apps[service] ?? const VideoApps(),
-          inheritDefaults: true,
-          onChanged: _saving || widget.refreshing ? null : (apps) => _save(service, apps),
-        ),
-      ],
-      if (_saving || widget.refreshing) ...[
-        const SizedBox(height: 16),
-        const LinearProgressIndicator(),
-      ],
-      const SizedBox(height: 24),
-      const Text('Install Infuse and connect your media servers there first. '
-          'Open in Infuse opens the movie or show across its connected libraries; '
-          'it cannot select a particular server or copy. If the title is missing '
-          'in Infuse, it may show a title page without a playable copy. '
-          'Cantinarr does not start playback automatically.'),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: TextButton.icon(
-          onPressed: () => launchUrl(Uri.parse('https://firecore.com/infuse'),
-              mode: LaunchMode.externalApplication),
-          icon: const Icon(Icons.open_in_new),
-          label: const Text('Get Infuse'),
-        ),
-      ),
-      const Text('If Infuse cannot open, Cantinarr opens the original server link '
-          'in your browser. Android uses the Plex, Jellyfin, or Emby app. '
-          'Web and desktop use the browser.'),
-    ],
-  );
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text(context.l10n.settingsVideoAppsHelp),
+          const SizedBox(height: 8),
+          Text(context.l10n.settingsVideoAppsDefaultHelp),
+          if (widget.services.isEmpty) ...[
+            const SizedBox(height: 24),
+            Text(context.l10n.settingsNoVideoServers),
+          ],
+          for (final service in widget.services) ...[
+            const SizedBox(height: 24),
+            Text(mediaServerTypeLabel(service),
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            VideoAppField(
+              key: ValueKey('$service:$_formVersion'),
+              serviceType: service,
+              value: widget.apps[service] ?? const VideoApps(),
+              inheritDefaults: true,
+              onChanged: _saving || widget.refreshing
+                  ? null
+                  : (apps) => _save(service, apps),
+            ),
+          ],
+          if (_saving || widget.refreshing) ...[
+            const SizedBox(height: 16),
+            const LinearProgressIndicator(),
+          ],
+          const SizedBox(height: 24),
+          Text(context.l10n.settingsInfuseHelp),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () => launchUrl(
+                  Uri.parse('https://firecore.com/infuse'),
+                  mode: LaunchMode.externalApplication),
+              icon: const Icon(Icons.open_in_new),
+              label: Text(context.l10n.settingsGetInfuse),
+            ),
+          ),
+          Text(context.l10n.settingsInfuseFallbackHelp),
+        ],
+      );
 }

@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/operations_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -109,7 +111,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
 
   String _friendlyError(Object e) {
     final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
-    return m != null ? m.group(1)! : 'Something went wrong';
+    return m != null ? m.group(1)! : context.l10n.opsSomethingWentWrongMessage;
   }
 
   Future<void> _approve() async {
@@ -128,8 +130,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
     setState(() => _reviewing = false);
     if (confirmation == null) return;
     if (!_action.canTakeAction) {
-      _showSnack(
-          'This fix changed while you were reviewing it. Refresh first.');
+      _showSnack(context.l10n.opsThisFixChangedWhileYouWereReviewing);
       return;
     }
     setState(() => _busy = true);
@@ -164,7 +165,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
           _decisionUncertain = true;
         });
         _showSnack(
-          'Could not confirm whether the fix ran. Refresh before deciding again.',
+          context.l10n.opsCouldNotConfirmWhetherTheFixRan,
         );
       }
     }
@@ -176,8 +177,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
   /// server computed, never from any agent-authored string, preserving this
   /// widget's no-agent-text-near-controls invariant.
   Future<_ApprovalConfirmation?> _confirmApproval() {
-    final offer =
-        _action.canTakeAction ? _action.autoApprovalOffer : null;
+    final offer = _action.canTakeAction ? _action.autoApprovalOffer : null;
     var remember = false;
     return showDialog<_ApprovalConfirmation>(
       context: context,
@@ -188,8 +188,8 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
           // whole warning reachable on a small screen or at a large text scale,
           // instead of clipping the part that says it cannot be undone.
           scrollable: true,
-          title: const Text(
-            'Approve this change?',
+          title: Text(
+            context.l10n.opsApproveThisChange,
             style: TextStyle(color: AppTheme.textPrimary),
           ),
           content: Column(
@@ -197,7 +197,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                _ActionCopy.confirmation(_action),
+                _ActionCopy.confirmation(context, _action),
                 style: const TextStyle(color: AppTheme.textSecondary),
               ),
               const SizedBox(height: 16),
@@ -206,13 +206,12 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
                 const SizedBox(height: 8),
                 CheckboxListTile(
                   value: remember,
-                  onChanged: (v) =>
-                      setDialogState(() => remember = v ?? false),
+                  onChanged: (v) => setDialogState(() => remember = v ?? false),
                   contentPadding: EdgeInsets.zero,
                   controlAffinity: ListTileControlAffinity.leading,
                   activeColor: AppTheme.accent,
-                  title: const Text(
-                    'Always approve this fix for this problem',
+                  title: Text(
+                    context.l10n.opsAlwaysApproveThisFixForThisProblem,
                     style: TextStyle(
                       color: AppTheme.textPrimary,
                       fontSize: 14,
@@ -220,11 +219,11 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
                     ),
                   ),
                   subtitle: Text(
-                    '${offer.label}'
-                    '${offer.reactivatesPausedRule ? ' · re-enables a paused rule' : ''}'
-                    ' — applies to future auto-detected issues and any already '
-                    'waiting; pauses itself if a fix fails. Applies on every '
-                    'connected service and media type.',
+                    context.l10n.opsRuleOffer(
+                        offer.label,
+                        offer.reactivatesPausedRule
+                            ? context.l10n.opsReactivatesRule
+                            : ''),
                     style: const TextStyle(
                       color: AppTheme.textSecondary,
                       fontSize: 12,
@@ -237,7 +236,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel'),
+              child: Text(context.l10n.opsCancel),
             ),
             ElevatedButton(
               onPressed: () => Navigator.of(dialogContext)
@@ -246,7 +245,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
                 backgroundColor: AppTheme.available,
                 foregroundColor: AppTheme.background,
               ),
-              child: const Text('Approve and apply'),
+              child: Text(context.l10n.opsApproveAndApply),
             ),
           ],
         ),
@@ -265,19 +264,18 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
 
   void _showApprovalOutcome(AgentAction action) {
     final message = switch (action.status) {
-      AgentActionStatus.executed => 'Fix applied.',
-      AgentActionStatus.failed => 'The fix was approved, but it failed.',
-      AgentActionStatus.superseded =>
-        'The fix did not run because the issue or proposal changed.',
+      AgentActionStatus.executed => context.l10n.opsFixApplied,
+      AgentActionStatus.failed => context.l10n.opsTheFixWasApprovedButItFailed,
+      AgentActionStatus.superseded => context.l10n.opsTheFixDidNotRunBecauseThe,
       AgentActionStatus.outcomeUnknown =>
-        'Approval was recorded, but the result could not be confirmed.',
+        context.l10n.opsApprovalWasRecordedButTheResultCould,
       AgentActionStatus.approved ||
       AgentActionStatus.executing =>
-        'Fix approved and applying.',
-      AgentActionStatus.denied => 'This fix was already denied.',
+        context.l10n.opsFixApprovedAndApplying,
+      AgentActionStatus.denied => context.l10n.opsThisFixWasAlreadyDenied,
       AgentActionStatus.proposed ||
       AgentActionStatus.unknown =>
-        'The fix was not approved.',
+        context.l10n.opsTheFixWasNotApproved,
     };
     _showSnack(message);
   }
@@ -302,7 +300,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         backgroundColor: AppTheme.surface,
-        title: const Text('Deny this fix',
+        title: Text(context.l10n.opsDenyThisFix,
             style: TextStyle(color: AppTheme.textPrimary)),
         content: TextField(
           controller: controller,
@@ -310,8 +308,8 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
           maxLines: 3,
           minLines: 1,
           style: const TextStyle(color: AppTheme.textPrimary),
-          decoration: const InputDecoration(
-            labelText: 'Reason (optional)',
+          decoration: InputDecoration(
+            labelText: context.l10n.opsReasonOptional,
             labelStyle: TextStyle(color: AppTheme.textSecondary),
             border: OutlineInputBorder(),
           ),
@@ -319,7 +317,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.opsCancel),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
@@ -327,7 +325,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
               foregroundColor: AppTheme.background,
             ),
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Deny'),
+            child: Text(context.l10n.opsDeny),
           ),
         ],
       ),
@@ -342,8 +340,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
     setState(() => _reviewing = false);
     if (confirmed != true) return;
     if (!_action.canTakeAction) {
-      _showSnack(
-          'This fix changed while you were reviewing it. Refresh first.');
+      _showSnack(context.l10n.opsThisFixChangedWhileYouWereReviewing);
       return;
     }
 
@@ -381,7 +378,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
 
   void _showDenyOutcome(AgentAction action) {
     if (action.status == AgentActionStatus.denied) {
-      _showSnack('Fix denied. The agent can investigate another option.');
+      _showSnack(context.l10n.opsFixDeniedTheAgentCanInvestigateAnother);
       return;
     }
     _showApprovalOutcome(action);
@@ -411,13 +408,13 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Header: a fixed icon + a fixed "proposed a fix" line (NOT agent text).
-          const Row(
+          Row(
             children: [
               Icon(Icons.build_circle_outlined,
                   size: 18, color: AppTheme.requested),
               SizedBox(width: 8),
               Text(
-                'The agent proposed a fix',
+                context.l10n.opsTheAgentProposedAFix,
                 style: TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 13,
@@ -451,7 +448,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
           // Plain-language summary of the action kind (server-authored copy,
           // chosen by the typed kind enum — never an agent string).
           Text(
-            _ActionCopy.summary(action),
+            _ActionCopy.summary(context, action),
             style: const TextStyle(
               color: AppTheme.textPrimary,
               fontSize: 15,
@@ -466,8 +463,8 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
           // The one edit with no wrong answer: shrink a destructive delete.
           if (_deleteSelectionActive) ...[
             const SizedBox(height: 10),
-            const Text(
-              'Episodes to delete (uncheck to spare)',
+            Text(
+              context.l10n.opsEpisodesToDeleteUncheckToSpare,
               style: TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 12,
@@ -511,8 +508,8 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
                 action.params.raw,
               )) ...[
             const SizedBox(height: 12),
-            const Text(
-              'Values used after approval',
+            Text(
+              context.l10n.opsValuesUsedAfterApproval,
               style: TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 12,
@@ -530,7 +527,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
           if (action.rationale.trim().isNotEmpty) ...[
             const SizedBox(height: 12),
             _QuotedBlock(
-              label: "Agent's reasoning",
+              label: context.l10n.opsAgentSReasoning,
               text: action.rationale.trim(),
             ),
           ],
@@ -539,12 +536,15 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
           if (action.resultText != null &&
               action.resultText!.trim().isNotEmpty) ...[
             const SizedBox(height: 12),
-            _QuotedBlock(label: 'Result', text: action.resultText!.trim()),
+            _QuotedBlock(
+                label: context.l10n.opsResult, text: action.resultText!.trim()),
           ],
           if (action.denyReason != null &&
               action.denyReason!.trim().isNotEmpty) ...[
             const SizedBox(height: 12),
-            _QuotedBlock(label: 'Deny note', text: action.denyReason!.trim()),
+            _QuotedBlock(
+                label: context.l10n.opsDenyNote,
+                text: action.denyReason!.trim()),
           ],
 
           const SizedBox(height: 14),
@@ -568,7 +568,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
                   minimumSize: const Size(0, 32),
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-                label: const Text('View agent activity'),
+                label: Text(context.l10n.opsViewAgentActivity),
               ),
             ),
           ],
@@ -582,7 +582,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
     AgentActionParams? params,
     bool includeLeadingGap = true,
   }) {
-    final rows = _ActionCopy.paramRows(action, params: params);
+    final rows = _ActionCopy.paramRows(context, action, params: params);
     if (rows.isEmpty) return const [];
     return [
       if (includeLeadingGap) const SizedBox(height: 10),
@@ -607,7 +607,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
                         strokeWidth: 2, color: AppTheme.background),
                   )
                 : const Icon(Icons.check_circle_outline, size: 18),
-            label: const Text('Approve'),
+            label: Text(context.l10n.opsApprove),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.available,
               foregroundColor: AppTheme.background,
@@ -621,7 +621,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
           child: OutlinedButton.icon(
             onPressed: _busy || _reviewing ? null : _deny,
             icon: const Icon(Icons.cancel_outlined, size: 18),
-            label: const Text('Deny'),
+            label: Text(context.l10n.opsDeny),
             style: OutlinedButton.styleFrom(
               foregroundColor: AppTheme.error,
               side: const BorderSide(color: AppTheme.error),
@@ -634,9 +634,9 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
 
   Widget _buildFrozenFooter(AgentAction action, {required bool isAdmin}) {
     final blocked = _decisionUncertain
-        ? 'Could not confirm whether the fix ran. Refresh before deciding again.'
+        ? context.l10n.opsCouldNotConfirmWhetherTheFixRan
         : !widget.decisionsEnabled && action.status.isPending
-            ? 'This fix could not be refreshed. Retry before deciding.'
+            ? context.l10n.opsThisFixCouldNotBeRefreshedRetry
             : action.decisionBlockedReason;
     if (action.status.isPending && blocked != null) {
       return Row(
@@ -647,7 +647,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
           const SizedBox(width: 6),
           Expanded(
             child: Text(
-              blocked,
+              localizeOperationsLabel(context, blocked),
               style: const TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 13,
@@ -661,13 +661,13 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
 
     // A reporter / non-admin viewing a still-pending proposal.
     if (action.status.isPending && !isAdmin) {
-      return const Row(
+      return Row(
         children: [
           Icon(Icons.hourglass_empty, size: 16, color: AppTheme.requested),
           SizedBox(width: 6),
           Expanded(
             child: Text(
-              'Waiting on an admin to approve a fix.',
+              context.l10n.opsWaitingOnAnAdminToApproveA,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ),
@@ -675,7 +675,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
       );
     }
 
-    final decided = _ActionCopy.frozenFooter(action);
+    final decided = _ActionCopy.frozenFooter(context, action);
     return Row(
       children: [
         Icon(decided.$2, size: 16, color: decided.$3),
@@ -716,10 +716,10 @@ class _MediaScopeLine extends StatelessWidget {
       parts.add(
           'S${action.issueSeason.toString().padLeft(2, '0')}E${action.issueEpisode.toString().padLeft(2, '0')}');
     } else if (action.issueSeason > 0) {
-      parts.add('Season ${action.issueSeason}');
+      parts.add(context.l10n.opsSeasonNumber(action.issueSeason.toString()));
     }
     if (action.issueOccurrences > 1) {
-      parts.add('seen ${action.issueOccurrences} times');
+      parts.add(context.l10n.opsSeenTimes(action.issueOccurrences.toString()));
     }
     return Row(
       children: [
@@ -729,8 +729,7 @@ class _MediaScopeLine extends StatelessWidget {
         Expanded(
           child: Text(
             parts.join(' · '),
-            style:
-                const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
       ],
@@ -759,16 +758,16 @@ class _PriorAttemptsBlock extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppTheme.surfaceVariant,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-            color: anyRecurred ? AppTheme.error : AppTheme.border),
+        border:
+            Border.all(color: anyRecurred ? AppTheme.error : AppTheme.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             anyRecurred
-                ? 'Already tried — and it came back'
-                : 'Already tried on this problem',
+                ? context.l10n.opsAlreadyTriedAndItCameBack
+                : context.l10n.opsAlreadyTriedOnThisProblem,
             style: TextStyle(
               color: anyRecurred ? AppTheme.error : AppTheme.textSecondary,
               fontSize: 12,
@@ -781,8 +780,8 @@ class _PriorAttemptsBlock extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 2),
               child: Text(
                 a.recurred
-                    ? '${_label(a)} ran and the same download was re-added afterwards — that fix did not hold.'
-                    : '${_label(a)} ran on this issue.',
+                    ? context.l10n.opsPriorAttemptReturned(_label(a))
+                    : context.l10n.opsPriorAttemptRan(_label(a)),
                 style: const TextStyle(
                     color: AppTheme.textPrimary, fontSize: 13, height: 1.35),
               ),
@@ -817,8 +816,8 @@ class _ActionTarget extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Target instance',
+                Text(
+                  context.l10n.opsTargetInstance,
                   style: TextStyle(
                     color: AppTheme.textSecondary,
                     fontSize: 11,
@@ -837,7 +836,7 @@ class _ActionTarget extends StatelessWidget {
                 const SizedBox(height: 2),
                 SelectableText(
                   action.instanceId.trim().isEmpty
-                      ? 'Instance ID unavailable'
+                      ? context.l10n.opsInstanceIDUnavailable
                       : action.instanceId.trim(),
                   style: const TextStyle(
                     color: AppTheme.textSecondary,
@@ -858,38 +857,39 @@ class _ActionTarget extends StatelessWidget {
 /// language so the action enum — never an agent string — selects the wording.
 class _ActionCopy {
   /// A one-line plain-language summary of what approving will do.
-  static String summary(AgentAction a) {
+  static String summary(BuildContext context, AgentAction a) {
     final params = a.approvedParams ?? a.params;
     switch (a.kind) {
       case AgentActionKind.grabRelease:
         return params.queueIdToReplace != null
-            ? 'Grab a different release and remove the current one'
-            : 'Grab a specific release';
+            ? context.l10n.opsGrabADifferentReleaseAndRemoveThe
+            : context.l10n.opsGrabASpecificRelease;
       case AgentActionKind.remediateQueue:
         switch (params.queueAction) {
           case 'remove':
-            return 'Remove the stuck item from the download queue';
+            return context.l10n.opsRemoveTheStuckItemFromTheDownload;
           case 'blocklist_search':
-            return 'Blocklist the current release and let the service replace it';
+            return context.l10n.opsBlocklistTheCurrentReleaseAndLetThe;
           case 'blocklist_only':
-            return 'Remove and blocklist this release without searching for a replacement';
+            return context
+                .l10n.opsRemoveAndBlocklistThisReleaseWithoutSearching;
           case 'change_category':
-            return 'Change the download category to unblock the import';
+            return context.l10n.opsChangeTheDownloadCategoryToUnblockThe;
           default:
-            return 'Fix the stuck download-queue item';
+            return context.l10n.opsFixTheStuckDownloadQueueItem;
         }
       case AgentActionKind.manualImport:
         return params.force
-            ? 'Force-import the downloaded files (overrides safety checks)'
-            : 'Manually import the downloaded files';
+            ? context.l10n.opsForceImportTheDownloadedFilesOverridesSafety
+            : context.l10n.opsManuallyImportTheDownloadedFiles;
       case AgentActionKind.triggerSearch:
-        return 'Start an automatic search for this title';
+        return context.l10n.opsStartAnAutomaticSearchForThisTitle;
       case AgentActionKind.rescan:
-        return 'Rescan the files on disk and re-run the import';
+        return context.l10n.opsRescanTheFilesOnDiskAndRe;
       case AgentActionKind.deleteMediaFiles:
-        return _deleteSummary(params);
+        return _deleteSummary(context, params);
       case AgentActionKind.unknown:
-        return 'Apply a fix';
+        return context.l10n.opsApplyAFix;
     }
   }
 
@@ -899,54 +899,53 @@ class _ActionCopy {
   /// admin is being asked for. The blocklist choice stays a distinct promise
   /// (files gone versus files gone *and* that release stood down), so it is
   /// never folded away.
-  static String _deleteSummary(AgentActionParams p) {
+  static String _deleteSummary(BuildContext context, AgentActionParams p) {
     // A book delete covers every file the record holds — plural, count unknown.
     final one = p.mediaType == 'movie' ||
         (p.mediaType == 'tv' && p.episodes.length == 1);
-    final files = one ? 'file' : 'files';
-    final replacements = one ? 'a replacement' : 'replacements';
     if (!p.blocklist) {
-      return 'Delete the wrong $files already in your library and look for '
-          '$replacements';
+      return one
+          ? context.l10n.opsDeleteWrongFileSearch
+          : context.l10n.opsDeleteWrongFilesSearch;
     }
-    final release = one ? 'that release' : 'those releases';
-    return 'Delete the wrong $files, block $release from coming back, and look '
-        'for $replacements';
+    return one
+        ? context.l10n.opsDeleteWrongFileBlockSearch
+        : context.l10n.opsDeleteWrongFilesBlockSearch;
   }
 
   /// Fixed confirmation copy selected only from typed enums/validated flags.
   /// No rationale, identifier, or other agent-authored string enters a control.
-  static String confirmation(AgentAction a) {
+  static String confirmation(BuildContext context, AgentAction a) {
     switch (a.kind) {
       case AgentActionKind.grabRelease:
         return a.params.queueIdToReplace != null
-            ? 'Cantinarr will download a different release and remove the current queue item. This changes your connected media service immediately.'
-            : 'Cantinarr will download a release in your connected media service immediately.';
+            ? context.l10n.opsCantinarrWillDownloadADifferentReleaseAnd
+            : context.l10n.opsCantinarrWillDownloadAReleaseInYour;
       case AgentActionKind.remediateQueue:
         switch (a.params.queueAction) {
           case 'remove':
-            return 'Cantinarr will remove an item from the download queue. This cannot be undone from Cantinarr.';
+            return context.l10n.opsCantinarrWillRemoveAnItemFromThe;
           case 'blocklist_search':
-            return 'Cantinarr will blocklist the current release and remove it from the queue. Replacement searches follow your service\'s failed-download settings, but are suppressed for unaired episodes.';
+            return context.l10n.opsCantinarrWillBlocklistTheCurrentReleaseAnd;
           case 'blocklist_only':
-            return 'Cantinarr will blocklist the stuck release and remove it from the queue, without searching for a replacement. Episode monitoring and existing library files are unchanged.';
+            return context.l10n.opsCantinarrWillBlocklistTheStuckReleaseAnd;
           case 'change_category':
-            return 'Cantinarr will change a download category in your connected services.';
+            return context.l10n.opsCantinarrWillChangeADownloadCategoryIn;
           default:
-            return 'Cantinarr will change the download queue in your connected media service.';
+            return context.l10n.opsCantinarrWillChangeTheDownloadQueueIn;
         }
       case AgentActionKind.manualImport:
         return a.params.force
-            ? 'Cantinarr will force-import downloaded files and override normal import safety checks.'
-            : 'Cantinarr will import downloaded files into your media library.';
+            ? context.l10n.opsCantinarrWillForceImportDownloadedFilesAnd
+            : context.l10n.opsCantinarrWillImportDownloadedFilesIntoYour;
       case AgentActionKind.triggerSearch:
-        return 'Cantinarr will start a search and may add a download to the queue.';
+        return context.l10n.opsCantinarrWillStartASearchAndMay;
       case AgentActionKind.rescan:
-        return 'Cantinarr will rescan files and run the import process in your connected media service.';
+        return context.l10n.opsCantinarrWillRescanFilesAndRunThe;
       case AgentActionKind.deleteMediaFiles:
-        return _deleteConfirmation(a.params);
+        return _deleteConfirmation(context, a.params);
       case AgentActionKind.unknown:
-        return 'Cantinarr will make a change in your connected media service.';
+        return context.l10n.opsCantinarrWillMakeAChangeInYour;
     }
   }
 
@@ -965,7 +964,7 @@ class _ActionCopy {
   /// The only thing that changes the ending is blocking: standing a release
   /// down is what makes a media service go looking on its own, and when it
   /// does, Cantinarr stays out of the way instead of duplicating the search.
-  static String _deleteConfirmation(AgentActionParams p) {
+  static String _deleteConfirmation(BuildContext context, AgentActionParams p) {
     final episodes = p.episodes;
     final isTv = p.mediaType == 'tv';
     // A book delete covers every file the record holds — plural, count unknown.
@@ -973,58 +972,50 @@ class _ActionCopy {
 
     final String target;
     if (p.mediaType == 'book') {
-      target = 'every file this book holds in your library';
+      target = context.l10n.opsEveryFileThisBookHoldsInYour;
     } else if (p.mediaType == 'music') {
-      target = 'every track file this album holds in your library';
+      target = context.l10n.opsEveryTrackFileThisAlbumHoldsIn;
     } else if (isTv && episodes.isNotEmpty) {
       final season = p.season;
-      target = '${one ? '1 file' : '${episodes.length} files'} from your '
-          'library — ${season == null ? '' : 'season $season, '}'
-          '${one ? 'episode' : 'episodes'} ${_episodeRanges(episodes)}';
+      target = context.l10n.opsDeleteEpisodeTarget(
+          episodes.length,
+          season == null
+              ? ''
+              : context.l10n.opsDeleteSeasonFragment(season.toString()),
+          _episodeRanges(episodes));
     } else if (isTv) {
-      target = 'the episode files listed on this fix';
+      target = context.l10n.opsTheEpisodeFilesListedOnThisFix;
     } else {
-      target = 'the movie file in your library';
+      target = context.l10n.opsTheMovieFileInYourLibrary;
     }
 
     final buffer = StringBuffer(
-      'Cantinarr will permanently delete $target. This cannot be undone: '
-      '${one ? 'the file is' : 'the files are'} removed from disk and '
-      'Cantinarr keeps no copy.',
+      context.l10n.opsDeleteFilesConfirmation(target, one ? 'one' : 'other'),
     );
     if (p.blocklist) {
       buffer.write(
         one
-            ? ' It also blocks the release that file came from, so your media '
-                'service will not download that same release again.'
-            : ' It also blocks the releases those files came from, so your '
-                'media service will not download those same releases again.',
+            ? context.l10n.opsItAlsoBlocksTheReleaseThatFile
+            : context.l10n.opsItAlsoBlocksTheReleasesThoseFiles,
       );
     } else {
       buffer.write(
         one
-            ? ' The release that file came from is not blocked, so your media '
-                'service could download the same one again.'
-            : ' The releases those files came from are not blocked, so your '
-                'media service could download the same ones again.',
+            ? context.l10n.opsTheReleaseThatFileCameFromIs
+            : context.l10n.opsTheReleasesThoseFilesCameFromAre,
       );
     }
 
     buffer.write(
       isTv
-          ? ' Cantinarr then looks for replacements, but only for the episodes '
-              'of this season that have already aired. The rest of the season '
-              'is left alone — your media service will grab each episode as it '
-              'comes out.'
-          : ' Cantinarr then looks for a replacement.',
+          ? context.l10n.opsCantinarrThenLooksForReplacementsButOnly
+          : context.l10n.opsCantinarrThenLooksForAReplacement,
     );
     if (p.blocklist) {
       buffer.write(
         one
-            ? ' If blocking that release already sent your media service '
-                'looking for a replacement itself, Cantinarr leaves that to it.'
-            : ' If blocking those releases already sent your media service '
-                'looking for replacements itself, Cantinarr leaves that to it.',
+            ? context.l10n.opsIfBlockingThatReleaseAlreadySentYour
+            : context.l10n.opsIfBlockingThoseReleasesAlreadySentYour,
       );
     }
     return buffer.toString();
@@ -1057,6 +1048,7 @@ class _ActionCopy {
   /// The quoted, non-editable data rows for the action's params. Each tuple is
   /// (label, value, useMonospace). Values are UNTRUSTED display data.
   static List<(String, String, bool)> paramRows(
+    BuildContext context,
     AgentAction a, {
     AgentActionParams? params,
   }) {
@@ -1064,86 +1056,118 @@ class _ActionCopy {
     final rows = <(String, String, bool)>[];
 
     String mediaLabel() => switch (p.mediaType) {
-          'tv' => 'TV',
-          'book' => 'Book',
-          'music' => 'Music',
-          _ => 'Movie',
+          'tv' => context.l10n.opsTV,
+          'book' => context.l10n.opsBook,
+          'music' => context.l10n.opsMusic,
+          _ => context.l10n.opsMovie,
         };
 
     switch (a.kind) {
       case AgentActionKind.grabRelease:
-        if (p.mediaType != null) rows.add(('Type', mediaLabel(), false));
+        if (p.mediaType != null)
+          rows.add((context.l10n.opsType, mediaLabel(), false));
         if (p.releaseTitle != null) {
-          rows.add(('Release', p.releaseTitle!, false));
+          rows.add((context.l10n.opsRelease, p.releaseTitle!, false));
         }
-        if (p.quality != null) rows.add(('Quality', p.quality!, false));
-        if (p.size != null) rows.add(('Size', _formatBytes(p.size!), false));
-        if (p.protocol != null) rows.add(('Protocol', p.protocol!, false));
+        if (p.quality != null)
+          rows.add((context.l10n.opsQuality, p.quality!, false));
+        if (p.size != null)
+          rows.add((context.l10n.opsSize, _formatBytes(p.size!), false));
+        if (p.protocol != null)
+          rows.add((context.l10n.opsProtocol, p.protocol!, false));
         if (p.indexer != null || p.indexerId != null) {
-          final name = p.indexer ?? 'Indexer';
+          final name = p.indexer ?? context.l10n.opsIndexer;
           final id = p.indexerId == null ? '' : ' (#${p.indexerId})';
-          rows.add(('Indexer', '$name$id', false));
+          rows.add((context.l10n.opsIndexer, '$name$id', false));
         }
         if (p.rejected) {
           final reason = p.rejections.isEmpty
-              ? 'Rejected by the connected media service'
+              ? context.l10n.opsRejectedByTheConnectedMediaService
               : p.rejections.join('; ');
-          rows.add(('Warning', reason, false));
+          rows.add((context.l10n.opsWarning, reason, false));
         }
         if (p.guid != null) {
-          rows.add(('Safe reference', _shorten(p.guid!), true));
+          rows.add((context.l10n.opsSafeReference, _shorten(p.guid!), true));
         }
         if (p.queueIdToReplace != null) {
-          rows.add(('Replaces queue item', '#${p.queueIdToReplace}', false));
+          rows.add((
+            context.l10n.opsReplacesQueueItem,
+            '#${p.queueIdToReplace}',
+            false
+          ));
         }
       case AgentActionKind.remediateQueue:
-        if (p.mediaType != null) rows.add(('Type', mediaLabel(), false));
+        if (p.mediaType != null)
+          rows.add((context.l10n.opsType, mediaLabel(), false));
         if (p.queueId != null) {
-          rows.add(('Queue item', '#${p.queueId}', false));
+          rows.add((context.l10n.opsQueueItem, '#${p.queueId}', false));
         }
         if (p.queueAction != null) {
-          rows.add(('Action', p.queueAction!, true));
+          rows.add((context.l10n.opsAction, p.queueAction!, true));
         }
       case AgentActionKind.manualImport:
-        if (p.mediaType != null) rows.add(('Type', mediaLabel(), false));
+        if (p.mediaType != null)
+          rows.add((context.l10n.opsType, mediaLabel(), false));
         if (p.queueId != null) {
-          rows.add(('Queue item', '#${p.queueId}', false));
+          rows.add((context.l10n.opsQueueItem, '#${p.queueId}', false));
         }
-        rows.add(('Force', p.force ? 'yes' : 'no', false));
+        rows.add((
+          context.l10n.opsForce,
+          p.force ? context.l10n.opsYes : context.l10n.opsNo,
+          false
+        ));
       case AgentActionKind.triggerSearch:
-        if (p.mediaType != null) rows.add(('Type', mediaLabel(), false));
-        if (p.tmdbId != null) rows.add(('TMDB id', '${p.tmdbId}', false));
-        if (p.season != null) rows.add(('Season', '${p.season}', false));
-        if (p.episode != null) rows.add(('Episode', '${p.episode}', false));
+        if (p.mediaType != null)
+          rows.add((context.l10n.opsType, mediaLabel(), false));
+        if (p.tmdbId != null)
+          rows.add((context.l10n.opsTMDBId, '${p.tmdbId}', false));
+        if (p.season != null)
+          rows.add((context.l10n.opsSeason, '${p.season}', false));
+        if (p.episode != null)
+          rows.add((context.l10n.opsEpisode, '${p.episode}', false));
         if (p.authorId != null) {
-          rows.add(('Author id', '${p.authorId}', false));
+          rows.add((context.l10n.opsAuthorId, '${p.authorId}', false));
         }
-        if (p.bookId != null) rows.add(('Book id', '${p.bookId}', false));
+        if (p.bookId != null)
+          rows.add((context.l10n.opsBookId, '${p.bookId}', false));
         if (p.artistId != null) {
-          rows.add(('Artist id', '${p.artistId}', false));
+          rows.add((context.l10n.opsArtistId, '${p.artistId}', false));
         }
-        if (p.albumId != null) rows.add(('Album id', '${p.albumId}', false));
+        if (p.albumId != null)
+          rows.add((context.l10n.opsAlbumId, '${p.albumId}', false));
       case AgentActionKind.rescan:
-        if (p.mediaType != null) rows.add(('Type', mediaLabel(), false));
-        if (p.tmdbId != null) rows.add(('TMDB id', '${p.tmdbId}', false));
+        if (p.mediaType != null)
+          rows.add((context.l10n.opsType, mediaLabel(), false));
+        if (p.tmdbId != null)
+          rows.add((context.l10n.opsTMDBId, '${p.tmdbId}', false));
         if (p.authorId != null) {
-          rows.add(('Author id', '${p.authorId}', false));
+          rows.add((context.l10n.opsAuthorId, '${p.authorId}', false));
         }
         if (p.artistId != null) {
-          rows.add(('Artist id', '${p.artistId}', false));
+          rows.add((context.l10n.opsArtistId, '${p.artistId}', false));
         }
       case AgentActionKind.deleteMediaFiles:
-        if (p.mediaType != null) rows.add(('Type', mediaLabel(), false));
-        if (p.tmdbId != null) rows.add(('TMDB id', '${p.tmdbId}', false));
-        if (p.bookId != null) rows.add(('Book id', '${p.bookId}', false));
-        if (p.albumId != null) rows.add(('Album id', '${p.albumId}', false));
-        if (p.season != null) rows.add(('Season', '${p.season}', false));
+        if (p.mediaType != null)
+          rows.add((context.l10n.opsType, mediaLabel(), false));
+        if (p.tmdbId != null)
+          rows.add((context.l10n.opsTMDBId, '${p.tmdbId}', false));
+        if (p.bookId != null)
+          rows.add((context.l10n.opsBookId, '${p.bookId}', false));
+        if (p.albumId != null)
+          rows.add((context.l10n.opsAlbumId, '${p.albumId}', false));
+        if (p.season != null)
+          rows.add((context.l10n.opsSeason, '${p.season}', false));
         final toDelete = p.episodes;
         if (toDelete.isNotEmpty) {
-          rows.add(('Episodes', _episodeRanges(toDelete), false));
-          rows.add(('Files to delete', '${toDelete.length}', false));
+          rows.add((context.l10n.opsEpisodes, _episodeRanges(toDelete), false));
+          rows.add(
+              (context.l10n.opsFilesToDelete, '${toDelete.length}', false));
         }
-        rows.add(('Block the release', p.blocklist ? 'yes' : 'no', false));
+        rows.add((
+          context.l10n.opsBlockTheRelease,
+          p.blocklist ? context.l10n.opsYes : context.l10n.opsNo,
+          false
+        ));
       case AgentActionKind.unknown:
         // Unknown kind: list whatever params arrived, generically + verbatim.
         p.raw.forEach((k, v) {
@@ -1157,20 +1181,21 @@ class _ActionCopy {
   /// rule's decision reads "Approved automatically" (with the rule's fixed
   /// label when the rule still exists) so history never claims a human
   /// approved what a rule did.
-  static (String, IconData, Color) frozenFooter(AgentAction a) {
-    final when = a.decidedAt != null ? _relative(a.decidedAt!) : null;
-    final by = a.executedAt != null ? _relative(a.executedAt!) : when;
+  static (String, IconData, Color) frozenFooter(
+      BuildContext context, AgentAction a) {
+    final when = a.decidedAt != null ? _relative(context, a.decidedAt!) : null;
+    final by = a.executedAt != null ? _relative(context, a.executedAt!) : when;
     final auto = a.autoApproved;
     final autoLabel = a.autoRuleLabel;
     final approvedPrefix = auto
-        ? 'Approved automatically${autoLabel != null ? ' · $autoLabel' : ''}'
-        : 'Approved';
+        ? '${context.l10n.opsApprovedAutomatically}${autoLabel != null ? ' · $autoLabel' : ''}'
+        : context.l10n.opsApproved;
     switch (a.status) {
       case AgentActionStatus.executed:
         return (
           auto
-              ? '$approvedPrefix · applied'
-              : 'Approved${by != null ? ' · $by' : ''} · applied',
+              ? '$approvedPrefix${context.l10n.opsAppliedSuffix}'
+              : '${context.l10n.opsApproved}${by != null ? ' · $by' : ''}${context.l10n.opsAppliedSuffix}',
           Icons.check_circle,
           AppTheme.available
         );
@@ -1178,42 +1203,46 @@ class _ActionCopy {
       case AgentActionStatus.executing:
         return (
           auto
-              ? '$approvedPrefix · applying…'
-              : 'Approved${when != null ? ' · $when' : ''} · applying…',
+              ? '$approvedPrefix${context.l10n.opsApplyingSuffix}'
+              : '${context.l10n.opsApproved}${when != null ? ' · $when' : ''}${context.l10n.opsApplyingSuffix}',
           Icons.check_circle,
           AppTheme.available
         );
       case AgentActionStatus.denied:
         return (
-          'Denied${when != null ? ' · $when' : ''}',
+          '${context.l10n.opsDenied}${when != null ? ' · $when' : ''}',
           Icons.cancel,
           AppTheme.error
         );
       case AgentActionStatus.failed:
         return (
           auto
-              ? 'Approved automatically, but the fix failed'
-              : 'Approved, but the fix failed',
+              ? context.l10n.opsApprovedAutomaticallyButTheFixFailed
+              : context.l10n.opsApprovedButTheFixFailed,
           Icons.error_outline,
           AppTheme.error
         );
       case AgentActionStatus.superseded:
         return (
-          'Not run · the issue or proposal changed',
+          context.l10n.opsNotRunTheIssueOrProposalChanged,
           Icons.history,
           AppTheme.textSecondary
         );
       case AgentActionStatus.outcomeUnknown:
         return (
           auto
-              ? 'Approved automatically, but the outcome could not be confirmed'
-              : 'Approved, but the outcome could not be confirmed',
+              ? context.l10n.opsApprovedAutomaticallyButTheOutcomeCouldNot
+              : context.l10n.opsApprovedButTheOutcomeCouldNotBe,
           Icons.help_outline,
           AppTheme.requested
         );
       case AgentActionStatus.proposed:
       case AgentActionStatus.unknown:
-        return (a.status.label, Icons.info_outline, AppTheme.textSecondary);
+        return (
+          localizeOperationsLabel(context, a.status.label),
+          Icons.info_outline,
+          AppTheme.textSecondary
+        );
     }
   }
 
@@ -1223,19 +1252,19 @@ class _ActionCopy {
     return '${s.substring(0, 28)}…${s.substring(s.length - 12)}';
   }
 
-  static String _relative(DateTime t) {
+  static String _relative(BuildContext context, DateTime t) {
     final d = DateTime.now().difference(t);
-    if (d.inSeconds < 45) return 'just now';
+    if (d.inSeconds < 45) return context.l10n.opsJustNow;
     if (d.inMinutes < 60) {
       final m = d.inMinutes;
-      return '${m}m ago';
+      return context.l10n.opsMinutesAgoAction(m.toString());
     }
     if (d.inHours < 24) {
       final h = d.inHours;
-      return '${h}h ago';
+      return context.l10n.opsHoursAgoAction(h.toString());
     }
     final days = d.inDays;
-    return '${days}d ago';
+    return context.l10n.opsDaysAgoAction(days.toString());
   }
 
   static String _formatBytes(int bytes) {

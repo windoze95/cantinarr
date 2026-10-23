@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -59,7 +61,7 @@ class RequesterAuthorDetailScreen extends ConsumerWidget {
       appBar: AppBar(
         title: Text(
           (name != null && name.isNotEmpty ? name : nameHint?.trim()) ??
-              'Author',
+              context.l10n.browseAuthor,
         ),
       ),
       body: RefreshIndicator(
@@ -73,7 +75,7 @@ class RequesterAuthorDetailScreen extends ConsumerWidget {
             child: CircularProgressIndicator(color: AppTheme.accent),
           ),
           error: (error, _) =>
-              _AuthorError(message: _authorErrorMessage(error)),
+              _AuthorError(message: _authorErrorMessage(context, error)),
           data: (data) => _AuthorBody(detail: data, instanceId: pinned),
         ),
       ),
@@ -84,18 +86,18 @@ class RequesterAuthorDetailScreen extends ConsumerWidget {
 /// Says which failure this was in requester vocabulary. The distinction that
 /// matters is "this library has no such author" versus "this library could not
 /// be read at all" — rendered identically, a reader stops looking.
-String _authorErrorMessage(Object error) {
+String _authorErrorMessage(BuildContext context, Object error) {
   final status = error is DioException ? error.response?.statusCode : null;
   switch (status) {
     case 404:
-      return 'This author is not in your book library.\n'
-          'Search for one of their books to add them.';
+      return context.l10n
+          .browseThisAuthorIsNotInYourBookLibraryNBrowseSearchForOneOfTheirBooksToAddThem;
     case 401:
     case 403:
-      return 'You do not have access to this book library.';
+      return context.l10n.browseYouDoNotHaveAccessToThisBookLibrary;
     default:
-      return 'This author could not be loaded. '
-          'Check the connection and try again.';
+      return context.l10n
+          .browseThisAuthorCouldNotBeLoadedBrowseCheckTheConnectionAndTryAgain;
   }
 }
 
@@ -179,7 +181,7 @@ class _AuthorHeader extends ConsumerWidget {
     final image = instanceId == null
         ? null
         : chaptarrImageSource(ref, author.image, instanceId!);
-    final count = author.countLabel;
+    final count = browseLabel(context, author.countLabel);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
       child: Row(
@@ -244,10 +246,12 @@ class _AuthorBookTile extends ConsumerWidget {
         : chaptarrImageSource(ref, title.cover, instanceId!);
     final status = buildAuthorBookStatus(title);
     final fid = title.foreignBookId.trim();
-    final year = title.year > 0 ? bookPublicationYearLabel(title.year) : null;
+    final year = title.year > 0
+        ? browseLabel(context, bookPublicationYearLabel(title.year))
+        : null;
     final subtitle = <String>[
       if (year != null) year,
-      if (status?.subtitle != null) status!.subtitle!,
+      if (status?.subtitle != null) browseLabel(context, status!.subtitle!),
     ].join(' · ');
 
     return ListTile(
@@ -288,7 +292,9 @@ class _AuthorBookTile extends ConsumerWidget {
                     ),
                   if (status != null) ...[
                     if (subtitle.isNotEmpty) const SizedBox(height: 4),
-                    _StatusPill(label: status.label, color: status.color),
+                    _StatusPill(
+                        label: browseLabel(context, status.label),
+                        color: status.color),
                   ],
                 ],
               ),

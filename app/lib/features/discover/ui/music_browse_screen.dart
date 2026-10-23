@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -97,11 +99,11 @@ class _MusicBrowseScreenState extends ConsumerState<MusicBrowseScreen>
     if (!access.canBrowse('lidarr', id)) {
       _setupReturnOffset = null;
       return Scaffold(
-          appBar: AppBar(title: Text(widget.query.title)),
+          appBar: AppBar(title: Text(browseLabel(context, widget.query.title))),
           body: Center(
               child: Text(access.needsUpdate(id)
-                  ? adminCatalogUpdateMessage
-                  : 'This music library is not available to you.')));
+                  ? browseLabel(context, adminCatalogUpdateMessage)
+                  : context.l10n.browseThisMusicLibraryIsNotAvailableToYou)));
     }
     final query = widget.query.withInstance(id);
     _query = query;
@@ -119,9 +121,11 @@ class _MusicBrowseScreenState extends ConsumerState<MusicBrowseScreen>
             .whereType<({String url, Map<String, String>? headers})>()
             .toList(),
         child: Scaffold(
-          appBar: AppBar(title: Text(query.title), actions: [
+          appBar:
+              AppBar(title: Text(browseLabel(context, query.title)), actions: [
             IconButton(
-                tooltip: 'Refresh ${query.title}',
+                tooltip: context.l10n
+                    .browseRefreshFeed(browseLabel(context, query.title)),
                 icon: const Icon(Icons.refresh),
                 onPressed: state.loading
                     ? null
@@ -147,7 +151,7 @@ class _MusicBrowseScreenState extends ConsumerState<MusicBrowseScreen>
                   child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(query.description),
+                        Text(browseLabel(context, query.description)),
                         if (query.feed == 'popular')
                           MusicPeriodSelector(
                               period: query.period,
@@ -196,7 +200,7 @@ class _MusicBrowseScreenState extends ConsumerState<MusicBrowseScreen>
                           : state.nextPage != null && state.error == null
                               ? OutlinedButton(
                                   onPressed: notifier.loadMore,
-                                  child: const Text('Load more'))
+                                  child: Text(context.l10n.browseLoadMore))
                               : const SizedBox.shrink()),
                 )),
               ],

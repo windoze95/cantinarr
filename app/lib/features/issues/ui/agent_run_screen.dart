@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/operations_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -56,7 +58,7 @@ class _AgentRunScreenState extends ConsumerState<AgentRunScreen>
 
   String _friendlyError(Object e) {
     final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
-    return m != null ? m.group(1)! : 'Something went wrong';
+    return m != null ? m.group(1)! : context.l10n.opsSomethingWentWrongMessage;
   }
 
   Future<void> _load() async {
@@ -103,7 +105,7 @@ class _AgentRunScreenState extends ConsumerState<AgentRunScreen>
   Widget build(BuildContext context) {
     final detail = _detail;
     return Scaffold(
-      appBar: AppBar(title: const Text('Agent activity')),
+      appBar: AppBar(title: Text(context.l10n.opsAgentActivity)),
       body: CenteredContent(
           child: _isLoading
               ? const Center(
@@ -115,12 +117,15 @@ class _AgentRunScreenState extends ConsumerState<AgentRunScreen>
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text(_friendlyError(_error ?? 'Could not load run'),
+                            Text(
+                                _friendlyError(
+                                    _error ?? context.l10n.opsCouldNotLoadRun),
                                 style: const TextStyle(color: AppTheme.error),
                                 textAlign: TextAlign.center),
                             const SizedBox(height: 12),
                             ElevatedButton(
-                                onPressed: _load, child: const Text('Retry')),
+                                onPressed: _load,
+                                child: Text(context.l10n.opsRetry)),
                           ],
                         ),
                       ),
@@ -134,8 +139,8 @@ class _AgentRunScreenState extends ConsumerState<AgentRunScreen>
                         children: [
                           if (_error != null) ...[
                             IssueRefreshBanner(
-                              message:
-                                  "Couldn't refresh agent activity. Showing the last update.",
+                              message: context.l10n
+                                  .opsCouldnTRefreshAgentActivityShowingThe,
                               onRetry: _load,
                             ),
                             const SizedBox(height: 12),
@@ -143,10 +148,10 @@ class _AgentRunScreenState extends ConsumerState<AgentRunScreen>
                           _RunSummary(run: detail.run),
                           const SizedBox(height: 16),
                           if (detail.steps.isEmpty)
-                            const Padding(
+                            Padding(
                               padding: EdgeInsets.only(top: 24),
                               child: Center(
-                                child: Text('No steps recorded.',
+                                child: Text(context.l10n.opsNoStepsRecorded,
                                     style: TextStyle(
                                         color: AppTheme.textSecondary)),
                               ),
@@ -170,8 +175,9 @@ class _RunSummary extends StatelessWidget {
   Widget build(BuildContext context) {
     final chips = <String>[
       if (run.model.isNotEmpty) run.model,
-      '${run.stepCount} step${run.stepCount == 1 ? '' : 's'}',
-      if (run.stopReasonLabel != null) run.stopReasonLabel!,
+      context.l10n.opsRunSteps(run.stepCount),
+      if (run.stopReasonLabel != null)
+        localizeOperationsLabel(context, run.stopReasonLabel!),
     ];
     return Container(
       padding: const EdgeInsets.all(14),
@@ -184,7 +190,8 @@ class _RunSummary extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Run #${run.id} · ${run.statusLabel}',
+            context.l10n.opsRunStatus(run.id.toString(),
+                localizeOperationsLabel(context, run.statusLabel)),
             style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 14,
@@ -238,17 +245,17 @@ class _StepTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (icon, color, heading) = _describe(step);
+    final (icon, color, heading) = _describe(context, step);
     final details = <Widget>[];
 
     if (step.text != null && step.text!.trim().isNotEmpty) {
       details.add(_text(step.text!.trim()));
     }
     if (step.toolInput != null && step.toolInput!.trim().isNotEmpty) {
-      details.add(_quoted('input', step.toolInput!.trim()));
+      details.add(_quoted(context.l10n.opsInput, step.toolInput!.trim()));
     }
     if (step.toolOutput != null && step.toolOutput!.trim().isNotEmpty) {
-      details.add(_quoted('result', step.toolOutput!.trim()));
+      details.add(_quoted(context.l10n.opsResult, step.toolOutput!.trim()));
     }
 
     return Padding(
@@ -330,27 +337,39 @@ class _StepTile extends StatelessWidget {
         ),
       );
 
-  (IconData, Color, String) _describe(AgentStep s) {
+  (IconData, Color, String) _describe(BuildContext context, AgentStep s) {
     if (s.isError) {
-      return (Icons.error_outline, AppTheme.error, _toolHeading(s, 'Error'));
+      return (
+        Icons.error_outline,
+        AppTheme.error,
+        _toolHeading(s, context.l10n.opsError)
+      );
     }
     switch (s.kind) {
       case 'assistant':
-        return (Icons.smart_toy, AppTheme.accent, 'Agent');
+        return (Icons.smart_toy, AppTheme.accent, context.l10n.opsAgent);
       case 'tool_call':
         return (
           Icons.build_outlined,
           AppTheme.downloading,
-          _toolHeading(s, 'Tool call')
+          _toolHeading(s, context.l10n.opsToolCall)
         );
       case 'tool_result':
-        return (Icons.south, AppTheme.textSecondary, _toolHeading(s, 'Result'));
+        return (
+          Icons.south,
+          AppTheme.textSecondary,
+          _toolHeading(s, context.l10n.opsResult)
+        );
       case 'giveup':
-        return (Icons.flag_outlined, AppTheme.error, 'Gave up');
+        return (Icons.flag_outlined, AppTheme.error, context.l10n.opsGaveUp);
       case 'system':
-        return (Icons.info_outline, AppTheme.textSecondary, 'System');
+        return (
+          Icons.info_outline,
+          AppTheme.textSecondary,
+          context.l10n.opsSystem
+        );
       default:
-        return (Icons.circle, AppTheme.textSecondary, 'Activity');
+        return (Icons.circle, AppTheme.textSecondary, context.l10n.opsActivity);
     }
   }
 

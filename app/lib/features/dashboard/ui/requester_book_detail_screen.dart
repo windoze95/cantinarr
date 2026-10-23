@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -333,18 +335,18 @@ class _RequesterBookDetailScreenState
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Padding(
+              Padding(
                 padding: EdgeInsets.fromLTRB(24, 0, 24, 6),
-                child: Text('Which format is the problem with?'),
+                child: Text(context.l10n.browseWhichFormatIsTheProblemWith),
               ),
               ListTile(
                 leading: const Icon(Icons.menu_book_outlined),
-                title: const Text('eBook'),
+                title: Text(context.l10n.browseEBook),
                 onTap: () => Navigator.of(sheetContext).pop(BookFormat.ebook),
               ),
               ListTile(
                 leading: const Icon(Icons.headphones_outlined),
-                title: const Text('Audiobook'),
+                title: Text(context.l10n.browseAudiobook),
                 onTap: () =>
                     Navigator.of(sheetContext).pop(BookFormat.audiobook),
               ),
@@ -422,7 +424,7 @@ class _RequesterBookDetailScreenState
           }
           context.go('/dashboard/books');
         }),
-        title: const Text('Book details'),
+        title: Text(context.l10n.browseBookDetails),
       ),
       // Metadata renders immediately; ownership and request truth resolve in
       // their own rows instead of blanking the whole page behind one digest.
@@ -628,7 +630,7 @@ class _RequesterBookDetailScreenState
           if (publication.summary.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text(
-              publication.summary,
+              localizedBookPublicationSummary(context, publication),
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),
@@ -649,7 +651,8 @@ class _RequesterBookDetailScreenState
               title: title,
               instanceId: instanceId,
               requestLibraries: requestLibraries(auth?.connection, 'chaptarr'),
-              defaultRequestLibraryId: defaultRequestLibrary(auth?.connection, 'chaptarr'),
+              defaultRequestLibraryId:
+                  defaultRequestLibrary(auth?.connection, 'chaptarr'),
               chooseRequestLibrary: true,
               searchTerm: widget.searchTerm,
               service: _requestService,
@@ -667,8 +670,8 @@ class _RequesterBookDetailScreenState
                   : MediaDownloadChoiceButton(
                       instanceId: instanceId,
                       choices: ebookFiles,
-                      label: 'Download eBook',
-                      sheetTitle: 'Download eBook',
+                      label: context.l10n.browseDownloadEBook,
+                      sheetTitle: context.l10n.browseDownloadEBook,
                       iconOnly: true,
                     ),
               audiobookDownload: !downloadsEnabled || audiobookFiles.isEmpty
@@ -676,8 +679,8 @@ class _RequesterBookDetailScreenState
                   : MediaDownloadChoiceButton(
                       instanceId: instanceId,
                       choices: audiobookFiles,
-                      label: 'Download audiobook',
-                      sheetTitle: 'Download audiobook',
+                      label: context.l10n.browseDownloadAudiobook,
+                      sheetTitle: context.l10n.browseDownloadAudiobook,
                       iconOnly: true,
                     ),
               onRequestCompleted: _onRequestCompleted,
@@ -686,7 +689,7 @@ class _RequesterBookDetailScreenState
           // library responses cannot move it while someone is reading.
           if (overview.isNotEmpty) ...[
             const SizedBox(height: 24),
-            Text('About this book',
+            Text(context.l10n.browseAboutThisBook,
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(
@@ -704,7 +707,7 @@ class _RequesterBookDetailScreenState
               onPressed: () => _onReportProblem(title, owned),
               icon: const Icon(Icons.flag_outlined,
                   size: 18, color: AppTheme.textSecondary),
-              label: const Text('Report a problem',
+              label: Text(context.l10n.browseReportAProblem,
                   style: TextStyle(color: AppTheme.textPrimary)),
               style: OutlinedButton.styleFrom(
                 side: const BorderSide(color: AppTheme.border),
@@ -720,7 +723,7 @@ class _RequesterBookDetailScreenState
               child: OutlinedButton.icon(
                 onPressed: _openInChaptarr,
                 icon: const Icon(Icons.open_in_new_rounded, size: 17),
-                label: const Text('Manage book'),
+                label: Text(context.l10n.browseManageBook),
               ),
             ),
           ],
@@ -745,7 +748,8 @@ class _RequesterBookDetailScreenState
           // the page is the reader's route to the book's own page elsewhere.
           if (links.isNotEmpty) ...[
             const SizedBox(height: 24),
-            Text('Links', style: Theme.of(context).textTheme.titleMedium),
+            Text(context.l10n.browseLinks,
+                style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             Center(child: BookLinkChips(links)),
           ],
@@ -767,7 +771,7 @@ class _RequesterBookDetailScreenState
         ].join(' · ');
         choices.add(MediaDownloadChoice(
           fileId: file.id,
-          label: _bookFileLabel(file, i),
+          label: _bookFileLabel(context, file, i),
           subtitle: details.isEmpty ? null : details,
           reportedPath: file.path,
         ));
@@ -786,16 +790,16 @@ class _RequesterBookDetailScreenState
             const Icon(Icons.menu_book,
                 size: 48, color: AppTheme.textSecondary),
             const SizedBox(height: 12),
-            const Text(
-              'This book could not be found. It may have been removed from '
-              'the library.',
+            Text(
+              context.l10n
+                  .browseThisBookCouldNotBeFoundItMayHaveBeenRemovedFromBrowseTheLibrary,
               textAlign: TextAlign.center,
               style: TextStyle(color: AppTheme.textSecondary),
             ),
             const SizedBox(height: 16),
             OutlinedButton(
               onPressed: () => context.go('/dashboard/books'),
-              child: const Text('Browse Books'),
+              child: Text(context.l10n.browseBrowseBooks),
             ),
           ],
         ),
@@ -804,10 +808,10 @@ class _RequesterBookDetailScreenState
   }
 }
 
-String _bookFileLabel(ChaptarrBookFile file, int index) {
+String _bookFileLabel(BuildContext context, ChaptarrBookFile file, int index) {
   final path = file.path?.replaceAll('\\', '/') ?? '';
   final parts = path.split('/').where((part) => part.isNotEmpty).toList();
-  return parts.isEmpty ? 'File ${index + 1}' : parts.last;
+  return parts.isEmpty ? context.l10n.detailFileNumber(index + 1) : parts.last;
 }
 
 /// Combines a series name and its position into one display label

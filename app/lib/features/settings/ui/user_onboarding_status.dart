@@ -1,3 +1,5 @@
+import '../../media_access/ui/media_access_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -152,136 +154,140 @@ class _UserOnboardingStatusState extends ConsumerState<UserOnboardingStatus> {
     final ssoRequired = _status?.ssoOnly == true && _user?.isAdmin == false;
     final hasLink = widget.invitationLink?.isNotEmpty == true;
     final requestTypes = {
-      'radarr': 'Movies',
-      'sonarr': 'TV',
-      'chaptarr': 'Books',
-      'lidarr': 'Music'
+      'radarr': context.l10n.settingsMovies,
+      'sonarr': context.l10n.settingsTv,
+      'chaptarr': context.l10n.settingsBooks,
+      'lidarr': context.l10n.settingsMusic
     };
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _section('Cantinarr sign-in', [
+      _section(context.l10n.settingsCantinarrSignIn, [
         if (_status == null || _user == null)
           _message(
-              'Could not verify Cantinarr sign-in settings. Refresh to retry.')
+              context.l10n.settingsCouldNotVerifyCantinarrSignInSettingsRefresh)
         else if (ssoRequired) ...[
-          _message('Single sign-on required: ${_status!.ssoProvider}.'),
+          _message(context.l10n.settingsMessageSingleSignOnRequiredValue1(
+              (_status!.ssoProvider).toString())),
           if (!_status!.ssoAvailable)
-            _message(
-                'The single sign-on provider is unavailable. Review its settings before inviting this user.'),
+            _message(context
+                .l10n.settingsTheSingleSignOnProviderIsUnavailableReview),
           if (hasLink)
-            _message(
-                'Share the invitation. The recipient continues with ${_status!.ssoProvider} to join this account.'),
+            _message(context.l10n
+                .settingsMessageShareTheInvitationTheRecipientContinuesWithValue1(
+                    (_status!.ssoProvider).toString())),
         ] else ...[
           if (_user!.hasPassword && _user!.passwordEnabled)
-            _message('A Cantinarr password is configured.'),
+            _message(context.l10n.settingsACantinarrPasswordIsConfigured),
           if (_user!.passkeyEnabled)
             _message(
-                'Passkeys are allowed. The user must register a passkey before using it.'),
+                context.l10n.settingsPasskeysAreAllowedTheUserMustRegisterA),
           if (_user!.ssoLinked)
-            _message('A single sign-on identity is linked.'),
+            _message(context.l10n.settingsASingleSignOnIdentityIsLinked),
           if (hasLink)
-            _message(
-                'This invitation connects one device and expires in 7 days. The user can set up permitted sign-in methods after joining.'),
+            _message(context
+                .l10n.settingsThisInvitationConnectsOneDeviceAndExpiresIn),
           if (!hasLink && _user!.hasPendingInvite)
-            _message(
-                'An invitation is outstanding. Its existing link is not shown again; use the account menu to replace it if needed.'),
+            _message(context
+                .l10n.settingsAnInvitationIsOutstandingItsExistingLinkIs),
           if (!hasLink &&
               !_user!.hasPendingInvite &&
               _user!.deviceCount == 0 &&
               !(_user!.hasPassword && _user!.passwordEnabled) &&
               !_user!.ssoLinked &&
               !(_plexLinked == true && _plex?['enabled'] == true))
-            _message(
-                'No current invitation or connected device. Issue an invitation to finish Cantinarr sign-in.'),
+            _message(context
+                .l10n.settingsNoCurrentInvitationOrConnectedDeviceIssueAn),
         ],
         if (hasPlex) ...[
           if (_plexLinked == null || _plex == null)
-            _message(
-                'Could not verify Plex sign-in. A media-account link alone does not confirm a sign-in identity.')
+            _message(context.l10n.settingsCouldNotVerifyPlexSignInAMedia)
           else ...[
             _message(_plexLinked!
-                ? 'Plex sign-in identity confirmed.'
-                : 'No confirmed Plex sign-in identity.'),
+                ? context.l10n.settingsPlexSignInIdentityConfirmed
+                : context.l10n.settingsNoConfirmedPlexSignInIdentity),
             _message(_plex!['enabled'] == true
-                ? 'Plex sign-in is enabled.'
-                : 'Plex sign-in is off.'),
+                ? context.l10n.settingsPlexSignInIsEnabled
+                : context.l10n.settingsPlexSignInIsOff),
             _message(_plex!['auto_create'] == true
-                ? 'Automatic signup is enabled for eligible Plex users.'
-                : 'Automatic signup is off. Imported users do not need automatic signup.'),
+                ? context
+                    .l10n.settingsAutomaticSignupIsEnabledForEligiblePlexUsers
+                : context.l10n.settingsAutomaticSignupIsOffImportedUsersDoNot),
             if (ssoRequired)
               _message(
-                  'Plex does not satisfy the required single sign-on policy.'),
+                  context.l10n.settingsPlexDoesNotSatisfyTheRequiredSingleSign),
           ],
           TextButton(
             onPressed: () => _open('/settings/plex-auth'),
-            child: const Text('Review Plex sign-in'),
+            child: Text(context.l10n.settingsReviewPlexSignIn),
           ),
         ],
-        _message(
-            'Jellyfin, Emby, and Audiobookshelf passwords are used on those servers. Importing an account does not make its password a Cantinarr password.'),
+        _message(context
+            .l10n.settingsJellyfinEmbyAndAudiobookshelfPasswordsAreUsedOn),
         Wrap(spacing: 8, runSpacing: 8, children: [
           if (!hasLink && _user != null)
             TextButton(
               onPressed: widget.onIssueInvitation ??
                   () => _open('/settings/users/${widget.userId}/access'),
               child: Text(_user!.hasPendingInvite
-                  ? 'Replace invitation'
-                  : 'Issue invitation'),
+                  ? context.l10n.settingsReplaceInvitation
+                  : context.l10n.settingsIssueInvitation),
             ),
           TextButton(
               onPressed: () => _open('/settings/users/${widget.userId}/sso'),
-              child: const Text('Linked sign-in')),
+              child: Text(context.l10n.settingsLinkedSignIn)),
           if (hasLink)
             TextButton.icon(
               onPressed: () async {
                 await Clipboard.setData(
                     ClipboardData(text: widget.invitationLink!));
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Invitation copied')));
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      content: Text(context.l10n.settingsInvitationCopied)));
                 }
               },
               icon: const Icon(Icons.copy, size: 18),
-              label: const Text('Copy invitation'),
+              label: Text(context.l10n.settingsCopyInvitation),
             ),
         ]),
         if (hasLink && widget.originSource == 'app')
           _message(
-              'This invitation uses the address this app connects to. For people outside your network, check External Address before sharing it.'),
+              context.l10n.settingsThisInvitationUsesTheAddressThisAppConnects),
       ]),
-      _section('Request permissions', [
+      _section(context.l10n.settingsRequestPermissions, [
         if (_grants == null)
-          _message('Could not load request assignments. Refresh to retry.')
+          _message(
+              context.l10n.settingsCouldNotLoadRequestAssignmentsRefreshToRetry)
         else ...[
           for (final type in requestTypes.entries)
             _message('${type.value}: ${_assignmentNames(type.key, instances)}'),
           _message(
-              'No request assignments is a valid choice. Library playback access is configured separately.'),
+              context.l10n.settingsNoRequestAssignmentsIsAValidChoiceLibrary),
         ],
         if (_user != null &&
             !_user!.isAdmin &&
             !_user!.permissions.contains('media:request'))
-          _message('This account does not have permission to request content.'),
+          _message(
+              context.l10n.settingsThisAccountDoesNotHavePermissionToRequest),
         Wrap(spacing: 8, runSpacing: 8, children: [
           TextButton(
               onPressed: () async {
                 await assignRequestLibraries(context, ref, [widget.userId]);
                 if (mounted) await _load();
               },
-              child: const Text('Assign request libraries')),
+              child: Text(context.l10n.settingsAssignRequestLibraries)),
           TextButton(
               onPressed: () => _open(
                   '/settings/users/${widget.userId}/request-settings${_user?.isAdmin == true ? '?admin=1' : ''}'),
-              child: const Text('Request settings')),
+              child: Text(context.l10n.settingsRequestSettings2)),
         ]),
       ]),
       if (widget.showMediaAccounts)
-        _section('Media server accounts', [
+        _section(context.l10n.settingsMediaServerAccounts, [
           if (_accounts == null)
             _message(
-                'Could not verify media-server accounts. Refresh to retry.')
+                context.l10n.settingsCouldNotVerifyMediaServerAccountsRefreshTo)
           else ...[
             if (mediaServers.isEmpty && _accounts!.isEmpty)
-              _message('No media servers are configured.'),
+              _message(context.l10n.settingsNoMediaServersAreConfigured),
             for (final server in mediaServers)
               _mediaAccountRow(
                   server,
@@ -301,13 +307,13 @@ class _UserOnboardingStatusState extends ConsumerState<UserOnboardingStatus> {
                 showActions: false,
               ),
           ],
-          _message(
-              'Linked accounts and active server access are separate. These statuses do not prove a title can be played.'),
+          _message(context
+              .l10n.settingsLinkedAccountsAndActiveServerAccessAreSeparate),
         ]),
       TextButton.icon(
           onPressed: _load,
           icon: const Icon(Icons.refresh),
-          label: const Text('Refresh access status')),
+          label: Text(context.l10n.settingsRefreshAccessStatus)),
     ]);
   }
 
@@ -322,8 +328,8 @@ class _UserOnboardingStatusState extends ConsumerState<UserOnboardingStatus> {
             title: Text(
                 '${mediaServerTypeLabel(server.serviceType)} · ${server.name}'),
             subtitle: Text(account == null
-                ? 'No account linked'
-                : '${account.remoteUsername}\n${account.managementLabel}\n${account.accessLabel}${account.granted ? '' : '\nNo Cantinarr library grant'}'),
+                ? context.l10n.settingsNoAccountLinked
+                : '${account.remoteUsername}\n${mediaAccessLabel(context, account.managementLabel)}\n${mediaAccessLabel(context, account.accessLabel)}${account.granted ? '' : context.l10n.settingsNnoCantinarrLibraryGrant}'),
             isThreeLine: account != null,
           ),
           if (showActions && widget.mediaAccountActions != null)
@@ -333,11 +339,11 @@ class _UserOnboardingStatusState extends ConsumerState<UserOnboardingStatus> {
 
   String _assignmentNames(String type, List<ServiceInstance> instances) {
     final ids = _grants![type] ?? const [];
-    if (ids.isEmpty) return 'No libraries assigned';
+    if (ids.isEmpty) return context.l10n.settingsNoLibrariesAssigned;
     return ids
         .map((id) =>
             instances.where((i) => i.id == id).firstOrNull?.name ??
-            'Unavailable library')
+            context.l10n.settingsUnavailableLibrary)
         .join(', ');
   }
 }
@@ -363,7 +369,7 @@ Future<void> assignRequestLibraries(
             builder: (dialogContext, update) => PopScope(
                 canPop: !busy,
                 child: AlertDialog(
-                  title: const Text('Assign request libraries'),
+                  title: Text(context.l10n.settingsAssignRequestLibraries),
                   content: SizedBox(
                       width: 480,
                       child: SingleChildScrollView(
@@ -371,21 +377,22 @@ Future<void> assignRequestLibraries(
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                              'Add libraries for ${userIds.toSet().length} selected users. Existing assignments and defaults stay in place.'),
+                          Text(context.l10n
+                              .settingsMessageAddLibrariesForValue1SelectedUsersExistingAssignments(
+                                  (userIds.toSet().length).toString())),
                           if (connection?.instanceAssignments != true)
-                            const Text(
-                                'Update the server to assign libraries here.')
+                            Text(context.l10n
+                                .settingsUpdateTheServerToAssignLibrariesHere)
                           else if (instances.isEmpty)
-                            const Text(
-                                'Connect Radarr, Sonarr, Chaptarr, or Lidarr to offer requests.')
+                            Text(context.l10n
+                                .settingsConnectRadarrSonarrChaptarrOrLidarrToOffer)
                           else
                             for (final instance in instances)
                               CheckboxListTile(
                                 contentPadding: EdgeInsets.zero,
                                 title: Text(instance.name),
                                 subtitle: Text(completed.contains(instance.id)
-                                    ? 'Assigned'
+                                    ? context.l10n.settingsAssigned
                                     : instance.serviceType),
                                 value: selected.contains(instance.id),
                                 onChanged:
@@ -408,7 +415,7 @@ Future<void> assignRequestLibraries(
                     TextButton(
                         onPressed:
                             busy ? null : () => Navigator.pop(dialogContext),
-                        child: const Text('Done')),
+                        child: Text(context.l10n.settingsDone)),
                     FilledButton(
                         onPressed: busy ||
                                 connection?.instanceAssignments != true ||
@@ -432,18 +439,19 @@ Future<void> assignRequestLibraries(
                                     completed.add(id);
                                   }
                                 } on DioException {
-                                  error =
-                                      'Some assignments could not be confirmed. Completed libraries remain assigned; retry the remaining libraries.';
+                                  error = context.l10n
+                                      .settingsSomeAssignmentsCouldNotBeConfirmedCompletedLibraries;
                                 } catch (_) {
-                                  error =
-                                      'Could not finish assigning libraries. Retry the remaining libraries.';
+                                  error = context.l10n
+                                      .settingsCouldNotFinishAssigningLibrariesRetryTheRemaining;
                                 }
                                 if (dialogContext.mounted) {
                                   update(() => busy = false);
                                 }
                               },
-                        child: Text(
-                            busy ? 'Assigning…' : 'Add selected libraries')),
+                        child: Text(busy
+                            ? context.l10n.settingsAssigning
+                            : context.l10n.settingsAddSelectedLibraries)),
                   ],
                 )),
           ));

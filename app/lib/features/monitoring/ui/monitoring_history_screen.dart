@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -45,7 +46,7 @@ class _MonitoringHistoryScreenState
     if (service == null) {
       setState(() {
         _isLoading = false;
-        _error = 'No Tautulli or Tracearr instance configured. Add one from Settings > Add Instance.';
+        _error = context.l10n.adminNoTautulliOrTracearrInstanceConfiguredAdd;
       });
       return;
     }
@@ -64,7 +65,7 @@ class _MonitoringHistoryScreenState
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _error = 'Failed to load history: $e';
+        _error = context.l10n.adminFailedToLoadHistory2((e).toString());
       });
     }
   }
@@ -88,12 +89,12 @@ class _MonitoringHistoryScreenState
         color: AppTheme.accent,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
-          children: const [
+          children: [
             SizedBox(height: 160),
             Icon(Icons.history, size: 48, color: AppTheme.textSecondary),
             SizedBox(height: 12),
             Center(
-              child: Text('No history yet',
+              child: Text(context.l10n.adminNoHistoryYet,
                   style:
                       TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
             ),
@@ -131,18 +132,26 @@ class _MonitoringHistoryScreenState
   }
 }
 
-String _relativeTime(DateTime? date) {
+String _relativeTime(DateTime? date, {AppLocalizations? strings}) {
   if (date == null) return '';
   final local = date.toLocal();
   final diff = DateTime.now().difference(local);
-  if (diff.inMinutes < 1) return 'just now';
-  if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-  if (diff.inHours < 24) return '${diff.inHours}h ago';
-  if (diff.inDays < 7) return '${diff.inDays}d ago';
+  if (diff.inMinutes < 1)
+    return (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminJustNow2;
+  if (diff.inMinutes < 60)
+    return (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminMAgo((diff.inMinutes).toString());
+  if (diff.inHours < 24)
+    return (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminHAgo((diff.inHours).toString());
+  if (diff.inDays < 7)
+    return (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminDAgo((diff.inDays).toString());
   if (local.year == DateTime.now().year) {
-    return DateFormat('MMM d').format(local);
+    return DateFormat.MMMd(strings?.dateLocale ?? 'en_US').format(local);
   }
-  return DateFormat('MMM d, yyyy').format(local);
+  return DateFormat.yMMMd(strings?.dateLocale ?? 'en_US').format(local);
 }
 
 class _HistoryTile extends StatelessWidget {
@@ -190,7 +199,7 @@ class _HistoryTile extends StatelessWidget {
         style: TextStyle(color: color, fontSize: 12),
       ),
       trailing: Text(
-        _relativeTime(item.date),
+        _relativeTime(item.date, strings: context.l10n),
         style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
       ),
     );

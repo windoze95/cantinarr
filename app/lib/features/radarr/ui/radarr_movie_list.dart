@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/storage/library_view_preferences.dart';
@@ -27,18 +28,23 @@ class RadarrMovieList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => LibraryCollection(
-    viewMode: viewMode, scrollKey: scrollKey, embedded: embedded,
-    emptyMessage: 'No movies found', itemCount: movies.length,
-    itemBuilder: (context, index) {
-      final movie = movies[index];
-      return _MovieTile(
-        key: ValueKey(movie.id), grid: viewMode == LibraryViewMode.grid,
-        movie: movie,
-        onOpen: onOpen == null ? null : () => onOpen!(movie),
-        onAction: onAction == null ? null : (action) => onAction!(movie, action),
+        viewMode: viewMode,
+        scrollKey: scrollKey,
+        embedded: embedded,
+        emptyMessage: context.l10n.adminNoMoviesFound,
+        itemCount: movies.length,
+        itemBuilder: (context, index) {
+          final movie = movies[index];
+          return _MovieTile(
+            key: ValueKey(movie.id),
+            grid: viewMode == LibraryViewMode.grid,
+            movie: movie,
+            onOpen: onOpen == null ? null : () => onOpen!(movie),
+            onAction:
+                onAction == null ? null : (action) => onAction!(movie, action),
+          );
+        },
       );
-    },
-  );
 }
 
 class _MovieTile extends StatelessWidget {
@@ -46,8 +52,12 @@ class _MovieTile extends StatelessWidget {
   final RadarrMovie movie;
   final VoidCallback? onOpen;
   final ValueChanged<LibraryAction>? onAction;
-  const _MovieTile({super.key, required this.grid, required this.movie,
-    this.onOpen, this.onAction});
+  const _MovieTile(
+      {super.key,
+      required this.grid,
+      required this.movie,
+      this.onOpen,
+      this.onAction});
 
   @override
   Widget build(BuildContext context) {
@@ -55,8 +65,12 @@ class _MovieTile extends StatelessWidget {
       grid: grid,
       name: movie.title,
       onTap: onOpen,
-      onLongPress: onAction == null ? null : () => showLibraryActionMenu(
-        context, title: movie.title, actions: libraryActions('movie', monitored: movie.monitored), onSelected: onAction!),
+      onLongPress: onAction == null
+          ? null
+          : () => showLibraryActionMenu(context,
+              title: movie.title,
+              actions: libraryActions('movie', monitored: movie.monitored),
+              onSelected: onAction!),
       artwork: CachedImage(
         url: movie.posterUrl,
         fit: BoxFit.cover,
@@ -70,33 +84,34 @@ class _MovieTile extends StatelessWidget {
           Text('${movie.year}',
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-          if (!grid) Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-            decoration: BoxDecoration(
-              color: movie.hasFile
-                  ? AppTheme.available.withValues(alpha: 0.15)
-                  : movie.monitored
-                      ? AppTheme.requested.withValues(alpha: 0.15)
-                      : AppTheme.unavailable.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Text(
-              movie.hasFile
-                  ? 'Downloaded'
-                  : movie.monitored
-                      ? 'Missing'
-                      : 'Unmonitored',
-              style: TextStyle(
+          if (!grid)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
                 color: movie.hasFile
-                    ? AppTheme.available
+                    ? AppTheme.available.withValues(alpha: 0.15)
                     : movie.monitored
-                        ? AppTheme.requested
-                        : AppTheme.unavailable,
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
+                        ? AppTheme.requested.withValues(alpha: 0.15)
+                        : AppTheme.unavailable.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                movie.hasFile
+                    ? context.l10n.adminDownloaded
+                    : movie.monitored
+                        ? context.l10n.adminMissing
+                        : context.l10n.adminUnmonitored,
+                style: TextStyle(
+                  color: movie.hasFile
+                      ? AppTheme.available
+                      : movie.monitored
+                          ? AppTheme.requested
+                          : AppTheme.unavailable,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ),
-          ),
           if (!grid && movie.movieFile != null) ...[
             Text(
               movie.movieFile!.sizeFormatted,
@@ -106,8 +121,12 @@ class _MovieTile extends StatelessWidget {
           ],
         ],
       ),
-      actions: onAction == null ? null : LibraryActionMenu(
-        title: movie.title, actions: libraryActions('movie', monitored: movie.monitored), onSelected: onAction!),
+      actions: onAction == null
+          ? null
+          : LibraryActionMenu(
+              title: movie.title,
+              actions: libraryActions('movie', monitored: movie.monitored),
+              onSelected: onAction!),
     );
   }
 }

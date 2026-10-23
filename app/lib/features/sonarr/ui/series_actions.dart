@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../core/widgets/action_sheet.dart';
 import '../../../core/widgets/library_actions.dart';
@@ -16,10 +17,12 @@ Future<void> showSeriesActions(
   VoidCallback? onChanged,
   VoidCallback? onRemoved,
 }) async {
-  final action = selectedAction ?? await showActionSheet<LibraryAction>(
-    context, title: series.title,
-    actions: libraryActions('series', monitored: series.monitored),
-  );
+  final action = selectedAction ??
+      await showActionSheet<LibraryAction>(
+        context,
+        title: series.title,
+        actions: libraryActions('series', monitored: series.monitored),
+      );
   if (action == null || !context.mounted) return;
 
   void toast(String message) {
@@ -32,24 +35,38 @@ Future<void> showSeriesActions(
     switch (action) {
       case LibraryAction.search:
         await service.searchSeries(series.id);
-        toast('Searching for monitored episodes of ${series.title}…');
+        toast(context.l10n
+            .adminSearchingForMonitoredEpisodesOf((series.title).toString()));
       case LibraryAction.interactive:
         final fresh = await service.getSeriesById(series.id);
         if (!context.mounted) return;
         final seasons = [...fresh.seasons]
           ..sort((a, b) => a.seasonNumber.compareTo(b.seasonNumber));
-        if (seasons.isEmpty) { toast('No seasons available'); return; }
+        if (seasons.isEmpty) {
+          toast(context.l10n.adminNoSeasonsAvailable);
+          return;
+        }
         final season = await showActionSheet<int>(context,
-          title: 'Select season', actions: [for (final s in seasons)
-            SheetAction(s.seasonNumber, Icons.tv,
-              s.seasonNumber == 0 ? 'Specials' : 'Season ${s.seasonNumber}')]);
+            title: context.l10n.adminSelectSeason2,
+            actions: [
+              for (final s in seasons)
+                SheetAction(
+                    s.seasonNumber,
+                    Icons.tv,
+                    s.seasonNumber == 0
+                        ? context.l10n.adminSpecials
+                        : context.l10n.adminSeason((s.seasonNumber).toString()))
+            ]);
         if (season == null || !context.mounted) return;
         await Navigator.of(context, rootNavigator: true).push(AmbientPageRoute(
-          builder: (_) => SonarrReleasesScreen(instanceId: instanceId,
-            seriesId: series.id, seasonNumber: season, seriesTitle: series.title)));
+            builder: (_) => SonarrReleasesScreen(
+                instanceId: instanceId,
+                seriesId: series.id,
+                seasonNumber: season,
+                seriesTitle: series.title)));
       case LibraryAction.rescan:
         await service.rescanSeries(series.id);
-        toast('Rescan queued for ${series.title}');
+        toast(context.l10n.adminRescanQueuedFor((series.title).toString()));
         if (context.mounted) onChanged?.call();
       case LibraryAction.edit:
         final saved = await Navigator.of(context, rootNavigator: true)
@@ -60,23 +77,24 @@ Future<void> showSeriesActions(
         if (saved == true && context.mounted) onChanged?.call();
       case LibraryAction.refresh:
         await service.refreshSeries(series.id);
-        toast('Refresh queued for ${series.title}');
+        toast(context.l10n.adminRefreshQueuedFor((series.title).toString()));
         if (context.mounted) onChanged?.call();
       case LibraryAction.remove:
-        final deleteFiles = await confirmLibraryRemoval(context, title: series.title, noun: 'series', service: 'Sonarr');
+        final deleteFiles = await confirmLibraryRemoval(context,
+            title: series.title, noun: 'series', service: 'Sonarr');
         if (deleteFiles == null) return;
         await service.deleteSeries(series.id, deleteFiles: deleteFiles);
-        toast('Removed ${series.title}');
+        toast(context.l10n.adminRemoved((series.title).toString()));
         if (context.mounted) onRemoved?.call();
       case LibraryAction.monitoring:
         await service.setSeriesMonitored(series.id,
             monitored: !series.monitored);
         toast(series.monitored
-            ? 'Stopped monitoring ${series.title}'
-            : 'Monitoring ${series.title}');
+            ? context.l10n.adminStoppedMonitoring2((series.title).toString())
+            : context.l10n.adminMonitoring2((series.title).toString()));
         if (context.mounted) onChanged?.call();
     }
   } catch (e) {
-    toast('Action failed: $e');
+    toast(context.l10n.adminActionFailed((e).toString()));
   }
 }

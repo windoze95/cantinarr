@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/auth_messages.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -191,9 +193,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         _serverUrlController.clear();
       }
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Forgot ${server.label}'),
+        content: Text(context.l10n.authForgotServer(server.label)),
         action: SnackBarAction(
-          label: 'Undo',
+          label: context.l10n.authUndo,
           onPressed: () async {
             try {
               await history.undoForget(server, previous);
@@ -209,18 +211,18 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   }
 
   void _showHistoryError() {
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text('Could not save server shortcuts. Please try again.'),
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(context.l10n.authSaveShortcutsError),
     ));
   }
 
   String _parseConnectionError(Object e) {
     final msg = e.toString();
     if (msg.contains('Connection refused') || msg.contains('SocketException')) {
-      return 'Could not reach your Cantinarr server. Check its address and connection.';
+      return context.l10n.authServerUnreachable;
     }
-    if (msg.contains('404')) return 'Cantinarr was not found at this address.';
-    return 'Could not reach your Cantinarr server. Check its address and connection.';
+    if (msg.contains('404')) return context.l10n.authCantinarrNotFound;
+    return context.l10n.authServerUnreachable;
   }
 
   void _backToServerUrl() {
@@ -315,7 +317,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      showPasskeyOffer ? 'Secure your account' : _subtitle,
+                      showPasskeyOffer
+                          ? context.l10n.authSecureAccount
+                          : _subtitle,
                       style: const TextStyle(
                         color: AppTheme.textSecondary,
                         fontSize: 15,
@@ -336,13 +340,14 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                                 authState.isLoading || auth?.isLoading == true,
                             isLoading:
                                 (_isCheckingServer && !_backgroundCheck) ||
-                                    authState.isLoading || auth?.isLoading == true,
+                                    authState.isLoading ||
+                                    auth?.isLoading == true,
                             error: _serverError ?? auth?.error,
                             servers: savedServers.valueOrNull ?? const [],
                             historyUnavailable: savedServers.hasError,
                             showSavedServers: _showSavedServers,
-                            onToggleSavedServers: () => setState(() =>
-                                _showSavedServers = !_showSavedServers),
+                            onToggleSavedServers: () => setState(
+                                () => _showSavedServers = !_showSavedServers),
                             isCheckingSavedServer:
                                 _isCheckingServer && _backgroundCheck,
                             retrySavedServer:
@@ -401,9 +406,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   }
 
   String get _subtitle => switch (_view) {
-        _AuthView.serverUrl => 'Connect to Cantinarr',
-        _AuthView.setup => 'Create your admin account',
-        _AuthView.login => 'Sign in to your server',
+        _AuthView.serverUrl => context.l10n.authConnectCantinarr,
+        _AuthView.setup => context.l10n.authCreateAdmin,
+        _AuthView.login => context.l10n.authSignInServer,
       };
 }
 
@@ -446,7 +451,9 @@ class _PasskeyOfferViewState extends ConsumerState<_PasskeyOfferView> {
     });
 
     try {
-      await ref.read(authProvider.notifier).registerPasskey('Passkey');
+      await ref
+          .read(authProvider.notifier)
+          .registerPasskey(context.l10n.authDefaultPasskeyName);
       if (mounted) {
         // Success — dismiss the offer and proceed to dashboard
         ref.read(authProvider.notifier).dismissPasskeyOffer();
@@ -480,8 +487,8 @@ class _PasskeyOfferViewState extends ConsumerState<_PasskeyOfferView> {
               const Icon(Icons.fingerprint, color: AppTheme.accent, size: 36),
         ),
         const SizedBox(height: 20),
-        const Text(
-          'Add a Passkey',
+        Text(
+          context.l10n.authAddPasskeyTitle,
           style: TextStyle(
             color: AppTheme.textPrimary,
             fontSize: 20,
@@ -491,17 +498,17 @@ class _PasskeyOfferViewState extends ConsumerState<_PasskeyOfferView> {
         const SizedBox(height: 8),
         Text(
           checkingPasskeys
-              ? 'Checking passkey support...'
+              ? context.l10n.authCheckingPasskeys
               : passkeyAvailable
-                  ? 'Sign in faster next time with Face ID, fingerprint, or your device PIN.'
-                  : 'Passkeys require HTTPS. You can add one later in Settings after configuring a reverse proxy.',
+                  ? context.l10n.authPasskeyBenefit
+                  : context.l10n.authPasskeyHttps,
           style: const TextStyle(color: AppTheme.textSecondary, fontSize: 14),
           textAlign: TextAlign.center,
         ),
         if (_error != null) ...[
           const SizedBox(height: 12),
           Text(
-            _error!,
+            localizeAuthMessage(context, _error!),
             style: const TextStyle(color: AppTheme.error, fontSize: 13),
             textAlign: TextAlign.center,
           ),
@@ -528,7 +535,9 @@ class _PasskeyOfferViewState extends ConsumerState<_PasskeyOfferView> {
                       ),
                     )
                   : const Icon(Icons.fingerprint),
-              label: Text(_isRegistering ? 'Registering...' : 'Add Passkey'),
+              label: Text(_isRegistering
+                  ? context.l10n.authRegistering
+                  : context.l10n.authAddPasskey),
             ),
           ),
         const SizedBox(height: 12),
@@ -537,8 +546,8 @@ class _PasskeyOfferViewState extends ConsumerState<_PasskeyOfferView> {
           height: 50,
           child: TextButton(
             onPressed: _isRegistering ? null : _skip,
-            child: const Text(
-              'Skip for now',
+            child: Text(
+              context.l10n.authSkipNow,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 15),
             ),
           ),
@@ -555,7 +564,7 @@ class _PasskeyOfferViewState extends ConsumerState<_PasskeyOfferView> {
         message.contains('Google account')) {
       return message;
     }
-    return 'Could not register passkey. You can add one later in Settings.';
+    return context.l10n.authRegisterPasskeyError;
   }
 }
 
@@ -605,14 +614,12 @@ class _ConnectionView extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'This app connects to a Cantinarr server running on a computer or NAS. '
-          'That server connects to your services, including Radarr, Sonarr, and Plex.',
+          context.l10n.authServerExplanation,
           style: Theme.of(context).textTheme.bodyMedium,
         ),
         const SizedBox(height: 12),
         Text(
-          'Ask your server admin for a connection link, or enter your '
-          'Cantinarr server address below.',
+          context.l10n.authAskAdminLink,
           style: Theme.of(context).textTheme.bodyMedium,
         ),
         const SizedBox(height: 20),
@@ -620,8 +627,8 @@ class _ConnectionView extends StatelessWidget {
           key: const ValueKey('connection-entry'),
           controller: controller,
           enabled: !isAuthenticating,
-          decoration: const InputDecoration(
-            labelText: 'Link or Cantinarr address',
+          decoration: InputDecoration(
+            labelText: context.l10n.authLinkOrAddress,
             floatingLabelBehavior: FloatingLabelBehavior.always,
             hintText: 'http://192.168.1.10:8585',
             prefixIcon: Icon(Icons.link),
@@ -638,7 +645,7 @@ class _ConnectionView extends StatelessWidget {
         if (error != null) ...[
           const SizedBox(height: 12),
           Text(
-            error!,
+            localizeAuthMessage(context, error!),
             style: const TextStyle(color: AppTheme.error, fontSize: 13),
             textAlign: TextAlign.center,
           ),
@@ -657,40 +664,44 @@ class _ConnectionView extends StatelessWidget {
                       color: AppTheme.background,
                     ),
                   )
-                : const Text('Connect'),
+                : Text(context.l10n.authConnect),
           ),
         ),
         if (isCheckingSavedServer) ...[
           const SizedBox(height: 12),
-          const Text('Checking saved server...', textAlign: TextAlign.center),
+          Text(context.l10n.authCheckingSavedServer,
+              textAlign: TextAlign.center),
         ],
         if (retrySavedServer != null)
           TextButton(
             onPressed: isLoading ? null : retrySavedServer,
-            child: const Text('Retry saved server'),
+            child: Text(context.l10n.authRetrySavedServer),
           ),
         if (passkeyServer case final server?) ...[
           const SizedBox(height: 16),
           OutlinedButton.icon(
             onPressed: isLoading ? null : onPasskey,
             icon: const Icon(Icons.fingerprint),
-            label: const Text('Sign in with passkey',
+            label: Text(context.l10n.authSignInPasskey,
                 textAlign: TextAlign.center),
           ),
           const SizedBox(height: 6),
-          Text('For ${server.label}', textAlign: TextAlign.center,
+          Text(context.l10n.authForServer(server.label),
+              textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall),
           if (server.name != null)
-            Text(server.url, textAlign: TextAlign.center,
+            Text(server.url,
+                textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall),
         ],
         if (servers.isNotEmpty) ...[
           TextButton.icon(
             onPressed: isAuthenticating ? null : onToggleSavedServers,
-            icon: Icon(
-                showSavedServers ? Icons.expand_less : Icons.expand_more),
-            label: Text(
-                showSavedServers ? 'Hide saved servers' : 'Saved servers'),
+            icon:
+                Icon(showSavedServers ? Icons.expand_less : Icons.expand_more),
+            label: Text(showSavedServers
+                ? context.l10n.authHideSavedServers
+                : context.l10n.authSavedServers),
           ),
           if (showSavedServers)
             SavedServerPicker(
@@ -706,8 +717,8 @@ class _ConnectionView extends StatelessWidget {
         ],
         if (historyUnavailable) ...[
           const SizedBox(height: 12),
-          const Text('Saved servers are unavailable. Paste a connection link '
-              'or enter an address to continue.', textAlign: TextAlign.center),
+          Text(context.l10n.authSavedServersUnavailable,
+              textAlign: TextAlign.center),
         ],
         const SizedBox(height: 24),
         const ServerSetupHelp(),
@@ -758,13 +769,13 @@ class _SetupViewState extends ConsumerState<_SetupView> {
       ref.read(authProvider.notifier).clearError();
       // Show error via a snackbar since this is a client-side validation
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Passwords do not match')),
+        SnackBar(content: Text(context.l10n.authPasswordsMismatch)),
       );
       return;
     }
     if (password.length < 8) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Password must be at least 8 characters')),
+        SnackBar(content: Text(context.l10n.authPasswordEightCharacters)),
       );
       return;
     }
@@ -809,8 +820,8 @@ class _SetupViewState extends ConsumerState<_SetupView> {
 
         TextField(
           controller: _usernameController,
-          decoration: const InputDecoration(
-            labelText: 'Username',
+          decoration: InputDecoration(
+            labelText: context.l10n.authUsername,
             prefixIcon: Icon(Icons.person_outline),
           ),
           textInputAction: TextInputAction.next,
@@ -821,7 +832,7 @@ class _SetupViewState extends ConsumerState<_SetupView> {
         TextField(
           controller: _passwordController,
           decoration: InputDecoration(
-            labelText: 'Password',
+            labelText: context.l10n.authPassword,
             prefixIcon: const Icon(Icons.lock_outline),
             suffixIcon: IconButton(
               icon: Icon(
@@ -838,7 +849,7 @@ class _SetupViewState extends ConsumerState<_SetupView> {
         TextField(
           controller: _confirmPasswordController,
           decoration: InputDecoration(
-            labelText: 'Confirm Password',
+            labelText: context.l10n.authConfirmPassword,
             prefixIcon: const Icon(Icons.lock_outline),
             suffixIcon: IconButton(
               icon: Icon(
@@ -855,7 +866,7 @@ class _SetupViewState extends ConsumerState<_SetupView> {
         if (error != null) ...[
           const SizedBox(height: 12),
           Text(
-            error,
+            localizeAuthMessage(context, error),
             style: const TextStyle(color: AppTheme.error, fontSize: 13),
             textAlign: TextAlign.center,
           ),
@@ -877,7 +888,7 @@ class _SetupViewState extends ConsumerState<_SetupView> {
                       color: AppTheme.background,
                     ),
                   )
-                : const Text('Create Account'),
+                : Text(context.l10n.authCreateAccount),
           ),
         ),
 
@@ -885,8 +896,8 @@ class _SetupViewState extends ConsumerState<_SetupView> {
 
         TextButton(
           onPressed: widget.onBack,
-          child: const Text(
-            'Back',
+          child: Text(
+            context.l10n.authBack,
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
@@ -962,21 +973,26 @@ class _LoginViewState extends ConsumerState<_LoginView> {
           SizedBox(
             width: double.infinity,
             child: FilledButton.icon(
-              onPressed: isLoading ? null : () async {
-                try {
-                  await ref.read(authProvider.notifier).startSSO(widget.serverUrl);
-                } catch (_) {
-                  // The auth notifier records a visible, retryable error.
-                }
-              },
+              onPressed: isLoading
+                  ? null
+                  : () async {
+                      try {
+                        await ref
+                            .read(authProvider.notifier)
+                            .startSSO(widget.serverUrl);
+                      } catch (_) {
+                        // The auth notifier records a visible, retryable error.
+                      }
+                    },
               icon: const Icon(Icons.login),
-              label: Text('Continue with ${widget.serverStatus!.ssoProvider}'),
+              label: Text(context.l10n
+                  .authContinueProvider(widget.serverStatus!.ssoProvider)),
             ),
           ),
           const SizedBox(height: 16),
           if (widget.serverStatus?.ssoOnly == true) ...[
-            const Text(
-              'Single sign-on is required. Administrators can use local sign-in below to recover access.',
+            Text(
+              context.l10n.authSsoRequired,
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 16),
@@ -994,13 +1010,13 @@ class _LoginViewState extends ConsumerState<_LoginView> {
                         .toString()),
                 icon: const Icon(Icons.play_arrow),
                 label: Text(widget.serverStatus?.ssoOnly == true
-                    ? 'Continue with Plex (administrator recovery)'
-                    : 'Continue with Plex'),
+                    ? context.l10n.authContinuePlexRecovery
+                    : context.l10n.authContinuePlex),
               )),
           const SizedBox(height: 16),
         ],
         if (widget.serverStatus?.ssoError case final message?) ...[
-          Text(message, textAlign: TextAlign.center),
+          Text(localizeAuthMessage(context, message), textAlign: TextAlign.center),
           const SizedBox(height: 16),
         ],
 
@@ -1012,7 +1028,7 @@ class _LoginViewState extends ConsumerState<_LoginView> {
             child: OutlinedButton.icon(
               onPressed: isLoading ? null : _loginWithPasskey,
               icon: const Icon(Icons.fingerprint, size: 22),
-              label: const Text('Sign in with Passkey'),
+              label: Text(context.l10n.authSignInPasskeyTitle),
               style: OutlinedButton.styleFrom(
                 side: const BorderSide(color: AppTheme.accent),
                 foregroundColor: AppTheme.accent,
@@ -1026,12 +1042,12 @@ class _LoginViewState extends ConsumerState<_LoginView> {
             ),
           ),
           const SizedBox(height: 16),
-          const Row(
+          Row(
             children: [
               Expanded(child: Divider(color: AppTheme.border)),
               Padding(
                 padding: EdgeInsets.symmetric(horizontal: 12),
-                child: Text('or use password',
+                child: Text(context.l10n.authOrPassword,
                     style:
                         TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
               ),
@@ -1043,8 +1059,8 @@ class _LoginViewState extends ConsumerState<_LoginView> {
 
         TextField(
           controller: _usernameController,
-          decoration: const InputDecoration(
-            labelText: 'Username',
+          decoration: InputDecoration(
+            labelText: context.l10n.authUsername,
             prefixIcon: Icon(Icons.person_outline),
           ),
           textInputAction: TextInputAction.next,
@@ -1055,7 +1071,7 @@ class _LoginViewState extends ConsumerState<_LoginView> {
         TextField(
           controller: _passwordController,
           decoration: InputDecoration(
-            labelText: 'Password',
+            labelText: context.l10n.authPassword,
             prefixIcon: const Icon(Icons.lock_outline),
             suffixIcon: IconButton(
               icon: Icon(
@@ -1072,7 +1088,7 @@ class _LoginViewState extends ConsumerState<_LoginView> {
         if (error != null) ...[
           const SizedBox(height: 12),
           Text(
-            error,
+            localizeAuthMessage(context, error),
             style: const TextStyle(color: AppTheme.error, fontSize: 13),
             textAlign: TextAlign.center,
           ),
@@ -1094,7 +1110,7 @@ class _LoginViewState extends ConsumerState<_LoginView> {
                       color: AppTheme.background,
                     ),
                   )
-                : const Text('Sign In'),
+                : Text(context.l10n.authSignIn),
           ),
         ),
 
@@ -1106,8 +1122,8 @@ class _LoginViewState extends ConsumerState<_LoginView> {
           children: [
             TextButton(
               onPressed: isLoading ? null : widget.onBack,
-              child: const Text(
-                'Use a connection link',
+              child: Text(
+                context.l10n.authUseConnectionLink,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
               ),
             ),

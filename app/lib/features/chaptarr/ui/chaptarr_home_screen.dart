@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/storage/library_sort_preferences.dart';
@@ -37,8 +38,8 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
     super.initState();
     // Listen before the first frame so preference restoration cannot race the
     // instance notifier's creation. Its initial selection is also read below.
-    ref.listenManual(librarySortProvider('chaptarr'), (_, selection) =>
-        _notifier?.sorting.setSelection(selection));
+    ref.listenManual(librarySortProvider('chaptarr'),
+        (_, selection) => _notifier?.sorting.setSelection(selection));
     WidgetsBinding.instance.addPostFrameCallback((_) => _initNotifier());
   }
 
@@ -76,12 +77,19 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
         notifier?.loadAuthors();
       }
     }
+
     showAuthorActions(context,
-      service: ChaptarrApiService(backendDio: dio, instanceId: instanceId),
-      settings: LibrarySettingsService(dio: dio, instanceId: instanceId,
-        kind: LibrarySettingsKind.author, id: author.id),
-      instanceId: instanceId, author: author, selectedAction: action,
-      onChanged: reload, onRemoved: reload);
+        service: ChaptarrApiService(backendDio: dio, instanceId: instanceId),
+        settings: LibrarySettingsService(
+            dio: dio,
+            instanceId: instanceId,
+            kind: LibrarySettingsKind.author,
+            id: author.id),
+        instanceId: instanceId,
+        author: author,
+        selectedAction: action,
+        onChanged: reload,
+        onRemoved: reload);
   }
 
   Future<void> _openAuthor(ChaptarrAuthor author) async {
@@ -126,64 +134,73 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
         return LibraryCommandLayout(
           key: ValueKey('chaptarr-$instanceId'),
           headerBuilder: (collapsed) => LibraryCommandHeader(
-              collapsed: collapsed,
-              sort: LibrarySortMenu(module: 'chaptarr', selection: sort,
-                onSelected: (field) => ref.read(librarySortProvider('chaptarr').notifier).select(field)),
-              viewMode: viewMode,
-              onViewModeChanged: (value) => ref
-                  .read(libraryViewModeProvider('chaptarr').notifier).set(value),
-              title: 'Author library',
-              subtitle: '$instanceName  /  Chaptarr',
-              stats: [
-                LibraryStat(
-                  label: 'Total',
-                  value: state.authors.length,
-                  color: AppTheme.textPrimary,
-                ),
-                LibraryStat(
-                  label: 'Complete',
-                  value: state.completeCount,
-                  color: AppTheme.available,
-                ),
-                LibraryStat(
-                  label: 'Partial',
-                  value: state.partialCount,
-                  color: AppTheme.requested,
-                ),
-              ],
-              searchController: _searchController,
-              onSearch: _notifier!.search,
-              searchHint: 'Filter this author library…',
-              filter: PopupMenuButton<ChaptarrLibraryFilter>(
-                tooltip: 'Filter authors',
-                icon: const Icon(Icons.tune_rounded),
-                onSelected: _notifier!.setFilter,
-                itemBuilder: (_) => ChaptarrLibraryFilter.values
-                    .map((f) => PopupMenuItem(
-                          value: f,
-                          child: Row(
-                            children: [
-                              if (f == state.filter)
-                                const Icon(
-                                  Icons.check,
-                                  size: 18,
-                                  color: AppTheme.accent,
-                                ),
-                              if (f != state.filter) const SizedBox(width: 18),
-                              const SizedBox(width: 8),
-                              Text(
-                                f.name[0].toUpperCase() + f.name.substring(1),
-                              ),
-                            ],
-                          ),
-                        ))
-                    .toList(),
+            collapsed: collapsed,
+            sort: LibrarySortMenu(
+                module: 'chaptarr',
+                selection: sort,
+                onSelected: (field) => ref
+                    .read(librarySortProvider('chaptarr').notifier)
+                    .select(field)),
+            viewMode: viewMode,
+            onViewModeChanged: (value) => ref
+                .read(libraryViewModeProvider('chaptarr').notifier)
+                .set(value),
+            title: context.l10n.adminAuthorLibrary,
+            subtitle: '$instanceName  /  Chaptarr',
+            stats: [
+              LibraryStat(
+                label: context.l10n.adminTotal,
+                value: state.authors.length,
+                color: AppTheme.textPrimary,
               ),
+              LibraryStat(
+                label: context.l10n.adminComplete,
+                value: state.completeCount,
+                color: AppTheme.available,
+              ),
+              LibraryStat(
+                label: context.l10n.adminPartial,
+                value: state.partialCount,
+                color: AppTheme.requested,
+              ),
+            ],
+            searchController: _searchController,
+            onSearch: _notifier!.search,
+            searchHint: context.l10n.adminFilterThisAuthorLibrary,
+            filter: PopupMenuButton<ChaptarrLibraryFilter>(
+              tooltip: context.l10n.adminFilterAuthors,
+              icon: const Icon(Icons.tune_rounded),
+              onSelected: _notifier!.setFilter,
+              itemBuilder: (_) => ChaptarrLibraryFilter.values
+                  .map((f) => PopupMenuItem(
+                        value: f,
+                        child: Row(
+                          children: [
+                            if (f == state.filter)
+                              const Icon(
+                                Icons.check,
+                                size: 18,
+                                color: AppTheme.accent,
+                              ),
+                            if (f != state.filter) const SizedBox(width: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              f.name[0].toUpperCase() + f.name.substring(1),
+                            ),
+                          ],
+                        ),
+                      ))
+                  .toList(),
             ),
+          ),
           children: [
             if (_notifier!.sorting.notice != null)
-              ErrorBanner(message: _notifier!.sorting.notice!, maxLines: null,
-                onRetry: _notifier!.sorting.canRetry ? _notifier!.sorting.refresh : null),
+              ErrorBanner(
+                  message: _notifier!.sorting.notice!,
+                  maxLines: null,
+                  onRetry: _notifier!.sorting.canRetry
+                      ? _notifier!.sorting.refresh
+                      : null),
             if (state.error != null)
               ErrorBanner(
                 message: state.error!,
@@ -200,10 +217,12 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
                           color: AppTheme.accent,
                           child: ChaptarrAuthorList(
                             viewMode: viewMode,
-                            scrollKey: 'chaptarr-$instanceId-${_notifier!.sorting.effectiveSelection.key}',
+                            scrollKey:
+                                'chaptarr-$instanceId-${_notifier!.sorting.effectiveSelection.key}',
                             imageSourceFor: (item) => instanceId == null
                                 ? null
-                                : chaptarrImageSource(ref, item.portraitUrl, instanceId),
+                                : chaptarrImageSource(
+                                    ref, item.portraitUrl, instanceId),
                             authors: state.filtered,
                             onTap: _openAuthor,
                             onAction: _showActions,

@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/shell_labels.dart';
 import 'package:flutter/material.dart';
 import '../layout/adaptive.dart';
 import '../models/app_module.dart';
@@ -73,7 +74,7 @@ class ModuleScaffold extends StatelessWidget {
                           ),
                           child: Icon(page.activeIcon),
                         ),
-                        label: page.label,
+                        label: localizeShellLabel(context, page.label),
                       ),
                   ],
                 ),

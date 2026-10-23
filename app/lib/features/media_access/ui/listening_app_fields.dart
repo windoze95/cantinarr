@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 
 import '../data/listening_apps.dart';
@@ -20,13 +21,15 @@ class ListeningAppFields extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _field(
-            label: 'iPhone and iPad',
+            context,
+            label: context.l10n.mediaIPhoneAndIPad,
             selected: value.ios,
             apps: ListeningApp.ios,
             change: (id) => ListeningApps(ios: id, android: value.android),
           ),
           const SizedBox(height: 16),
           _field(
+            context,
             label: 'Android',
             selected: value.android,
             apps: ListeningApp.android,
@@ -35,7 +38,8 @@ class ListeningAppFields extends StatelessWidget {
         ],
       );
 
-  Widget _field({
+  Widget _field(
+    BuildContext context, {
     required String label,
     required String selected,
     required List<ListeningApp> apps,
@@ -54,14 +58,18 @@ class ListeningAppFields extends StatelessWidget {
       decoration: InputDecoration(labelText: label),
       items: [
         if (inheritDefaults)
-          const DropdownMenuItem(
+          DropdownMenuItem(
               value: '',
-              child:
-                  Text('Use admin default', overflow: TextOverflow.ellipsis)),
+              child: Text(context.l10n.mediaUseAdminDefault,
+                  overflow: TextOverflow.ellipsis)),
         for (final app in apps)
           DropdownMenuItem(
               value: app.id,
-              child: Text(app.label, overflow: TextOverflow.ellipsis)),
+              child: Text(
+                  app == ListeningApp.browser
+                      ? context.l10n.mediaBrowser
+                      : app.label,
+                  overflow: TextOverflow.ellipsis)),
       ],
       onChanged: onChanged == null
           ? null

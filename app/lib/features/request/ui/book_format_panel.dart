@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -294,8 +296,8 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
         }
       });
       _announce(action == 'cancel'
-          ? 'Request cancelled.'
-          : 'Your request is saved for another delivery attempt.');
+          ? context.l10n.browseRequestCancelled
+          : context.l10n.browseYourRequestIsSavedForAnotherDeliveryAttempt);
       _refresh();
     } on RequestSubmissionException catch (e) {
       if (mounted) _announce(e.message);
@@ -334,7 +336,8 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     final selected = format == BookRequestFormat.both
         ? [BookRequestFormat.ebook, BookRequestFormat.audiobook]
         : [format];
-    if (_choosingLibrary || selected.any(_inFlight.contains) ||
+    if (_choosingLibrary ||
+        selected.any(_inFlight.contains) ||
         !_canRequest(_detail, format) ||
         (widget.chooseRequestLibrary &&
             widget.requestLibraries.length > 1 &&
@@ -347,11 +350,14 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       setState(() => _choosingLibrary = true);
       try {
         target = await confirmRequestLibrary(context,
-            libraries: widget.requestLibraries, defaultLibraryId: widget.defaultRequestLibraryId);
+            libraries: widget.requestLibraries,
+            defaultLibraryId: widget.defaultRequestLibraryId);
       } finally {
         if (mounted) setState(() => _choosingLibrary = false);
       }
-      if (!mounted || requestKey != (widget.foreignId, widget.instanceId) || target == null) return;
+      if (!mounted ||
+          requestKey != (widget.foreignId, widget.instanceId) ||
+          target == null) return;
     }
     _savedGeneration++; // ignore reads started before this submission
     _checkGeneration++;
@@ -370,7 +376,8 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
             _delivery = const [];
           });
           await _check();
-          if (!mounted || requestKey != (widget.foreignId, widget.instanceId)) return;
+          if (!mounted || requestKey != (widget.foreignId, widget.instanceId))
+            return;
           if (!_canRequest(_detail, format)) {
             _announce(_formatOutcome(format, _detail.statusFor(format)));
             return;
@@ -396,7 +403,8 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
         failureMessage = e.message;
         definitiveFailure = e.definitive;
       }
-      if (!mounted || requestKey != (widget.foreignId, widget.instanceId)) return;
+      if (!mounted || requestKey != (widget.foreignId, widget.instanceId))
+        return;
       if (submission == null) {
         await _refreshAfterSubmission();
         if (!mounted) return;
@@ -415,16 +423,14 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
         }
         _announce(definitiveFailure && failureMessage != null
             ? failureMessage
-            : 'The request outcome couldn’t be confirmed. The book status was '
-                'refreshed.');
+            : context.l10n.requestOutcomeUnconfirmedRefreshed);
         return;
       }
       if (!submission.isKnown) {
         await _refreshAfterSubmission();
         if (!mounted) return;
         _announce(
-          'The request was sent, but its result could not be confirmed. The '
-          'book status was refreshed.',
+          context.l10n.requestSentUnconfirmedRefreshed,
         );
         return;
       }
@@ -502,22 +508,25 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
 
   void _announce(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
+      SnackBar(content: Text(browseLabel(context, message))),
     );
   }
 
   String _formatOutcome(BookRequestFormat format, RequestStatus? status) =>
       switch (status) {
-        RequestStatus.available => '${format.label} is available.',
-        RequestStatus.downloading => '${format.label} is downloading.',
-        RequestStatus.requested ||
-        RequestStatus.partial =>
-          '${format.label} requested.',
-        RequestStatus.pending => '${format.label} is pending approval.',
-        RequestStatus.denied => '${format.label} was not approved.',
+        RequestStatus.available => context.l10n
+            .requestFormatAvailable(browseLabel(context, format.label)),
+        RequestStatus.downloading => context.l10n
+            .requestFormatDownloading(browseLabel(context, format.label)),
+        RequestStatus.requested || RequestStatus.partial => context.l10n
+            .requestFormatRequested(browseLabel(context, format.label)),
+        RequestStatus.pending =>
+          context.l10n.requestFormatPending(browseLabel(context, format.label)),
+        RequestStatus.denied =>
+          context.l10n.requestFormatDenied(browseLabel(context, format.label)),
         RequestStatus.unavailable ||
         null =>
-          '${format.label} could not be requested. Try again.',
+          context.l10n.requestFormatFailed(browseLabel(context, format.label)),
       };
 
   bool _canRequest(BookRequestStatusDetail detail, BookRequestFormat format) {
@@ -551,8 +560,8 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
         if (widget.chooseRequestLibrary && _requestLibraryId != null)
           Padding(
               padding: const EdgeInsets.only(bottom: 8),
-              child: Text(
-                  'Request library: ${requestLibraryName(widget.requestLibraries, _instanceId)}')),
+              child: Text(context.l10n.requestLibraryName(requestLibraryName(
+                  context, widget.requestLibraries, _instanceId)))),
 
         // A Material (not a decorated box) so a row tap paints its ripple on
         // top of the card instead of behind its opaque surface colour.
@@ -568,7 +577,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-                child: Text('Formats',
+                child: Text(context.l10n.browseFormats,
                     style: Theme.of(context).textTheme.titleSmall),
               ),
               const Divider(height: 1, color: AppTheme.border),
@@ -607,7 +616,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
                         ? () => _request(BookRequestFormat.both)
                         : null,
                     icon: const Icon(Icons.add),
-                    label: const Text('Request both'),
+                    label: Text(context.l10n.browseRequestBoth),
                   )),
               for (final d in _delivery)
                 if (!{'complete', 'cancelled'}.contains(d['state']))
@@ -623,8 +632,10 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
                                   : () => _deliveryAction(
                                       d['request_id'] as int, 'retry',
                                       format: d['format'] as String),
-                              child: Text(
-                                  'Retry ${d['format'] == 'ebook' ? 'eBook' : 'audiobook'}')),
+                              child: Text(context.l10n.requestRetryFormat(
+                                  d['format'] == 'ebook'
+                                      ? context.l10n.browseEBook
+                                      : context.l10n.browseAudiobook))),
                       ])),
               for (final id in cancellable)
                 Padding(
@@ -635,7 +646,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
                             onPressed: _actions.contains(id)
                                 ? null
                                 : () => _deliveryAction(id, 'cancel'),
-                            child: const Text('Cancel request')))),
+                            child: Text(context.l10n.browseCancelRequest)))),
             ],
           ),
         ),
@@ -679,8 +690,9 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
                   child: Text(
                     detail.effectiveUnknownReason ==
                             BookStatusUnknownReason.identityNeedsAttention
-                        ? 'Ask an admin to check this book’s library match'
-                        : 'Ask an admin to check this book’s format',
+                        ? context
+                            .l10n.browseAskAnAdminToCheckThisBookSLibraryMatch
+                        : context.l10n.browseAskAnAdminToCheckThisBookSFormat,
                     style: const TextStyle(
                       color: AppTheme.requested,
                       fontSize: 12,
@@ -701,7 +713,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
             child: TextButton.icon(
               onPressed: _inFlight.isNotEmpty || _checking ? null : _refresh,
               icon: const Icon(Icons.refresh_rounded, size: 18),
-              label: const Text('Couldn’t check · Retry'),
+              label: Text(context.l10n.browseCouldnTCheckRetry),
             ),
           ),
       ],
@@ -718,7 +730,8 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       BookRequestFormat.audiobook,
     ]) {
       final wait = detail.waitFor(format);
-      if (wait != null) reasons[wait.reason] = wait.explanation;
+      if (wait != null)
+        reasons[wait.reason] = browseLabel(context, wait.explanation);
     }
     if (reasons.isEmpty) return null;
     return reasons.values.join('\n\n');
@@ -740,14 +753,16 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     return _FormatRow(
       rowKey: ValueKey('book-format-row:${format.value}'),
       icon: icon,
-      label: format.label,
+      label: browseLabel(context, format.label),
       state: requestable && !denied
           ? null
-          : _formatState(detail, format, !_loading),
+          : _formatState(context, detail, format, !_loading),
       action: _inFlight.contains(format)
           ? const _SubmittingIndicator()
           : requestable
-              ? _RequestAction(denied ? 'Request again' : 'Request')
+              ? _RequestAction(denied
+                  ? context.l10n.browseRequestAgain
+                  : context.l10n.browseRequest)
               : null,
       download: download,
       onTap: requestable && !_choosingLibrary && !_inFlight.contains(format)
@@ -898,7 +913,7 @@ class _SubmittingIndicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Row(
+    return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         SizedBox(
@@ -910,7 +925,7 @@ class _SubmittingIndicator extends StatelessWidget {
         SizedBox(width: 8),
         Flexible(
           child: Text(
-            'Requesting…',
+            context.l10n.browseRequesting,
             style: TextStyle(
               color: AppTheme.accent,
               fontSize: 12,
@@ -924,6 +939,7 @@ class _SubmittingIndicator extends StatelessWidget {
 }
 
 ({String label, Color color}) _formatState(
+  BuildContext context,
   BookRequestStatusDetail detail,
   BookRequestFormat format,
   bool statusLoaded,
@@ -935,11 +951,11 @@ class _SubmittingIndicator extends StatelessWidget {
     BookRequestFormat.both => null,
   };
   if (owned?.downloaded ?? false) {
-    return (label: 'Available', color: AppTheme.available);
+    return (label: context.l10n.browseAvailable, color: AppTheme.available);
   }
 
   if (owned?.monitored ?? false) {
-    return (label: 'Requested', color: AppTheme.requested);
+    return (label: context.l10n.browseRequested, color: AppTheme.requested);
   }
 
   // Checked before the plain status words below, because the server hands this
@@ -947,30 +963,36 @@ class _SubmittingIndicator extends StatelessWidget {
   // word. Requested claims a monitored library record; this row has none yet.
   final wait = detail.waitFor(format);
   if (wait != null) {
-    return (label: wait.label, color: AppTheme.requested);
+    return (label: browseLabel(context, wait.label), color: AppTheme.requested);
   }
 
   final status = detail.statusFor(format);
   if (status != null && status != RequestStatus.unavailable) {
     return switch (status) {
       RequestStatus.available => (
-          label: 'Available',
+          label: context.l10n.browseAvailable,
           color: AppTheme.available
         ),
       RequestStatus.pending => (
-          label: 'Pending Approval',
+          label: context.l10n.browsePendingApproval,
           color: AppTheme.requested
         ),
       RequestStatus.requested => (
-          label: 'Requested',
+          label: context.l10n.browseRequested,
           color: AppTheme.requested
         ),
       RequestStatus.downloading => (
-          label: 'Downloading',
+          label: context.l10n.browseDownloading,
           color: AppTheme.downloading
         ),
-      RequestStatus.partial => (label: 'Requested', color: AppTheme.requested),
-      RequestStatus.denied => (label: 'Request Denied', color: AppTheme.error),
+      RequestStatus.partial => (
+          label: context.l10n.browseRequested,
+          color: AppTheme.requested
+        ),
+      RequestStatus.denied => (
+          label: context.l10n.browseRequestDenied,
+          color: AppTheme.error
+        ),
       RequestStatus.unavailable => throw StateError('unreachable'),
     };
   }
@@ -979,24 +1001,30 @@ class _SubmittingIndicator extends StatelessWidget {
   // format was never requested. Keep the neutral loading state instead of
   // briefly claiming "Not requested" for a pending or denied request.
   if (!statusLoaded) {
-    return (label: 'Checking…', color: AppTheme.textSecondary);
+    return (label: context.l10n.browseChecking, color: AppTheme.textSecondary);
   }
 
   if (!detail.isKnown) {
     if (detail.effectiveUnknownReason ==
         BookStatusUnknownReason.identityNeedsAttention) {
       return (
-        label: 'Library match needs attention',
+        label: context.l10n.browseLibraryMatchNeedsAttention,
         color: AppTheme.requested
       );
     }
     return detail.effectiveUnknownReason ==
             BookStatusUnknownReason.formatNeedsAttention
-        ? (label: 'Format needs attention', color: AppTheme.requested)
-        : (label: 'Couldn’t check', color: AppTheme.error);
+        ? (
+            label: context.l10n.browseFormatNeedsAttention,
+            color: AppTheme.requested
+          )
+        : (label: context.l10n.browseCouldnTCheck, color: AppTheme.error);
   }
   if (status == RequestStatus.unavailable) {
-    return (label: 'Not requested', color: AppTheme.textSecondary);
+    return (
+      label: context.l10n.browseNotRequested,
+      color: AppTheme.textSecondary
+    );
   }
-  return (label: 'Couldn’t check', color: AppTheme.error);
+  return (label: context.l10n.browseCouldnTCheck, color: AppTheme.error);
 }

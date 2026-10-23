@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/request_service.dart';
@@ -28,13 +30,13 @@ class RequestButton extends StatelessWidget {
         SizedBox(
           width: double.infinity,
           height: 54,
-          child: _buildButton(),
+          child: _buildButton(context),
         ),
         if (error != null)
           Padding(
             padding: const EdgeInsets.only(top: 6),
             child: Text(
-              error!,
+              browseLabel(context, error!),
               style: const TextStyle(color: AppTheme.error, fontSize: 12),
             ),
           ),
@@ -42,7 +44,7 @@ class RequestButton extends StatelessWidget {
     );
   }
 
-  Widget _buildButton() {
+  Widget _buildButton(BuildContext context) {
     final (color, icon, enabled) = switch (status) {
       RequestStatus.unavailable => (AppTheme.accent, Icons.add, true),
       RequestStatus.pending => (
@@ -88,7 +90,9 @@ class RequestButton extends StatelessWidget {
               )
             : Icon(icon, size: 20),
         label: Text(
-          isRequesting ? 'Requesting...' : status.buttonLabel,
+          isRequesting
+              ? context.l10n.browseRequestingAlternate
+              : browseLabel(context, status.buttonLabel),
           style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
         ),
         style: ElevatedButton.styleFrom(

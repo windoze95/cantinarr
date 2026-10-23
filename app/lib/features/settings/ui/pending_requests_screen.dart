@@ -1,3 +1,6 @@
+import '../../discover/ui/browse_labels.dart';
+import 'settings_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import '../../request/ui/catalog_request_panel.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -77,31 +80,32 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
             lower.contains('no library') ||
             lower.contains('no pinned'));
     if (missingBookInstance) {
-      return 'This older request doesn’t identify a book library; deny it and ask the requester to submit it again.';
+      return context.l10n.settingsThisOlderRequestDoesnTIdentifyABook;
     }
     if (lower.contains('root folder') ||
         lower.contains('quality profile') ||
         lower.contains('metadata profile') ||
         lower.contains('book configuration')) {
-      return 'Check this book library’s paths and profiles, then try again.';
+      return context.l10n.settingsCheckThisBookLibrarySPathsAndProfiles;
     }
     // Approving replayed an add that had already failed the same way. The old
     // "Something went wrong. Try again." read as a transient glitch and invited
     // another Approve, which cannot work until the library has the record.
     if (lower.contains('add this book in the library first')) {
-      return 'The library still can’t find this book. Add it in the library '
-          'first, then approve — retrying here won’t help.';
+      return context.l10n.settingsTheLibraryStillCanTFindThisBook;
     }
-    return 'Something went wrong. Try again.';
+    return context.l10n.settingsSomethingWentWrongTryAgain;
   }
 
   String _approvalMessage(
     PendingRequestItem item,
     BookApprovalResult result,
   ) {
-    if (!item.isBook) return 'Approved ${item.title}';
+    if (!item.isBook)
+      return context.l10n
+          .settingsMessageApprovedValue1((item.title).toString());
     if (!result.isKnown || result.formats.isEmpty) {
-      return 'Approval saved. The remaining queue was refreshed.';
+      return context.l10n.settingsApprovalSavedTheRemainingQueueWasRefreshed;
     }
     final approved = <String>[];
     final attention = <String>[];
@@ -116,19 +120,23 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
         case RequestStatus.downloading:
         case RequestStatus.requested:
         case RequestStatus.partial:
-          approved.add('${format.label} approved.');
+          approved.add(context.l10n.settingsMessageValue1Approved(
+              (browseLabel(context, format.label)).toString()));
         case RequestStatus.pending:
-          attention.add('${format.label} still needs attention.');
+          attention.add(context.l10n.settingsMessageValue1StillNeedsAttention(
+              (browseLabel(context, format.label)).toString()));
         case RequestStatus.denied:
         case RequestStatus.unavailable:
           attention.add(result.status == RequestStatus.partial
-              ? '${format.label} still needs attention.'
-              : '${format.label} could not be approved.');
+              ? context.l10n.settingsMessageValue1StillNeedsAttention(
+                  (browseLabel(context, format.label)).toString())
+              : context.l10n.settingsMessageValue1CouldNotBeApproved(
+                  (browseLabel(context, format.label)).toString()));
       }
     }
     final message = [...approved, ...attention].join(' ');
     return message.isEmpty
-        ? 'Approval saved. The remaining queue was refreshed.'
+        ? context.l10n.settingsApprovalSavedTheRemainingQueueWasRefreshed
         : message;
   }
 
@@ -180,9 +188,9 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
     final requestedBookFormat = item.requestedBookFormat;
     if (item.isBook && requestedBookFormat == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'This request uses an unsupported book format and cannot be approved.',
+            context.l10n.settingsThisRequestUsesAnUnsupportedBookFormatAnd,
           ),
         ),
       );
@@ -213,7 +221,8 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
             return AlertDialog(
               backgroundColor: AppTheme.surface,
               title: Text(
-                'Approve ${item.title}',
+                context.l10n
+                    .settingsMessageApproveValue1((item.title).toString()),
                 style: const TextStyle(color: AppTheme.textPrimary),
               ),
               content: Column(
@@ -221,7 +230,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    item.requestedByLabel,
+                    settingsPendingRequestedBy(context, item),
                     style: const TextStyle(
                       color: AppTheme.textSecondary,
                       fontSize: 13,
@@ -229,8 +238,8 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                   ),
                   const SizedBox(height: 16),
                   if (item.isTv) ...[
-                    const Text(
-                      'Season scope',
+                    Text(
+                      context.l10n.settingsSeasonScope,
                       style: TextStyle(
                           color: AppTheme.textSecondary, fontSize: 13),
                     ),
@@ -247,12 +256,18 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                         if (isExplicit)
                           DropdownMenuItem<String>(
                             value: _keepRequestedScope,
-                            child: Text(
-                                'Keep requested (${SeasonScope.describe(item.seasonScope)})'),
+                            child: Text(context.l10n
+                                .settingsMessageKeepRequestedValue1(
+                                    (browseLabel(
+                                            context,
+                                            SeasonScope.describe(
+                                                item.seasonScope)))
+                                        .toString())),
                           ),
                         ...SeasonScope.choices.map((c) =>
                             DropdownMenuItem<String>(
-                                value: c.value, child: Text(c.label))),
+                                value: c.value,
+                                child: Text(browseLabel(context, c.label)))),
                       ],
                       onChanged: (v) {
                         if (v != null) {
@@ -263,14 +278,14 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                     const SizedBox(height: 16),
                   ],
                   if (item.isBook) ...[
-                    const Text(
-                      'Requested format',
+                    Text(
+                      context.l10n.settingsRequestedFormat,
                       style: TextStyle(
                           color: AppTheme.textSecondary, fontSize: 13),
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      requestedBookFormat!.label,
+                      browseLabel(context, requestedBookFormat!.label),
                       style: const TextStyle(
                         color: AppTheme.textPrimary,
                         fontSize: 16,
@@ -280,7 +295,8 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                     if (item.instanceName.isNotEmpty) ...[
                       const SizedBox(height: 14),
                       Text(
-                        'Library: ${item.instanceName}',
+                        context.l10n.settingsMessageLibraryValue1(
+                            (item.instanceName).toString()),
                         style: const TextStyle(
                           color: AppTheme.textSecondary,
                           fontSize: 14,
@@ -288,8 +304,8 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                       ),
                     ],
                   ] else ...[
-                    const Text(
-                      'Quality profile',
+                    Text(
+                      context.l10n.settingsQualityProfile,
                       style: TextStyle(
                           color: AppTheme.textSecondary, fontSize: 13),
                     ),
@@ -303,9 +319,9 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                         isDense: true,
                       ),
                       items: [
-                        const DropdownMenuItem<int?>(
+                        DropdownMenuItem<int?>(
                           value: null,
-                          child: Text('Default'),
+                          child: Text(context.l10n.settingsDefault),
                         ),
                         ...profiles.map((p) => DropdownMenuItem<int?>(
                               value: p.id,
@@ -320,7 +336,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(dialogContext).pop(false),
-                  child: const Text('Cancel'),
+                  child: Text(context.l10n.settingsCancel),
                 ),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
@@ -328,7 +344,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                     foregroundColor: AppTheme.background,
                   ),
                   onPressed: () => Navigator.of(dialogContext).pop(true),
-                  child: const Text('Approve'),
+                  child: Text(context.l10n.settingsApprove),
                 ),
               ],
             );
@@ -340,7 +356,8 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
     if (confirmed != true) return;
     if (!mounted) return;
     try {
-      _approvalSelections[item.id] = (scope: chosenScope, profile: chosenProfile);
+      _approvalSelections[item.id] =
+          (scope: chosenScope, profile: chosenProfile);
       final result = await _service.approve(
         item.id,
         // The "keep requested" sentinel sends no override, so the server keeps
@@ -377,7 +394,9 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
         SnackBar(
           content: Text(message.isNotEmpty
               ? message
-              : 'The library has this author now — ${item.title} went through.'),
+              : context.l10n
+                  .settingsMessageTheLibraryHasThisAuthorNowValue1Went(
+                      (item.title).toString())),
         ),
       );
     } catch (e) {
@@ -396,15 +415,15 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
         return AlertDialog(
           backgroundColor: AppTheme.surface,
           title: Text(
-            'Deny ${item.title}',
+            context.l10n.settingsMessageDenyValue1((item.title).toString()),
             style: const TextStyle(color: AppTheme.textPrimary),
           ),
           content: TextField(
             controller: controller,
             autofocus: true,
             style: const TextStyle(color: AppTheme.textPrimary),
-            decoration: const InputDecoration(
-              labelText: 'Reason (optional)',
+            decoration: InputDecoration(
+              labelText: context.l10n.settingsReasonOptional,
               labelStyle: TextStyle(color: AppTheme.textSecondary),
               border: OutlineInputBorder(),
             ),
@@ -412,7 +431,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel'),
+              child: Text(context.l10n.settingsCancel),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
@@ -420,7 +439,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                 foregroundColor: AppTheme.background,
               ),
               onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Deny'),
+              child: Text(context.l10n.settingsDeny),
             ),
           ],
         );
@@ -437,7 +456,9 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
       await _load();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Denied ${item.title}')),
+        SnackBar(
+            content: Text(context.l10n
+                .settingsMessageDeniedValue1((item.title).toString()))),
       );
     } catch (e) {
       if (!mounted) return;
@@ -459,11 +480,11 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
     final children = <Widget>[];
 
     if (pending.isEmpty && _waiting.isEmpty && !_waitingBlind) {
-      return const [
+      return [
         SizedBox(height: 120),
         Center(
           child: Text(
-            'No pending requests.',
+            context.l10n.settingsNoPendingRequests,
             style: TextStyle(color: AppTheme.textSecondary),
           ),
         ),
@@ -471,8 +492,8 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
     }
 
     if (pending.isNotEmpty) {
-      children.add(const _SectionHeader(
-        title: 'Needs approval',
+      children.add(_SectionHeader(
+        title: context.l10n.settingsNeedsApproval,
         caption: null,
       ));
       for (var i = 0; i < pending.length; i++) {
@@ -490,15 +511,16 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
     }
 
     if (_waiting.isNotEmpty || _waitingBlind) {
-      children.add(const _SectionHeader(
-        title: 'Saved requests',
-        caption: 'Delivery progress and requests that need attention.',
+      children.add(_SectionHeader(
+        title: context.l10n.settingsSavedRequests,
+        caption:
+            context.l10n.settingsDeliveryProgressAndRequestsThatNeedAttention,
       ));
       if (_waitingBlind) {
-        children.add(const Padding(
+        children.add(Padding(
           padding: EdgeInsets.fromLTRB(16, 4, 16, 12),
           child: Text(
-            'Couldn’t check what the server is retrying. Pull to refresh.',
+            context.l10n.settingsCouldnTCheckWhatTheServerIsRetrying,
             style: TextStyle(color: AppTheme.error, fontSize: 12),
           ),
         ));
@@ -518,12 +540,12 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Approvals'),
+        title: Text(context.l10n.settingsApprovals),
         actions: [
           TextButton.icon(
             onPressed: () => context.push('/approvals/history'),
             icon: const Icon(Icons.history),
-            label: const Text('History'),
+            label: Text(context.l10n.settingsHistory),
           ),
           const SizedBox(width: 8),
         ],
@@ -549,7 +571,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                                 const SizedBox(height: 12),
                                 ElevatedButton(
                                     onPressed: _load,
-                                    child: const Text('Retry')),
+                                    child: Text(context.l10n.settingsRetry)),
                               ],
                             ),
                           ),
@@ -630,13 +652,14 @@ class _WaitingTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final detailRoute = item.detailRoute;
-    final waited = _relativeTime(item.requestedAt);
+    final waited = _relativeTime(context, item.requestedAt);
     // Absent is not "never tried" — the server restarted and cannot vouch for
     // the attempt its predecessor made. Say that, rather than leaving a blank
     // that reads as nothing having happened.
     final lastTried = item.lastAttemptAt == null
-        ? 'last attempt unknown'
-        : 'last tried ${_relativeTime(item.lastAttemptAt)}';
+        ? context.l10n.settingsLastAttemptUnknown
+        : context.l10n.settingsMessageLastTriedValue1(
+            (_relativeTime(context, item.lastAttemptAt)).toString());
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       onTap: detailRoute == null ? null : () => context.push(detailRoute),
@@ -670,7 +693,7 @@ class _WaitingTile extends StatelessWidget {
         children: [
           const SizedBox(height: 2),
           Text(
-            item.requestedByLabel,
+            settingsPendingRequestedBy(context, item),
             style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
           const SizedBox(height: 4),
@@ -683,7 +706,11 @@ class _WaitingTile extends StatelessWidget {
                 const SizedBox(width: 5),
                 Expanded(
                   child: Text(
-                    item.waitDescription ?? 'Waiting for the library',
+                    (item.waitDescription == null
+                            ? null
+                            : settingsModelLabel(
+                                context, item.waitDescription!)) ??
+                        context.l10n.settingsWaitingForTheLibrary,
                     style: const TextStyle(
                       color: AppTheme.requested,
                       fontSize: 12,
@@ -710,13 +737,19 @@ class _WaitingTile extends StatelessWidget {
             spacing: 6,
             runSpacing: 6,
             children: [
-              _waitingChip(item.mediaLabel),
+              _waitingChip(settingsModelLabel(context, item.mediaLabel)),
               if (item.isBook && item.bookFormat.isNotEmpty)
-                _waitingChip(
-                    item.requestedBookFormat?.label ?? 'Unsupported format'),
+                _waitingChip((item.requestedBookFormat == null
+                        ? null
+                        : browseLabel(
+                            context, item.requestedBookFormat!.label)) ??
+                    context.l10n.settingsUnsupportedFormat),
               if (item.isBook && item.instanceName.isNotEmpty)
-                _waitingChip('Library: ${item.instanceName}'),
-              if (waited.isNotEmpty) _waitingChip('Waiting since $waited'),
+                _waitingChip(context.l10n.settingsMessageLibraryValue1(
+                    (item.instanceName).toString())),
+              if (waited.isNotEmpty)
+                _waitingChip(context.l10n
+                    .settingsMessageWaitingSinceValue1((waited).toString())),
               _waitingChip(lastTried),
             ],
           ),
@@ -745,13 +778,15 @@ Widget _waitingChip(String label) {
   );
 }
 
-String _relativeTime(DateTime? date) {
+String _relativeTime(BuildContext context, DateTime? date) {
   if (date == null) return '';
   final diff = DateTime.now().difference(date.toLocal());
-  if (diff.inMinutes < 1) return 'just now';
-  if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-  if (diff.inHours < 24) return '${diff.inHours}h ago';
-  return '${diff.inDays}d ago';
+  if (diff.inMinutes < 1) return context.l10n.settingsJustNow;
+  if (diff.inMinutes < 60)
+    return context.l10n.settingsMessageValue1MAgo((diff.inMinutes).toString());
+  if (diff.inHours < 24)
+    return context.l10n.settingsMessageValue1HAgo((diff.inHours).toString());
+  return context.l10n.settingsMessageValue1DAgo((diff.inDays).toString());
 }
 
 class _PendingTile extends StatelessWidget {
@@ -810,7 +845,7 @@ class _PendingTile extends StatelessWidget {
         children: [
           const SizedBox(height: 2),
           Text(
-            item.requestedByLabel,
+            settingsPendingRequestedBy(context, item),
             style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
           // Most rows are a plain yes/no and say nothing here. A row whose add
@@ -818,7 +853,7 @@ class _PendingTile extends StatelessWidget {
           // so Approve got pressed, failed, and left no idea what to do next.
           if (item.isCatalogRetired) ...[
             const SizedBox(height: 4),
-            const Text('Needs attention',
+            Text(context.l10n.settingsNeedsAttention,
                 style: TextStyle(color: AppTheme.requested)),
             CatalogRequestPanel(
                 mediaType: item.mediaType,
@@ -843,7 +878,7 @@ class _PendingTile extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        failure.reason,
+                        settingsModelLabel(context, failure.reason),
                         style: const TextStyle(
                           color: AppTheme.requested,
                           fontSize: 12,
@@ -851,7 +886,7 @@ class _PendingTile extends StatelessWidget {
                         ),
                       ),
                       Text(
-                        failure.action,
+                        settingsModelLabel(context, failure.action),
                         style: const TextStyle(
                           color: AppTheme.textSecondary,
                           fontSize: 12,
@@ -869,12 +904,19 @@ class _PendingTile extends StatelessWidget {
             spacing: 6,
             runSpacing: 6,
             children: [
-              _chip(item.mediaLabel),
-              if (showScope) _chip(SeasonScope.describe(item.seasonScope)),
+              _chip(settingsModelLabel(context, item.mediaLabel)),
+              if (showScope)
+                _chip(browseLabel(
+                    context, SeasonScope.describe(item.seasonScope))),
               if (showBookFormat)
-                _chip(item.requestedBookFormat?.label ?? 'Unsupported format'),
+                _chip((item.requestedBookFormat == null
+                        ? null
+                        : browseLabel(
+                            context, item.requestedBookFormat!.label)) ??
+                    context.l10n.settingsUnsupportedFormat),
               if ((item.isBook || item.isMusic) && item.instanceName.isNotEmpty)
-                _chip('Library: ${item.instanceName}'),
+                _chip(context.l10n.settingsMessageLibraryValue1(
+                    (item.instanceName).toString())),
             ],
           ),
         ],
@@ -892,7 +934,7 @@ class _PendingTile extends StatelessWidget {
             IconButton(
               icon: const Icon(Icons.replay),
               color: AppTheme.requested,
-              tooltip: 'Try again',
+              tooltip: context.l10n.settingsTryAgain,
               onPressed: onWait,
             )
           else
@@ -900,8 +942,8 @@ class _PendingTile extends StatelessWidget {
               icon: const Icon(Icons.check_circle_outline),
               color: AppTheme.available,
               tooltip: item.isBook && item.requestedBookFormat == null
-                  ? 'Unsupported book format'
-                  : 'Approve',
+                  ? context.l10n.settingsUnsupportedBookFormat
+                  : context.l10n.settingsApprove,
               onPressed: item.isBook && item.requestedBookFormat == null
                   ? null
                   : onApprove,
@@ -909,7 +951,7 @@ class _PendingTile extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.cancel_outlined),
             color: AppTheme.error,
-            tooltip: 'Deny',
+            tooltip: context.l10n.settingsDeny,
             onPressed: onDeny,
           ),
         ],
