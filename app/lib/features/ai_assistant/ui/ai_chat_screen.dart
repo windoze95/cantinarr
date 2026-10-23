@@ -1,3 +1,5 @@
+import 'ai_chat_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -149,9 +151,9 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         leading: IconButton(
           icon: const Icon(Icons.close),
           onPressed: _exitAssistant,
-          tooltip: 'Exit assistant',
+          tooltip: context.l10n.aiExitAssistant,
         ),
-        title: const Text('AI Assistant'),
+        title: Text(context.l10n.aiAssistant),
       ),
       body: Center(
         child: Padding(
@@ -167,8 +169,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                   color: AppTheme.accent,
                 ),
                 const SizedBox(height: 16),
-                const Text(
-                  'AI Assistant',
+                Text(
+                  context.l10n.aiAssistant,
                   style: TextStyle(
                     color: AppTheme.textPrimary,
                     fontSize: 24,
@@ -200,7 +202,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                       ref.invalidate(aiSettingsProvider);
                     },
                     icon: const Icon(Icons.tune_rounded, size: 18),
-                    label: const Text('Set up AI access'),
+                    label: Text(context.l10n.aiSetupAccess),
                   ),
                 ],
               ],
@@ -213,46 +215,40 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
   String _unavailableCopy(AiSettings? settings) {
     if (settings == null) {
-      return 'AI access is not ready. Choose a personal provider or ask your '
-          'server admin about included access.';
+      return context.l10n.aiAccessNotReady;
     }
     final effective = settings.effective;
     if (effective.source == AiAccessSource.personal) {
-      return 'Your selected personal provider needs attention. Cantinarr did '
-          'not fall back to included access.';
+      return context.l10n.aiPersonalNeedsAttention;
     }
     if (settings.shared.granted && !settings.shared.configured) {
-      return 'Your account has included AI access, but the server provider '
-          'still needs admin setup. You can use a personal provider now.';
+      return context.l10n.aiIncludedNeedsSetup;
     }
     if (!settings.shared.granted) {
-      return 'Add your own AI provider, or ask your server admin to include '
-          'AI access for this account.';
+      return context.l10n.aiAddProvider;
     }
-    return 'Included AI is temporarily unavailable. You can use a personal '
-        'provider or ask your server admin to check the provider.';
+    return context.l10n.aiIncludedUnavailable;
   }
 
   Widget _buildChat(BuildContext context, AiChatNotifier notifier,
       AiChatCapabilities? capabilities) {
     final state = notifier.state;
-    final isAdmin =
-        ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
+    final isAdmin = ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
 
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
           icon: Icon(context.canPop() ? Icons.arrow_back : Icons.close),
           onPressed: _exitAssistant,
-          tooltip: 'Exit assistant',
+          tooltip: context.l10n.aiExitAssistant,
         ),
-        title: const Text('AI Assistant'),
+        title: Text(context.l10n.aiAssistant),
         actions: [
           if (isAdmin)
             IconButton(
               icon: const Icon(Icons.manage_history_outlined),
               onPressed: () => context.push('/settings/change-history'),
-              tooltip: 'Configuration history',
+              tooltip: context.l10n.aiConfigurationHistory,
             ),
           IconButton(
             icon: const Icon(Icons.add_comment_outlined),
@@ -260,7 +256,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
               notifier.clearChat();
               ref.invalidate(aiSettingsProvider);
             },
-            tooltip: 'New chat',
+            tooltip: context.l10n.aiNewChat,
           ),
         ],
       ),
@@ -295,10 +291,14 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                     var msg = state.messages[index];
                     // The introduction is display-only. Derive it from this
                     // settings read without rewriting the conversation.
-                    if (index == 0 && msg.excludeFromHistory &&
+                    if (index == 0 &&
+                        msg.excludeFromHistory &&
                         msg.role == ChatRole.assistant) {
-                      msg = msg.copyWith(content:
-                          capabilities?.welcomeMessage ?? aiChatWelcomeFallback);
+                      msg = msg.copyWith(
+                          content: capabilities
+                                  ?.localizedWelcome(context.l10n) ??
+                              context.l10n
+                                  .settingsHeyIMYourCantinarrAssistantWhatWould);
                     }
                     final isLast = index == state.messages.length - 1;
                     return ChatBubble(
@@ -354,8 +354,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                             textInputAction: TextInputAction.send,
                             onSubmitted: (_) => _send(),
                             onTapOutside: (_) => _dismissKeyboard(),
-                            decoration: const InputDecoration(
-                              hintText: 'Ask me anything...',
+                            decoration: InputDecoration(
+                              hintText: context.l10n.aiAskAnything,
                               border: InputBorder.none,
                               contentPadding: EdgeInsets.symmetric(
                                   horizontal: 12, vertical: 10),
@@ -386,7 +386,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
   }
 
   Widget _buildSuggestions(AiChatCapabilities? capabilities) {
-    final suggestions = capabilities?.suggestions ?? const <String>[];
+    final suggestions =
+        capabilities?.localizedSuggestions(context.l10n) ?? const <String>[];
     if (suggestions.isEmpty) return const SizedBox.shrink();
 
     return SizedBox(

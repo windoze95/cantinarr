@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -14,7 +15,8 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-const _instance = ServiceInstance(id: 'one', serviceType: 'tdarr', name: 'Tdarr');
+const _instance =
+    ServiceInstance(id: 'one', serviceType: 'tdarr', name: 'Tdarr');
 const _second = ServiceInstance(id: 'two', serviceType: 'tdarr', name: 'Other');
 // Local wall time keeps date text identical on developer and CI machines.
 const _observed = '2026-09-15T12:00:00';
@@ -39,25 +41,35 @@ class _Adapter implements HttpClientAdapter {
   Future<ResponseBody> fetch(RequestOptions options,
       Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async {
     requests.add(options);
-    final body = answer != null ? await answer!(options) : offline
-        ? {'error': 'Could not reach Tdarr'}
-        : options.path.endsWith('/activity') ? activity
-        : options.path.endsWith('/libraries')
-        ? {'observed_at': _observed, 'items': libraries}
-        : {
-          'observed_at': _observed,
-          'library_id': options.queryParameters['library_id'] ?? '',
-          'total_files': options.queryParameters['library_id'] == 'films' ? 5 : 12,
-          'note': 'Status counts are not an overall completion percentage.',
-          'transcodes': [
-            {'label': 'Queued', 'value': 2},
-            {'label': 'Not required', 'value': 3},
-            {'label': 'Future state', 'value': null},
-          ],
-          'health_checks': <dynamic>[],
-        };
+    final body = answer != null
+        ? await answer!(options)
+        : offline
+            ? {'error': 'Could not reach Tdarr'}
+            : options.path.endsWith('/activity')
+                ? activity
+                : options.path.endsWith('/libraries')
+                    ? {'observed_at': _observed, 'items': libraries}
+                    : {
+                        'observed_at': _observed,
+                        'library_id':
+                            options.queryParameters['library_id'] ?? '',
+                        'total_files':
+                            options.queryParameters['library_id'] == 'films'
+                                ? 5
+                                : 12,
+                        'note':
+                            'Status counts are not an overall completion percentage.',
+                        'transcodes': [
+                          {'label': 'Queued', 'value': 2},
+                          {'label': 'Not required', 'value': 3},
+                          {'label': 'Future state', 'value': null},
+                        ],
+                        'health_checks': <dynamic>[],
+                      };
     return ResponseBody.fromString(jsonEncode(body), offline ? 502 : 200,
-        headers: {'content-type': ['application/json']});
+        headers: {
+          'content-type': ['application/json']
+        });
   }
 
   @override
@@ -65,19 +77,40 @@ class _Adapter implements HttpClientAdapter {
 }
 
 Map<String, dynamic> _activity({bool working = true, bool noNodes = false}) => {
-  'observed_at': _observed,
-  'nodes': noNodes ? <dynamic>[] : [
-    {'id': 'node', 'name': 'Local node', 'paused': false, 'workers': working ? [
-      {'id': 'worker', 'file': r'C:\media\sample.mkv', 'kind': 'Transcode',
-        'compute': 'CPU', 'status': 'Transcoding', 'eta': '', 'flow': true,
-        'progress_percent': null, 'fps': null},
-    ] : <dynamic>[]},
-  ],
-};
+      'observed_at': _observed,
+      'nodes': noNodes
+          ? <dynamic>[]
+          : [
+              {
+                'id': 'node',
+                'name': 'Local node',
+                'paused': false,
+                'workers': working
+                    ? [
+                        {
+                          'id': 'worker',
+                          'file': r'C:\media\sample.mkv',
+                          'kind': 'Transcode',
+                          'compute': 'CPU',
+                          'status': 'Transcoding',
+                          'eta': '',
+                          'flow': true,
+                          'progress_percent': null,
+                          'fps': null
+                        },
+                      ]
+                    : <dynamic>[]
+              },
+            ],
+    };
 
 Future<ProviderContainer> _pump(WidgetTester tester, _Adapter adapter,
-    {bool activity = true, bool shell = false, ValueNotifier<bool>? visible}) async {
-  final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))..httpClientAdapter = adapter;
+    {bool activity = true,
+    bool shell = false,
+    ValueNotifier<bool>? visible,
+    Locale? locale}) async {
+  final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+    ..httpClientAdapter = adapter;
   final container = ProviderContainer(overrides: [
     instanceProvider.overrideWith(_Instances.new),
     backendClientProvider.overrideWithValue(dio),
@@ -85,31 +118,60 @@ Future<ProviderContainer> _pump(WidgetTester tester, _Adapter adapter,
   addTearDown(container.dispose);
   Widget screen = TdarrScreen(activity: activity);
   if (shell) {
-    screen = TdarrModuleShell(currentIndex: activity ? 0 : 1,
-        onTabChanged: (_) {}, child: screen);
+    screen = TdarrModuleShell(
+        currentIndex: activity ? 0 : 1, onTabChanged: (_) {}, child: screen);
   }
-  await tester.pumpWidget(UncontrolledProviderScope(container: container,
-    child: RepaintBoundary(key: const ValueKey('tdarr-golden'),
-      child: MaterialApp(theme: AppTheme.dark, debugShowCheckedModeBanner: false,
-        home: Scaffold(body: visible == null ? screen :
-      ValueListenableBuilder<bool>(valueListenable: visible, child: screen,
-        builder: (_, enabled, child) => TickerMode(enabled: enabled, child: child!))))),
+  await tester.pumpWidget(UncontrolledProviderScope(
+    container: container,
+    child: RepaintBoundary(
+        key: const ValueKey('tdarr-golden'),
+        child: MaterialApp(
+            locale: locale,
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            theme: AppTheme.dark,
+            debugShowCheckedModeBanner: false,
+            home: Scaffold(
+                body: visible == null
+                    ? screen
+                    : ValueListenableBuilder<bool>(
+                        valueListenable: visible,
+                        child: screen,
+                        builder: (_, enabled, child) =>
+                            TickerMode(enabled: enabled, child: child!))))),
   ));
   await tester.pumpAndSettle();
   return container;
 }
 
-Future<void> _dispose(WidgetTester tester) async => tester.pumpWidget(const SizedBox());
+Future<void> _dispose(WidgetTester tester) async =>
+    tester.pumpWidget(const SizedBox());
 
 void main() {
+  testWidgets('French Tdarr localizes worker counts and known statuses',
+      (tester) async {
+    final adapter = _Adapter();
+    await _pump(tester, adapter, locale: const Locale('fr'));
+    expect(find.text('1 processus actif'), findsOneWidget);
+    await _dispose(tester);
+    await _pump(tester, adapter, activity: false, locale: const Locale('fr'));
+    expect(find.text('Dans la file'), findsOneWidget);
+    // Unknown names from a provider remain provider text.
+    expect(find.text('Future state'), findsOneWidget);
+    expect(find.text('Not required'), findsOneWidget);
+    await _dispose(tester);
+  });
+
   for (final activity in [true, false]) {
-    testWidgets('${activity ? "activity" : "libraries"} fits a narrow phone', (tester) async {
+    testWidgets('${activity ? "activity" : "libraries"} fits a narrow phone',
+        (tester) async {
       tester.view.physicalSize = const Size(390, 844);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       final adapter = _Adapter();
       if (activity) {
-        final worker = (adapter.activity['nodes'] as List).first['workers'][0] as Map<String, dynamic>;
+        final worker = (adapter.activity['nodes'] as List).first['workers'][0]
+            as Map<String, dynamic>;
         worker['progress_percent'] = 42.5;
         worker['fps'] = 68;
         worker['eta'] = '0:02:14';
@@ -123,8 +185,10 @@ void main() {
           find.byKey(const ValueKey('tdarr-golden')));
       final capture = boundary.toImage(pixelRatio: 3);
       try {
-        await expectLater(capture, matchesGoldenFile(
-            'goldens/tdarr_${activity ? "activity" : "libraries"}_phone.png'));
+        await expectLater(
+            capture,
+            matchesGoldenFile(
+                'goldens/tdarr_${activity ? "activity" : "libraries"}_phone.png'));
       } finally {
         (await capture).dispose();
       }
@@ -132,7 +196,8 @@ void main() {
     });
   }
 
-  testWidgets('worker progress is step-scoped and missing values stay unknown', (tester) async {
+  testWidgets('worker progress is step-scoped and missing values stay unknown',
+      (tester) async {
     final adapter = _Adapter();
     await _pump(tester, adapter);
     expect(adapter.requests.single.path, '/api/tdarr/one/activity');
@@ -147,7 +212,8 @@ void main() {
     await _dispose(tester);
   });
 
-  testWidgets('stale snapshot survives an outage and retry recovers it', (tester) async {
+  testWidgets('stale snapshot survives an outage and retry recovers it',
+      (tester) async {
     final adapter = _Adapter();
     await _pump(tester, adapter);
     adapter.offline = true;
@@ -166,7 +232,8 @@ void main() {
     await _dispose(tester);
   });
 
-  testWidgets('offline is not confused with an empty node list', (tester) async {
+  testWidgets('offline is not confused with an empty node list',
+      (tester) async {
     final adapter = _Adapter()..offline = true;
     await _pump(tester, adapter);
     expect(find.text('Tdarr unavailable'), findsOneWidget);
@@ -180,14 +247,18 @@ void main() {
     await _dispose(tester);
   });
 
-  testWidgets('libraries fetch only the selection and retain unknown status counts', (tester) async {
+  testWidgets(
+      'libraries fetch only the selection and retain unknown status counts',
+      (tester) async {
     final adapter = _Adapter();
     await _pump(tester, adapter, activity: false);
     expect(adapter.requests.map((r) => r.path), [
-      '/api/tdarr/one/libraries', '/api/tdarr/one/stats',
+      '/api/tdarr/one/libraries',
+      '/api/tdarr/one/stats',
     ]);
     expect(find.text('12 files'), findsOneWidget);
-    expect(find.text('Status counts are not an overall completion percentage.'), findsOneWidget);
+    expect(find.text('Status counts are not an overall completion percentage.'),
+        findsOneWidget);
     expect(find.text('Future state'), findsOneWidget);
     expect(find.text('Unavailable'), findsOneWidget);
     expect(adapter.requests.last.queryParameters, isEmpty);
@@ -197,19 +268,26 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('5 files'), findsOneWidget);
     expect(adapter.requests.last.queryParameters, {'library_id': 'films'});
-    expect(adapter.requests.where((r) => r.queryParameters['library_id'] == 'series'), isEmpty);
+    expect(
+        adapter.requests
+            .where((r) => r.queryParameters['library_id'] == 'series'),
+        isEmpty);
     adapter.libraries = [];
-    final statsReads = adapter.requests.where((r) => r.path.endsWith('/stats')).length;
+    final statsReads =
+        adapter.requests.where((r) => r.path.endsWith('/stats')).length;
     await tester.pump(const Duration(seconds: 30));
     await tester.pumpAndSettle();
     expect(find.text('Showing stale data'), findsOneWidget);
-    expect(find.textContaining('Selected library no longer exists'), findsOneWidget);
+    expect(find.textContaining('Selected library no longer exists'),
+        findsOneWidget);
     expect(find.text('Removed library'), findsOneWidget);
-    expect(adapter.requests.where((r) => r.path.endsWith('/stats')).length, statsReads);
+    expect(adapter.requests.where((r) => r.path.endsWith('/stats')).length,
+        statsReads);
     await _dispose(tester);
   });
 
-  testWidgets('hidden and background views do not poll and resume immediately', (tester) async {
+  testWidgets('hidden and background views do not poll and resume immediately',
+      (tester) async {
     final adapter = _Adapter();
     final visible = ValueNotifier(true);
     addTearDown(visible.dispose);
@@ -230,12 +308,14 @@ void main() {
     await _dispose(tester);
   });
 
-  testWidgets('instance changes discard old data and outstanding responses', (tester) async {
+  testWidgets('instance changes discard old data and outstanding responses',
+      (tester) async {
     final adapter = _Adapter();
     final container = await _pump(tester, adapter);
     final pending = Completer<Map<String, dynamic>>();
-    adapter.answer = (r) => r.path.contains('/one/') ? pending.future :
-        Future.value(_activity(noNodes: true));
+    adapter.answer = (r) => r.path.contains('/one/')
+        ? pending.future
+        : Future.value(_activity(noNodes: true));
     await tester.tap(find.byTooltip('Refresh'));
     await tester.pump();
     container.read(instanceProvider.notifier).setActiveTdarrInstance('two');

@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/auth_messages.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
@@ -67,8 +69,8 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                const Text(
-                  'Paste your connection link to get started',
+                Text(
+                  context.l10n.authPasteConnectionLink,
                   style: TextStyle(color: AppTheme.textSecondary, fontSize: 15),
                   textAlign: TextAlign.center,
                 ),
@@ -77,8 +79,8 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                 // Link input
                 TextField(
                   controller: _linkController,
-                  decoration: const InputDecoration(
-                    labelText: 'Connection Link',
+                  decoration: InputDecoration(
+                    labelText: context.l10n.authConnectionLink,
                     hintText: 'cantinarr://connect?...',
                     prefixIcon: Icon(Icons.link),
                   ),
@@ -93,7 +95,7 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                 if (error != null) ...[
                   const SizedBox(height: 8),
                   Text(
-                    error,
+                    localizeAuthMessage(context, error),
                     style: const TextStyle(color: AppTheme.error, fontSize: 13),
                     textAlign: TextAlign.center,
                   ),
@@ -116,7 +118,7 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                               color: AppTheme.background,
                             ),
                           )
-                        : const Text('Connect'),
+                        : Text(context.l10n.authConnect),
                   ),
                 ),
                 const SizedBox(height: 24),
@@ -124,8 +126,8 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                 // Admin login
                 TextButton(
                   onPressed: _showAdminLogin,
-                  child: const Text(
-                    'Admin Login',
+                  child: Text(
+                    context.l10n.authAdminLogin,
                     style:
                         TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                   ),
@@ -178,7 +180,7 @@ class _AdminLoginDialogState extends ConsumerState<_AdminLoginDialog> {
     } catch (e) {
       setState(() {
         _isLoading = false;
-        _error = 'Login failed. Check URL and password.';
+        _error = context.l10n.authLoginFailed;
       });
     }
   }
@@ -200,14 +202,14 @@ class _AdminLoginDialogState extends ConsumerState<_AdminLoginDialog> {
     });
 
     return AlertDialog(
-      title: const Text('Admin Login'),
+      title: Text(context.l10n.authAdminLogin),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           TextField(
             controller: _serverUrlController,
-            decoration: const InputDecoration(
-              labelText: 'Server URL',
+            decoration: InputDecoration(
+              labelText: context.l10n.authServerUrl,
               hintText: 'https://cantinarr.example.com',
               prefixIcon: Icon(Icons.dns_outlined),
             ),
@@ -219,7 +221,7 @@ class _AdminLoginDialogState extends ConsumerState<_AdminLoginDialog> {
           TextField(
             controller: _passwordController,
             decoration: InputDecoration(
-              labelText: 'Password',
+              labelText: context.l10n.authPassword,
               prefixIcon: const Icon(Icons.lock_outline),
               suffixIcon: IconButton(
                 icon: Icon(
@@ -235,7 +237,7 @@ class _AdminLoginDialogState extends ConsumerState<_AdminLoginDialog> {
           if (_error != null) ...[
             const SizedBox(height: 12),
             Text(
-              _error!,
+              localizeAuthMessage(context, _error!),
               style: const TextStyle(color: AppTheme.error, fontSize: 13),
             ),
           ],
@@ -244,7 +246,7 @@ class _AdminLoginDialogState extends ConsumerState<_AdminLoginDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(context.l10n.authCancel),
         ),
         ElevatedButton(
           onPressed: _isLoading ? null : _login,
@@ -254,7 +256,7 @@ class _AdminLoginDialogState extends ConsumerState<_AdminLoginDialog> {
                   height: 18,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Text('Login'),
+              : Text(context.l10n.authLogin),
         ),
       ],
     );

@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/models/backend_connection.dart';
@@ -37,9 +38,9 @@ Future<String?> confirmRequestLibrary(
   String? libraryNote,
 }) async {
   if (libraries.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text(
-            'No request library is assigned. An administrator can update assignments in Settings > Users.')));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(context.l10n
+            .browseNoRequestLibraryIsAssignedAnAdministratorCanUpdateAssignmentsInSettingsUsers)));
     return null;
   }
   if (libraries.length == 1 && !confirmSingle) return libraries.single.id;
@@ -58,6 +59,7 @@ Future<String?> confirmRequestLibrary(
   return result?.instanceId;
 }
 
-String requestLibraryName(List<LibraryChoice> libraries, String? id) =>
+String requestLibraryName(
+        BuildContext context, List<LibraryChoice> libraries, String? id) =>
     libraries.where((library) => library.id == id).firstOrNull?.name ??
-    'Selected library';
+    context.l10n.browseSelectedLibrary;

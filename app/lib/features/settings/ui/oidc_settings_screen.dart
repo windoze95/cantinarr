@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5,10 +6,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../auth/logic/auth_provider.dart';
 
-String oidcError(Object error) {
+String oidcError(Object error, {BuildContext? context}) {
   if (error is DioException && error.response?.data is Map) {
     return (error.response!.data as Map)['error']?.toString() ??
-        'Single sign-on could not be completed.';
+        (context?.l10n ?? lookupAppLocalizations(const Locale('en')))
+            .settingsSingleSignOnCouldNotBeCompleted;
   }
   return error.toString().replaceFirst('Bad state: ', '');
 }
@@ -82,7 +84,7 @@ class _OIDCSettingsScreenState extends ConsumerState<OIDCSettingsScreen> {
         _error = null;
       });
     } catch (e) {
-      if (mounted) setState(() => _error = oidcError(e));
+      if (mounted) setState(() => _error = oidcError(e, context: context));
     }
   }
 
@@ -114,7 +116,7 @@ class _OIDCSettingsScreenState extends ConsumerState<OIDCSettingsScreen> {
       });
       return true;
     } catch (e) {
-      if (mounted) setState(() => _error = oidcError(e));
+      if (mounted) setState(() => _error = oidcError(e, context: context));
       return false;
     }
   }
@@ -132,7 +134,7 @@ class _OIDCSettingsScreenState extends ConsumerState<OIDCSettingsScreen> {
         await ref.read(authProvider.notifier).startSSO(conn.serverUrl,
             purpose: 'test', externalOrigin: callback.origin);
       } else {
-        var message = 'Single sign-on settings saved.';
+        var message = context.l10n.settingsSingleSignOnSettingsSaved;
         if (action == 'validate') {
           final result = await _request(method: 'POST', suffix: '/validate');
           message = result['message'] as String;
@@ -143,7 +145,7 @@ class _OIDCSettingsScreenState extends ConsumerState<OIDCSettingsScreen> {
         }
       }
     } catch (e) {
-      if (mounted) setState(() => _error = oidcError(e));
+      if (mounted) setState(() => _error = oidcError(e, context: context));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -180,7 +182,7 @@ class _OIDCSettingsScreenState extends ConsumerState<OIDCSettingsScreen> {
       );
 
   Widget _buildPage(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Single sign-on')),
+        appBar: AppBar(title: Text(context.l10n.settingsSingleSignOn)),
         body: Align(
             alignment: Alignment.topCenter,
             child: ConstrainedBox(
@@ -191,25 +193,27 @@ class _OIDCSettingsScreenState extends ConsumerState<OIDCSettingsScreen> {
                       style: TextStyle(
                           color: Theme.of(context).colorScheme.error)),
                   TextButton(
-                      onPressed: _load, child: const Text('Reload settings'))
+                      onPressed: _load,
+                      child: Text(context.l10n.settingsReloadSettings))
                 ],
                 if (_config == null && _error == null)
                   const Center(child: CircularProgressIndicator()),
                 if (_config != null) ...[
-                  const Text(
-                      'Use one OpenID Connect provider to sign in. Cantinarr continues to manage accounts, roles and access.'),
-                  _switch('enabled', 'Enable single sign-on',
-                      'Show the provider on the sign-in screen.'),
-                  _field('label', 'Provider label'),
-                  _field('issuer', 'Issuer URL',
-                      helper:
-                          'The provider’s HTTPS issuer address, including its realm or application path.'),
-                  _field('client_id', 'Client ID'),
-                  _field('client_secret', 'Client secret',
+                  Text(
+                      context.l10n.settingsUseOneOpenidConnectProviderToSignIn),
+                  _switch('enabled', context.l10n.settingsEnableSingleSignOn,
+                      context.l10n.settingsShowTheProviderOnTheSignInScreen),
+                  _field('label', context.l10n.settingsProviderLabel),
+                  _field('issuer', context.l10n.settingsIssuerUrl,
+                      helper: context.l10n
+                          .settingsTheProviderSHttpsIssuerAddressIncludingIts),
+                  _field('client_id', context.l10n.settingsClientId),
+                  _field('client_secret', context.l10n.settingsClientSecret,
                       secret: true,
                       helper: _config!['has_secret'] == true
-                          ? 'A secret is saved. Leave blank to keep it.'
-                          : 'Optional for a public client. Stored encrypted on the server.'),
+                          ? context.l10n.settingsASecretIsSavedLeaveBlankToKeep
+                          : context.l10n
+                              .settingsOptionalForAPublicClientStoredEncryptedOn),
                   if (_config!['has_secret'] == true)
                     TextButton(
                         onPressed: _busy
@@ -218,55 +222,70 @@ class _OIDCSettingsScreenState extends ConsumerState<OIDCSettingsScreen> {
                                 setState(() => _config!['client_secret'] = '');
                                 await _run('save');
                               },
-                        child: const Text('Remove saved client secret')),
-                  const Text('Registered callback',
+                        child:
+                            Text(context.l10n.settingsRemoveSavedClientSecret)),
+                  Text(context.l10n.settingsRegisteredCallback,
                       style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
-                  SelectableText(
-                      (_config!['callback_url'] as String?)?.isNotEmpty == true
-                          ? _config!['callback_url'] as String
-                          : 'Set an HTTPS External Address in Settings first.'),
+                  SelectableText((_config!['callback_url'] as String?)
+                              ?.isNotEmpty ==
+                          true
+                      ? _config!['callback_url'] as String
+                      : context.l10n
+                          .settingsSetAnHttpsExternalAddressInSettingsFirst),
                   TextButton.icon(
                       onPressed: () => Clipboard.setData(ClipboardData(
                           text: _config!['callback_url'] as String? ?? '')),
                       icon: const Icon(Icons.copy),
-                      label: const Text('Copy callback')),
+                      label: Text(context.l10n.settingsCopyCallback)),
                   const SizedBox(height: 12),
-                  _field('additional_scopes', 'Additional scopes',
-                      helper:
-                          'openid profile email are always requested. Separate additional scopes with spaces.'),
-                  _field('group_claim', 'Group claim'),
-                  _field('allowed_groups', 'Allowed groups',
+                  _field('additional_scopes',
+                      context.l10n.settingsAdditionalScopes,
+                      helper: context.l10n
+                          .settingsOpenidProfileEmailAreAlwaysRequestedSeparateAdditional),
+                  _field('group_claim', context.l10n.settingsGroupClaim),
+                  _field('allowed_groups', context.l10n.settingsAllowedGroups,
                       lines: 3,
-                      helper:
-                          'Optional. One exact group name per line. A user must belong to at least one; missing or malformed groups deny sign-in.'),
-                  _switch('auto_create', 'Create accounts automatically',
-                      'Off by default. New identities become ordinary users. Existing accounts must be explicitly linked.'),
-                  _switch('use_proxy', 'Use outbound proxy',
-                      'Use the server’s outbound proxy for discovery, keys, token exchange and UserInfo. Direct connections are the default.'),
-                  _switch('sso_only', 'Require single sign-on',
-                      'Saving this signs out regular users with local sessions. Invitations also require SSO. Administrators keep local recovery access.'),
-                  const Text(
-                      'Before requiring SSO, complete Test sign-in with the saved configuration and give at least one administrator a local password. Turn off this requirement before changing provider settings.'),
+                      helper: context
+                          .l10n.settingsOptionalOneExactGroupNamePerLineA),
+                  _switch(
+                      'auto_create',
+                      context.l10n.settingsCreateAccountsAutomatically,
+                      context.l10n
+                          .settingsOffByDefaultNewIdentitiesBecomeOrdinaryUsers),
+                  _switch(
+                      'use_proxy',
+                      context.l10n.settingsUseOutboundProxy,
+                      context
+                          .l10n.settingsUseTheServerSOutboundProxyForDiscovery),
+                  _switch(
+                      'sso_only',
+                      context.l10n.settingsRequireSingleSignOn,
+                      context.l10n
+                          .settingsSavingThisSignsOutRegularUsersWithLocal),
+                  Text(context
+                      .l10n.settingsBeforeRequiringSsoCompleteTestSignInWith),
                   const SizedBox(height: 12),
                   Text(_config!['tested'] == true
-                      ? 'The saved configuration passed Test sign-in.'
-                      : 'The saved configuration has not passed Test sign-in.'),
+                      ? context
+                          .l10n.settingsTheSavedConfigurationPassedTestSignIn
+                      : context.l10n
+                          .settingsTheSavedConfigurationHasNotPassedTestSign),
                   const SizedBox(height: 20),
                   Wrap(spacing: 12, runSpacing: 12, children: [
                     FilledButton(
                         onPressed: _busy ? null : () => _run('save'),
-                        child: const Text('Save settings')),
+                        child: Text(context.l10n.settingsSaveSettings)),
                     OutlinedButton(
                         onPressed: _busy ? null : () => _run('validate'),
-                        child: const Text('Validate discovery')),
+                        child: Text(context.l10n.settingsValidateDiscovery)),
                     OutlinedButton(
                         onPressed: _busy ? null : () => _run('test'),
-                        child: const Text('Test sign-in')),
+                        child: Text(context.l10n.settingsTestSignIn)),
                   ]),
                   const SizedBox(height: 12),
-                  const Text(
-                      'Test sign-in saves these settings and opens your browser. It never creates or links an account. If you close the browser, your current session stays signed in.'),
+                  Text(context
+                      .l10n.settingsTestSignInSavesTheseSettingsAndOpens),
                 ],
               ]),
             )),

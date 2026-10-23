@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -57,8 +58,10 @@ class CredentialSection extends StatelessWidget {
               ),
               child: Text(
                 isConfigured
-                    ? 'Configured'
-                    : (builtinActive ? 'Built-in key' : 'Not set'),
+                    ? context.l10n.settingsConfigured
+                    : (builtinActive
+                        ? context.l10n.settingsBuiltInKey
+                        : context.l10n.settingsNotSet),
                 style: TextStyle(
                   color: isConfigured || builtinActive
                       ? AppTheme.available
@@ -87,7 +90,9 @@ class CredentialSection extends StatelessWidget {
           controller: controller,
           obscureText: true,
           decoration: InputDecoration(
-            hintText: isConfigured ? 'Enter new value to replace' : hint,
+            hintText: isConfigured
+                ? context.l10n.settingsEnterNewValueToReplace
+                : hint,
             isDense: true,
           ),
         ),

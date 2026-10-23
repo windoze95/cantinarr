@@ -145,7 +145,10 @@ settings_source = 'app/lib/features/settings/data/settings_search_index.dart'
 settings = (ROOT / settings_source).read_text()
 screens = {}
 setting_count = 0
-for block in settings.split('SettingsSearchEntry(')[1:]:
+# Only catalog declarations describe documented controls. Runtime localized
+# copies retain those entries' IDs and do not add settings of their own.
+registry = settings[settings.index('const List<SettingsSearchEntry> _rootEntries'): ]
+for block in registry.split('SettingsSearchEntry(')[1:]:
     if not re.search(r'^\s+title:', block, re.M):
         continue
     def value(key):

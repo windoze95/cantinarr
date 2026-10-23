@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/models/app_module.dart';
@@ -32,12 +33,17 @@ class DownloadsModuleShell extends ConsumerWidget {
         (ref.watch(downloadsPreferencesProvider).valueOrNull?.content ?? false);
 
     return ModuleScaffold(
-      appBar: admin && (currentIndex == 1 || !content) && instanceState.downloadInstances.length > 1
+      appBar: admin &&
+              (currentIndex == 1 || !content) &&
+              instanceState.downloadInstances.length > 1
           ? AppBar(
               title: InstanceDropdown(
                 instances: instanceState.downloadInstances,
                 activeInstanceId: instanceState.activeDownloadInstanceId,
-                aggregateOption: (id: allDownloadInstancesId, label: 'All'),
+                aggregateOption: (
+                  id: allDownloadInstancesId,
+                  label: context.l10n.adminAll
+                ),
                 onChanged: (id) => ref
                     .read(instanceProvider.notifier)
                     .setActiveDownloadInstance(id),

@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -42,14 +43,14 @@ class AttentionMenuVisibilitySwitch extends ConsumerWidget {
     return ListTile(
       leading: Icon(_icon, color: AppTheme.textSecondary),
       title: Text(
-        _title,
+        _title(context),
         style: const TextStyle(
           color: AppTheme.textPrimary,
           fontWeight: FontWeight.w500,
         ),
       ),
       subtitle: Text(
-        _subtitle,
+        _subtitle(context),
         style: const TextStyle(
           color: AppTheme.textSecondary,
           fontSize: 13,
@@ -84,22 +85,20 @@ class AttentionMenuVisibilitySwitch extends ConsumerWidget {
             .set(value),
       };
 
-  String get _title => switch (item) {
-        AttentionMenuItem.approvals => 'Approvals',
-        AttentionMenuItem.issues => 'Issues',
-        AttentionMenuItem.agentFixes => 'Agent fixes',
-        AttentionMenuItem.profileApprovals => 'Profile approvals',
+  String _title(BuildContext context) => switch (item) {
+        AttentionMenuItem.approvals => context.l10n.shellApprovals,
+        AttentionMenuItem.issues => context.l10n.shellIssues,
+        AttentionMenuItem.agentFixes => context.l10n.shellAgentFixes,
+        AttentionMenuItem.profileApprovals =>
+          context.l10n.shellProfileApprovals,
       };
 
-  String get _subtitle => switch (item) {
-        AttentionMenuItem.approvals =>
-          'Only show in the menu when requests are pending',
-        AttentionMenuItem.issues =>
-          'Only show in the menu when something needs attention or tracking',
-        AttentionMenuItem.agentFixes =>
-          'Only show in the menu when proposals await review',
+  String _subtitle(BuildContext context) => switch (item) {
+        AttentionMenuItem.approvals => context.l10n.commonPendingRequestsMenu,
+        AttentionMenuItem.issues => context.l10n.commonActiveIssuesMenu,
+        AttentionMenuItem.agentFixes => context.l10n.commonPendingProposalsMenu,
         AttentionMenuItem.profileApprovals =>
-          'Only show in the menu when changes await a decision',
+          context.l10n.commonPendingChangesMenu,
       };
 
   IconData get _icon => switch (item) {

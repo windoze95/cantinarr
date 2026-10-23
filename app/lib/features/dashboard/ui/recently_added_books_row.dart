@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -43,7 +45,9 @@ class RecentlyAddedBooksRow extends ConsumerWidget {
     // check can tell an unreachable library from a genuinely empty one. Do
     // not gate on `owned.isLoading` — that would make the row flicker in and
     // out on every refresh.
-    if (recent.hasError || owned.hasError || (books.isEmpty && !recent.isLoading)) {
+    if (recent.hasError ||
+        owned.hasError ||
+        (books.isEmpty && !recent.isLoading)) {
       return const SizedBox.shrink();
     }
 
@@ -74,7 +78,7 @@ class RecentlyAddedBooksRow extends ConsumerWidget {
             padding: EdgeInsets.symmetric(
               horizontal: viewportWidth >= 900 ? 24 : 16,
             ),
-            child: const SectionHeader(title: 'Recently Added'),
+            child: SectionHeader(title: context.l10n.browseRecentlyAdded),
           ),
           const SizedBox(height: 12),
           HorizontalItemRow<RecentBook>(
@@ -84,21 +88,22 @@ class RecentlyAddedBooksRow extends ConsumerWidget {
             itemBuilder: (book) {
               final cover = chaptarrImageSource(ref, book.cover, instanceId);
               final canOpen = book.foreignBookId.trim().isNotEmpty;
-              final status =
-                  buildRecentBookStatus(byForeignBookId[book.foreignBookId.trim()]);
+              final status = buildRecentBookStatus(
+                  byForeignBookId[book.foreignBookId.trim()]);
               return MediaCard(
                 id: book.bookId,
                 title: book.title,
                 posterPath: cover?.url,
                 posterHeaders: cover?.headers,
                 placeholderIcon: Icons.menu_book,
-                subtitle: status?.subtitle ?? book.formatLabel,
+                subtitle: browseNullableLabel(
+                    context, status?.subtitle ?? book.formatLabel),
                 // D-02: a null status here is the correct rendering for an
                 // undetermined ownership state — MediaCard already skips its
                 // badge entirely when the label is null, and substituting
                 // any literal label would reintroduce the exact defect
                 // BOOK-01 removes.
-                statusLabel: status?.label,
+                statusLabel: browseNullableLabel(context, status?.label),
                 statusColor: status?.color,
                 width: cardWidth,
                 onTap: canOpen

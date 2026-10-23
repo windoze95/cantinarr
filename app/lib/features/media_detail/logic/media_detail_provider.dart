@@ -39,29 +39,22 @@ class MediaDetailState {
     this.similar = const [],
   });
 
-  String get title =>
-      movieDetail?.title ?? tvDetail?.name ?? '';
+  String get title => movieDetail?.title ?? tvDetail?.name ?? '';
 
-  String get tagline =>
-      movieDetail?.tagline ?? tvDetail?.tagline ?? '';
+  String get tagline => movieDetail?.tagline ?? tvDetail?.tagline ?? '';
 
-  String get overview =>
-      movieDetail?.overview ?? tvDetail?.overview ?? '';
+  String get overview => movieDetail?.overview ?? tvDetail?.overview ?? '';
 
-  String? get posterPath =>
-      movieDetail?.posterPath ?? tvDetail?.posterPath;
+  String? get posterPath => movieDetail?.posterPath ?? tvDetail?.posterPath;
 
   String? get backdropPath =>
       movieDetail?.backdropPath ?? tvDetail?.backdropPath;
 
-  double? get voteAverage =>
-      movieDetail?.voteAverage ?? tvDetail?.voteAverage;
+  double? get voteAverage => movieDetail?.voteAverage ?? tvDetail?.voteAverage;
 
-  List<Genre> get genres =>
-      movieDetail?.genres ?? tvDetail?.genres ?? [];
+  List<Genre> get genres => movieDetail?.genres ?? tvDetail?.genres ?? [];
 
-  String? get trailerKey =>
-      movieDetail?.trailerKey ?? tvDetail?.trailerKey;
+  String? get trailerKey => movieDetail?.trailerKey ?? tvDetail?.trailerKey;
 
   List<Season> get seasons => tvDetail?.seasons ?? [];
 
@@ -80,9 +73,10 @@ class MediaDetailState {
           .take(5)
           .toList();
 
-  List<TitleFact> facts({DateTime? now}) => switch ((movieDetail, tvDetail)) {
+  List<TitleFact> facts({DateTime? now, String? dateLocale}) =>
+      switch ((movieDetail, tvDetail)) {
         (final movie?, _) => movieFacts(movie),
-        (_, final tv?) => tvFacts(tv, now: now),
+        (_, final tv?) => tvFacts(tv, now: now, dateLocale: dateLocale),
         _ => const [],
       };
 
@@ -95,9 +89,7 @@ class MediaDetailState {
         (final movie?, _) => titleLinks(
             type: MediaType.movie, tmdbId: movie.id, imdbId: movie.imdbId),
         (_, final tv?) => titleLinks(
-            type: MediaType.tv,
-            tmdbId: tv.id,
-            imdbId: tv.externalIds?.imdbId),
+            type: MediaType.tv, tmdbId: tv.id, imdbId: tv.externalIds?.imdbId),
         _ => const [],
       };
 

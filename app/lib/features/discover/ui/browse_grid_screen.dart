@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -42,14 +44,15 @@ class BrowseGridScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) => _BrowseGridBody(
-    key: ValueKey(ref.watch(discoverSessionProvider)),
-    query: query,
-    session: ref.watch(browseSessionProvider),
-  );
+        key: ValueKey(ref.watch(discoverSessionProvider)),
+        query: query,
+        session: ref.watch(browseSessionProvider),
+      );
 }
 
 class _BrowseGridBody extends ConsumerStatefulWidget {
-  const _BrowseGridBody({super.key, required this.query, required this.session});
+  const _BrowseGridBody(
+      {super.key, required this.query, required this.session});
   final BrowseQuery query;
   final BrowseSession session;
   @override
@@ -81,7 +84,8 @@ class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
   @override
   void initState() {
     super.initState();
-    _notifier = widget.session.acquire(widget.query)..addListener(_onFeedChanged);
+    _notifier = widget.session.acquire(widget.query)
+      ..addListener(_onFeedChanged);
     _scrollController = ScrollController(
         initialScrollOffset: _notifier.scrollOffset, keepScrollOffset: false)
       ..addListener(_maybeLoadMore);
@@ -103,7 +107,8 @@ class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
     widget.session.touch(_notifier);
     await Future.wait([
       _notifier.refresh(),
-      ref.read(librarySnapshotProvider.notifier)
+      ref
+          .read(librarySnapshotProvider.notifier)
           .refresh(force: true, type: _notifier.query.type),
     ]);
   }
@@ -119,8 +124,8 @@ class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !identical(entry, _notifier)) return;
       if (_scrollController.hasClients) {
-        _scrollController.jumpTo(entry.scrollOffset.clamp(
-            0.0, _scrollController.position.maxScrollExtent));
+        _scrollController.jumpTo(entry.scrollOffset
+            .clamp(0.0, _scrollController.position.maxScrollExtent));
       }
       _refresh();
     });
@@ -140,16 +145,19 @@ class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
   void _onFeedChanged() {
     if (!mounted) return;
     double? anchorOffset;
-    final oldOffset = _scrollController.hasClients ? _scrollController.offset : 0.0;
+    final oldOffset =
+        _scrollController.hasClients ? _scrollController.offset : 0.0;
     // Use the laid-out grid's scroll offset, which excludes filters/padding.
     final grid = _gridKey.currentContext?.findRenderObject();
-    if (grid is RenderSliverGrid && _displayedItems.isNotEmpty &&
+    if (grid is RenderSliverGrid &&
+        _displayedItems.isNotEmpty &&
         !identical(_displayedItems, _notifier.items)) {
-      final index = (grid.constraints.scrollOffset / _rowExtent).floor() * _columns;
+      final index =
+          (grid.constraints.scrollOffset / _rowExtent).floor() * _columns;
       if (index < _displayedItems.length) {
         final anchor = _displayedItems[index];
-        final next = _notifier.items.indexWhere(
-            (item) => item.id == anchor.id && item.mediaType == anchor.mediaType);
+        final next = _notifier.items.indexWhere((item) =>
+            item.id == anchor.id && item.mediaType == anchor.mediaType);
         if (next >= 0) {
           anchorOffset = oldOffset +
               ((next ~/ _columns) - (index ~/ _columns)) * _rowExtent;
@@ -159,7 +167,8 @@ class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
     setState(() {});
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (anchorOffset != null && _scrollController.hasClients &&
+      if (anchorOffset != null &&
+          _scrollController.hasClients &&
           _scrollController.offset == oldOffset) {
         _scrollController.jumpTo(anchorOffset.clamp(
             0.0, _scrollController.position.maxScrollExtent));
@@ -254,20 +263,23 @@ class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
 
   String get _title {
     final query = _notifier.query;
-    if (query.title case final title?) return title;
+    if (query.title case final title?) return browseLabel(context, title);
     final tv = query.type == MediaType.tv;
     return switch (query.feed) {
       BrowseFeed.featured =>
         featuredRowTitle(_notifier.featuredSource ?? '', isTv: tv),
-      BrowseFeed.popular => tv ? 'Popular TV Shows' : 'Popular Movies',
-      BrowseFeed.topRated => 'Top Rated',
-      BrowseFeed.upcoming => 'Coming Soon',
-      BrowseFeed.nowPlaying => 'In Theaters',
-      BrowseFeed.onTheAir => 'Airing This Week',
-      BrowseFeed.anticipated => 'Most Anticipated',
-      BrowseFeed.discover => tv ? 'Browse TV Shows' : 'Browse Movies',
-      BrowseFeed.recommendations => 'Recommended',
-      BrowseFeed.similar => 'Similar',
+      BrowseFeed.popular => tv
+          ? context.l10n.browsePopularTVShows
+          : context.l10n.browsePopularMovies,
+      BrowseFeed.topRated => context.l10n.browseTopRated,
+      BrowseFeed.upcoming => context.l10n.browseComingSoon,
+      BrowseFeed.nowPlaying => context.l10n.browseInTheaters,
+      BrowseFeed.onTheAir => context.l10n.browseAiringThisWeek,
+      BrowseFeed.anticipated => context.l10n.browseMostAnticipated,
+      BrowseFeed.discover =>
+        tv ? context.l10n.browseBrowseTVShows : context.l10n.browseBrowseMovies,
+      BrowseFeed.recommendations => context.l10n.browseRecommended,
+      BrowseFeed.similar => context.l10n.browseSimilar,
     };
   }
 
@@ -276,10 +288,10 @@ class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
   String get _emptyMessage {
     final query = _notifier.query;
     if (!query.feed.isFilterable) {
-      return 'This feed has no titles right now.';
+      return context.l10n.browseThisFeedHasNoTitlesRightNow;
     }
     if (query.filters.isEmpty) {
-      return 'No titles came back for this browse.';
+      return context.l10n.browseNoTitlesCameBackForThisBrowse;
     }
     final genreNames = {for (final genre in _genres) genre.id: genre.name};
     final languageNames = {
@@ -290,12 +302,9 @@ class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
         for (final provider in providers)
           provider.providerId: provider.providerName,
     };
-    final described = query.filters.describe(
-      genreNames,
-      languageNames: languageNames,
-      providerNames: providerNames,
-    );
-    return 'No titles matched $described.';
+    final described = localizedBrowseFilters(context, query.filters, genreNames,
+        languages: languageNames, providers: providerNames);
+    return context.l10n.browseNoTitlesMatchedFilters(described);
   }
 
   @override
@@ -312,7 +321,8 @@ class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
     );
     final isTv = query.type == MediaType.tv;
     final error = _notifier.error;
-    final settled = !_notifier.isLoading && items.isEmpty &&
+    final settled = !_notifier.isLoading &&
+        items.isEmpty &&
         (_notifier.hasLoaded || error != null);
 
     return DiscoverRefresh(
@@ -327,7 +337,8 @@ class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
             final usable = constraints.maxWidth - 2 * horizontalPadding;
             final columns = (usable / BrowseGridScreen.minCardWidth)
                 .floor()
-                .clamp(BrowseGridScreen.minColumns, BrowseGridScreen.maxColumns);
+                .clamp(
+                    BrowseGridScreen.minColumns, BrowseGridScreen.maxColumns);
             final cardWidth =
                 (usable - BrowseGridScreen.columnSpacing * (columns - 1)) /
                     columns;
@@ -347,7 +358,7 @@ class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
                     SliverFillRemaining(
                       hasScrollBody: false,
                       child: FullScreenError(
-                        message: 'These titles could not be loaded.',
+                        message: context.l10n.browseTheseTitlesCouldNotBeLoaded,
                         onRetry: _notifier.load,
                       ),
                     )
@@ -356,10 +367,10 @@ class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
                       hasScrollBody: false,
                       child: _EmptyState(
                         message: _emptyMessage,
-                        onClearFilters: query.feed.isFilterable &&
-                                !query.filters.isEmpty
-                            ? _clearFilters
-                            : null,
+                        onClearFilters:
+                            query.feed.isFilterable && !query.filters.isEmpty
+                                ? _clearFilters
+                                : null,
                       ),
                     )
                   else
@@ -384,20 +395,23 @@ class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
                             return CatalogStatusBuilder(
                               key: ValueKey((item.mediaType, item.id)),
                               item: item,
-                              legacyStatus: libraryStatus[(item.mediaType, item.id)],
+                              legacyStatus:
+                                  libraryStatus[(item.mediaType, item.id)],
                               builder: (status) => MediaCard(
-                              id: item.id,
-                              title: item.title,
-                              posterPath: item.posterPath,
-                              rating: item.voteAverage,
-                              statusLabel: status?.label,
-                              statusColor: status?.color,
-                              subtitle: status?.episodeSubtitle,
-                              is4K: status?.is4K ?? false,
-                              width: cardWidth,
-                              onTap: () => context.push(
-                                '/detail/${item.mediaType.name}/${item.id}',
-                              ),
+                                id: item.id,
+                                title: item.title,
+                                posterPath: item.posterPath,
+                                rating: item.voteAverage,
+                                statusLabel:
+                                    browseNullableLabel(context, status?.label),
+                                statusColor: status?.color,
+                                subtitle: browseNullableLabel(
+                                    context, status?.episodeSubtitle),
+                                is4K: status?.is4K ?? false,
+                                width: cardWidth,
+                                onTap: () => context.push(
+                                  '/detail/${item.mediaType.name}/${item.id}',
+                                ),
                               ),
                             );
                           },
@@ -405,7 +419,8 @@ class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
                         ),
                       ),
                     ),
-                  if (_notifier.isLoading || (!_notifier.hasLoaded && error == null))
+                  if (_notifier.isLoading ||
+                      (!_notifier.hasLoaded && error == null))
                     const SliverToBoxAdapter(
                       child: Padding(
                         padding: EdgeInsets.symmetric(vertical: 24),
@@ -421,12 +436,15 @@ class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
                   const SliverToBoxAdapter(child: SizedBox(height: 24)),
                 ],
               ),
-              if (items.isNotEmpty && (error != null ||
-                  (isTv ? snapshot.seriesFailed : snapshot.moviesFailed)))
+              if (items.isNotEmpty &&
+                  (error != null ||
+                      (isTv ? snapshot.seriesFailed : snapshot.moviesFailed)))
                 Align(
                   alignment: Alignment.bottomCenter,
-                  child: SafeArea(child: ErrorBanner(
-                    message: 'Could not refresh these titles. Showing the last loaded results.',
+                  child: SafeArea(
+                      child: ErrorBanner(
+                    message: context.l10n
+                        .browseCouldNotRefreshTheseTitlesShowingTheLastLoadedResults,
                     onRetry: _refresh,
                   )),
                 ),
@@ -451,14 +469,16 @@ class _BrowseGridScreenState extends ConsumerState<_BrowseGridBody> {
           SectionSortMenu<BrowseSort>(
             options: BrowseSort.values,
             selected: query.sort,
-            labelOf: (sort) => sort.label,
+            labelOf: (sort) => browseLabel(context, sort.label),
             onSelected: _setSort,
-            tooltip: 'Sort titles',
+            tooltip: context.l10n.browseSortTitles,
           ),
           OutlinedButton.icon(
             onPressed: _openFilters,
             icon: const Icon(Icons.tune_rounded, size: 18),
-            label: Text(count == 0 ? 'Filters' : 'Filters ($count)'),
+            label: Text(count == 0
+                ? context.l10n.browseFilters
+                : context.l10n.browseFiltersCount(count)),
           ),
         ],
       ),
@@ -484,16 +504,16 @@ class _EmptyState extends StatelessWidget {
             const Icon(Icons.search_off_rounded,
                 size: 48, color: AppTheme.textMuted),
             const SizedBox(height: 16),
-            Text('Nothing matched',
+            Text(context.l10n.browseNothingMatched,
                 style: textTheme.titleLarge, textAlign: TextAlign.center),
             const SizedBox(height: 8),
-            Text(message,
+            Text(browseLabel(context, message),
                 style: textTheme.bodyMedium, textAlign: TextAlign.center),
             if (onClearFilters != null) ...[
               const SizedBox(height: 20),
               OutlinedButton(
                 onPressed: onClearFilters,
-                child: const Text('Clear filters'),
+                child: Text(context.l10n.browseClearFilters),
               ),
             ],
           ],

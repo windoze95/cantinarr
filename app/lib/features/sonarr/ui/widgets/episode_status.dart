@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../data/sonarr_models.dart';
@@ -12,21 +13,31 @@ typedef EpisodeStatus = ({String text, Color color});
 /// 3. no file, not yet aired          -> "Unaired"  (info/ember)
 /// 4. has file, below quality cutoff  -> "{quality} — {size}"  (orange)
 /// 5. has file, meets cutoff          -> "{quality} — {size}"  (green)
-EpisodeStatus episodeStatusLine(SonarrEpisode episode, SonarrQueueItem? queue) {
+EpisodeStatus episodeStatusLine(SonarrEpisode episode, SonarrQueueItem? queue,
+    {AppLocalizations? strings}) {
   if (queue != null) {
     final pct = (queue.progress * 100).round();
     return (
-      text: '$pct% — ${_downloadPhrase(queue)}',
+      text: '$pct% — ${_downloadPhrase(queue, strings: strings)}',
       color: sonarrQueueStatusColor(queue),
     );
   }
   if (!episode.hasFile) {
     return episode.hasAired
-        ? (text: 'Missing', color: AppTheme.error)
-        : (text: 'Unaired', color: AppTheme.downloading);
+        ? (
+            text: (strings ?? lookupAppLocalizations(const Locale('en')))
+                .adminMissing,
+            color: AppTheme.error
+          )
+        : (
+            text: (strings ?? lookupAppLocalizations(const Locale('en')))
+                .adminUnaired,
+            color: AppTheme.downloading
+          );
   }
   final file = episode.episodeFile;
-  final quality = file?.quality ?? 'Downloaded';
+  final quality = file?.quality ??
+      (strings ?? lookupAppLocalizations(const Locale('en'))).adminDownloaded;
   final size =
       (file != null && file.size > 0) ? ' — ${file.sizeFormatted}' : '';
   final cutoffMet = !(file?.qualityCutoffNotMet ?? false);
@@ -38,32 +49,42 @@ EpisodeStatus episodeStatusLine(SonarrEpisode episode, SonarrQueueItem? queue) {
 
 /// A friendly phrase for an active download's state, e.g.
 /// "Downloaded — waiting to import".
-String _downloadPhrase(SonarrQueueItem q) {
+String _downloadPhrase(SonarrQueueItem q, {AppLocalizations? strings}) {
   switch (q.trackedDownloadState) {
     case 'importPending':
     case 'importBlocked':
-      return 'Downloaded — waiting to import';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminDownloadedWaitingToImport;
     case 'importing':
-      return 'Importing';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminImporting;
     case 'imported':
-      return 'Imported';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminImported;
     case 'failedPending':
     case 'failed':
-      return 'Failed';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminFailed2;
   }
-  if (q.trackedDownloadStatus == 'error') return 'Error';
+  if (q.trackedDownloadStatus == 'error')
+    return (strings ?? lookupAppLocalizations(const Locale('en'))).adminError;
   switch (q.status) {
     case 'downloading':
-      return 'Downloading';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminDownloading;
     case 'paused':
-      return 'Paused';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminPaused;
     case 'queued':
-      return 'Queued';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminQueued;
     case 'delay':
-      return 'Pending';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminPending;
     case 'completed':
-      return 'Downloaded';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminDownloaded;
     default:
-      return sonarrQueueStatusLabel(q);
+      return sonarrQueueStatusLabel(q, strings: strings);
   }
 }

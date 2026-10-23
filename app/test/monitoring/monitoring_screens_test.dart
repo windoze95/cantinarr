@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -132,6 +133,7 @@ Future<_FakeAdapter> _pump(
   Widget screen, {
   required List<ServiceInstance> instances,
   required Map<String, Map<String, dynamic>> answers,
+  Locale? locale,
 }) async {
   final adapter = _FakeAdapter(answers);
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
@@ -142,7 +144,12 @@ Future<_FakeAdapter> _pump(
         instanceProvider.overrideWith(() => _Instances(instances)),
         backendClientProvider.overrideWithValue(dio),
       ],
-      child: MaterialApp(theme: AppTheme.dark, home: Scaffold(body: screen)),
+      child: MaterialApp(
+          locale: locale,
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          theme: AppTheme.dark,
+          home: Scaffold(body: screen)),
     ),
   );
   // Screens load after the first frame; settle so the request lands. The
@@ -159,6 +166,43 @@ Future<void> _teardown(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets(
+      'French monitoring translates counts and decisions without changing titles',
+      (tester) async {
+    final adapter = await _pump(tester, const MonitoringActivityScreen(),
+        locale: const Locale('fr'),
+        instances: const [
+          _tracearr
+        ],
+        answers: {
+          '/api/watch-history/tracearr-a/activity': _activityBody([
+            _stream(title: 'Music', mediaType: 'track', server: 'Den'),
+          ]),
+        });
+    expect(find.textContaining('1 flux • '), findsOneWidget);
+    expect(find.text('Lecture directe'), findsOneWidget);
+    expect(find.text('Musique'), findsOneWidget);
+    expect(find.text('Music'), findsOneWidget);
+    expect(find.text('Den'), findsOneWidget);
+    expect(
+        adapter.requests.single.path, '/api/watch-history/tracearr-a/activity');
+    await _teardown(tester);
+  });
+
+  testWidgets('French monitoring uses translated play counts', (tester) async {
+    await _pump(tester, const MonitoringStatsScreen(),
+        locale: const Locale('fr'),
+        instances: const [
+          _tracearr
+        ],
+        answers: {
+          '/api/watch-history/tracearr-a/stats': _statsBody(),
+        });
+    expect(find.text('3 lectures'), findsWidgets);
+    expect(find.text('Heat'), findsOneWidget);
+    await _teardown(tester);
+  });
+
   const emptyCopy =
       'No Tautulli or Tracearr instance configured. Add one from Settings > Add Instance.';
 
@@ -171,8 +215,7 @@ void main() {
       answers: {
         '/api/watch-history/tracearr-a/activity': _activityBody([
           _stream(title: 'Heat', server: 'Den', serverType: 'jellyfin'),
-          _stream(
-              title: 'Hurt', mediaType: 'track', serverType: 'plex'),
+          _stream(title: 'Hurt', mediaType: 'track', serverType: 'plex'),
         ]),
       },
     );
@@ -220,13 +263,14 @@ void main() {
       answers: {
         '/api/watch-history/tracearr-a/history': _historyBody(
           server: 'Den',
-          note: 'The 1 most recent plays across every server Tracearr monitors.',
+          note:
+              'The 1 most recent plays across every server Tracearr monitors.',
         ),
       },
     );
 
-    expect(adapter.requests.single.path,
-        '/api/watch-history/tracearr-a/history');
+    expect(
+        adapter.requests.single.path, '/api/watch-history/tracearr-a/history');
     expect(adapter.requests.single.query['limit'], '50');
     expect(find.textContaining('Den'), findsOneWidget);
     expect(find.textContaining('most recent plays'), findsOneWidget);
@@ -258,8 +302,7 @@ void main() {
       },
     );
 
-    expect(adapter.requests.single.path,
-        '/api/watch-history/tracearr-a/stats');
+    expect(adapter.requests.single.path, '/api/watch-history/tracearr-a/stats');
     expect(adapter.requests.single.query['days'], '30');
     expect(find.text('Based on 1,240 plays since 2 Aug 2026.'), findsOneWidget);
     expect(find.text('Heat'), findsOneWidget);

@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 
 import '../data/media_access_service.dart';
@@ -22,28 +23,34 @@ class VideoAppField extends StatelessWidget {
   Widget build(BuildContext context) {
     final selected = VideoApp.values.any((app) => app.id == value.ios)
         ? value.ios
-        : inheritDefaults ? '' : VideoApp.service.id;
+        : inheritDefaults
+            ? ''
+            : VideoApp.service.id;
     return DropdownButtonFormField<String>(
       key: ValueKey('$serviceType:$selected'),
       initialValue: selected,
       isExpanded: true,
-      decoration: const InputDecoration(labelText: 'iPhone and iPad'),
+      decoration: InputDecoration(labelText: context.l10n.mediaIPhoneAndIPad),
       items: [
         if (inheritDefaults)
-          const DropdownMenuItem(
+          DropdownMenuItem(
             value: '',
-            child: Text('Use admin default', overflow: TextOverflow.ellipsis),
+            child: Text(context.l10n.mediaUseAdminDefault,
+                overflow: TextOverflow.ellipsis),
           ),
         DropdownMenuItem(
           value: VideoApp.service.id,
           child: Text(mediaServerTypeLabel(serviceType)),
         ),
         const DropdownMenuItem(value: 'infuse', child: Text('Infuse')),
-        const DropdownMenuItem(value: 'browser', child: Text('Browser')),
+        DropdownMenuItem(
+            value: 'browser', child: Text(context.l10n.mediaBrowser)),
       ],
-      onChanged: onChanged == null ? null : (id) {
-        if (id != null) onChanged!(VideoApps(ios: id));
-      },
+      onChanged: onChanged == null
+          ? null
+          : (id) {
+              if (id != null) onChanged!(VideoApps(ios: id));
+            },
     );
   }
 }

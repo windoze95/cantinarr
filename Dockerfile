@@ -20,6 +20,10 @@ ARG CANTINARR_E2E_WEB_SEMANTICS=false
 ARG APP_BUILD_NUMBER=
 WORKDIR /app
 COPY app/pubspec.yaml app/pubspec.lock ./
+# pub get generates the locale classes, so its inputs must be present in the
+# dependency layer as well as in the later full source copy.
+COPY app/l10n.yaml ./
+COPY app/lib/l10n/*.arb ./lib/l10n/
 RUN flutter pub get --enforce-lockfile
 COPY app/ .
 RUN flutter build web --release --no-pub \

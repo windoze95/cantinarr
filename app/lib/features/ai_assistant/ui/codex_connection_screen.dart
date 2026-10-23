@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -87,7 +88,7 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _flowError = 'Could not start OpenAI OAuth sign-in. Try again.';
+        _flowError = context.l10n.settingsCouldNotStartOpenaiOauthSignInTry;
       });
     } finally {
       if (mounted) setState(() => _starting = false);
@@ -104,7 +105,7 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
     _expiryTimer = Timer(flow.expiresIn, () {
       if (_flow?.flowId != flow.flowId) return;
       _finishFlowWithError(
-        'That one-time code expired. Start again.',
+        context.l10n.settingsThatOneTimeCodeExpiredStartAgain,
         cancelFlow: flow,
       );
     });
@@ -119,9 +120,9 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
     }
     if (!opened && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Could not open ChatGPT sign-in. Copy the code and try Reopen.',
+            context.l10n.settingsCouldNotOpenChatgptSignInCopyThe,
           ),
         ),
       );
@@ -133,7 +134,7 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
     if (flow == null || _checking) return;
     if (_flowExpiresAt?.isBefore(DateTime.now()) == true) {
       _finishFlowWithError(
-        'That one-time code expired. Start again.',
+        context.l10n.settingsThatOneTimeCodeExpiredStartAgain,
         cancelFlow: flow,
       );
       return;
@@ -147,8 +148,9 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
         case CodexDeviceFlowStatus.pending:
           if (!silent) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Still waiting for approval in ChatGPT.'),
+              SnackBar(
+                content:
+                    Text(context.l10n.settingsStillWaitingForApprovalInChatgpt),
               ),
             );
           }
@@ -173,19 +175,21 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(_isShared
-                    ? 'Shared OpenAI OAuth connected'
-                    : 'Personal OpenAI OAuth connected'),
+                    ? context.l10n.settingsSharedOpenaiOauthConnected
+                    : context.l10n.settingsPersonalOpenaiOauthConnected),
               ),
             );
           }
           return;
         case CodexDeviceFlowStatus.expired:
-          _finishFlowWithError('That one-time code expired. Start again.');
+          _finishFlowWithError(
+              context.l10n.settingsThatOneTimeCodeExpiredStartAgain);
           return;
         case CodexDeviceFlowStatus.failed:
           _finishFlowWithError(
             result.error.isEmpty
-                ? 'ChatGPT did not approve the connection. Start again.'
+                ? context
+                    .l10n.settingsChatgptDidNotApproveTheConnectionStartAgain
                 : result.error,
           );
           ref.invalidate(
@@ -199,8 +203,9 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
     } catch (_) {
       if (!silent && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not check the connection. Try again.'),
+          SnackBar(
+            content:
+                Text(context.l10n.settingsCouldNotCheckTheConnectionTryAgain),
           ),
         );
       }
@@ -262,24 +267,22 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: Text(_isShared
-            ? 'Disconnect shared OpenAI OAuth?'
-            : 'Disconnect personal OpenAI OAuth?'),
+            ? context.l10n.settingsDisconnectSharedOpenaiOauth
+            : context.l10n.settingsDisconnectPersonalOpenaiOauth),
         content: Text(
           _isShared
-              ? 'Included AI will stop working for every user who relies on '
-                  'this shared account. Cantinarr conversations are not deleted.'
-              : 'Cantinarr will forget this personal account connection. If it '
-                  'is your selected provider, AI stays unavailable until you '
-                  'choose another source. Cantinarr conversations are not deleted.',
+              ? context.l10n.settingsIncludedAiWillStopWorkingForEveryUser
+              : context.l10n
+                  .settingsCantinarrWillForgetThisPersonalAccountConnectionIf,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.settingsCancel),
           ),
           ElevatedButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Disconnect'),
+            child: Text(context.l10n.settingsDisconnect),
           ),
         ],
       ),
@@ -301,16 +304,17 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(_isShared
-                ? 'Shared OpenAI OAuth disconnected'
-                : 'Personal OpenAI OAuth disconnected'),
+                ? context.l10n.settingsSharedOpenaiOauthDisconnected
+                : context.l10n.settingsPersonalOpenaiOauthDisconnected),
           ),
         );
       }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not disconnect OpenAI OAuth. Try again.'),
+          SnackBar(
+            content: Text(
+                context.l10n.settingsCouldNotDisconnectOpenaiOauthTryAgain),
           ),
         );
       }
@@ -331,7 +335,7 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
     await Clipboard.setData(ClipboardData(text: code));
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('One-time code copied')),
+        SnackBar(content: Text(context.l10n.settingsOneTimeCodeCopied)),
       );
     }
   }
@@ -346,7 +350,9 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          _isShared ? 'Shared OpenAI (OAuth)' : 'Personal OpenAI (OAuth)',
+          _isShared
+              ? context.l10n.settingsSharedOpenaiOauth
+              : context.l10n.settingsPersonalOpenaiOauth,
         ),
         actions: [
           IconButton(
@@ -356,7 +362,7 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
                   : codexConnectionStatusProvider,
             ),
             icon: const Icon(Icons.refresh),
-            tooltip: 'Refresh connection',
+            tooltip: context.l10n.settingsRefreshConnection,
           ),
         ],
       ),
@@ -409,7 +415,9 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          _isShared ? 'Connect the server account' : 'Connect your own account',
+          _isShared
+              ? context.l10n.settingsConnectTheServerAccount
+              : context.l10n.settingsConnectYourOwnAccount,
           style: const TextStyle(
             color: AppTheme.textPrimary,
             fontSize: 18,
@@ -419,12 +427,9 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
         const SizedBox(height: 6),
         Text(
           _isShared
-              ? 'ChatGPT opens in your browser. The resulting authorization '
-                  'stays encrypted on this server and can power included AI '
-                  'for users you explicitly enable.'
-              : 'ChatGPT opens in your browser and gives your Cantinarr '
-                  'account a private, revocable connection. Your password '
-                  'never passes through Cantinarr.',
+              ? context.l10n
+                  .settingsChatgptOpensInYourBrowserTheResultingAuthorization
+              : context.l10n.settingsChatgptOpensInYourBrowserAndGivesYour,
           style: const TextStyle(color: AppTheme.textSecondary, height: 1.45),
         ),
         const SizedBox(height: 18),
@@ -438,7 +443,9 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
                 )
               : const Icon(Icons.open_in_browser, size: 19),
           label: Text(
-            _isShared ? 'Connect shared OpenAI OAuth' : 'Connect OpenAI OAuth',
+            _isShared
+                ? context.l10n.settingsConnectSharedOpenaiOauth
+                : context.l10n.settingsConnectOpenaiOauth,
           ),
         ),
       ],
@@ -454,7 +461,7 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Row(
+              Row(
                 children: [
                   SizedBox(
                     width: 18,
@@ -466,7 +473,7 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
                   ),
                   SizedBox(width: 10),
                   Text(
-                    'Waiting for ChatGPT approval',
+                    context.l10n.settingsWaitingForChatgptApproval,
                     style: TextStyle(
                       color: AppTheme.textPrimary,
                       fontWeight: FontWeight.w600,
@@ -490,8 +497,8 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            'ONE-TIME CODE',
+                          Text(
+                            context.l10n.settingsOneTimeCode,
                             style: TextStyle(
                               color: AppTheme.textMuted,
                               fontSize: 10,
@@ -516,15 +523,14 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
                     IconButton(
                       onPressed: () => _copyCode(flow.userCode),
                       icon: const Icon(Icons.copy_rounded),
-                      tooltip: 'Copy one-time code',
+                      tooltip: context.l10n.settingsCopyOneTimeCode,
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 14),
-              const Text(
-                'Sign in on the page that opened, enter this code, then '
-                'approve Cantinarr. This screen checks automatically.',
+              Text(
+                context.l10n.settingsSignInOnThePageThatOpenedEnter,
                 style: TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 13,
@@ -541,16 +547,20 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
           children: [
             OutlinedButton(
               onPressed: _checking ? null : () => _checkConnection(),
-              child: Text(_checking ? 'Checking…' : 'Check now'),
+              child: Text(_checking
+                  ? context.l10n.settingsChecking
+                  : context.l10n.settingsCheckNow),
             ),
             OutlinedButton.icon(
               onPressed: () => _openVerificationPage(flow.verificationUri),
               icon: const Icon(Icons.open_in_new, size: 17),
-              label: const Text('Reopen ChatGPT sign-in'),
+              label: Text(context.l10n.settingsReopenChatgptSignIn),
             ),
             TextButton(
               onPressed: _cancelling ? null : _cancelConnection,
-              child: Text(_cancelling ? 'Cancelling…' : 'Cancel'),
+              child: Text(_cancelling
+                  ? context.l10n.settingsCancelling
+                  : context.l10n.settingsCancel),
             ),
           ],
         ),
@@ -585,8 +595,8 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Connected',
+                    Text(
+                      context.l10n.settingsConnected,
                       style: TextStyle(
                         color: AppTheme.textPrimary,
                         fontSize: 17,
@@ -628,8 +638,8 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
         ],
         if (limits != null && !limits.isEmpty) ...[
           const SizedBox(height: 22),
-          const Text(
-            'Codex usage',
+          Text(
+            context.l10n.settingsCodexUsage,
             style: TextStyle(
               color: AppTheme.textPrimary,
               fontSize: 18,
@@ -639,10 +649,14 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
           const SizedBox(height: 4),
           Text(
             status.stale
-                ? 'This cached snapshot may be out of date. Refresh to try again.'
+                ? context.l10n.settingsThisCachedSnapshotMayBeOutOfDate
                 : status.updatedAt == null
-                    ? 'Shown from the server’s recent ChatGPT usage snapshot.'
-                    : 'Updated ${DateFormat('MMM d, h:mm a').format(status.updatedAt!.toLocal())}',
+                    ? context.l10n.settingsShownFromTheServerSRecentChatgptUsage
+                    : context.l10n.settingsMessageUpdatedValue1(
+                        (DateFormat.yMMMd(context.l10n.dateLocale)
+                                .add_jm()
+                                .format(status.updatedAt!.toLocal()))
+                            .toString()),
             style: TextStyle(
               color: status.stale ? AppTheme.warning : AppTheme.textSecondary,
               fontSize: 13,
@@ -651,14 +665,14 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
           const SizedBox(height: 12),
           if (limits.primary != null)
             _UsageMeter(
-              label: 'Short-term allowance',
+              label: context.l10n.settingsShortTermAllowance,
               window: limits.primary!,
             ),
           if (limits.primary != null && limits.secondary != null)
             const SizedBox(height: 12),
           if (limits.secondary != null)
             _UsageMeter(
-              label: 'Long-term allowance',
+              label: context.l10n.settingsLongTermAllowance,
               window: limits.secondary!,
             ),
         ],
@@ -667,10 +681,10 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
           onPressed: _unlinking ? null : _unlink,
           icon: const Icon(Icons.link_off, size: 18),
           label: Text(_unlinking
-              ? 'Disconnecting…'
+              ? context.l10n.settingsDisconnecting
               : _isShared
-                  ? 'Disconnect shared OpenAI OAuth'
-                  : 'Disconnect OpenAI OAuth'),
+                  ? context.l10n.settingsDisconnectSharedOpenaiOauth2
+                  : context.l10n.settingsDisconnectOpenaiOauth),
           style: OutlinedButton.styleFrom(foregroundColor: AppTheme.error),
         ),
       ],
@@ -698,7 +712,9 @@ class _ConnectionIntro extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            shared ? 'Included AI, one allowance' : 'Use your ChatGPT plan',
+            shared
+                ? context.l10n.settingsIncludedAiOneAllowance
+                : context.l10n.settingsUseYourChatgptPlan,
             style: const TextStyle(
               color: AppTheme.textPrimary,
               fontSize: 22,
@@ -708,11 +724,9 @@ class _ConnectionIntro extends StatelessWidget {
           const SizedBox(height: 7),
           Text(
             shared
-                ? 'This server account can power the assistant for every user '
-                    'you grant included access. They share its Codex meter.'
-                : 'Cantinarr can run its assistant against your own Codex '
-                    'allowance. This personal connection takes priority over '
-                    'included AI when selected.',
+                ? context.l10n.settingsThisServerAccountCanPowerTheAssistantFor
+                : context
+                    .l10n.settingsCantinarrCanRunItsAssistantAgainstYourOwn,
             style: const TextStyle(color: AppTheme.textSecondary, height: 1.45),
           ),
         ],
@@ -738,26 +752,23 @@ class _UnavailablePanel extends StatelessWidget {
       message: shared
           ? connected
               ? selected
-                  ? 'The shared account remains connected, but Codex is '
-                      'currently unavailable on this server.'
-                  : 'The shared account remains connected. Select OpenAI '
-                      '(OAuth) as the included provider to use it.'
+                  ? context
+                      .l10n.settingsTheSharedAccountRemainsConnectedButCodexIs
+                  : context.l10n
+                      .settingsTheSharedAccountRemainsConnectedSelectOpenaiOauth
               : selected
-                  ? 'OpenAI OAuth is selected for included AI, but the Codex '
-                      'runtime is currently unavailable.'
-                  : 'Select OpenAI (OAuth) as the included provider before '
-                      'connecting the shared account.'
+                  ? context.l10n.settingsOpenaiOauthIsSelectedForIncludedAiBut
+                  : context
+                      .l10n.settingsSelectOpenaiOauthAsTheIncludedProviderBefore
           : connected
               ? selected
-                  ? 'Your personal OpenAI OAuth remains connected, but Codex '
-                      'is currently unavailable on this server.'
-                  : 'Your personal OpenAI OAuth is saved while you use a '
-                      'different AI source.'
+                  ? context.l10n
+                      .settingsYourPersonalOpenaiOauthRemainsConnectedButCodex
+                  : context.l10n.settingsYourPersonalOpenaiOauthIsSavedWhileYou
               : selected
-                  ? 'Personal OpenAI OAuth is selected, but Codex is currently '
-                      'unavailable on this server.'
-                  : 'This personal connection is saved even while you use a '
-                      'different AI source.',
+                  ? context.l10n.settingsPersonalOpenaiOauthIsSelectedButCodexIs
+                  : context
+                      .l10n.settingsThisPersonalConnectionIsSavedEvenWhileYou,
     );
   }
 }
@@ -767,7 +778,7 @@ class _SharedAccountWarning extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const AppPanel(
+    return AppPanel(
       accentColor: AppTheme.warning,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -776,12 +787,8 @@ class _SharedAccountWarning extends StatelessWidget {
           SizedBox(width: 12),
           Expanded(
             child: Text(
-              'Sharing this connection means enabled users send prompts and '
-              'tool context through the same OpenAI OAuth account and consume one '
-              'Codex allowance. Activity is attributable to that account, and '
-              'any subscription or usage costs remain with it. ChatGPT '
-              'accounts are intended for one person; only enable this for '
-              'people or devices you control.',
+              context.l10n
+                  .settingsSharingThisConnectionMeansEnabledUsersSendPrompts,
               style: TextStyle(
                 color: AppTheme.textSecondary,
                 height: 1.45,
@@ -851,7 +858,8 @@ class _UsageMeter extends StatelessWidget {
                 ),
               ),
               Text(
-                '${_percentLabel(used)}% used',
+                context.l10n.settingsMessageValue1Used(
+                    (_percentLabel(used)).toString()),
                 style: TextStyle(
                   color: color,
                   fontSize: 12,
@@ -873,7 +881,11 @@ class _UsageMeter extends StatelessWidget {
           if (window.resetsAt != null) ...[
             const SizedBox(height: 8),
             Text(
-              'Resets ${DateFormat('MMM d, h:mm a').format(window.resetsAt!.toLocal())}',
+              context.l10n.settingsMessageResetsValue1(
+                  (DateFormat.yMMMd(context.l10n.dateLocale)
+                          .add_jm()
+                          .format(window.resetsAt!.toLocal()))
+                      .toString()),
               style: const TextStyle(
                 color: AppTheme.textMuted,
                 fontSize: 12,
@@ -902,13 +914,14 @@ class _StatusError extends StatelessWidget {
             const Icon(Icons.cloud_off_outlined,
                 color: AppTheme.textSecondary, size: 42),
             const SizedBox(height: 12),
-            const Text(
-              'Could not load the OpenAI OAuth connection.',
+            Text(
+              context.l10n.settingsCouldNotLoadTheOpenaiOauthConnection,
               style: TextStyle(color: AppTheme.textSecondary),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 12),
-            OutlinedButton(onPressed: onRetry, child: const Text('Retry')),
+            OutlinedButton(
+                onPressed: onRetry, child: Text(context.l10n.settingsRetry)),
           ],
         ),
       ),

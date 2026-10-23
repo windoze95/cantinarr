@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../discover/data/tmdb_models.dart';
@@ -5,7 +7,6 @@ import '../../media_download/data/media_download_models.dart';
 import '../../media_download/ui/media_download_button.dart';
 import '../../request/data/request_service.dart';
 import '../../request/logic/request_provider.dart';
-import '../logic/season_label.dart';
 
 /// Interactive per-season request table (Overseerr-style): one row per season
 /// with a checkbox, "Season N" (with its first-air year when TMDB knows one),
@@ -52,8 +53,7 @@ class SeasonTable extends StatefulWidget {
     this.onRequested,
     this.confirmDestination,
     this.downloadInstanceId,
-    this.downloadChoicesBySeason =
-        const <int, List<MediaDownloadChoice>>{},
+    this.downloadChoicesBySeason = const <int, List<MediaDownloadChoice>>{},
   });
 
   @override
@@ -100,7 +100,8 @@ class _SeasonTableState extends State<SeasonTable> {
     _selected.retainAll(_selectableNumbers);
   }
 
-  bool get _busy => _submitting ||
+  bool get _busy =>
+      _submitting ||
       widget.notifier.state.isRequesting ||
       widget.notifier.state.isCheckingStatus ||
       !widget.notifier.state.hasStatus;
@@ -125,14 +126,15 @@ class _SeasonTableState extends State<SeasonTable> {
       return RequestSeasonStatus(
           seasonNumber: seasonNumber, status: RequestStatus.pending);
     }
-    return season ?? RequestSeasonStatus(
-      seasonNumber: seasonNumber,
-      // A title without a breakdown must not turn accepted work into missing
-      // seasons. With a breakdown, a newly announced season may still be new.
-      status: state.seasons.isEmpty && state.status != RequestStatus.partial
-          ? state.status
-          : RequestStatus.unavailable,
-    );
+    return season ??
+        RequestSeasonStatus(
+          seasonNumber: seasonNumber,
+          // A title without a breakdown must not turn accepted work into missing
+          // seasons. With a breakdown, a newly announced season may still be new.
+          status: state.seasons.isEmpty && state.status != RequestStatus.partial
+              ? state.status
+              : RequestStatus.unavailable,
+        );
   }
 
   bool _canRequestSeason(int seasonNumber) =>
@@ -150,10 +152,8 @@ class _SeasonTableState extends State<SeasonTable> {
   }
 
   /// Selectable season numbers, shared by every selection and submit path.
-  List<int> get _selectableNumbers => _realSeasons
-      .map((s) => s.seasonNumber)
-      .where(_canRequestSeason)
-      .toList();
+  List<int> get _selectableNumbers =>
+      _realSeasons.map((s) => s.seasonNumber).where(_canRequestSeason).toList();
 
   void _selectAll() {
     if (_busy) return;
@@ -193,7 +193,8 @@ class _SeasonTableState extends State<SeasonTable> {
       _confirming = widget.confirmDestination != null;
     });
     try {
-      if (widget.confirmDestination != null && !await widget.confirmDestination!()) return;
+      if (widget.confirmDestination != null &&
+          !await widget.confirmDestination!()) return;
       if (!mounted || notifier != widget.notifier) return;
       setState(() => _confirming = false);
       // The destination's refreshed status may cover or block these seasons.
@@ -205,7 +206,8 @@ class _SeasonTableState extends State<SeasonTable> {
         tvdbId: widget.tvdbId,
         seasons: seasons,
       );
-      if (!mounted || notifier != widget.notifier ||
+      if (!mounted ||
+          notifier != widget.notifier ||
           instanceId != notifier.instanceId) {
         return;
       }
@@ -213,7 +215,7 @@ class _SeasonTableState extends State<SeasonTable> {
         final quotaMessage = notifier.state.quotaMessage;
         if (quotaMessage != null) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(quotaMessage)),
+            SnackBar(content: Text(browseLabel(context, quotaMessage))),
           );
         }
         return;
@@ -247,9 +249,15 @@ class _SeasonTableState extends State<SeasonTable> {
                 Wrap(
                   spacing: 8,
                   children: [
-                    _QuickChip(label: 'All', onTap: _busy ? null : _selectAll),
-                    _QuickChip(label: 'First', onTap: _busy ? null : _selectFirst),
-                    _QuickChip(label: 'Latest', onTap: _busy ? null : _selectLatest),
+                    _QuickChip(
+                        label: context.l10n.browseAll,
+                        onTap: _busy ? null : _selectAll),
+                    _QuickChip(
+                        label: context.l10n.browseFirst,
+                        onTap: _busy ? null : _selectFirst),
+                    _QuickChip(
+                        label: context.l10n.browseLatest,
+                        onTap: _busy ? null : _selectLatest),
                   ],
                 ),
                 const SizedBox(height: 8),
@@ -287,9 +295,7 @@ class _SeasonTableState extends State<SeasonTable> {
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
-                    onPressed: (_selected.isEmpty || _busy)
-                        ? null
-                        : _submit,
+                    onPressed: (_selected.isEmpty || _busy) ? null : _submit,
                     icon: _busy && !_confirming
                         ? const SizedBox(
                             width: 16,
@@ -300,9 +306,9 @@ class _SeasonTableState extends State<SeasonTable> {
                         : const Icon(Icons.add, size: 18),
                     label: Text(
                       _selected.isEmpty
-                          ? 'Select seasons to request'
-                          : 'Request ${_selected.length} '
-                              'season${_selected.length == 1 ? '' : 's'}',
+                          ? context.l10n.browseSelectSeasonsToRequest
+                          : context.l10n
+                              .requestSelectedSeasons(_selected.length),
                     ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppTheme.accent,
@@ -348,11 +354,15 @@ class _SeasonRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accepted = status.isKnown && switch (status.status) {
-      RequestStatus.available || RequestStatus.requested ||
-      RequestStatus.downloading || RequestStatus.pending => true,
-      _ => false,
-    };
+    final accepted = status.isKnown &&
+        switch (status.status) {
+          RequestStatus.available ||
+          RequestStatus.requested ||
+          RequestStatus.downloading ||
+          RequestStatus.pending =>
+            true,
+          _ => false,
+        };
     final checked = accepted || selected;
     return InkWell(
       onTap: enabled ? () => onChanged(!selected) : null,
@@ -375,28 +385,31 @@ class _SeasonRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    seasonRowLabel(season),
+                    localizedSeasonRowLabel(context, season),
                     style: const TextStyle(
                         color: AppTheme.textPrimary, fontSize: 14),
                   ),
                   if (status.episodeCount > 0)
                     Text(
-                      '${status.episodesLabel} eps',
+                      context.l10n.detailEpisodeRatio(status.episodesLabel),
                       style: const TextStyle(
                           color: AppTheme.textSecondary, fontSize: 12),
                     )
                   else if (season.episodeCount != null)
                     Text(
-                      '${season.episodeCount} eps',
+                      context.l10n.detailEpisodeCount(season.episodeCount!),
                       style: const TextStyle(
                           color: AppTheme.textSecondary, fontSize: 12),
                     ),
                   if (status.hasRequestIssue)
                     Padding(
                       padding: const EdgeInsets.only(top: 4, right: 8),
-                      child: Text(status.requestBlockedMessage ??
-                          'Could not verify this season. Retry before requesting.',
-                        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+                      child: Text(
+                          status.requestBlockedMessage ??
+                              context.l10n
+                                  .browseCouldNotVerifyThisSeasonRetryBeforeRequesting,
+                          style: const TextStyle(
+                              color: AppTheme.textSecondary, fontSize: 12)),
                     ),
                 ],
               ),
@@ -407,8 +420,10 @@ class _SeasonRow extends StatelessWidget {
               MediaDownloadChoiceButton(
                 instanceId: downloadInstanceId!,
                 choices: downloadChoices,
-                label: 'Download Season ${season.seasonNumber} episodes',
-                sheetTitle: 'Download Season ${season.seasonNumber}',
+                label: context.l10n
+                    .detailDownloadSeasonEpisodes(season.seasonNumber),
+                sheetTitle:
+                    context.l10n.detailDownloadSeason(season.seasonNumber),
                 iconOnly: true,
               ),
             ],
@@ -427,13 +442,22 @@ class _SeasonStatusBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (label, color) = switch (status) {
-      null => ('Unknown', AppTheme.textSecondary),
-      RequestStatus.available => ('Available', AppTheme.available),
-      RequestStatus.partial => ('Partial', AppTheme.requested),
-      RequestStatus.downloading => ('Downloading', AppTheme.downloading),
-      RequestStatus.requested => ('Requested', AppTheme.requested),
-      RequestStatus.pending => ('Pending', AppTheme.requested),
-      _ => ('Not added', AppTheme.unavailable),
+      null => (context.l10n.browseUnknown, AppTheme.textSecondary),
+      RequestStatus.available => (
+          context.l10n.browseAvailable,
+          AppTheme.available
+        ),
+      RequestStatus.partial => (context.l10n.browsePartial, AppTheme.requested),
+      RequestStatus.downloading => (
+          context.l10n.browseDownloading,
+          AppTheme.downloading
+        ),
+      RequestStatus.requested => (
+          context.l10n.browseRequested,
+          AppTheme.requested
+        ),
+      RequestStatus.pending => (context.l10n.browsePending, AppTheme.requested),
+      _ => (context.l10n.browseNotAdded, AppTheme.unavailable),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),

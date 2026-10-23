@@ -37,6 +37,12 @@ native permissions or signing capabilities. Setup explains that separate
 server/TV subnets need mDNS forwarding as well as a working firewall route.
 See [Apple TV setup](../docs/apple-tv.md).
 
+## Languages
+
+The interface supports English and French. It follows the device language by default, using English for unsupported languages. Choose **Settings > Account > Language** to use **System default**, **English**, or **Français**. The choice applies immediately and is saved on this device, including after signing out. It does not change discovery filters, original title languages, or the device country used for streaming and release dates. Media metadata, messages returned by connected services, and assistant replies keep their source language.
+
+Translations live in `lib/l10n/app_en.arb` and `app_fr.arb`. Add messages to both bundles, with named placeholders and ICU plurals where needed; UI code reads them through `context.l10n`. `flutter pub get --enforce-lockfile` generates the ignored `app_localizations*.dart` files with the pinned SDK. Run `flutter gen-l10n` after editing a bundle. The Docker dependency layer copies the bundles and `l10n.yaml` before resolving packages. Standalone widgets without the localization delegate retain English; app and locale tests install the generated delegates.
+
 ## Design
 
 A single dark-first, cinematic theme designed for couch browsing and high-signal admin work. Its near-black sign face, espresso/umber layers, glowing amber-gold, and ember highlights come directly from the Cantinarr logo. A static, pointer-transparent ambient gradient sits behind translucent page scaffolds, while semantic Material 3 surfaces provide restrained depth for navigation, forms, grouped settings, and action docks. The futuristic feel comes from precision, depth, and interaction—not a cold blue cyber palette.
@@ -343,6 +349,7 @@ app/lib/
 │   ├── sonarr/                   # TV management + episode tools + import doctor engine
 │   ├── tdarr/                    # Read-only worker activity and library statistics
 │   └── monitoring/               # Watch activity/history/stats from Tautulli or Tracearr
+├── l10n/                         # English/French catalogs and localization helpers
 └── navigation/app_router.dart    # GoRouter: shell + module tab shells + guards
 ```
 

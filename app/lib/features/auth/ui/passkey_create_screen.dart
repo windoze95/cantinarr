@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/auth_messages.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -18,7 +20,18 @@ class PasskeyCreateScreen extends ConsumerStatefulWidget {
 }
 
 class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
-  final _nameController = TextEditingController(text: 'Passkey');
+  final _nameController = TextEditingController();
+  String? _defaultPasskeyName;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_defaultPasskeyName == null) {
+      _defaultPasskeyName = context.l10n.authDefaultPasskeyName;
+      _nameController.text = _defaultPasskeyName!;
+    }
+  }
+
   bool _isCreating = false;
   bool? _passkeyAvailable;
   bool _devicePasskeyAvailable = false;
@@ -41,10 +54,9 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
     final conn = ref.read(authProvider).valueOrNull?.connection;
     if (conn != null) {
       try {
-        final status = (await ref
-                .read(authProvider.notifier)
-                .checkServer(conn.serverUrl))
-            .status;
+        final status =
+            (await ref.read(authProvider.notifier).checkServer(conn.serverUrl))
+                .status;
         serverNativeReady =
             status.supportsPasskeyPlatform(PasskeyService.platformKind());
         browserFallbackAvailable = status.webAuthnAvailable;
@@ -84,9 +96,9 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
       await ref.read(authProvider.notifier).registerPasskey(name);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Passkey created')),
+        SnackBar(content: Text(context.l10n.authPasskeyCreated)),
       );
-      _nameController.text = 'Passkey';
+      _nameController.text = _defaultPasskeyName!;
       context.pop(true);
     } catch (e) {
       if (!mounted) return;
@@ -116,14 +128,14 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
       if (!mounted) return;
       setState(() {
         _isCreating = false;
-        _error = 'Could not open browser setup';
+        _error = context.l10n.authOpenBrowserSetupError;
       });
     }
   }
 
   @override
   Widget build(BuildContext context) => UnsavedChangesGuard(
-        hasChanges: () => _nameController.text != 'Passkey',
+        hasChanges: () => _nameController.text != _defaultPasskeyName,
         isSaving: _isCreating,
         child: _buildPage(context),
       );
@@ -133,7 +145,7 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
     final available = _passkeyAvailable ?? false;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Create Passkey')),
+      appBar: AppBar(title: Text(context.l10n.authCreatePasskey)),
       body: CenteredContent(
           child: SafeArea(
         child: ListView(
@@ -144,9 +156,9 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
             TextField(
               controller: _nameController,
               enabled: available && !_isCreating && !checkingAvailability,
-              decoration: const InputDecoration(
-                labelText: 'Name',
-                hintText: 'Phone, laptop, browser',
+              decoration: InputDecoration(
+                labelText: context.l10n.authName,
+                hintText: context.l10n.authPasskeyNameHint,
                 prefixIcon: Icon(Icons.label_outline),
               ),
               textCapitalization: TextCapitalization.words,
@@ -155,7 +167,8 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
             ),
             if (_error != null) ...[
               const SizedBox(height: 16),
-              Text(_error!, style: const TextStyle(color: AppTheme.error)),
+              Text(localizeAuthMessage(context, _error!),
+                  style: const TextStyle(color: AppTheme.error)),
             ],
             const SizedBox(height: 24),
             FilledButton.icon(
@@ -170,10 +183,10 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
                     )
                   : const Icon(Icons.fingerprint),
               label: Text(checkingAvailability
-                  ? 'Checking...'
+                  ? context.l10n.authCheckingDots
                   : _isCreating
-                      ? 'Creating...'
-                      : 'Create Passkey'),
+                      ? context.l10n.authCreating
+                      : context.l10n.authCreatePasskey),
             ),
             if (!checkingAvailability && !available) ...[
               const SizedBox(height: 16),
@@ -186,7 +199,7 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
                 OutlinedButton.icon(
                   onPressed: _isCreating ? null : _openBrowser,
                   icon: const Icon(Icons.open_in_browser),
-                  label: const Text('Open Browser'),
+                  label: Text(context.l10n.authOpenBrowser),
                 ),
               ],
             ],
@@ -204,19 +217,19 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
         message.contains('Google account')) {
       return message;
     }
-    return 'Could not create passkey';
+    return context.l10n.authCreatePasskeyError;
   }
 
   String _nativeUnavailableMessage() {
     if (!_devicePasskeyAvailable) {
-      return 'Passkeys are not available in this app on this device.';
+      return context.l10n.authPasskeysUnavailable;
     }
     if (!_browserFallbackAvailable) {
-      return 'Passkeys require HTTPS or localhost on this server.';
+      return context.l10n.authPasskeysNeedHttps;
     }
     if (!_serverNativePasskeyReady) {
-      return 'Native passkey creation is not configured for this server.';
+      return context.l10n.authNativePasskeyUnconfigured;
     }
-    return 'Native passkey creation is not available for this server yet.';
+    return context.l10n.authNativePasskeyUnavailable;
   }
 }

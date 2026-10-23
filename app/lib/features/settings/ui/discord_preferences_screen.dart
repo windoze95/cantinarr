@@ -1,3 +1,5 @@
+import 'settings_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,10 +14,12 @@ class DiscordPreferencesScreen extends ConsumerStatefulWidget {
   const DiscordPreferencesScreen({super.key});
 
   @override
-  ConsumerState<DiscordPreferencesScreen> createState() => _DiscordPreferencesScreenState();
+  ConsumerState<DiscordPreferencesScreen> createState() =>
+      _DiscordPreferencesScreenState();
 }
 
-class _DiscordPreferencesScreenState extends ConsumerState<DiscordPreferencesScreen> {
+class _DiscordPreferencesScreenState
+    extends ConsumerState<DiscordPreferencesScreen> {
   final _ids = TextEditingController();
   final _draft = SettingsDraft();
   DiscordPreferences? _prefs;
@@ -26,7 +30,8 @@ class _DiscordPreferencesScreenState extends ConsumerState<DiscordPreferencesScr
   DiscordDelivery? _result;
 
   Object get _values => [_enabled, _ids.text, _events];
-  DiscordPreferencesService get _service => DiscordPreferencesService(ref.read(backendClientProvider));
+  DiscordPreferencesService get _service =>
+      DiscordPreferencesService(ref.read(backendClientProvider));
 
   @override
   void initState() {
@@ -35,7 +40,10 @@ class _DiscordPreferencesScreenState extends ConsumerState<DiscordPreferencesScr
   }
 
   @override
-  void dispose() { _ids.dispose(); super.dispose(); }
+  void dispose() {
+    _ids.dispose();
+    super.dispose();
+  }
 
   void _saved(DiscordPreferences prefs) {
     _prefs = prefs;
@@ -50,19 +58,27 @@ class _DiscordPreferencesScreenState extends ConsumerState<DiscordPreferencesScr
   }
 
   Future<void> _load() async {
-    setState(() { _busy = true; _error = null; });
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
     try {
       final prefs = await _service.get();
       if (mounted) {
         setState(() {
-          if (_prefs == null) { _saved(prefs); } else { _prefs = prefs; }
+          if (_prefs == null) {
+            _saved(prefs);
+          } else {
+            _prefs = prefs;
+          }
         });
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _error = e is DioException && e.response?.statusCode == 404
-            ? 'Personal Discord mentions need a newer server. Update Cantinarr and try again.'
-            : 'Could not read Discord preferences. Try again.');
+        setState(() => _error = e is DioException &&
+                e.response?.statusCode == 404
+            ? context.l10n.settingsPersonalDiscordMentionsNeedANewerServerUpdate
+            : context.l10n.settingsCouldNotReadDiscordPreferencesTryAgain);
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -70,31 +86,51 @@ class _DiscordPreferencesScreenState extends ConsumerState<DiscordPreferencesScr
   }
 
   Future<void> _save() async {
-    final ids = _ids.text.split(RegExp(r'[\s,]+')).where((id) => id.isNotEmpty).toSet().toList();
-    if (ids.length > 10 || ids.any((id) => !RegExp(r'^[1-9][0-9]{16,19}$').hasMatch(id)) || (_enabled && ids.isEmpty)) {
-      setState(() => _error = 'Enter up to 10 numeric Discord user IDs before enabling mentions.');
+    final ids = _ids.text
+        .split(RegExp(r'[\s,]+'))
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
+    if (ids.length > 10 ||
+        ids.any((id) => !RegExp(r'^[1-9][0-9]{16,19}$').hasMatch(id)) ||
+        (_enabled && ids.isEmpty)) {
+      setState(
+          () => _error = context.l10n.settingsEnterUpTo10NumericDiscordUserIds);
       return;
     }
-    setState(() { _busy = true; _error = null; _result = null; });
+    setState(() {
+      _busy = true;
+      _error = null;
+      _result = null;
+    });
     try {
       final prefs = await _service.save(_enabled, ids, _events);
       if (!mounted) return;
       setState(() => _saved(prefs));
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(context.l10n.settingsSaved)));
     } catch (_) {
-      if (mounted) setState(() => _error = 'Could not save Discord preferences. Check your IDs and try again.');
+      if (mounted)
+        setState(() => _error =
+            context.l10n.settingsCouldNotSaveDiscordPreferencesCheckYourIds);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
   Future<void> _test() async {
-    setState(() { _busy = true; _error = null; _result = null; });
+    setState(() {
+      _busy = true;
+      _error = null;
+      _result = null;
+    });
     try {
       final result = await _service.test();
       if (mounted) setState(() => _result = result);
     } catch (_) {
-      if (mounted) setState(() => _error = 'Could not test mentions. Check the server settings or wait a minute before trying again.');
+      if (mounted)
+        setState(() => _error =
+            context.l10n.settingsCouldNotTestMentionsCheckTheServerSettings);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -107,76 +143,115 @@ class _DiscordPreferencesScreenState extends ConsumerState<DiscordPreferencesScr
       hasChanges: () => _draft.hasChanges(_values),
       isSaving: _busy,
       child: Scaffold(
-        appBar: AppBar(title: const Text('Discord Notifications'), actions: [
-          IconButton(tooltip: 'Refresh Discord status', onPressed: _busy ? null : _load,
-              icon: const Icon(Icons.refresh)),
-        ]),
-        body: Align(alignment: Alignment.topCenter, child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 700),
-          child: ListView(padding: const EdgeInsets.all(20), children: [
-            if (_busy) const LinearProgressIndicator(),
-            const Text('Get a personal ping in your server’s Discord channel when your requested content is ready or a report changes. These are channel mentions, not direct messages.'),
-            if (admin) ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Server Discord Notifications'),
-              subtitle: const Text('Configure the webhook, events, roles, and appearance'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () async {
-                await context.push('/settings/discord-notifications/server');
-                if (mounted) _load();
-              },
-            ),
-            if (_error != null) Padding(padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error))),
-            if (_prefs != null) ...[
-              if (_prefs!.blockedReason != null) Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12), child: Text(_prefs!.blockedReason!)),
-              SwitchListTile.adaptive(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Mention me in Discord'),
-                value: _enabled,
-                onChanged: _busy ? null : (value) => setState(() => _enabled = value),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _ids,
-                enabled: !_busy,
-                autocorrect: false,
-                enableSuggestions: false,
-                onChanged: (_) => setState(() => _result = null),
-                decoration: const InputDecoration(
-                  labelText: 'Discord user IDs', border: OutlineInputBorder(),
-                  helperText: 'Separate multiple IDs with commas. Use IDs, not usernames.', helperMaxLines: 2),
-              ),
-              const SizedBox(height: 12),
-              const Text('In Discord, enable User Settings → Advanced → Developer Mode, then copy your user ID from your profile. The IDs you enter will be visible to people in the notification channel. Your Discord server, channel, and notification settings also control whether you receive a ping.'),
-              const SizedBox(height: 16),
-              for (final entry in discordEventLabels.entries)
-                if (admin || !discordAdminEvents.contains(entry.key))
+        appBar: AppBar(
+            title: Text(context.l10n.settingsDiscordNotifications),
+            actions: [
+              IconButton(
+                  tooltip: context.l10n.settingsRefreshDiscordStatus,
+                  onPressed: _busy ? null : _load,
+                  icon: const Icon(Icons.refresh)),
+            ]),
+        body: Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 700),
+              child: ListView(padding: const EdgeInsets.all(20), children: [
+                if (_busy) const LinearProgressIndicator(),
+                Text(context.l10n.settingsGetAPersonalPingInYourServerS),
+                if (admin)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title:
+                        Text(context.l10n.settingsServerDiscordNotifications),
+                    subtitle: Text(context.l10n
+                        .settingsConfigureTheWebhookEventsRolesAndAppearance),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () async {
+                      await context
+                          .push('/settings/discord-notifications/server');
+                      if (mounted) _load();
+                    },
+                  ),
+                if (_error != null)
+                  Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: Text(_error!,
+                          style: TextStyle(
+                              color: Theme.of(context).colorScheme.error))),
+                if (_prefs != null) ...[
+                  if (_prefs!.blockedReason != null)
+                    Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: Text(_prefs!.blockedReason!)),
                   SwitchListTile.adaptive(
                     contentPadding: EdgeInsets.zero,
-                    title: Text(entry.value),
-                    subtitle: _prefs!.allowedEvents[entry.key] != true
-                        ? const Text('This event is disabled by the server.') : null,
-                    value: _events[entry.key] == true,
-                    onChanged: _busy ? null : (value) => setState(() {
-                      _events = {..._events, entry.key: value};
-                    }),
+                    title: Text(context.l10n.settingsMentionMeInDiscord),
+                    value: _enabled,
+                    onChanged: _busy
+                        ? null
+                        : (value) => setState(() => _enabled = value),
                   ),
-              const SizedBox(height: 12),
-              Wrap(spacing: 12, runSpacing: 12, children: [
-                FilledButton(onPressed: _busy ? null : _save, child: const Text('Save')),
-                OutlinedButton(
-                  onPressed: _busy || _draft.hasChanges(_values) || _prefs!.blockedReason != null ? null : _test,
-                  child: const Text('Test my mentions')),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _ids,
+                    enabled: !_busy,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    onChanged: (_) => setState(() => _result = null),
+                    decoration: InputDecoration(
+                        labelText: context.l10n.settingsDiscordUserIds,
+                        border: OutlineInputBorder(),
+                        helperText: context.l10n
+                            .settingsSeparateMultipleIdsWithCommasUseIdsNot,
+                        helperMaxLines: 2),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(context.l10n
+                      .settingsInDiscordEnableUserSettingsAdvancedDeveloperMode),
+                  const SizedBox(height: 16),
+                  for (final entry in discordEventLabels.entries)
+                    if (admin || !discordAdminEvents.contains(entry.key))
+                      SwitchListTile.adaptive(
+                        contentPadding: EdgeInsets.zero,
+                        title:
+                            Text(settingsDiscordEventLabel(context, entry.key)),
+                        subtitle: _prefs!.allowedEvents[entry.key] != true
+                            ? Text(context
+                                .l10n.settingsThisEventIsDisabledByTheServer)
+                            : null,
+                        value: _events[entry.key] == true,
+                        onChanged: _busy
+                            ? null
+                            : (value) => setState(() {
+                                  _events = {..._events, entry.key: value};
+                                }),
+                      ),
+                  const SizedBox(height: 12),
+                  Wrap(spacing: 12, runSpacing: 12, children: [
+                    FilledButton(
+                        onPressed: _busy ? null : _save,
+                        child: Text(context.l10n.settingsSave)),
+                    OutlinedButton(
+                        onPressed: _busy ||
+                                _draft.hasChanges(_values) ||
+                                _prefs!.blockedReason != null
+                            ? null
+                            : _test,
+                        child: Text(context.l10n.settingsTestMyMentions)),
+                  ]),
+                  const SizedBox(height: 12),
+                  Text(context.l10n
+                      .settingsSaveYourChoicesBeforeTestingTheTestMentions),
+                  if (_result != null)
+                    ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(context.l10n.settingsMessageTestValue1(
+                            (settingsModelLabel(context, _result!.label))
+                                .toString())),
+                        subtitle: Text(_result!.detail)),
+                ],
               ]),
-              const SizedBox(height: 12),
-              const Text('Save your choices before testing. The test mentions only your saved IDs in the configured channel.'),
-              if (_result != null) ListTile(contentPadding: EdgeInsets.zero,
-                title: Text('Test: ${_result!.label}'), subtitle: Text(_result!.detail)),
-            ],
-          ]),
-        )),
+            )),
       ),
     );
   }

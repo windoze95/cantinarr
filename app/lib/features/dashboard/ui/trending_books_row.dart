@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -34,8 +36,7 @@ class TrendingBooksRow extends ConsumerWidget {
 
     final trending = ref.watch(trendingBooksProvider);
     final owned = ref.watch(ownedBooksProvider);
-    final isAdmin =
-        ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
+    final isAdmin = ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
     final viewportWidth = MediaQuery.sizeOf(context).width;
     final horizontalPadding = viewportWidth >= 900 ? 24.0 : 16.0;
 
@@ -48,21 +49,23 @@ class TrendingBooksRow extends ConsumerWidget {
     if (feed != null && feed.connected == false) {
       if (!isAdmin) return const SizedBox.shrink();
       return Padding(
-        padding: EdgeInsets.fromLTRB(horizontalPadding, 20, horizontalPadding, 0),
+        padding:
+            EdgeInsets.fromLTRB(horizontalPadding, 20, horizontalPadding, 0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SectionHeader(title: 'Trending Books'),
+            SectionHeader(title: context.l10n.browseTrendingBooks),
             const SizedBox(height: 8),
-            const Text(
-              'Connect a Hardcover account to this Chaptarr instance to see '
-              "what's trending with readers right now.",
+            Text(
+              context.l10n
+                  .browseConnectAHardcoverAccountToThisChaptarrInstanceToSeeBrowseWhatSTrendingWithReadersRightNow,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
             ),
             const SizedBox(height: 8),
             OutlinedButton.icon(
               icon: const Icon(Icons.add_link),
-              label: const Text('Connect Hardcover in Chaptarr settings'),
+              label:
+                  Text(context.l10n.browseConnectHardcoverInChaptarrSettings),
               onPressed: () => context.push(
                 '/settings/instance/${instance.id}',
                 extra: {
@@ -113,7 +116,7 @@ class TrendingBooksRow extends ConsumerWidget {
         children: [
           Padding(
             padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
-            child: const SectionHeader(title: 'Trending Books'),
+            child: SectionHeader(title: context.l10n.browseTrendingBooks),
           ),
           const SizedBox(height: 12),
           HorizontalItemRow<TrendingBook>(
@@ -127,9 +130,9 @@ class TrendingBooksRow extends ConsumerWidget {
                 title: book.title,
                 posterPath: book.imageUrl,
                 placeholderIcon: Icons.menu_book,
-                subtitle: status?.subtitle ??
+                subtitle: browseNullableLabel(context, status?.subtitle) ??
                     (book.author.isNotEmpty ? book.author : null),
-                statusLabel: status?.label,
+                statusLabel: browseNullableLabel(context, status?.label),
                 statusColor: status?.color,
                 rating: book.rating,
                 width: cardWidth,

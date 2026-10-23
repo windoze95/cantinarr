@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
 
@@ -20,12 +21,12 @@ class ChaptarrSearchActions extends StatelessWidget {
       final stack = constraints.maxWidth < 350 || scaledBody > 20;
       final automatic = _action(
         icon: Icons.search,
-        label: 'Find automatically',
+        label: context.l10n.adminFindAutomatically,
         onPressed: onFindAutomatically,
       );
       final choose = _action(
         icon: Icons.manage_search,
-        label: 'Choose a download',
+        label: context.l10n.adminChooseADownload,
         onPressed: onChooseDownload,
       );
       if (stack) {

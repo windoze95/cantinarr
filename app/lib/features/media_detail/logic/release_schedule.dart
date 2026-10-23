@@ -84,17 +84,15 @@ List<ReleaseMilestone> _milestonesFor(
     }
   }
 
-  final milestones = earliestByType.entries
-      .map((e) {
-        final date = _dateOnly(e.value);
-        return ReleaseMilestone(
-          type: e.key,
-          label: _typeLabels[e.key]!,
-          date: date,
-          isUpcoming: !date.isBefore(today),
-        );
-      })
-      .toList();
+  final milestones = earliestByType.entries.map((e) {
+    final date = _dateOnly(e.value);
+    return ReleaseMilestone(
+      type: e.key,
+      label: _typeLabels[e.key]!,
+      date: date,
+      isUpcoming: !date.isBefore(today),
+    );
+  }).toList();
 
   // Sort by date ascending; tie-break on TMDB type ascending so a limited
   // run (2) reads before a wide one (3) on a shared day, and a cinema date
@@ -168,4 +166,6 @@ ReleaseSchedule? resolveReleaseSchedule(
 /// the current year: that line only ever shows near-future dates, while this
 /// section can show dates spanning decades, where a bare "Sep 23" would be
 /// ambiguous about which year.
-String formatReleaseDate(DateTime date) => DateFormat('MMM d, yyyy').format(date);
+String formatReleaseDate(DateTime date, {String? locale}) =>
+    (locale == null ? DateFormat('MMM d, yyyy') : DateFormat.yMMMd(locale))
+        .format(date);

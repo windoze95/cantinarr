@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/config/app_config.dart';
@@ -26,7 +28,7 @@ void showCastCrewSheet(
     showDragHandle: false,
     builder: (_) => _CastCrewSheet(
       title: title,
-      entries: _entriesFor(cast, crew),
+      entries: _entriesFor(context, cast, crew),
       onPerson: (person) => showPersonDetailSheet(
         context,
         personId: person.id,
@@ -59,8 +61,10 @@ class _Person extends _Entry {
   });
 }
 
-List<_Entry> _entriesFor(List<CastMember> cast, List<CrewMember> crew) => [
-      if (cast.isNotEmpty) const _Heading('Cast'),
+List<_Entry> _entriesFor(
+        BuildContext context, List<CastMember> cast, List<CrewMember> crew) =>
+    [
+      if (cast.isNotEmpty) _Heading(context.l10n.browseCast),
       for (final member in cast)
         _Person(
           id: member.id,
@@ -69,7 +73,7 @@ List<_Entry> _entriesFor(List<CastMember> cast, List<CrewMember> crew) => [
           profilePath: member.profilePath,
         ),
       for (final section in crewSections(crew)) ...[
-        _Heading(section.department),
+        _Heading(browseLabel(context, section.department)),
         for (final member in section.members)
           _Person(
             id: member.id,
@@ -110,12 +114,12 @@ class _CastCrewSheet extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: 32),
           itemCount: entries.length + 1,
           itemBuilder: (context, index) {
-            if (index == 0) return _header();
+            if (index == 0) return _header(context);
             return switch (entries[index - 1]) {
               _Heading(:final text) => Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
                   child: Text(
-                    text,
+                    browseLabel(context, text),
                     style: const TextStyle(
                       color: AppTheme.textPrimary,
                       fontSize: 16,
@@ -137,7 +141,7 @@ class _CastCrewSheet extends StatelessWidget {
     );
   }
 
-  Widget _header() => Column(
+  Widget _header(BuildContext context) => Column(
         children: [
           Center(
             child: Container(
@@ -155,8 +159,8 @@ class _CastCrewSheet extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Cast & crew',
+                Text(
+                  context.l10n.browseCastCrew,
                   style: TextStyle(
                     color: AppTheme.textPrimary,
                     fontSize: 20,

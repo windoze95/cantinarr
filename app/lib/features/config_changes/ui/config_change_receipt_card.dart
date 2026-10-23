@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/operations_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -56,7 +58,7 @@ class _ConfigChangeReceiptCardState
       if (!mounted) return;
       setState(() => _change = restored);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Previous settings restored.')),
+        SnackBar(content: Text(context.l10n.opsPreviousSettingsRestored)),
       );
     } catch (_) {
       if (!mounted) return;
@@ -70,9 +72,9 @@ class _ConfigChangeReceiptCardState
       }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Could not confirm whether settings were restored. Review the current state.',
+            context.l10n.opsCouldNotConfirmWhetherSettingsWereRestoredMessage,
           ),
         ),
       );
@@ -91,8 +93,9 @@ class _ConfigChangeReceiptCardState
     final canOfferRestore = change.supportsRestore;
     return Semantics(
       container: true,
-      label:
-          '${change.statusLabel} configuration change in ${change.serviceLabel}',
+      label: context.l10n.opsReceiptSemantics(
+          localizeOperationsLabel(context, change.statusLabel),
+          change.serviceLabel),
       child: Container(
         width: double.infinity,
         margin: const EdgeInsets.only(top: 8),
@@ -122,9 +125,9 @@ class _ConfigChangeReceiptCardState
               children: [
                 Icon(configChangeStatusIcon(change), size: 20, color: color),
                 const SizedBox(width: 8),
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Connected-app settings',
+                    context.l10n.opsConnectedAppSettings,
                     style: TextStyle(
                       color: AppTheme.textPrimary,
                       fontSize: 13,
@@ -150,7 +153,7 @@ class _ConfigChangeReceiptCardState
             if (change.changes.isNotEmpty) ...[
               const SizedBox(height: 10),
               Text(
-                '${change.changes.length} setting${change.changes.length == 1 ? '' : 's'} changed',
+                context.l10n.opsSettingsChanged(change.changes.length),
                 style: const TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 12,
@@ -180,7 +183,7 @@ class _ConfigChangeReceiptCardState
                     '/settings/change-history/${change.id}',
                   ),
                   icon: const Icon(Icons.compare_arrows_rounded, size: 18),
-                  label: const Text('Review change'),
+                  label: Text(context.l10n.opsReviewChange),
                 ),
                 if (canOfferRestore)
                   TextButton.icon(
@@ -192,7 +195,7 @@ class _ConfigChangeReceiptCardState
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.restore_rounded, size: 18),
-                    label: const Text('Restore previous settings'),
+                    label: Text(context.l10n.opsRestorePreviousSettings),
                   ),
               ],
             ),

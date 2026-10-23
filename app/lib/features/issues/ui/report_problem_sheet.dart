@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/operations_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -137,7 +139,7 @@ class ReportProblemButton extends StatelessWidget {
       ),
       icon: const Icon(Icons.flag_outlined,
           size: 18, color: AppTheme.textSecondary),
-      label: const Text('Report a problem',
+      label: Text(context.l10n.opsReportAProblem,
           style: TextStyle(color: AppTheme.textPrimary)),
       style: OutlinedButton.styleFrom(
         side: const BorderSide(color: AppTheme.border),
@@ -196,7 +198,8 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
   /// scope-aware. An ebook has no audio to be in the wrong language, so that
   /// choice is withheld for ebook-scoped reports.
   List<IssueCategory> _categoryChoices() {
-    if (widget.scope.mediaType == 'book' && widget.scope.bookFormat == 'ebook') {
+    if (widget.scope.mediaType == 'book' &&
+        widget.scope.bookFormat == 'ebook') {
       return IssueCategory.values
           .where((c) => c != IssueCategory.wrongAudio)
           .toList();
@@ -207,24 +210,24 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
   String _chipLabel(IssueCategory c) {
     if (widget.scope.mediaType == 'book') {
       return switch (c) {
-        IssueCategory.wrongContent => 'Wrong book/title',
-        _ => c.label,
+        IssueCategory.wrongContent => context.l10n.opsWrongBookTitle,
+        _ => localizeOperationsLabel(context, c.label),
       };
     }
     if (widget.scope.mediaType == 'music') {
       return switch (c) {
-        IssueCategory.wrongContent => 'Wrong album/release',
-        _ => c.label,
+        IssueCategory.wrongContent => context.l10n.opsWrongAlbumRelease,
+        _ => localizeOperationsLabel(context, c.label),
       };
     }
-    return c.label;
+    return localizeOperationsLabel(context, c.label);
   }
 
   Future<void> _submit() async {
     if (_submitting) return;
     final reason = _reasonController.text.trim();
     if (_reasonRequired && reason.isEmpty) {
-      setState(() => _error = 'Please describe the problem.');
+      setState(() => _error = context.l10n.opsPleaseDescribeTheProblem);
       return;
     }
     setState(() {
@@ -262,15 +265,14 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
 
   String _friendlyError(Object e) {
     final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
-    return m != null ? m.group(1)! : 'Could not send your report.';
+    return m != null ? m.group(1)! : context.l10n.opsCouldNotSendYourReport;
   }
 
   String _successMessage(IssueStatus status) => switch (status) {
         IssueStatus.observing ||
         IssueStatus.recovering =>
-          'Thanks — we’re tracking this quietly and will step in if it still '
-              'needs help.',
-        _ => "Thanks — we're looking into it",
+          context.l10n.opsThanksWeReTrackingThisQuietlyAnd,
+        _ => context.l10n.opsThanksWeReLookingIntoIt,
       };
 
   @override
@@ -286,8 +288,8 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Report a problem',
+          Text(
+            context.l10n.opsReportAProblem,
             style: TextStyle(
               color: AppTheme.textPrimary,
               fontSize: 20,
@@ -295,7 +297,7 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
             ),
           ),
           const SizedBox(height: 16),
-          const _SectionLabel("What's wrong?"),
+          _SectionLabel(context.l10n.opsWhatSWrong),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
@@ -322,7 +324,9 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
                 .toList(),
           ),
           const SizedBox(height: 16),
-          _SectionLabel(_reasonRequired ? 'Details' : 'Details (optional)'),
+          _SectionLabel(_reasonRequired
+              ? context.l10n.opsDetails
+              : context.l10n.opsDetailsOptional),
           const SizedBox(height: 8),
           TextField(
             controller: _reasonController,
@@ -334,8 +338,8 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
             },
             decoration: InputDecoration(
               hintText: _reasonRequired
-                  ? 'Tell us what happened'
-                  : 'Add anything that helps (optional)',
+                  ? context.l10n.opsTellUsWhatHappened
+                  : context.l10n.opsAddAnythingThatHelpsOptional,
               hintStyle: const TextStyle(color: AppTheme.textSecondary),
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -365,7 +369,7 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  child: const Text('Cancel'),
+                  child: Text(context.l10n.opsCancel),
                 ),
               ),
               const SizedBox(width: 12),
@@ -388,7 +392,7 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
                             strokeWidth: 2,
                           ),
                         )
-                      : const Text('Submit'),
+                      : Text(context.l10n.opsSubmit),
                 ),
               ),
             ],

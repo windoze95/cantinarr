@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
@@ -108,7 +109,13 @@ class _MediaServerLinkSheetState extends ConsumerState<MediaServerLinkSheet> {
             children: [
               Expanded(
                 child: Text(
-                  'Link ${widget.serviceType == 'emby' || widget.serviceType == 'audiobookshelf' ? 'an' : 'a'} $product account',
+                  context.l10n.mediaLinkValue0Value1Account(
+                      (widget.serviceType == 'emby' ||
+                                  widget.serviceType == 'audiobookshelf'
+                              ? 'an'
+                              : 'a')
+                          .toString(),
+                      (product).toString()),
                   style: const TextStyle(
                     color: AppTheme.textPrimary,
                     fontSize: 20,
@@ -119,15 +126,20 @@ class _MediaServerLinkSheetState extends ConsumerState<MediaServerLinkSheet> {
               IconButton(
                 onPressed: users == null && !_failed ? null : _load,
                 icon: const Icon(Icons.refresh),
-                tooltip: 'Refresh accounts',
+                tooltip: context.l10n.mediaRefreshAccounts,
               ),
             ],
           ),
           const SizedBox(height: AppTheme.spaceSm),
           Text(
-            'Pick the account on $name that belongs to ${widget.username}. '
-            'Linking gives this user access to $name in Cantinarr. '
-            '${supportsManagement ? 'The account on $name stays as it is unless you choose to manage its access.' : 'This server manages linked accounts: granting access enables them, and removing access disables them.'}',
+            context.l10n.mediaPickTheAccountOnValue0ThatBelongsToValue1LinkingGivesThisUserAccessToValue2InCantinarrValu(
+                (name).toString(),
+                (widget.username).toString(),
+                (name).toString(),
+                (supportsManagement
+                        ? 'The account on $name stays as it is unless you choose to manage its access.'
+                        : 'This server manages linked accounts: granting access enables them, and removing access disables them.')
+                    .toString()),
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 14,
@@ -140,10 +152,10 @@ class _MediaServerLinkSheetState extends ConsumerState<MediaServerLinkSheet> {
               value: _manageAccess,
               onChanged: (value) =>
                   setState(() => _manageAccess = value == true),
-              title:
-                  const Text('Manage this account’s access through Cantinarr'),
-              subtitle: const Text(
-                  'Enables the account now. Removing its Cantinarr grant or deleting this user will turn off its server access. Existing libraries stay the same. Administrators are protected.'),
+              title: Text(
+                  context.l10n.mediaManageThisAccountSAccessThroughCantinarr),
+              subtitle: Text(context.l10n
+                  .mediaEnablesTheAccountNowRemovingItsCantinarrGrantOrDeletingThisUserWillTurnOffItsServerAccessE),
               controlAffinity: ListTileControlAffinity.leading,
             ),
           const SizedBox(height: AppTheme.spaceLg),
@@ -152,12 +164,13 @@ class _MediaServerLinkSheetState extends ConsumerState<MediaServerLinkSheet> {
               children: [
                 Expanded(
                   child: Text(
-                    "Couldn't load the accounts on $name.",
-                    style:
-                        const TextStyle(color: AppTheme.error, fontSize: 13),
+                    context.l10n
+                        .mediaCouldnTLoadTheAccountsOnValue0((name).toString()),
+                    style: const TextStyle(color: AppTheme.error, fontSize: 13),
                   ),
                 ),
-                TextButton(onPressed: _load, child: const Text('Retry')),
+                TextButton(
+                    onPressed: _load, child: Text(context.l10n.adminRetry)),
               ],
             )
           else if (linkable == null)
@@ -174,7 +187,7 @@ class _MediaServerLinkSheetState extends ConsumerState<MediaServerLinkSheet> {
             )
           else if (linkable.isEmpty)
             Text(
-              'No accounts to link on $name.',
+              context.l10n.mediaNoAccountsToLinkOnValue0((name).toString()),
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             )
@@ -187,15 +200,15 @@ class _MediaServerLinkSheetState extends ConsumerState<MediaServerLinkSheet> {
                 title: Text(user.name,
                     style: const TextStyle(color: AppTheme.textPrimary)),
                 subtitle: user.isAdministrator
-                    ? const Text('Administrator',
+                    ? Text(context.l10n.mediaAdministrator,
                         style: TextStyle(
                             color: AppTheme.textSecondary, fontSize: 12))
                     : user.isDisabled
-                        ? const Text('Turned off on the server',
+                        ? Text(context.l10n.mediaTurnedOffOnTheServer,
                             style: TextStyle(
                                 color: AppTheme.unavailable, fontSize: 12))
                         : user.pending
-                            ? const Text('Awaiting Plex acceptance',
+                            ? Text(context.l10n.mediaAwaitingPlexAcceptance,
                                 style: TextStyle(
                                     color: AppTheme.warning, fontSize: 12))
                             : null,
@@ -206,9 +219,9 @@ class _MediaServerLinkSheetState extends ConsumerState<MediaServerLinkSheet> {
                         : null)),
               ),
           const SizedBox(height: AppTheme.spaceMd),
-          const Text(
-            'Administrator accounts can be linked; Cantinarr never changes '
-            'them.',
+          Text(
+            context.l10n
+                .mediaAdministratorAccountsCanBeLinkedCantinarrNeverChangesThem,
             style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
           ),
         ],

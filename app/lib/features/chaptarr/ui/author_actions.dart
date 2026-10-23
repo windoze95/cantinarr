@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../core/network/library_settings_service.dart';
 import '../../../core/widgets/action_sheet.dart';
@@ -8,7 +9,8 @@ import '../data/chaptarr_api_service.dart';
 import '../data/chaptarr_models.dart';
 import 'chaptarr_releases_screen.dart';
 
-Future<void> showAuthorActions(BuildContext context, {
+Future<void> showAuthorActions(
+  BuildContext context, {
   required ChaptarrApiService service,
   required LibrarySettingsService settings,
   required String instanceId,
@@ -17,57 +19,82 @@ Future<void> showAuthorActions(BuildContext context, {
   VoidCallback? onChanged,
   VoidCallback? onRemoved,
 }) async {
-  final action = selectedAction ?? await showActionSheet<LibraryAction>(
-    context, title: author.authorName,
-    actions: libraryActions('author'),
-  );
+  final action = selectedAction ??
+      await showActionSheet<LibraryAction>(
+        context,
+        title: author.authorName,
+        actions: libraryActions('author'),
+      );
   if (action == null || !context.mounted) return;
   void toast(String message) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
     }
   }
+
   try {
     switch (action) {
       case LibraryAction.search:
         await service.searchAuthor(author.id);
-        toast('Search queued for ${author.authorName}');
+        toast(
+            context.l10n.adminSearchQueuedFor((author.authorName).toString()));
       case LibraryAction.interactive:
         final records = (await service.getBooks(authorId: author.id))
-            .where((record) => record.authorId == author.id).toList()
-          ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+            .where((record) => record.authorId == author.id)
+            .toList()
+          ..sort(
+              (a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
         if (!context.mounted) return;
-        if (records.isEmpty) { toast('No books in this author’s library'); return; }
+        if (records.isEmpty) {
+          toast(context.l10n.adminNoBooksInThisAuthorSLibrary);
+          return;
+        }
         final id = await showActionSheet<int>(context,
-          title: 'Select book and format', actions: [
-            for (final record in records) SheetAction(record.id, Icons.menu_book, "${record.title} · ${record.format == BookFormat.audiobook ? 'Audiobook' : 'eBook'}"),
-          ]);
+            title: context.l10n.adminSelectBookAndFormat,
+            actions: [
+              for (final record in records)
+                SheetAction(record.id, Icons.menu_book,
+                    "${record.title} · ${record.format == BookFormat.audiobook ? context.l10n.adminAudiobook : context.l10n.adminEBook}"),
+            ]);
         if (id == null || !context.mounted) return;
         final selected = records.firstWhere((r) => r.id == id);
         await Navigator.of(context, rootNavigator: true).push(AmbientPageRoute(
-          builder: (_) => ChaptarrReleasesScreen(instanceId: instanceId,
-            bookId: id, bookTitle: selected.title)));
+            builder: (_) => ChaptarrReleasesScreen(
+                instanceId: instanceId,
+                bookId: id,
+                bookTitle: selected.title)));
       case LibraryAction.edit:
       case LibraryAction.monitoring:
-        final saved = await Navigator.of(context, rootNavigator: true).push<bool>(AmbientPageRoute(
-          builder: (_) => LibrarySettingsScreen(service: settings, title: author.authorName,
-            monitoringOnly: action == LibraryAction.monitoring)));
-        if (saved == true && context.mounted) { toast('Settings saved'); onChanged?.call(); }
+        final saved = await Navigator.of(context, rootNavigator: true)
+            .push<bool>(AmbientPageRoute(
+                builder: (_) => LibrarySettingsScreen(
+                    service: settings,
+                    title: author.authorName,
+                    monitoringOnly: action == LibraryAction.monitoring)));
+        if (saved == true && context.mounted) {
+          toast(context.l10n.adminSettingsSaved);
+          onChanged?.call();
+        }
       case LibraryAction.refresh:
         await service.refreshAuthor(author.id);
-        toast('Refresh queued for ${author.authorName}');
+        toast(
+            context.l10n.adminRefreshQueuedFor((author.authorName).toString()));
         if (context.mounted) onChanged?.call();
       case LibraryAction.rescan:
         await service.rescanAuthor(author.id);
-        toast('Rescan queued for ${author.authorName}');
+        toast(
+            context.l10n.adminRescanQueuedFor((author.authorName).toString()));
         if (context.mounted) onChanged?.call();
       case LibraryAction.remove:
-        final deleteFiles = await confirmLibraryRemoval(context, title: author.authorName,
-          noun: 'author', service: 'Chaptarr');
+        final deleteFiles = await confirmLibraryRemoval(context,
+            title: author.authorName, noun: 'author', service: 'Chaptarr');
         if (deleteFiles == null) return;
         await service.deleteAuthor(author.id, deleteFiles: deleteFiles);
-        toast('Removed ${author.authorName}');
+        toast(context.l10n.adminRemoved((author.authorName).toString()));
         if (context.mounted) onRemoved?.call();
     }
-  } catch (e) { toast('Action failed: $e'); }
+  } catch (e) {
+    toast(context.l10n.adminActionFailed((e).toString()));
+  }
 }

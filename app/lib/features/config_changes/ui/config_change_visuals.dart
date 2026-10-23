@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/operations_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -13,9 +15,10 @@ Color configChangeStatusColor(ConfigChange change) => switch (change.status) {
     };
 
 IconData configChangeStatusIcon(ConfigChange change) => switch (change.status) {
-      ConfigChangeStatus.applied => change.operation == ConfigChangeOperation.revert
-          ? Icons.restore_rounded
-          : Icons.check_circle_outline,
+      ConfigChangeStatus.applied =>
+        change.operation == ConfigChangeOperation.revert
+            ? Icons.restore_rounded
+            : Icons.check_circle_outline,
       ConfigChangeStatus.executing => Icons.sync_rounded,
       ConfigChangeStatus.failed => Icons.error_outline,
       ConfigChangeStatus.outcomeUnknown => Icons.help_outline,
@@ -29,7 +32,7 @@ class ConfigChangeStatusPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => StatusPill(
-        text: change.statusLabel,
+        text: localizeOperationsLabel(context, change.statusLabel),
         color: configChangeStatusColor(change),
       );
 }
@@ -48,13 +51,12 @@ class ConfigChangeTarget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final instance = change.instanceName.trim().isEmpty
-        ? 'Unnamed instance'
+        ? context.l10n.opsUnnamedInstance
         : change.instanceName.trim();
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Icon(Icons.dns_outlined,
-            size: 18, color: AppTheme.textSecondary),
+        const Icon(Icons.dns_outlined, size: 18, color: AppTheme.textSecondary),
         const SizedBox(width: 8),
         Expanded(
           child: Column(
@@ -97,13 +99,15 @@ class ConfigChangeTarget extends StatelessWidget {
   }
 }
 
-String configCurrentStatusLabel(ConfigChange change) =>
+String configCurrentStatusLabel(BuildContext context, ConfigChange change) =>
     switch (change.currentStatus) {
-      ConfigCurrentStatus.matchesApplied => 'Current settings match',
-      ConfigCurrentStatus.different => 'Current settings changed',
-      ConfigCurrentStatus.unavailable => 'Current settings unavailable',
-      ConfigCurrentStatus.unknown => 'Current status unknown',
-      null => 'Current status not checked',
+      ConfigCurrentStatus.matchesApplied =>
+        context.l10n.opsCurrentSettingsMatch,
+      ConfigCurrentStatus.different => context.l10n.opsCurrentSettingsChanged,
+      ConfigCurrentStatus.unavailable =>
+        context.l10n.opsCurrentSettingsUnavailable,
+      ConfigCurrentStatus.unknown => context.l10n.opsCurrentStatusUnknown,
+      null => context.l10n.opsCurrentStatusNotChecked,
     };
 
 Color configCurrentStatusColor(ConfigChange change) =>

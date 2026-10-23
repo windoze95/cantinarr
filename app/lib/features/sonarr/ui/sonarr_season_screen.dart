@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -39,8 +40,7 @@ class SonarrSeasonScreen extends ConsumerStatefulWidget {
   });
 
   @override
-  ConsumerState<SonarrSeasonScreen> createState() =>
-      _SonarrSeasonScreenState();
+  ConsumerState<SonarrSeasonScreen> createState() => _SonarrSeasonScreenState();
 }
 
 class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
@@ -55,8 +55,9 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
 
   bool get _allSeasons => widget.seasonNumber == null;
 
-  String get _title =>
-      _allSeasons ? 'All Seasons' : seasonLabel(widget.seasonNumber!);
+  String get _title => _allSeasons
+      ? context.l10n.adminAllSeasons
+      : seasonLabel(widget.seasonNumber!, strings: context.l10n);
 
   @override
   void initState() {
@@ -104,7 +105,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _error = 'Failed to load episodes: $e';
+        _error = context.l10n.adminFailedToLoadEpisodes((e).toString());
       });
     }
   }
@@ -118,16 +119,20 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   /// Season scope: SeasonSearch for one season, SeriesSearch (monitored
   /// episodes) for All Seasons.
   Future<void> _automaticSearch() async {
+    final translations = context.l10n;
     try {
       if (_allSeasons) {
         await _service.searchSeries(_series.id);
-        _toast('Searching for monitored episodes of ${_series.title}…');
+        _toast(translations
+            .adminSearchingForMonitoredEpisodesOf((_series.title).toString()));
       } else {
         await _service.searchSeason(_series.id, widget.seasonNumber!);
-        _toast('Searching for ${seasonLabel(widget.seasonNumber!)}…');
+        _toast(translations.adminSearchingFor2(
+            (seasonLabel(widget.seasonNumber!, strings: translations))
+                .toString()));
       }
     } catch (e) {
-      _toast('Search failed: $e');
+      _toast(translations.adminSearchFailed((e).toString()));
     }
   }
 
@@ -139,19 +144,19 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
       final seasons = [..._series.seasons]
         ..sort((a, b) => a.seasonNumber.compareTo(b.seasonNumber));
       if (seasons.isEmpty) {
-        _toast('No seasons available');
+        _toast(context.l10n.adminNoSeasonsAvailable);
         return;
       }
       seasonNumber = await showDialog<int>(
         context: context,
         builder: (ctx) => SimpleDialog(
           backgroundColor: AppTheme.surface,
-          title: const Text('Select Season'),
+          title: Text(context.l10n.adminSelectSeason),
           children: seasons
               .map((s) => SimpleDialogOption(
                     onPressed: () => Navigator.pop(ctx, s.seasonNumber),
                     child: Text(
-                      seasonLabel(s.seasonNumber),
+                      seasonLabel(s.seasonNumber, strings: context.l10n),
                       style: TextStyle(
                         color: _series.monitored && s.monitored
                             ? AppTheme.textPrimary
@@ -178,11 +183,13 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   }
 
   Future<void> _automaticEpisodeSearch(SonarrEpisode episode) async {
+    final translations = context.l10n;
     try {
       await _service.searchEpisodes([episode.id]);
-      _toast('Searching for ${episode.seasonEpisodeLabel}…');
+      _toast(translations
+          .adminSearchingFor2((episode.seasonEpisodeLabel).toString()));
     } catch (e) {
-      _toast('Search failed: $e');
+      _toast(translations.adminSearchFailed((e).toString()));
     }
   }
 
@@ -217,10 +224,12 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
         ];
       });
       _toast(target
-          ? 'Monitoring ${episode.seasonEpisodeLabel}'
-          : 'Unmonitored ${episode.seasonEpisodeLabel}');
+          ? context.l10n
+              .adminMonitoring2((episode.seasonEpisodeLabel).toString())
+          : context.l10n
+              .adminUnmonitored2((episode.seasonEpisodeLabel).toString()));
     } catch (e) {
-      _toast('Could not change monitoring: $e');
+      _toast(context.l10n.adminCouldNotChangeMonitoring((e).toString()));
     }
   }
 
@@ -233,17 +242,22 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
       context,
       title: title,
       actions: [
-        const SheetAction('automatic', Icons.search, 'Automatic Search'),
-        const SheetAction(
-            'interactive', Icons.manage_search, 'Interactive Search'),
-        const SheetAction('select', Icons.checklist, 'Select Episodes'),
+        SheetAction(
+            'automatic', Icons.search, context.l10n.adminAutomaticSearch),
+        SheetAction('interactive', Icons.manage_search,
+            context.l10n.adminInteractiveSearch),
+        SheetAction(
+            'select', Icons.checklist, context.l10n.adminSelectEpisodes),
         SheetAction(
             'monitor',
             episode.monitored ? Icons.bookmark_border : Icons.bookmark,
-            episode.monitored ? 'Unmonitor Episode' : 'Monitor Episode',
+            episode.monitored
+                ? context.l10n.adminUnmonitorEpisode
+                : context.l10n.adminMonitorEpisode,
             enabled: _series.monitored),
         if (episode.hasFile)
-          const SheetAction('delete', Icons.delete_outline, 'Delete File',
+          SheetAction(
+              'delete', Icons.delete_outline, context.l10n.adminDeleteFile,
               color: AppTheme.error),
       ],
     );
@@ -265,28 +279,30 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   /// Confirms then deletes the downloaded files of [episodes] (those that
   /// have one). Used by the episode menu and the selection-mode Delete button.
   Future<void> _confirmDeleteFiles(List<SonarrEpisode> episodes) async {
+    final translations = context.l10n;
     final withFiles = [
       for (final e in episodes)
         if (e.hasFile && e.episodeFileId > 0) e,
     ];
     if (withFiles.isEmpty) return;
     final what = withFiles.length == 1
-        ? 'the downloaded file for ${withFiles.single.seasonEpisodeLabel}'
-        : '${withFiles.length} downloaded files';
+        ? translations.adminTheDownloadedFileFor(
+            (withFiles.single.seasonEpisodeLabel).toString())
+        : translations.adminDownloadedFiles((withFiles.length).toString());
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.surface,
-        title: const Text('Delete Files'),
-        content: Text('Delete $what from disk?'),
+        title: Text(translations.adminDeleteFiles),
+        content: Text(translations.adminDeleteFromDisk((what).toString())),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+              child: Text(translations.adminCancel)),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: TextButton.styleFrom(foregroundColor: AppTheme.error),
-            child: const Text('Delete'),
+            child: Text(translations.adminDelete),
           ),
         ],
       ),
@@ -296,12 +312,12 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
       await _service
           .deleteEpisodeFiles([for (final e in withFiles) e.episodeFileId]);
       _toast(withFiles.length == 1
-          ? 'Deleted 1 file'
-          : 'Deleted ${withFiles.length} files');
+          ? translations.adminDeleted1File
+          : translations.adminDeletedFiles((withFiles.length).toString()));
       if (_selecting) _stopSelecting();
       _load();
     } catch (e) {
-      _toast('Delete failed: $e');
+      _toast(translations.adminDeleteFailed((e).toString()));
     }
   }
 
@@ -335,24 +351,27 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
     _startSelecting(preselect: undownloadedEpisodeIds(_episodes));
   }
 
-  List<SonarrEpisode> get _selectedEpisodes =>
-      [for (final e in _episodes) if (_selectedIds.contains(e.id)) e];
+  List<SonarrEpisode> get _selectedEpisodes => [
+        for (final e in _episodes)
+          if (_selectedIds.contains(e.id)) e
+      ];
 
   /// Selected episodes that actually have a file on disk (deletable).
   int get _selectedFileCount =>
       _selectedEpisodes.where((e) => e.hasFile && e.episodeFileId > 0).length;
 
   Future<void> _searchSelected() async {
+    final translations = context.l10n;
     final ids = _selectedIds.toList()..sort();
     if (ids.isEmpty) return;
     try {
       await _service.searchEpisodes(ids);
       _toast(ids.length == 1
-          ? 'Searching for 1 episode…'
-          : 'Searching for ${ids.length} episodes…');
+          ? translations.adminSearchingFor1Episode
+          : translations.adminSearchingForEpisodes((ids.length).toString()));
       _stopSelecting();
     } catch (e) {
-      _toast('Search failed: $e');
+      _toast(translations.adminSearchFailed((e).toString()));
     }
   }
 
@@ -437,8 +456,8 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
       return FullScreenError(message: _error!, onRetry: _load);
     }
     if (_episodes.isEmpty) {
-      return const Center(
-        child: Text('No episodes',
+      return Center(
+        child: Text(context.l10n.adminNoEpisodes,
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
       );
     }
@@ -486,10 +505,11 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   }
 }
 
-String formatEpisodeAirDate(SonarrEpisode e) {
+String formatEpisodeAirDate(SonarrEpisode e, {AppLocalizations? strings}) {
   final dt = e.airDateUtc?.toLocal() ??
       (e.airDate != null ? DateTime.tryParse(e.airDate!) : null);
-  if (dt == null) return 'TBA';
+  if (dt == null)
+    return (strings ?? lookupAppLocalizations(const Locale('en'))).adminTBA;
   return DateFormat('MMMM d, yyyy').format(dt);
 }
 
@@ -505,7 +525,7 @@ class _SeasonHeader extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(seasonLabel(seasonNumber),
+          Text(seasonLabel(seasonNumber, strings: context.l10n),
               style: const TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 16,
@@ -548,7 +568,7 @@ class _EpisodeTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final status = episodeStatusLine(episode, queueItem);
+    final status = episodeStatusLine(episode, queueItem, strings: context.l10n);
     return InkWell(
       onTap: onTap,
       onLongPress: onLongPress,
@@ -594,7 +614,9 @@ class _EpisodeTile extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      episode.title ?? 'Episode ${episode.episodeNumber}',
+                      episode.title ??
+                          context.l10n
+                              .adminEpisode((episode.episodeNumber).toString()),
                       style: const TextStyle(
                           color: AppTheme.textPrimary,
                           fontSize: 15,
@@ -603,7 +625,7 @@ class _EpisodeTile extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 2),
-                    Text(formatEpisodeAirDate(episode),
+                    Text(formatEpisodeAirDate(episode, strings: context.l10n),
                         style: const TextStyle(
                             color: AppTheme.textSecondary, fontSize: 12)),
                     const SizedBox(height: 4),
@@ -623,7 +645,7 @@ class _EpisodeTile extends StatelessWidget {
             if (!selecting)
               IconButton(
                 icon: const Icon(Icons.search, color: AppTheme.textSecondary),
-                tooltip: 'Automatic search',
+                tooltip: context.l10n.adminAutomaticSearch2,
                 onPressed: onSearch,
               ),
           ],
@@ -669,29 +691,38 @@ class _SelectionBar extends StatelessWidget {
         children: [
           IconButton(
             icon: const Icon(Icons.close, color: AppTheme.textSecondary),
-            tooltip: 'Cancel selection',
+            tooltip: context.l10n.adminCancelSelection,
             onPressed: onClose,
           ),
           Expanded(
             child: Text(
-              '$selectedCount selected',
+              context.l10n.adminSelected((selectedCount).toString()),
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          TextButton(
-              onPressed: onSelectAll,
-              style: buttonStyle,
-              child: const Text('All')),
-          TextButton(
-              onPressed: onSelectUndownloaded,
-              style: buttonStyle,
-              child: const Text('Undownloaded')),
-          TextButton(
-              onPressed: onSelectNone,
-              style: buttonStyle,
-              child: const Text('None')),
+          Expanded(
+            flex: 3,
+            child: Wrap(
+              alignment: WrapAlignment.end,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                TextButton(
+                    onPressed: onSelectAll,
+                    style: buttonStyle,
+                    child: Text(context.l10n.adminAll)),
+                TextButton(
+                    onPressed: onSelectUndownloaded,
+                    style: buttonStyle,
+                    child: Text(context.l10n.adminUndownloaded)),
+                TextButton(
+                    onPressed: onSelectNone,
+                    style: buttonStyle,
+                    child: Text(context.l10n.adminNone)),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -738,29 +769,33 @@ class _ActionBar extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: selecting ? _buildSearchSelected() : _buildSplitAutomatic(),
+            child: selecting
+                ? _buildSearchSelected(context)
+                : _buildSplitAutomatic(context),
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: selecting ? _buildDeleteSelected() : _buildInteractive(),
+            child: selecting
+                ? _buildDeleteSelected(context)
+                : _buildInteractive(context),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildInteractive() {
+  Widget _buildInteractive(BuildContext context) {
     return OutlinedButton.icon(
       onPressed: onInteractive,
-      icon: const Icon(Icons.person_outline,
-          size: 18, color: AppTheme.available),
-      label: const Text('Interactive',
+      icon:
+          const Icon(Icons.person_outline, size: 18, color: AppTheme.available),
+      label: Text(context.l10n.adminInteractive,
           style: TextStyle(color: AppTheme.textPrimary)),
       style: _buttonStyle(),
     );
   }
 
-  Widget _buildSearchSelected() {
+  Widget _buildSearchSelected(BuildContext context) {
     final enabled = selectedCount > 0;
     return OutlinedButton.icon(
       onPressed: enabled ? onSearchSelected : null,
@@ -769,8 +804,8 @@ class _ActionBar extends StatelessWidget {
           color: enabled ? AppTheme.available : AppTheme.textSecondary),
       label: Text(
         selectedCount == 1
-            ? 'Search 1 episode'
-            : 'Search $selectedCount episodes',
+            ? context.l10n.adminSearch1Episode
+            : context.l10n.adminSearchEpisodes(selectedCount.toString()),
         style: TextStyle(
             color: enabled ? AppTheme.textPrimary : AppTheme.textSecondary),
       ),
@@ -780,7 +815,7 @@ class _ActionBar extends StatelessWidget {
 
   /// Deletes the downloaded files among the selected episodes; enabled only
   /// when the selection contains at least one file.
-  Widget _buildDeleteSelected() {
+  Widget _buildDeleteSelected(BuildContext context) {
     final enabled = selectedFileCount > 0;
     return OutlinedButton.icon(
       onPressed: enabled ? onDeleteSelected : null,
@@ -788,10 +823,10 @@ class _ActionBar extends StatelessWidget {
           size: 18, color: enabled ? AppTheme.error : AppTheme.textSecondary),
       label: Text(
         selectedFileCount == 1
-            ? 'Delete 1 file'
-            : 'Delete $selectedFileCount files',
-        style: TextStyle(
-            color: enabled ? AppTheme.error : AppTheme.textSecondary),
+            ? context.l10n.adminDelete1File
+            : context.l10n.adminDeleteFiles2(selectedFileCount.toString()),
+        style:
+            TextStyle(color: enabled ? AppTheme.error : AppTheme.textSecondary),
       ),
       style: _buttonStyle(),
     );
@@ -800,7 +835,7 @@ class _ActionBar extends StatelessWidget {
   /// Split button: the main segment runs the season-wide automatic search, the
   /// arrow reveals "Individual episodes" (selection mode, undownloaded
   /// preselected).
-  Widget _buildSplitAutomatic() {
+  Widget _buildSplitAutomatic(BuildContext context) {
     return IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -810,11 +845,11 @@ class _ActionBar extends StatelessWidget {
               onPressed: onAutomatic,
               icon:
                   const Icon(Icons.search, size: 18, color: AppTheme.available),
-              label: const Text('Automatic',
+              label: Text(context.l10n.adminAutomatic,
                   style: TextStyle(color: AppTheme.textPrimary)),
               style: _buttonStyle(
-                  radius: const BorderRadius.horizontal(
-                      left: Radius.circular(10))),
+                  radius:
+                      const BorderRadius.horizontal(left: Radius.circular(10))),
             ),
           ),
           SizedBox(
@@ -829,9 +864,9 @@ class _ActionBar extends StatelessWidget {
                   leadingIcon: const Icon(Icons.checklist,
                       size: 18, color: AppTheme.textSecondary),
                   onPressed: onAutomaticEpisodes,
-                  child: const Text('Individual episodes',
-                      style: TextStyle(
-                          color: AppTheme.textPrimary, fontSize: 14)),
+                  child: Text(context.l10n.adminIndividualEpisodes,
+                      style:
+                          TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
                 ),
               ],
               builder: (context, controller, _) => OutlinedButton(

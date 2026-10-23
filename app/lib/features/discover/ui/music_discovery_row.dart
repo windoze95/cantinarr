@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -52,7 +54,7 @@ class MusicDiscoveryCard extends ConsumerWidget {
       placeholderIcon: Icons.album,
       artworkAspectRatio: 1,
       width: width,
-      statusLabel: badge?.label,
+      statusLabel: browseNullableLabel(context, badge?.label),
       statusColor: color,
       onTap: () => context.push(album.detailLocation(instanceId), extra: album),
     );
@@ -71,7 +73,7 @@ class MusicPeriodSelector extends StatelessWidget {
         children: [
           for (final entry in musicPeriods.entries)
             ChoiceChip(
-              label: Text(entry.value),
+              label: Text(browseLabel(context, entry.value)),
               selected: period == entry.key,
               onSelected: (selected) {
                 if (selected) onChanged(entry.key);
@@ -93,11 +95,12 @@ class MusicFeedNotice extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(message, style: const TextStyle(color: AppTheme.textSecondary)),
+        Text(browseLabel(context, message),
+            style: const TextStyle(color: AppTheme.textSecondary)),
         if (state.error != null && !state.unsupported)
           TextButton(
               onPressed: state.loading ? null : retry,
-              child: const Text('Retry')),
+              child: Text(context.l10n.browseRetry)),
       ]),
     );
   }
@@ -136,12 +139,13 @@ class MusicDiscoveryRow extends ConsumerWidget {
               padding:
                   EdgeInsets.symmetric(horizontal: viewport >= 900 ? 24 : 16),
               child: SectionHeader(
-                  title: query.title,
+                  title: browseLabel(context, query.title),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       IconButton(
-                        tooltip: 'Refresh ${query.title}',
+                        tooltip: context.l10n.browseRefreshFeed(
+                            browseLabel(context, query.title)),
                         icon: const Icon(Icons.refresh, size: 20),
                         onPressed: state.loading
                             ? null
@@ -161,7 +165,7 @@ class MusicDiscoveryRow extends ConsumerWidget {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
               child: onPeriodChanged == null
-                  ? Text(query.description,
+                  ? Text(browseLabel(context, query.description),
                       style: const TextStyle(color: AppTheme.textSecondary))
                   : MusicPeriodSelector(
                       period: query.period, onChanged: onPeriodChanged!),
@@ -187,7 +191,8 @@ class MusicDiscoveryRow extends ConsumerWidget {
                 state.nextPage != null &&
                 state.error == null)
               TextButton(
-                  onPressed: notifier.loadMore, child: const Text('Load more')),
+                  onPressed: notifier.loadMore,
+                  child: Text(context.l10n.browseLoadMore)),
           ]),
         ));
   }
@@ -203,27 +208,28 @@ class MusicGenreStrip extends ConsumerWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const SectionHeader(title: 'Browse by genre'),
+        SectionHeader(title: context.l10n.browseBrowseByGenre),
         const SizedBox(height: 8),
         if (genres.isLoading && previous == null)
           const LinearProgressIndicator(),
         if (genres.hasError) ...[
           Text(genres.error is MusicDiscoveryUnsupported
-              ? musicUpdateMessage
+              ? browseLabel(context, musicUpdateMessage)
               : previous == null
-                  ? 'Could not load music genres.'
-                  : 'Refresh failed. Your previous genres are still shown.'),
+                  ? context.l10n.browseCouldNotLoadMusicGenres
+                  : context
+                      .l10n.browseRefreshFailedYourPreviousGenresAreStillShown),
           if (genres.error is! MusicDiscoveryUnsupported)
             TextButton(
                 onPressed: () =>
                     ref.invalidate(musicGenresProvider(instanceId)),
-                child: const Text('Retry')),
+                child: Text(context.l10n.browseRetry)),
         ],
         if (previous != null)
           Wrap(spacing: 8, runSpacing: 4, children: [
             for (final genre in previous)
               ActionChip(
-                  label: Text(genre.name),
+                  label: Text(browseLabel(context, genre.name)),
                   onPressed: () => context.push(MusicBrowseQuery(
                           feed: 'genre',
                           instanceId: instanceId,

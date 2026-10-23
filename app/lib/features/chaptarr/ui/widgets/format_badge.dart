@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../data/chaptarr_models.dart';
@@ -16,12 +17,12 @@ class ChaptarrFormatBadge extends StatelessWidget {
     final ({IconData icon, String label, Color color})? spec = switch (format) {
       BookFormat.audiobook => (
           icon: Icons.headphones,
-          label: 'Audiobook',
+          label: context.l10n.adminAudiobook,
           color: AppTheme.accent,
         ),
       BookFormat.ebook => (
           icon: Icons.menu_book,
-          label: 'eBook',
+          label: context.l10n.adminEBook,
           color: AppTheme.downloading,
         ),
       BookFormat.unknown => null,

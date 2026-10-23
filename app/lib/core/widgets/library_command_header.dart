@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 
 import '../layout/adaptive.dart';
@@ -37,29 +38,34 @@ class _LibraryCommandLayoutState extends State<LibraryCommandLayout> {
   bool _collapsed = false;
 
   bool _handleScroll(ScrollNotification notification) {
-    if (!AppBreakpoints.isMobile(context) || notification.depth != 0 ||
+    if (!AppBreakpoints.isMobile(context) ||
+        notification.depth != 0 ||
         notification.metrics.axis != Axis.vertical ||
         notification is! ScrollUpdateNotification) {
       return false;
     }
 
     final delta = notification.scrollDelta ?? 0;
-    final atTop = notification.metrics.pixels <=
-        notification.metrics.minScrollExtent + 4;
+    final atTop =
+        notification.metrics.pixels <= notification.metrics.minScrollExtent + 4;
     final collapsed = atTop || delta < -2
-        ? false : delta > 2 ? true : _collapsed;
+        ? false
+        : delta > 2
+            ? true
+            : _collapsed;
     if (_collapsed != collapsed) setState(() => _collapsed = collapsed);
     return false;
   }
 
   @override
-  Widget build(BuildContext context) => NotificationListener<ScrollNotification>(
-    onNotification: _handleScroll,
-    child: Column(children: [
-      widget.headerBuilder(_collapsed && AppBreakpoints.isMobile(context)),
-      ...widget.children,
-    ]),
-  );
+  Widget build(BuildContext context) =>
+      NotificationListener<ScrollNotification>(
+        onNotification: _handleScroll,
+        child: Column(children: [
+          widget.headerBuilder(_collapsed && AppBreakpoints.isMobile(context)),
+          ...widget.children,
+        ]),
+      );
 }
 
 /// Shared command header for the four admin libraries.
@@ -107,21 +113,24 @@ class LibraryCommandHeader extends StatelessWidget {
           final wideViewControl = SegmentedButton<LibraryViewMode>(
             showSelectedIcon: false,
             segments: [
-              ButtonSegment(value: LibraryViewMode.list,
+              ButtonSegment(
+                  value: LibraryViewMode.list,
                   icon: const Icon(Icons.view_list_rounded),
-                  label: wide ? const Text('List') : null,
-                  tooltip: 'List view'),
-              ButtonSegment(value: LibraryViewMode.grid,
+                  label: wide ? Text(context.l10n.commonList) : null,
+                  tooltip: context.l10n.commonListView),
+              ButtonSegment(
+                  value: LibraryViewMode.grid,
                   icon: const Icon(Icons.grid_view_rounded),
-                  label: wide ? const Text('Grid') : null,
-                  tooltip: 'Grid view'),
+                  label: wide ? Text(context.l10n.commonGrid) : null,
+                  tooltip: context.l10n.commonGridView),
             ],
             selected: {viewMode},
             onSelectionChanged: (selection) =>
                 onViewModeChanged(selection.single),
           );
           final nextViewMode = viewMode == LibraryViewMode.list
-              ? LibraryViewMode.grid : LibraryViewMode.list;
+              ? LibraryViewMode.grid
+              : LibraryViewMode.list;
           final compactViewControl = Container(
             width: 48,
             height: 48,
@@ -131,9 +140,12 @@ class LibraryCommandHeader extends StatelessWidget {
               border: Border.all(color: AppTheme.border),
             ),
             child: IconButton(
-              tooltip: '${nextViewMode == LibraryViewMode.grid ? 'Grid' : 'List'} view',
+              tooltip: nextViewMode == LibraryViewMode.grid
+                  ? context.l10n.commonGridView
+                  : context.l10n.commonListView,
               icon: Icon(nextViewMode == LibraryViewMode.grid
-                  ? Icons.grid_view_rounded : Icons.view_list_rounded),
+                  ? Icons.grid_view_rounded
+                  : Icons.view_list_rounded),
               onPressed: () => onViewModeChanged(nextViewMode),
             ),
           );
@@ -175,7 +187,8 @@ class LibraryCommandHeader extends StatelessWidget {
               TweenAnimationBuilder<double>(
                 tween: Tween(begin: 1, end: collapsed ? 0 : 1),
                 duration: MediaQuery.disableAnimationsOf(context)
-                    ? Duration.zero : const Duration(milliseconds: 200),
+                    ? Duration.zero
+                    : const Duration(milliseconds: 200),
                 curve: Curves.easeOut,
                 builder: (context, value, child) => ClipRect(
                   child: Align(
@@ -214,11 +227,13 @@ class LibraryCommandHeader extends StatelessWidget {
                         decoration: InputDecoration(
                           hintText: searchHint,
                           prefixIcon: wide
-                              ? const Icon(Icons.filter_alt_outlined) : null,
+                              ? const Icon(Icons.filter_alt_outlined)
+                              : null,
                           suffixIcon: searchController.text.isEmpty
                               ? null
                               : IconButton(
-                                  tooltip: 'Clear library filter',
+                                  tooltip:
+                                      context.l10n.commonClearLibraryFilter,
                                   icon: const Icon(Icons.close_rounded),
                                   onPressed: () {
                                     searchController.clear();

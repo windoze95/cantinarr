@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -64,7 +65,7 @@ class _MonitoringActivityScreenState
     if (service == null) {
       setState(() {
         _isLoading = false;
-        _error = 'No Tautulli or Tracearr instance configured. Add one from Settings > Add Instance.';
+        _error = context.l10n.adminNoTautulliOrTracearrInstanceConfiguredAdd;
       });
       return;
     }
@@ -84,7 +85,7 @@ class _MonitoringActivityScreenState
       if (silent) return;
       setState(() {
         _isLoading = false;
-        _error = 'Failed to load activity: $e';
+        _error = context.l10n.adminFailedToLoadActivity((e).toString());
       });
     }
   }
@@ -111,7 +112,8 @@ class _MonitoringActivityScreenState
                   textAlign: TextAlign.center),
             ),
             const SizedBox(height: 16),
-            ElevatedButton(onPressed: _load, child: const Text('Retry')),
+            ElevatedButton(
+                onPressed: _load, child: Text(context.l10n.adminRetry)),
           ],
         ),
       );
@@ -132,13 +134,13 @@ class _MonitoringActivityScreenState
             child: activity.streams.isEmpty
                 ? ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
-                    children: const [
+                    children: [
                       SizedBox(height: 160),
                       Icon(Icons.tv_off_outlined,
                           size: 48, color: AppTheme.textSecondary),
                       SizedBox(height: 12),
                       Center(
-                        child: Text('Nothing is playing',
+                        child: Text(context.l10n.adminNothingIsPlaying,
                             style: TextStyle(
                                 color: AppTheme.textSecondary, fontSize: 16)),
                       ),
@@ -190,8 +192,9 @@ class _ActivityHeader extends StatelessWidget {
           Expanded(
             child: Text(
               streamCount > 0
-                  ? '$streamCount stream${streamCount == 1 ? '' : 's'} • $bandwidthFormatted'
-                  : 'No active streams',
+                  ? context.l10n
+                      .polishActiveStreams(streamCount, bandwidthFormatted)
+                  : context.l10n.adminNoActiveStreams,
               style: const TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 13,
@@ -205,26 +208,27 @@ class _ActivityHeader extends StatelessWidget {
   }
 }
 
-({IconData icon, Color color, String label}) _stateStyle(
-    ActiveStream stream) {
+({IconData icon, Color color, String label}) _stateStyle(ActiveStream stream,
+    {AppLocalizations? strings}) {
   if (stream.isPaused) {
     return (
       icon: Icons.pause_circle_outline,
       color: AppTheme.unavailable,
-      label: 'Paused'
+      label: (strings ?? lookupAppLocalizations(const Locale('en'))).adminPaused
     );
   }
   if (stream.isBuffering) {
     return (
       icon: Icons.downloading_outlined,
       color: AppTheme.requested,
-      label: 'Buffering'
+      label:
+          (strings ?? lookupAppLocalizations(const Locale('en'))).adminBuffering
     );
   }
   return (
     icon: Icons.play_circle_outline,
     color: AppTheme.downloading,
-    label: 'Playing'
+    label: (strings ?? lookupAppLocalizations(const Locale('en'))).adminPlaying
   );
 }
 
@@ -237,7 +241,7 @@ class _StreamCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final state = _stateStyle(stream);
+    final state = _stateStyle(stream, strings: context.l10n);
     final playerLine = [
       if (stream.player.isNotEmpty) stream.player,
       if (stream.product.isNotEmpty && stream.product != stream.player)
@@ -309,7 +313,11 @@ class _StreamCard extends StatelessWidget {
                   children: [
                     _StreamBadge(text: state.label, color: state.color),
                     _StreamBadge(
-                      text: stream.streamTypeLabel,
+                      text: switch (stream.streamTypeLabel) {
+                        'Transcode' => context.l10n.polishTranscode,
+                        'Direct Stream' => context.l10n.polishDirectStream,
+                        _ => context.l10n.polishDirectPlay,
+                      },
                       color: stream.isTranscode
                           ? AppTheme.requested
                           : AppTheme.available,
@@ -323,7 +331,13 @@ class _StreamCard extends StatelessWidget {
                           color: AppTheme.textSecondary),
                     if (stream.mediaTypeLabel.isNotEmpty)
                       _StreamBadge(
-                          text: stream.mediaTypeLabel,
+                          text: switch (stream.mediaType) {
+                            'track' => context.l10n.commonLabelMusic,
+                            'live' => context.l10n.settingsLiveTv,
+                            'photo' => context.l10n.polishPhoto,
+                            'trailer' => context.l10n.browseTrailer,
+                            _ => stream.mediaTypeLabel,
+                          },
                           color: AppTheme.textSecondary),
                   ],
                 ),
@@ -331,7 +345,8 @@ class _StreamCard extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(left: 8),
                 child: Text(
-                  '${stream.progressPercent}% • ${stream.bandwidthFormatted}',
+                  context.l10n.admin((stream.progressPercent).toString(),
+                      (stream.bandwidthFormatted).toString()),
                   style: const TextStyle(
                       color: AppTheme.textSecondary, fontSize: 11),
                 ),

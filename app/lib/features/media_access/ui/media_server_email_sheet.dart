@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
@@ -71,7 +72,7 @@ class _MediaServerEmailSheetState extends ConsumerState<MediaServerEmailSheet> {
     if (_busy) return;
     final email = _controller.text.trim();
     if (!looksLikeEmail(email)) {
-      setState(() => _error = 'Enter a valid email address.');
+      setState(() => _error = context.l10n.mediaEnterAValidEmailAddress2e09ed);
       return;
     }
     setState(() {
@@ -103,24 +104,26 @@ class _MediaServerEmailSheetState extends ConsumerState<MediaServerEmailSheet> {
     }
   }
 
-  static const _genericFailure =
-      "Couldn't send the invite. Try again in a moment, or ask your admin.";
+  String get _genericFailure =>
+      context.l10n.mediaCouldnTSendTheInviteTryAgainInAMomentOrAskYourAdmin;
 
   String _describe(MediaAccessException e) {
     final name = widget.server.name;
     if (e.isTransport) {
-      return "Couldn't reach the server. Check your connection and try again.";
+      return context
+          .l10n.mediaCouldnTReachTheServerCheckYourConnectionAndTryAgain;
     }
     switch (e.code) {
       case 'name_taken':
-        return 'That email already has access to $name through another '
-            'account. Ask your admin.';
+        return context.l10n
+            .mediaThatEmailAlreadyHasAccessToValue0ThroughAnotherAccountAskYourAdmin(
+                (name).toString());
       case 'invalid_email':
-        return 'Enter a valid email address.';
+        return context.l10n.mediaEnterAValidEmailAddress2e09ed;
     }
     switch (e.status) {
       case 403:
-        return 'That server is not available to you.';
+        return context.l10n.mediaThatServerIsNotAvailableToYou;
       default:
         return _genericFailure;
     }
@@ -144,7 +147,7 @@ class _MediaServerEmailSheetState extends ConsumerState<MediaServerEmailSheet> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Your $product email',
+              context.l10n.mediaYourValue0Email((product).toString()),
               style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 18,
@@ -153,9 +156,11 @@ class _MediaServerEmailSheetState extends ConsumerState<MediaServerEmailSheet> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Enter the email of your $product account. Your invite to $name '
-              'is sent there, and you accept it from that email or in '
-              '$product.',
+              context.l10n
+                  .mediaEnterTheEmailOfYourValue0AccountYourInviteToValue1IsSentThereAndYouAcceptItFromThatEmailOr(
+                      (product).toString(),
+                      (name).toString(),
+                      (product).toString()),
               style: const TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 13,
@@ -170,8 +175,8 @@ class _MediaServerEmailSheetState extends ConsumerState<MediaServerEmailSheet> {
               keyboardType: TextInputType.emailAddress,
               autocorrect: false,
               textInputAction: TextInputAction.done,
-              decoration: const InputDecoration(
-                labelText: 'Email',
+              decoration: InputDecoration(
+                labelText: context.l10n.mediaEmail,
                 hintText: 'you@example.com',
                 prefixIcon: Icon(Icons.mail_outline),
               ),
@@ -195,7 +200,7 @@ class _MediaServerEmailSheetState extends ConsumerState<MediaServerEmailSheet> {
                         height: 18,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Text('Send my invite'),
+                    : Text(context.l10n.mediaSendMyInvite),
               ),
             ),
           ],

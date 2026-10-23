@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/operations_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -104,8 +106,7 @@ class _ConfigChangeHistoryScreenState
         for (final change in current) change.id: change,
         for (final change in older) change.id: change,
       };
-      final merged = byId.values.toList()
-        ..sort(_compareChanges);
+      final merged = byId.values.toList()..sort(_compareChanges);
       setState(() {
         _changes = merged;
         _hasOlder = older.length == _pageSize;
@@ -113,7 +114,7 @@ class _ConfigChangeHistoryScreenState
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not load older changes.')),
+        SnackBar(content: Text(context.l10n.opsCouldNotLoadOlderChanges)),
       );
     } finally {
       if (mounted) setState(() => _loadingOlder = false);
@@ -130,7 +131,9 @@ class _ConfigChangeHistoryScreenState
   }
 
   DateTime _sortDate(ConfigChange change) =>
-      change.completedAt ?? change.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      change.completedAt ??
+      change.createdAt ??
+      DateTime.fromMillisecondsSinceEpoch(0);
 
   int _compareChanges(ConfigChange a, ConfigChange b) {
     final byTime = _sortDate(b).compareTo(_sortDate(a));
@@ -139,21 +142,21 @@ class _ConfigChangeHistoryScreenState
 
   String _friendlyError(Object error) {
     final match = RegExp(r'"error":"([^"]+)"').firstMatch(error.toString());
-    return match?.group(1) ?? 'Could not load change history.';
+    return match?.group(1) ?? context.l10n.opsCouldNotLoadChangeHistory;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Configuration history')),
+      appBar: AppBar(title: Text(context.l10n.opsConfigurationHistory)),
       body: _loading
           ? const Center(
               child: CircularProgressIndicator(color: AppTheme.accent),
             )
           : _changes == null
               ? FullScreenError(
-                  title: 'Configuration history unavailable',
-                  message: _error ?? 'Could not load change history.',
+                  title: context.l10n.opsConfigurationHistoryUnavailable,
+                  message: _error ?? context.l10n.opsCouldNotLoadChangeHistory,
                   onRetry: _load,
                 )
               : RefreshIndicator(
@@ -189,12 +192,12 @@ class _ConfigChangeHistoryScreenState
                                 ),
                               ),
                               const SizedBox(width: 12),
-                              const Expanded(
+                              Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      'Connected-app changes',
+                                      context.l10n.opsConnectedAppChanges,
                                       style: TextStyle(
                                         color: AppTheme.textPrimary,
                                         fontSize: 15,
@@ -203,7 +206,8 @@ class _ConfigChangeHistoryScreenState
                                     ),
                                     SizedBox(height: 4),
                                     Text(
-                                      'AI and MCP quality-profile and custom-format writes are recorded here for review, live comparison, and troubleshooting. Applied profile updates can also be safely restored once while nothing has drifted.',
+                                      context.l10n
+                                          .opsAIAndMCPQualityProfileAndCustom,
                                       style: TextStyle(
                                         color: AppTheme.textSecondary,
                                         fontSize: 13,
@@ -219,8 +223,8 @@ class _ConfigChangeHistoryScreenState
                         if (_error != null) ...[
                           const SizedBox(height: 12),
                           ErrorBanner(
-                            message:
-                                "Couldn't refresh change history. Showing the last update.",
+                            message: context
+                                .l10n.opsCouldnTRefreshChangeHistoryShowingThe,
                             onRetry: _load,
                           ),
                         ],
@@ -243,7 +247,7 @@ class _ConfigChangeHistoryScreenState
                                         ),
                                       )
                                     : const Icon(Icons.expand_more_rounded),
-                                label: const Text('Load older changes'),
+                                label: Text(context.l10n.opsLoadOlderChanges),
                               ),
                             ),
                           ],
@@ -293,9 +297,9 @@ class _DayHeader extends StatelessWidget {
     final today = DateTime(now.year, now.month, now.day);
     final difference = today.difference(day).inDays;
     final label = switch (difference) {
-      0 => 'TODAY',
-      1 => 'YESTERDAY',
-      _ => DateFormat('MMM d, y').format(day).toUpperCase(),
+      0 => context.l10n.opsTODAY,
+      1 => context.l10n.opsYESTERDAY,
+      _ => DateFormat.yMMMd(context.l10n.dateLocale).format(day).toUpperCase(),
     };
     return Padding(
       padding: const EdgeInsets.fromLTRB(2, 14, 2, 8),
@@ -323,12 +327,12 @@ class _HistoryEntry extends StatelessWidget {
     final color = configChangeStatusColor(change);
     final time = change.completedAt ?? change.createdAt;
     final by = change.actorName.trim().isEmpty
-        ? change.sourceLabel
-        : '${change.sourceLabel} · ${change.actorName.trim()}';
+        ? localizeOperationsLabel(context, change.sourceLabel)
+        : '${localizeOperationsLabel(context, change.sourceLabel)} · ${change.actorName.trim()}';
     return Semantics(
       button: true,
       label:
-          '${change.displaySummary}. ${change.statusLabel}. ${change.serviceLabel}, ${change.instanceName}',
+          '${change.displaySummary}. ${localizeOperationsLabel(context, change.statusLabel)}. ${change.serviceLabel}, ${change.instanceName}',
       child: Stack(
         children: [
           Positioned(
@@ -418,7 +422,7 @@ class _EmptyHistory extends StatelessWidget {
   const _EmptyHistory();
 
   @override
-  Widget build(BuildContext context) => const Padding(
+  Widget build(BuildContext context) => Padding(
         padding: EdgeInsets.symmetric(vertical: 64, horizontal: 24),
         child: Column(
           children: [
@@ -429,7 +433,7 @@ class _EmptyHistory extends StatelessWidget {
             ),
             SizedBox(height: 14),
             Text(
-              'No connected-app changes yet',
+              context.l10n.opsNoConnectedAppChangesYet,
               style: TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 16,
@@ -438,7 +442,7 @@ class _EmptyHistory extends StatelessWidget {
             ),
             SizedBox(height: 6),
             Text(
-              'Changes made by the AI Assistant and other Cantinarr tools will appear here.',
+              context.l10n.opsChangesMadeByTheAIAssistantAnd,
               textAlign: TextAlign.center,
               style: TextStyle(color: AppTheme.textSecondary, height: 1.4),
             ),

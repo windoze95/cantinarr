@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/operations_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -72,7 +74,7 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
 
   String _friendlyError(Object e) {
     final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
-    return m != null ? m.group(1)! : 'Something went wrong';
+    return m != null ? m.group(1)! : context.l10n.opsSomethingWentWrongMessage;
   }
 
   Future<bool> _viewerIsAdmin() async {
@@ -187,29 +189,32 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
     // The attribution lanes are disjoint server-side and each is a subset of
     // the resolved total on the same clock, so the sentence always adds up.
     final lanes = <String>[
-      if (byAgent > 0) '$byAgent by the agent',
-      if (byRules > 0) '$byRules by your rules',
-      if (byAdmin > 0) '$byAdmin by you',
+      if (byAgent > 0) context.l10n.opsByAgentCount(byAgent.toString()),
+      if (byRules > 0) context.l10n.opsByRulesCount(byRules.toString()),
+      if (byAdmin > 0) context.l10n.opsByAdminCount(byAdmin.toString()),
     ];
     if (onOwn > 0) {
       lanes.add(lanes.isEmpty
-          ? (onOwn == 1 ? 'on its own' : 'all on their own')
-          : '$onOwn on their own');
+          ? (onOwn == 1
+              ? context.l10n.opsOnItsOwn
+              : context.l10n.opsAllOnTheirOwn)
+          : context.l10n.opsOnOwnCount(onOwn.toString()));
     }
     // The em dash follows the separator's wrap policy: breakable before, glued
     // after, so it leads a wrapped line instead of dangling at the end of one.
-    var head = _glueStat('$resolved resolved');
+    var head = _glueStat(context.l10n.opsResolvedStat(resolved));
     if (lanes.isNotEmpty) {
       head += ' —$_nbsp${lanes.map(_glueStat).join(' ·$_nbsp')}';
     }
     final window = <String>[
       head,
-      if (closedNoFix > 0) _glueStat('$closedNoFix closed by you (no fix)'),
-      if (dismissed > 0) _glueStat('$dismissed dismissed'),
+      if (closedNoFix > 0)
+        _glueStat(context.l10n.opsClosedNoFixStat(closedNoFix.toString())),
+      if (dismissed > 0) _glueStat(context.l10n.opsDismissedStat(dismissed)),
     ];
     final now = <String>[
-      if (needsAdmin > 0) '$needsAdmin need${needsAdmin == 1 ? 's' : ''} you',
-      if (paused > 0) '$paused rule${paused == 1 ? '' : 's'} paused',
+      if (needsAdmin > 0) context.l10n.opsNeedYouStat(needsAdmin),
+      if (paused > 0) context.l10n.opsPausedRulesStat(paused),
     ].map(_glueStat).toList();
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
@@ -229,7 +234,7 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${_glueStat('Last 7 days:')} ${window.join(' ·$_nbsp')}',
+                  '${_glueStat(context.l10n.opsLast7Days)} ${window.join(' ·$_nbsp')}',
                   style: const TextStyle(
                       color: AppTheme.textPrimary, fontSize: 13, height: 1.3),
                 ),
@@ -237,7 +242,7 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
                     child: Text(
-                      '${_glueStat('Right now:')} ${now.join(' ·$_nbsp')}',
+                      '${_glueStat(context.l10n.opsRightNow)} ${now.join(' ·$_nbsp')}',
                       style: const TextStyle(
                           color: AppTheme.textSecondary,
                           fontSize: 13,
@@ -259,7 +264,8 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
     if (_filter != _IssueFilter.closed) return null;
     final shown = _visibleIssues.length;
     if (_closedTotal <= shown) return null;
-    return 'Showing the $shown most recent of $_closedTotal closed issues.';
+    return context.l10n
+        .opsShowingRecentIssues(shown.toString(), _closedTotal.toString());
   }
 
   @override
@@ -271,8 +277,8 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
       appBar: AppBar(
         title: Text(
           ref.watch(authProvider).valueOrNull?.user?.isAdmin == true
-              ? 'Issues'
-              : 'My reports',
+              ? context.l10n.opsIssues
+              : context.l10n.opsMyReports,
         ),
       ),
       body: CenteredContent(
@@ -284,18 +290,18 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
               child: SizedBox(
                 width: double.infinity,
                 child: SegmentedButton<_IssueFilter>(
-                  segments: const [
+                  segments: [
                     ButtonSegment(
                       value: _IssueFilter.needsAttention,
-                      label: Text('Needs attention'),
+                      label: Text(context.l10n.opsNeedsAttention),
                     ),
                     ButtonSegment(
                       value: _IssueFilter.tracking,
-                      label: Text('Tracking'),
+                      label: Text(context.l10n.opsTracking),
                     ),
                     ButtonSegment(
                       value: _IssueFilter.closed,
-                      label: Text('Closed'),
+                      label: Text(context.l10n.opsClosed),
                     ),
                   ],
                   selected: {_filter},
@@ -309,7 +315,7 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
                 child: IssueRefreshBanner(
-                  message: "Couldn't refresh issues. Showing the last update.",
+                  message: context.l10n.opsCouldnTRefreshIssuesShowingTheLast,
                   onRetry: _load,
                 ),
               ),
@@ -331,7 +337,7 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
                                 const SizedBox(height: 12),
                                 ElevatedButton(
                                     onPressed: _load,
-                                    child: const Text('Retry')),
+                                    child: Text(context.l10n.opsRetry)),
                               ],
                             ),
                           ),
@@ -348,12 +354,12 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
                                     Center(
                                       child: Text(
                                         switch (_filter) {
-                                          _IssueFilter.needsAttention =>
-                                            'No issues need attention.',
-                                          _IssueFilter.tracking =>
-                                            'Nothing is being tracked.',
+                                          _IssueFilter.needsAttention => context
+                                              .l10n.opsNoIssuesNeedAttention,
+                                          _IssueFilter.tracking => context
+                                              .l10n.opsNothingIsBeingTracked,
                                           _IssueFilter.closed =>
-                                            'No closed issues yet.',
+                                            context.l10n.opsNoClosedIssuesYet,
                                         },
                                         style: const TextStyle(
                                             color: AppTheme.textSecondary),
@@ -366,8 +372,8 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
                                       const AlwaysScrollableScrollPhysics(),
                                   padding:
                                       const EdgeInsets.symmetric(vertical: 8),
-                                  itemCount:
-                                      _visibleIssues.length + (_historyNote() != null ? 1 : 0),
+                                  itemCount: _visibleIssues.length +
+                                      (_historyNote() != null ? 1 : 0),
                                   separatorBuilder: (_, __) => const Divider(
                                       color: AppTheme.border, height: 1),
                                   itemBuilder: (context, index) {
@@ -452,7 +458,9 @@ class _IssueTile extends StatelessWidget {
       minLeadingWidth: 8,
       horizontalTitleGap: 12,
       title: Text(
-        issue.title.isEmpty ? 'Issue #${issue.id}' : issue.title,
+        issue.title.isEmpty
+            ? context.l10n.opsIssueNumber(issue.id.toString())
+            : issue.title,
         style: TextStyle(
           color: tracking ? AppTheme.textSecondary : AppTheme.textPrimary,
           fontWeight:
@@ -466,7 +474,7 @@ class _IssueTile extends StatelessWidget {
         children: [
           const SizedBox(height: 2),
           Text(
-            issue.scopeLabel +
+            localizeOperationsLabel(context, issue.scopeLabel) +
                 (issue.reporterName.isNotEmpty
                     ? ' · ${issue.reporterName}'
                     : ''),
@@ -474,9 +482,10 @@ class _IssueTile extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           if (issue.status == IssueStatus.needsAdmin &&
-              issue.resolutionLabel.trim().isNotEmpty) ...[
+              localizeOperationsLabel(context, issue.resolutionLabel.trim())
+                  .isNotEmpty) ...[
             Text(
-              issue.resolutionLabel.trim(),
+              localizeOperationsLabel(context, issue.resolutionLabel.trim()),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
@@ -491,9 +500,12 @@ class _IssueTile extends StatelessWidget {
             spacing: 6,
             runSpacing: 6,
             children: [
-              if (category != null) _chip(category.label),
-              _statusChip(issue.status),
-              if (issue.status.isTerminal) _chip(issue.resolutionKind.label),
+              if (category != null)
+                _chip(localizeOperationsLabel(context, category.label)),
+              _statusChip(context, issue.status),
+              if (issue.status.isTerminal)
+                _chip(localizeOperationsLabel(
+                    context, issue.resolutionKind.label)),
             ],
           ),
         ],
@@ -522,7 +534,7 @@ class _IssueTile extends StatelessWidget {
     );
   }
 
-  Widget _statusChip(IssueStatus status) {
+  Widget _statusChip(BuildContext context, IssueStatus status) {
     final color = _statusColor(status);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -532,7 +544,7 @@ class _IssueTile extends StatelessWidget {
         border: Border.all(color: color.withValues(alpha: 0.5)),
       ),
       child: Text(
-        status.label,
+        localizeOperationsLabel(context, status.label),
         style: TextStyle(
           color: color,
           fontSize: 11,

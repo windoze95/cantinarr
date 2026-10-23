@@ -1,3 +1,6 @@
+import '../../discover/ui/browse_labels.dart';
+import 'settings_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
@@ -73,7 +76,7 @@ class _DiscoverySettingsScreenState
 
   String _friendlyError(Object e) {
     final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
-    return m != null ? m.group(1)! : 'Something went wrong';
+    return m != null ? m.group(1)! : context.l10n.notificationSomethingWrong;
   }
 
   Future<void> _load() async {
@@ -139,7 +142,7 @@ class _DiscoverySettingsScreenState
       } catch (_) {}
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Saved')),
+        SnackBar(content: Text(context.l10n.settingsSaved)),
       );
     } catch (e) {
       if (!mounted) return;
@@ -167,17 +170,20 @@ class _DiscoverySettingsScreenState
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Remove $label?'),
-        content: Text(message ?? 'This will disable the $label integration.'),
+        title:
+            Text(context.l10n.settingsMessageRemoveValue1((label).toString())),
+        content: Text(message ??
+            context.l10n.settingsMessageThisWillDisableTheValue1Integration(
+                (label).toString())),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.settingsCancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child:
-                const Text('Remove', style: TextStyle(color: AppTheme.error)),
+            child: Text(context.l10n.settingsRemove,
+                style: TextStyle(color: AppTheme.error)),
           ),
         ],
       ),
@@ -195,12 +201,16 @@ class _DiscoverySettingsScreenState
         if (refreshed != null) _edited = refreshed;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$label credential removed')),
+        SnackBar(
+            content: Text(context.l10n
+                .settingsMessageValue1CredentialRemoved((label).toString()))),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to remove: $e')),
+        SnackBar(
+            content: Text(context.l10n
+                .settingsMessageFailedToRemoveValue1((e).toString()))),
       );
     }
   }
@@ -214,7 +224,7 @@ class _DiscoverySettingsScreenState
 
   Widget _buildPage(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Discover')),
+      appBar: AppBar(title: Text(context.l10n.settingsDiscover)),
       body: CenteredContent(
         child: _isLoading
             ? const Center(
@@ -226,12 +236,14 @@ class _DiscoverySettingsScreenState
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(_error ?? 'Something went wrong',
+                          Text(
+                              _error ?? context.l10n.notificationSomethingWrong,
                               style: const TextStyle(color: AppTheme.error),
                               textAlign: TextAlign.center),
                           const SizedBox(height: 12),
                           ElevatedButton(
-                              onPressed: _load, child: const Text('Retry')),
+                              onPressed: _load,
+                              child: Text(context.l10n.settingsRetry)),
                         ],
                       ),
                     ),
@@ -266,10 +278,11 @@ class _DiscoverySettingsScreenState
           children: [
             Flexible(
               child: Text(
-                source.label,
+                settingsModelLabel(context, source.label),
                 style: TextStyle(
-                  color:
-                      selectable ? AppTheme.textPrimary : AppTheme.textSecondary,
+                  color: selectable
+                      ? AppTheme.textPrimary
+                      : AppTheme.textSecondary,
                   fontWeight: FontWeight.w500,
                 ),
               ),
@@ -277,7 +290,7 @@ class _DiscoverySettingsScreenState
             if (source.recommended) ...[
               const SizedBox(width: 8),
               StatusPill(
-                text: 'Recommended',
+                text: context.l10n.settingsRecommended,
                 color: selectable ? AppTheme.accent : AppTheme.textSecondary,
               ),
             ],
@@ -285,8 +298,8 @@ class _DiscoverySettingsScreenState
         ),
         subtitle: Text(
           selectable
-              ? source.description
-              : 'Add a Trakt client ID below to use this.',
+              ? settingsModelLabel(context, source.description)
+              : context.l10n.settingsAddATraktClientIdBelowToUse,
           style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
         ),
       ),
@@ -300,22 +313,16 @@ class _DiscoverySettingsScreenState
       cacheExtent: SettingsHighlight.cacheExtentFor(widget.highlightId),
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
-        const Padding(
+        Padding(
           padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
           child: Text(
-            'These settings shape the headline row on the Movies and TV tabs, '
-            'and movie and TV recommendation rows. Search is never filtered. '
-            'Books use Open Library, and music uses ListenBrainz and MusicBrainz, '
-            'with no extra account or API key. These source and English-only '
-            'settings do not apply to books or music. Admins can browse before '
-            'connecting a service; requests and book/music search need a connection.',
+            context.l10n.settingsTheseSettingsShapeTheHeadlineRowOnThe,
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
-        const _SectionLabel('Row source'),
-        for (final source in edited.sources)
-          _sourceTile(edited, source),
-        const _SectionLabel('Language'),
+        _SectionLabel(context.l10n.settingsRowSource),
+        for (final source in edited.sources) _sourceTile(edited, source),
+        _SectionLabel(context.l10n.settingsLanguage),
         SettingsHighlight(
           anchorId: SettingsAnchors.discoveryEnglishOnly,
           highlightId: widget.highlightId,
@@ -323,19 +330,18 @@ class _DiscoverySettingsScreenState
             value: edited.englishOnly,
             onChanged: (v) =>
                 setState(() => _edited = edited.copyWith(englishOnly: v)),
-            title: const Text(
-              'Only show English-language titles',
+            title: Text(
+              context.l10n.settingsOnlyShowEnglishLanguageTitles,
               style: TextStyle(
                   color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
             ),
-            subtitle: const Text(
-              'Hides titles whose original language is not English from the '
-              'movie and TV discovery and recommendation rows. Search still finds everything.',
+            subtitle: Text(
+              context.l10n.settingsHidesTitlesWhoseOriginalLanguageIsNotEnglish,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ),
         ),
-        const _SectionLabel('Covers'),
+        _SectionLabel(context.l10n.settingsCovers),
         SettingsHighlight(
           anchorId: SettingsAnchors.discoveryCover4KBadges,
           highlightId: widget.highlightId,
@@ -345,30 +351,27 @@ class _DiscoverySettingsScreenState
             // A server that predates the setting would silently drop it.
             onChanged: edited.cover4KBadges == null
                 ? null
-                : (v) => setState(
-                    () => _edited = edited.copyWith(cover4KBadges: v)),
-            title: const Text(
-              'Show 4K badges',
+                : (v) =>
+                    setState(() => _edited = edited.copyWith(cover4KBadges: v)),
+            title: Text(
+              context.l10n.settingsShow4KBadges,
               style: TextStyle(
                   color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
             ),
             subtitle: Text(
               edited.cover4KBadges == null
-                  ? 'Update your Cantinarr server to show 4K badges.'
-                  : 'Marks movie and show covers when the library\'s copy '
-                      'is 4K, for everyone on this server.',
+                  ? context.l10n.settingsUpdateYourCantinarrServerToShow4KBadges
+                  : context.l10n.settingsMarksMovieAndShowCoversWhenTheLibrary,
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ),
         ),
-        const _SectionLabel('Discover tabs'),
-        const Padding(
+        _SectionLabel(context.l10n.settingsDiscoverTabs),
+        Padding(
           padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Text(
-              'These choices hide unconfigured catalogs during initial setup. '
-              'After the first instance is added, Discover pages appear only '
-              'for accounts assigned to the matching service, including admins.'),
+          child: Text(context.l10n
+              .settingsTheseChoicesHideUnconfiguredCatalogsDuringInitialSetup),
         ),
         if (edited.hiddenWhenUnconfigured == null)
           const Padding(
@@ -379,8 +382,10 @@ class _DiscoverySettingsScreenState
             anchorId: SettingsAnchors.discoveryTabAnchors[tab.mediaType]!,
             highlightId: widget.highlightId,
             child: SwitchListTile(
-              title: Text(
-                  "Hide ${tab.label} when ${tab.serviceName} isn't connected"),
+              title: Text(context.l10n
+                  .settingsMessageHideValue1WhenValue2IsnTConnected(
+                      browseLabel(context, tab.label),
+                      (tab.serviceName).toString())),
               value: edited.hiddenWhenUnconfigured?[tab.mediaType] ?? false,
               onChanged: edited.hiddenWhenUnconfigured == null || _saving
                   ? null
@@ -391,7 +396,7 @@ class _DiscoverySettingsScreenState
                           })),
             ),
           ),
-        const _SectionLabel('Credentials'),
+        _SectionLabel(context.l10n.settingsCredentials),
         // Trakt leads: it is the credential that unlocks a source, while
         // TMDB is an optional override of the built-in key.
         Padding(
@@ -401,19 +406,18 @@ class _DiscoverySettingsScreenState
             highlightId: widget.highlightId,
             child: CredentialSection(
               title: 'Trakt',
-              description: 'Trending, popular lists, and the calendar run '
-                  'on Cantinarr\'s built-in Trakt app out of the box. Add '
-                  'your own client ID to use your Trakt application instead.',
+              description:
+                  context.l10n.settingsTrendingPopularListsAndTheCalendarRunOn,
               isConfigured:
                   _credentials?.isConfigured('trakt_client_id') ?? false,
               builtinActive: _credentials?.traktUsingBuiltin ?? false,
               controller: _traktIdController,
-              hint: 'Trakt client ID',
+              hint: context.l10n.settingsTraktClientId,
               onDelete: () => _deleteCredential(
                 'trakt_client_id',
                 'Trakt',
-                message: 'Your client ID will be removed and '
-                    'Cantinarr\'s built-in app takes over.',
+                message:
+                    context.l10n.settingsYourClientIdWillBeRemovedAndCantinarr,
               ),
             ),
           ),
@@ -425,19 +429,18 @@ class _DiscoverySettingsScreenState
             highlightId: widget.highlightId,
             child: CredentialSection(
               title: 'TMDB',
-              description: 'Discovery and search run on Cantinarr\'s '
-                  'built-in key out of the box. Add your own '
-                  'access token to use your TMDB account instead.',
+              description:
+                  context.l10n.settingsDiscoveryAndSearchRunOnCantinarrSBuilt,
               isConfigured:
                   _credentials?.isConfigured('tmdb_access_token') ?? false,
               builtinActive: _credentials?.tmdbUsingBuiltin ?? false,
               controller: _tmdbController,
-              hint: 'TMDB access token',
+              hint: context.l10n.settingsTmdbAccessToken,
               onDelete: () => _deleteCredential(
                 'tmdb_access_token',
                 'TMDB',
-                message: 'Your token will be removed and '
-                    'Cantinarr\'s built-in key takes over.',
+                message:
+                    context.l10n.settingsYourTokenWillBeRemovedAndCantinarrS,
               ),
             ),
           ),
@@ -463,7 +466,7 @@ class _DiscoverySettingsScreenState
                         strokeWidth: 2,
                       ),
                     )
-                  : const Text('Save'),
+                  : Text(context.l10n.settingsSave),
             ),
           ),
         ),

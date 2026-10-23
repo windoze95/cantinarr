@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
@@ -17,8 +18,7 @@ class MonitoringStatsScreen extends ConsumerStatefulWidget {
       _MonitoringStatsScreenState();
 }
 
-class _MonitoringStatsScreenState
-    extends ConsumerState<MonitoringStatsScreen> {
+class _MonitoringStatsScreenState extends ConsumerState<MonitoringStatsScreen> {
   StatsSnapshot? _stats;
   bool _isLoading = true;
   String? _error;
@@ -44,7 +44,7 @@ class _MonitoringStatsScreenState
     if (service == null) {
       setState(() {
         _isLoading = false;
-        _error = 'No Tautulli or Tracearr instance configured. Add one from Settings > Add Instance.';
+        _error = context.l10n.adminNoTautulliOrTracearrInstanceConfiguredAdd;
       });
       return;
     }
@@ -52,8 +52,8 @@ class _MonitoringStatsScreenState
     // Capture the request parameters so a slow response for a previously
     // selected period (or instance) can't overwrite the current selection.
     final days = _days;
-    final instanceId =
-        ref.read(instanceProvider.select((s) => s.activeWatchHistoryInstanceId));
+    final instanceId = ref
+        .read(instanceProvider.select((s) => s.activeWatchHistoryInstanceId));
     bool stale() =>
         !mounted ||
         days != _days ||
@@ -74,7 +74,7 @@ class _MonitoringStatsScreenState
       if (stale()) return;
       setState(() {
         _isLoading = false;
-        _error = 'Failed to load stats: $e';
+        _error = context.l10n.adminFailedToLoadStats((e).toString());
       });
     }
   }
@@ -95,10 +95,10 @@ class _MonitoringStatsScreenState
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
       child: SegmentedButton<int>(
         showSelectedIcon: false,
-        segments: const [
-          ButtonSegment(value: 7, label: Text('7 days')),
-          ButtonSegment(value: 30, label: Text('30 days')),
-          ButtonSegment(value: 90, label: Text('90 days')),
+        segments: [
+          ButtonSegment(value: 7, label: Text(context.l10n.admin7Days)),
+          ButtonSegment(value: 30, label: Text(context.l10n.admin30Days)),
+          ButtonSegment(value: 90, label: Text(context.l10n.admin90Days)),
         ],
         selected: {_days},
         onSelectionChanged: (value) => _setDays(value.first),
@@ -151,13 +151,13 @@ class _MonitoringStatsScreenState
             child: isEmpty
                 ? ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
-                    children: const [
+                    children: [
                       SizedBox(height: 140),
                       Icon(Icons.insights_outlined,
                           size: 48, color: AppTheme.textSecondary),
                       SizedBox(height: 12),
                       Center(
-                        child: Text('No stats for this period',
+                        child: Text(context.l10n.adminNoStatsForThisPeriod,
                             style: TextStyle(
                                 color: AppTheme.textSecondary, fontSize: 16)),
                       ),
@@ -174,17 +174,17 @@ class _MonitoringStatsScreenState
                           backgroundColor: Colors.transparent,
                         ),
                       _StatSection(
-                        title: 'Top Movies',
+                        title: context.l10n.adminTopMovies,
                         icon: Icons.movie_outlined,
                         entries: stats.topMovies,
                       ),
                       _StatSection(
-                        title: 'Top Shows',
+                        title: context.l10n.adminTopShows,
                         icon: Icons.tv_outlined,
                         entries: stats.topShows,
                       ),
                       _StatSection(
-                        title: 'Top Users',
+                        title: context.l10n.adminTopUsers,
                         icon: Icons.person_outline,
                         entries: stats.topUsers,
                       ),
@@ -232,9 +232,9 @@ class _StatSection extends StatelessWidget {
           ),
         ),
         if (entries.isEmpty)
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: Text('No plays in this period',
+            child: Text(context.l10n.adminNoPlaysInThisPeriod,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
           )
         else
@@ -292,7 +292,7 @@ class _StatTile extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Text(
-            '${entry.plays} play${entry.plays == 1 ? '' : 's'}',
+            context.l10n.polishPlays(entry.plays),
             style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
           ),
         ],

@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 
 import '../data/ai_provider_models.dart';
@@ -23,15 +24,23 @@ class ModelFallbackSetting extends StatelessWidget {
     if (recommendation == null) return const SizedBox.shrink();
     return SwitchListTile.adaptive(
       contentPadding: EdgeInsets.zero,
-      title: const Text('Use the provider’s fallback model'),
+      title: Text(context.l10n.aiUseFallback),
       value: enabled,
       onChanged: onChanged,
       subtitle: Text(
-        '${recommendation.source}'
-        '${recommendation.model.isEmpty ? '' : ': ${recommendation.model}'}. '
-        '${recommendation.description}'
-        ' One replacement attempt only when the selected model is unavailable. Your saved selection, account, provider, and billing source stay the same. Administrators receive a notification with the model change.'
-        '${shared ? ' This shared preference also applies to a separate remediation model override.' : ''}',
+        context.l10n
+            .settingsMessageValue1Value2Value3OneReplacementAttemptOnlyWhen(
+                (recommendation.source).toString(),
+                (recommendation.model.isEmpty
+                        ? ''
+                        : ': ${recommendation.model}')
+                    .toString(),
+                (recommendation.description).toString(),
+                (shared
+                        ? context.l10n
+                            .settingsThisSharedPreferenceAlsoAppliesToASeparate
+                        : '')
+                    .toString()),
       ),
     );
   }

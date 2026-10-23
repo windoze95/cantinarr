@@ -1,3 +1,5 @@
+import '../../media_access/ui/media_access_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:dio/dio.dart';
@@ -457,19 +459,20 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               .webhookStatus(widget.instanceId!);
       if (!status.supported) return;
       if (status.configured) {
-        result = 'Instant updates are on.';
+        result = context.l10n.settingsInstantUpdatesAreOn;
         color = AppTheme.available;
       } else {
         result = switch (status.state) {
-          'stale' => 'The $_serviceLabel webhook points at a different '
-              'Cantinarr address — configure to update it.',
-          'credential_missing' => 'The $_serviceLabel webhook exists, but the '
-              'server no longer holds its credential — configure to reissue '
-              'it.',
-          'no_public_url' => 'The server cannot determine the address the '
-              '$_serviceLabel container can call back — set '
-              'CANTINARR_ARR_CALLBACK_URL, then configure.',
-          _ => 'Instant updates are not configured yet.',
+          'stale' => context.l10n
+              .settingsMessageTheValue1WebhookPointsAtADifferentCantinarr(
+                  (_serviceLabel).toString()),
+          'credential_missing' => context.l10n
+              .settingsMessageTheValue1WebhookExistsButTheServerNo(
+                  (_serviceLabel).toString()),
+          'no_public_url' => context.l10n
+              .settingsMessageTheServerCannotDetermineTheAddressTheValue1(
+                  (_serviceLabel).toString()),
+          _ => context.l10n.settingsInstantUpdatesAreNotConfiguredYet,
         };
       }
     } on DioException catch (e) {
@@ -478,7 +481,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (code == 404 || code == 405) return;
       // Blindness, not absence: the state could not be read, which is a
       // different answer than "not configured".
-      result = 'Could not check instant updates: ${apiErrorMessage(e)}';
+      result = context.l10n.settingsMessageCouldNotCheckInstantUpdatesValue1(
+          (apiErrorMessage(e)).toString());
     } catch (_) {
       return;
     }
@@ -511,8 +515,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       });
     } catch (_) {
       if (!mounted || serviceType != _serviceType) return;
-      setState(() => _arrRootFoldersError =
-          'Could not read the library folders $_serviceLabel reports.');
+      setState(() => _arrRootFoldersError = context.l10n
+          .settingsMessageCouldNotReadTheLibraryFoldersValue1Reports(
+              (_serviceLabel).toString()));
     }
   }
 
@@ -534,7 +539,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (!mounted) return;
       setState(() {
         _mediaRoots = null;
-        _mediaRootsError = 'Could not load the server media folders.';
+        _mediaRootsError =
+            context.l10n.settingsCouldNotLoadTheServerMediaFolders;
       });
     }
   }
@@ -584,7 +590,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       }
     } catch (_) {
       if (!mounted) return;
-      setState(() => _userSelectError = 'Could not load users');
+      setState(() => _userSelectError = context.l10n.settingsCouldNotLoadUsers);
     }
   }
 
@@ -622,8 +628,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         });
       } catch (_) {
         if (mounted) {
-          setState(() => _userSelectError =
-              'Could not load Audiobookshelf library assignments');
+          setState(() => _userSelectError = context
+              .l10n.settingsCouldNotLoadAudiobookshelfLibraryAssignments);
         }
       }
       return;
@@ -673,7 +679,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       });
     } catch (_) {
       if (!mounted) return;
-      setState(() => _userSelectError = 'Could not load user assignments');
+      setState(() =>
+          _userSelectError = context.l10n.settingsCouldNotLoadUserAssignments);
     }
   }
 
@@ -767,8 +774,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           _mediaMappingsLoaded = true;
           _mediaMappingsError = null;
         } else {
-          _mediaMappingsError =
-              'Update the Cantinarr server to configure media downloads.';
+          _mediaMappingsError = context
+              .l10n.settingsUpdateTheCantinarrServerToConfigureMediaDownloads;
         }
       });
       // Deep links may open the editor without a service type; retry the
@@ -783,7 +790,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       // be guessed: omitting it on Save preserves the server's current rules.
       if (!mounted) return;
       setState(() => _mediaMappingsError =
-          'Could not load this instance’s media path mappings.');
+          context.l10n.settingsCouldNotLoadThisInstanceSMediaPath);
     }
   }
 
@@ -844,9 +851,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (!mounted || serviceType != _serviceType) return;
       setState(() {
         _mediaServerLibrariesLoading = false;
-        _mediaServerLibrariesError =
-            "Couldn't load the libraries this server reports: "
-            '${apiErrorMessage(e)}';
+        _mediaServerLibrariesError = context.l10n
+            .settingsMessageCouldnTLoadTheLibrariesThisServerReports(
+                (apiErrorMessage(e)).toString());
       });
     }
   }
@@ -949,8 +956,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       return;
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not reach plex.tv. Try again.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(context.l10n.settingsCouldNotReachPlexTvTryAgain)));
       return;
     }
     // A browser that will not open is not a failed link: the Reopen
@@ -971,9 +978,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (!mounted) return;
       if (!state.linked) {
         if (!silent) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content:
-                  Text('Not approved yet. Finish signing in on plex.tv.')));
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(
+                  context.l10n.settingsNotApprovedYetFinishSigningInOnPlex)));
         }
         return;
       }
@@ -985,8 +992,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _mediaServerConfigDirty = true;
       });
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Linked as ${state.account}. Pick the server to '
-              'share.')));
+          content: Text(context.l10n
+              .settingsMessageLinkedAsValue1PickTheServerToShare(
+                  (state.account).toString()))));
       _loadPlexServers();
     } on DioException catch (e) {
       if (!silent && mounted) {
@@ -995,8 +1003,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       }
     } catch (_) {
       if (!silent && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Could not reach plex.tv. Try again.')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.l10n.settingsCouldNotReachPlexTvTryAgain)));
       }
     }
   }
@@ -1004,19 +1012,16 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   /// Says which side failed. A 404 is a server from before Plex instances
   /// (the arr proxy's wildcard answers it), a 502 is the server unable to
   /// reach plex.tv, and no status at all is no answer from the server.
-  static String _plexLinkFailure(DioException e) {
+  String _plexLinkFailure(DioException e) {
     switch (e.response?.statusCode) {
       case 404:
-        return "This server doesn't have Plex linking yet. Update the "
-            'Cantinarr server, then try again.';
+        return context.l10n.settingsThisServerDoesnTHavePlexLinkingYet;
       case 502:
-        return "Your server couldn't reach plex.tv. Check its internet "
-            'access and try again.';
+        return context.l10n.settingsYourServerCouldnTReachPlexTvCheck;
       case null:
-        return 'No answer from the server. Check your connection and try '
-            'again.';
+        return context.l10n.settingsNoAnswerFromTheServerCheckYourConnection;
       default:
-        return 'Could not reach plex.tv. Try again.';
+        return context.l10n.settingsCouldNotReachPlexTvTryAgain;
     }
   }
 
@@ -1060,8 +1065,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (!mounted) return;
       setState(() {
         _plexServersLoading = false;
-        _plexServersError =
-            "Couldn't list the account's servers: ${apiErrorMessage(e)}";
+        _plexServersError = context.l10n
+            .settingsMessageCouldnTListTheAccountSServersValue1(
+                (apiErrorMessage(e)).toString());
       });
     }
   }
@@ -1084,7 +1090,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     if (_serviceTypeUnchosen) {
       setState(() {
         _testSucceeded = false;
-        _testResult = 'Choose a service type first.';
+        _testResult = context.l10n.settingsChooseAServiceTypeFirst;
       });
       return;
     }
@@ -1114,7 +1120,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       setState(() {
         _isTesting = false;
         _testSucceeded = true;
-        _testResult = 'Connection successful!';
+        _testResult = context.l10n.settingsConnectionSuccessful;
       });
       // A passing test proves the typed URL and key, which is exactly what
       // the library read needs when creating.
@@ -1132,31 +1138,34 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   String? _validate() {
     if (_isAbs) {
       if (widget.isEditing && !_absAccessLoaded) {
-        return 'Load the library assignments before saving.';
+        return context.l10n.settingsLoadTheLibraryAssignmentsBeforeSaving;
       }
       for (final id in _absEditedPolicies) {
         final policy = _absPolicies[id]!;
         if (policy.mode == 'selected' && policy.libraryIds.isEmpty) {
-          return 'Choose at least one library for each individual selection.';
+          return context.l10n.settingsChooseAtLeastOneLibraryForEachIndividual;
         }
       }
     }
     if (_serviceTypeUnchosen) {
-      return 'Choose a service type';
+      return context.l10n.settingsChooseAServiceType;
     }
     if (_isPlex) {
-      if (_nameController.text.trim().isEmpty) return 'Name is required';
-      if (!_plexHasCredential) return 'Link a Plex account first';
-      if (_plexMachineId.isEmpty) return 'Pick the Plex server to share';
+      if (_nameController.text.trim().isEmpty)
+        return context.l10n.settingsNameIsRequired;
+      if (!_plexHasCredential)
+        return context.l10n.settingsLinkAPlexAccountFirst;
+      if (_plexMachineId.isEmpty)
+        return context.l10n.settingsPickThePlexServerToShare;
     } else if (_nameController.text.trim().isEmpty ||
         _urlController.text.trim().isEmpty) {
-      return 'Name and URL are required';
+      return context.l10n.settingsNameAndUrlAreRequired;
     }
     if (_shouldSubmitMediaPathMappings) {
       for (final mapping in _mediaPathMappings) {
         if (mapping.arrPath.text.trim().isEmpty ||
             mapping.cantinarrPath.text.trim().isEmpty) {
-          return 'Both paths are required for every media mapping';
+          return context.l10n.settingsBothPathsAreRequiredForEveryMediaMapping;
         }
       }
     }
@@ -1166,7 +1175,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (address.isNotEmpty &&
           !address.startsWith('http://') &&
           !address.startsWith('https://')) {
-        return 'Enter an http:// or https:// address for users.';
+        return context.l10n.settingsEnterAnHttpOrHttpsAddressForUsers;
       }
     }
     // When editing, blank credentials keep the existing ones. Plex's is
@@ -1177,13 +1186,14 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     if (_usesUserPass) {
       if (_credentialsOptional) return null;
       if (_passwordOnly) {
-        if (_passwordController.text.isEmpty) return 'Password is required';
+        if (_passwordController.text.isEmpty)
+          return context.l10n.settingsPasswordIsRequired;
       } else if (_usernameController.text.trim().isEmpty ||
           _passwordController.text.isEmpty) {
-        return 'Username and password are required';
+        return context.l10n.settingsUsernameAndPasswordAreRequired;
       }
     } else if (!_isTdarr && _apiKeyController.text.trim().isEmpty) {
-      return 'API key is required';
+      return context.l10n.settingsApiKeyIsRequired;
     }
     return null;
   }
@@ -1212,23 +1222,29 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Change default $label instance?'),
+        title: Text(context.l10n
+            .settingsMessageChangeDefaultValue1Instance((label).toString())),
         content: Text(
           _newAssignments
-              ? 'Set "$newName" as the preferred request destination for users assigned to it who have no personal preference. Existing access and pending requests stay unchanged.'
-              : '"${sibling.name}" is currently the default $label instance. '
-                  'Saving will move the default from "${sibling.name}" to "$newName": '
-                  'requests and dashboard statuses for users without a per-user '
-                  'instance will switch to "$newName".',
+              ? context.l10n
+                  .settingsMessageSetValue1AsThePreferredRequestDestinationFor(
+                      (newName).toString())
+              : context.l10n
+                  .settingsMessageValue1IsCurrentlyTheDefaultValue2InstanceSaving(
+                      (sibling.name).toString(),
+                      (label).toString(),
+                      (sibling.name).toString(),
+                      (newName).toString(),
+                      (newName).toString()),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.settingsCancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Make Default'),
+            child: Text(context.l10n.settingsMakeDefault),
           ),
         ],
       ),
@@ -1246,16 +1262,16 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     return await showDialog<bool>(
             context: context,
             builder: (context) => AlertDialog(
-                  title: const Text('Remove the global default?'),
-                  content: const Text(
-                      'Users without a personal preference will use their first assigned instance. Existing access and pending requests stay unchanged.'),
+                  title: Text(context.l10n.settingsRemoveTheGlobalDefault),
+                  content: Text(context.l10n
+                      .settingsUsersWithoutAPersonalPreferenceWillUseTheir),
                   actions: [
                     TextButton(
                         onPressed: () => Navigator.pop(context, false),
-                        child: const Text('Cancel')),
+                        child: Text(context.l10n.settingsCancel)),
                     TextButton(
                         onPressed: () => Navigator.pop(context, true),
-                        child: const Text('Remove default'))
+                        child: Text(context.l10n.settingsRemoveDefault))
                   ],
                 )) ==
         true;
@@ -1280,7 +1296,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     return [
       const SizedBox(height: 16),
       Text(
-        _grantOnly && !_isMediaServer ? 'Assigned Users' : 'User Access',
+        _grantOnly && !_isMediaServer
+            ? context.l10n.settingsAssignedUsers
+            : context.l10n.settingsUserAccess2,
         style: const TextStyle(
             color: AppTheme.textSecondary,
             fontSize: 13,
@@ -1289,37 +1307,24 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       const SizedBox(height: 4),
       Text(
         _isChaptarr
-            ? 'Chaptarr instances are assigned per user: selected users get '
-                'Books access through this instance (alongside any other '
-                'Chaptarr instance they hold). Unselecting a user removes '
-                'their access.'
+            ? context
+                .l10n.settingsChaptarrInstancesAreAssignedPerUserSelectedUsers
             : _isLidarr
-                ? 'Lidarr instances are assigned per user: selected users get '
-                    'Music access through this instance (alongside any other '
-                    'Lidarr instance they hold). Unselecting a user removes '
-                    'their access.'
+                ? context
+                    .l10n.settingsLidarrInstancesAreAssignedPerUserSelectedUsers
                 : _isMediaServer && _supportsAccountManagement
-                    ? 'Selected users can use this server in Cantinarr and create or link an account. New accounts and shares created by Cantinarr are managed automatically. Grant changes affect server access only for accounts marked Managed by Cantinarr. Linked-only accounts and administrators stay as they are. Change account management in Settings > Users.'
+                    ? context
+                        .l10n.settingsSelectedUsersCanUseThisServerInCantinarr
                     : _isPlex
-                        ? 'Selected users get this server under Watch on Plex, '
-                            'where they sign in with their own Plex account or share '
-                            'its email; the share of the chosen libraries goes out '
-                            'the moment they do. Select yourself too: the account '
-                            'that owns the server is recognised as the owner, never '
-                            'invited. Unselecting a user removes their share; '
-                            'selecting them again shares it again.'
+                        ? context
+                            .l10n.settingsSelectedUsersGetThisServerUnderWatchOn
                         : _isMediaServer
-                            ? 'Selected users get this server under Watch on '
-                                '$_serviceLabel, where they create their own account '
-                                'or sign in with one they already have (administrator '
-                                'accounts included, so select yourself too). '
-                                'Unselecting a user turns their account off without '
-                                'deleting it; selecting them again turns it back on. '
-                                'Administrator accounts are never changed.'
-                            : 'Selected users can use this library for requests alongside '
-                                'their default $_serviceLabel library, choosing per '
-                                'request. Unselecting a user removes their access to this '
-                                'library.',
+                            ? context.l10n
+                                .settingsMessageSelectedUsersGetThisServerUnderWatchOn(
+                                    (_serviceLabel).toString())
+                            : context.l10n
+                                .settingsMessageSelectedUsersCanUseThisLibraryForRequests(
+                                    (_serviceLabel).toString()),
         style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
       ),
       const SizedBox(height: 8),
@@ -1332,7 +1337,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             ),
             TextButton(
               onPressed: _retryDirectory,
-              child: const Text('Retry'),
+              child: Text(context.l10n.settingsRetry),
             ),
           ],
         )
@@ -1349,7 +1354,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           ),
         )
       else if (users.isEmpty)
-        const Text('No users yet.',
+        Text(context.l10n.settingsNoUsersYet2,
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13))
       else
         ...users.expand((user) {
@@ -1371,9 +1376,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                     (account == null ||
                         (account.manageAccess && !account.administrator)),
                 unavailableReason: !accountKnown
-                    ? 'Load account management to change libraries.'
+                    ? context
+                        .l10n.settingsLoadAccountManagementToChangeLibraries
                     : account?.administrator == true
-                        ? 'Administrator accounts cannot be changed here.'
+                        ? context.l10n
+                            .settingsAdministratorAccountsCannotBeChangedHere
                         : null,
                 keepExisting: account != null &&
                     !account.createdByCantinarr &&
@@ -1406,16 +1413,18 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       subtitle: _isMediaServer && _supportsAccountManagement
           ? Text(
               _mediaAccountsFailed
-                  ? 'Account management could not be loaded'
+                  ? context.l10n.settingsAccountManagementCouldNotBeLoaded
                   : !_mediaAccountsLoaded && widget.isEditing
-                      ? 'Loading account management…'
+                      ? context.l10n.settingsLoadingAccountManagement
                       : _mediaAccounts.containsKey(user.id)
-                          ? '${_mediaAccounts[user.id]!.managementLabel} · ${_mediaAccounts[user.id]!.accessLabel}'
-                          : 'No linked account',
+                          ? '${mediaAccessLabel(context, _mediaAccounts[user.id]!.managementLabel)} · ${mediaAccessLabel(context, _mediaAccounts[user.id]!.accessLabel)}'
+                          : context.l10n.settingsNoLinkedAccount,
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 12))
           : defaultElsewhere != null
-              ? Text('Default library: "$defaultElsewhere"',
+              ? Text(
+                  context.l10n.settingsMessageDefaultLibraryValue1(
+                      (defaultElsewhere).toString()),
                   style: const TextStyle(
                       color: AppTheme.textSecondary, fontSize: 12))
               : null,
@@ -1481,20 +1490,20 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     final importNow = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Media server connected'),
+        title: Text(context.l10n.settingsMediaServerConnected),
         content: Text(
-          '${_nameController.text.trim()} is connected. Import its users to '
-          'link their media accounts and finish their Cantinarr access setup.',
+          context.l10n.settingsMessageValue1IsConnectedImportItsUsersToLink(
+              (_nameController.text.trim()).toString()),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Not now'),
+            child: Text(context.l10n.settingsNotNow),
           ),
           ElevatedButton.icon(
             onPressed: () => Navigator.of(dialogContext).pop(true),
             icon: const Icon(Icons.group_add_outlined),
-            label: const Text('Import users'),
+            label: Text(context.l10n.settingsImportUsers),
           ),
         ],
       ),
@@ -1604,8 +1613,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             setState(() => _isSaving = false);
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                  content: Text('Instance saved, but assigning users '
-                      'failed: ${apiErrorMessage(e)}')),
+                  content: Text(context.l10n
+                      .settingsMessageInstanceSavedButAssigningUsersFailedValue1(
+                          (apiErrorMessage(e)).toString()))),
             );
             return;
           }
@@ -1615,8 +1625,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
                 content: Text(_absSyncPending
-                    ? 'Library access saved. Changes are pending; Cantinarr will retry.'
-                    : 'Instance updated')),
+                    ? context.l10n
+                        .settingsLibraryAccessSavedChangesArePendingCantinarrWill
+                    : context.l10n.settingsInstanceUpdated)),
           );
           if (_absSyncPending) {
             setState(() => _isSaving = false);
@@ -1675,18 +1686,22 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (mounted) {
         final problems = <String>[
           if (assignmentError != null)
-            'assigning users failed: $assignmentError',
+            context.l10n.settingsMessageAssigningUsersFailedValue1(
+                (assignmentError).toString()),
           if (webhookError != null)
-            "instant updates couldn't be configured: $webhookError",
+            context.l10n.settingsMessageInstantUpdatesCouldnTBeConfiguredValue1(
+                (webhookError).toString()),
         ];
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
               content: Text(problems.isNotEmpty
-                  ? 'Instance created, but ${problems.join('; ')} '
-                      '— edit the instance to retry'
+                  ? context.l10n
+                      .settingsMessageInstanceCreatedButValue1EditTheInstanceTo(
+                          (problems.join('; ')).toString())
                   : webhookConfigured
-                      ? 'Instance created — instant updates configured'
-                      : 'Instance created')),
+                      ? context
+                          .l10n.settingsInstanceCreatedInstantUpdatesConfigured
+                      : context.l10n.settingsInstanceCreated)),
         );
         if (_isMediaServer && problems.isEmpty) {
           await _offerUserImport(created.id);
@@ -1698,7 +1713,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (!mounted) return;
       setState(() => _isSaving = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to save: ${apiErrorMessage(e)}')),
+        SnackBar(
+            content: Text(context.l10n.settingsMessageFailedToSaveValue1(
+                (apiErrorMessage(e)).toString()))),
       );
     }
   }
@@ -1770,19 +1787,20 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete Instance'),
+        title: Text(context.l10n.settingsDeleteInstance),
         content: Text(_newAssignments
-            ? 'Delete this instance and its user assignments? Affected users will use a remaining assigned instance for new requests, if any. Pending requests will not move to another instance.'
-            : 'Are you sure you want to delete this instance?'),
+            ? context
+                .l10n.settingsDeleteThisInstanceAndItsUserAssignmentsAffected
+            : context.l10n.settingsAreYouSureYouWantToDeleteThis),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.settingsCancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child:
-                const Text('Delete', style: TextStyle(color: AppTheme.error)),
+            child: Text(context.l10n.settingsDelete,
+                style: TextStyle(color: AppTheme.error)),
           ),
         ],
       ),
@@ -1797,14 +1815,16 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Instance deleted')),
+          SnackBar(content: Text(context.l10n.settingsInstanceDeleted)),
         );
         _finishEditing();
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to delete: ${apiErrorMessage(e)}')),
+          SnackBar(
+              content: Text(context.l10n.settingsMessageFailedToDeleteValue1(
+                  (apiErrorMessage(e)).toString()))),
         );
       }
     }
@@ -1824,7 +1844,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (!mounted) return;
       setState(() {
         _isConfiguringWebhook = false;
-        _webhookResult = 'Instant updates are configured.';
+        _webhookResult = context.l10n.settingsInstantUpdatesAreConfigured;
         _webhookResultColor = AppTheme.available;
       });
     } catch (e) {
@@ -1887,8 +1907,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _hardcoverConnected = status.configured;
         _hardcoverMethod = status.method;
         _hardcoverReconnect = status.reconnectRequired;
-        _hardcoverResult =
-            flow?.status == 'connected' ? 'Hardcover is connected.' : null;
+        _hardcoverResult = flow?.status == 'connected'
+            ? context.l10n.settingsHardcoverIsConnected
+            : null;
         _hardcoverResultColor = AppTheme.available;
       });
       if (flow?.status == 'connected' &&
@@ -1914,7 +1935,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     final token = _hardcoverController.text.trim();
     if (token.isEmpty) {
       setState(() {
-        _hardcoverResult = 'Paste the API token from Hardcover first.';
+        _hardcoverResult =
+            context.l10n.settingsPasteTheApiTokenFromHardcoverFirst;
         _hardcoverResultColor = AppTheme.error;
       });
       return;
@@ -1935,7 +1957,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _hardcoverConnected = status.configured;
         _hardcoverMethod = status.method;
         _hardcoverReconnect = status.reconnectRequired;
-        _hardcoverResult = 'Hardcover is connected.';
+        _hardcoverResult = context.l10n.settingsHardcoverIsConnected;
         _hardcoverResultColor = AppTheme.available;
       });
       if (status.configured) {
@@ -1967,8 +1989,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _hardcoverResult = 'Hardcover is connected to this instance, but the '
-            'other instances could not be loaded. ${apiErrorMessage(e)}';
+        _hardcoverResult = context.l10n
+            .settingsMessageHardcoverIsConnectedToThisInstanceButThe(
+                (apiErrorMessage(e)).toString());
         _hardcoverResultColor = AppTheme.error;
       });
       return;
@@ -2000,21 +2023,24 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       context: context,
       builder: (context) => AlertDialog(
         scrollable: true,
-        title: const Text('Use Hardcover for all Chaptarr instances?'),
+        title: Text(context.l10n.settingsUseHardcoverForAllChaptarrInstances),
         content: Text(
-          'Also use this ${connectionId == null ? 'token' : 'connection'} for:\n\n'
-          '${others.map((instance) => '• ${instance.name}').join('\n')}\n\n'
-          'Any Hardcover connections already set for these instances will be '
-          'replaced.',
+          context.l10n.settingsMessageAlsoUseThisValue1ForValue2AnyHardcover(
+              (connectionId == null
+                      ? context.l10n.settingsToken
+                      : context.l10n.settingsConnection)
+                  .toString(),
+              (others.map((instance) => '• ${instance.name}').join('\n'))
+                  .toString()),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Only this instance'),
+            child: Text(context.l10n.settingsOnlyThisInstance),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Apply to all'),
+            child: Text(context.l10n.settingsApplyToAll),
           ),
         ],
       ),
@@ -2023,7 +2049,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     setState(() {
       _isSavingHardcover = true;
       _hardcoverResult =
-          'Connecting Hardcover to the other Chaptarr instances…';
+          context.l10n.settingsConnectingHardcoverToTheOtherChaptarrInstances;
     });
     if (connectionId != null) {
       if (revisions.isNotEmpty) {
@@ -2039,7 +2065,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             }
           } else {
             failures.add(
-                '${instance.name}: ${matches.length == 1 ? matches.single.error : 'No result was returned. Try again.'}');
+                '${instance.name}: ${matches.length == 1 ? matches.single.error : context.l10n.settingsNoResultWasReturnedTryAgain}');
           }
         }
       }
@@ -2059,12 +2085,18 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     if (!mounted) return;
     setState(() {
       _hardcoverResult = failures.isEmpty
-          ? 'Hardcover is connected to all ${others.length + 1} '
-              'Chaptarr instances.'
-          : '${connectionId == null ? 'Token saved' : 'Connected'} for ${others.length + 1 - failures.length} of '
-              '${others.length + 1} Chaptarr instances. Could not update:\n'
-              '${failures.join('\n')}\n'
-              'Open those instances to try again.';
+          ? context.l10n
+              .settingsMessageHardcoverIsConnectedToAllValue1ChaptarrInstances(
+                  (others.length + 1).toString())
+          : context.l10n
+              .settingsMessageValue1ForValue2OfValue3ChaptarrInstancesCould(
+                  (connectionId == null
+                          ? context.l10n.settingsTokenSaved
+                          : context.l10n.settingsConnected)
+                      .toString(),
+                  (others.length + 1 - failures.length).toString(),
+                  (others.length + 1).toString(),
+                  (failures.join('\n')).toString());
       _hardcoverResultColor =
           failures.isEmpty ? AppTheme.available : AppTheme.error;
     });
@@ -2088,7 +2120,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _hardcoverMethod = 'none';
         _hardcoverReconnect = false;
         _hardcoverUseToken = false;
-        _hardcoverResult = 'Hardcover is disconnected.';
+        _hardcoverResult = context.l10n.settingsHardcoverIsDisconnected;
         _hardcoverResultColor = AppTheme.textSecondary;
       });
     } catch (e) {
@@ -2144,24 +2176,24 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   }
 
   String get _nameHint {
-    if (_isDownloadClient) return 'e.g. SABnzbd, qBittorrent';
+    if (_isDownloadClient) return context.l10n.settingsEGSabnzbdQbittorrent;
     switch (_serviceType) {
       case 'tautulli':
-        return 'e.g. Tautulli';
+        return context.l10n.settingsEGTautulli;
       case 'tracearr':
-        return 'e.g. Tracearr';
+        return context.l10n.settingsEGTracearr;
       case 'tdarr':
-        return 'e.g. Tdarr';
+        return context.l10n.settingsEGTdarr;
       case 'audiobookshelf':
-        return 'e.g. Home Audiobookshelf';
+        return context.l10n.settingsEGHomeAudiobookshelf;
       case 'jellyfin':
-        return 'e.g. Home Jellyfin';
+        return context.l10n.settingsEGHomeJellyfin;
       case 'emby':
-        return 'e.g. Home Emby';
+        return context.l10n.settingsEGHomeEmby;
       case 'plex':
-        return 'e.g. Cantina Plex';
+        return context.l10n.settingsEGCantinaPlex;
       default:
-        return 'e.g. Movies, 4K Movies';
+        return context.l10n.settingsEGMovies4KMovies;
     }
   }
 
@@ -2173,14 +2205,14 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SegmentedButton<_QbitAuth>(
-          segments: const [
+          segments: [
             ButtonSegment(
               value: _QbitAuth.password,
-              label: Text('Username & password'),
+              label: Text(context.l10n.settingsUsernamePassword),
             ),
             ButtonSegment(
               value: _QbitAuth.apiKey,
-              label: Text('API key'),
+              label: Text(context.l10n.settingsApiKey),
             ),
           ],
           selected: {_qbitAuth},
@@ -2198,9 +2230,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         const SizedBox(height: 6),
         Text(
           _qbitAuth == _QbitAuth.apiKey
-              ? 'API keys need qBittorrent 5.2 or newer; generate one under '
-                  'Options > WebUI.'
-              : 'The WebUI sign-in; works on every qBittorrent version.',
+              ? context.l10n.settingsApiKeysNeedQbittorrent52OrNewer
+              : context.l10n.settingsTheWebuiSignInWorksOnEveryQbittorrent,
           style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
         ),
       ],
@@ -2209,72 +2240,75 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   String get _apiKeyHint {
     if (widget.isEditing && !_qbitSwitchingShape) {
-      return 'Leave blank to keep existing';
+      return context.l10n.settingsLeaveBlankToKeepExisting;
     }
     switch (_serviceType) {
       case 'qbittorrent':
-        return 'Your qBittorrent API key (Options > WebUI, 5.2 or newer)';
+        return context.l10n.settingsYourQbittorrentApiKeyOptionsWebui52;
       case 'sabnzbd':
-        return 'Your SABnzbd API key';
+        return context.l10n.settingsYourSabnzbdApiKey;
       case 'tautulli':
-        return 'Your Tautulli API key';
+        return context.l10n.settingsYourTautulliApiKey;
       case 'tracearr':
-        return 'Your Tracearr API key (Settings > General, starts with trr_pub_)';
+        return context.l10n.settingsYourTracearrApiKeySettingsGeneralStartsWith;
       case 'tdarr':
-        return 'Tools > API Keys (only when authentication is enabled)';
+        return context.l10n.settingsToolsApiKeysOnlyWhenAuthenticationIsEnabled;
       case 'chaptarr':
-        return 'Your Chaptarr API key';
+        return context.l10n.settingsYourChaptarrApiKey;
       case 'lidarr':
-        return 'Your Lidarr API key';
+        return context.l10n.settingsYourLidarrApiKey;
       case 'audiobookshelf':
-        return 'Your Audiobookshelf administrator API key';
+        return context.l10n.settingsYourAudiobookshelfAdministratorApiKey;
       case 'jellyfin':
-        return 'Your Jellyfin API key (Dashboard > API Keys)';
+        return context.l10n.settingsYourJellyfinApiKeyDashboardApiKeys;
       case 'emby':
-        return 'Your Emby API key (Settings > Advanced > API Keys)';
+        return context.l10n.settingsYourEmbyApiKeySettingsAdvancedApiKeys;
       default:
-        return 'Your Radarr/Sonarr API key';
+        return context.l10n.settingsYourRadarrSonarrApiKey;
     }
   }
 
   String get _defaultSubtitle {
     if (_newAssignments)
-      return 'Preferred request destination for users assigned to this instance. Choosing a default does not grant access.';
-    if (_isDownloadClient) return 'Use this as the default download client';
+      return context
+          .l10n.settingsPreferredRequestDestinationForUsersAssignedToThis;
+    if (_isDownloadClient)
+      return context.l10n.settingsUseThisAsTheDefaultDownloadClient;
     if (_isWatchHistory) {
-      return 'Use this as the default $_serviceLabel instance';
+      return context.l10n.settingsMessageUseThisAsTheDefaultValue1Instance(
+          (_serviceLabel).toString());
     }
-    return 'Use this as the default for media requests';
+    return context.l10n.settingsUseThisAsTheDefaultForMediaRequests;
   }
 
   /// The server's own library kind, humanized. Jellyfin and Emby report
   /// 'movies', 'tvshows', 'music', 'books', 'homevideos', 'musicvideos',
   /// 'boxsets', 'photos', 'playlists'; a mixed movies-and-shows library
   /// reports none.
-  static String _collectionTypeLabel(String collectionType) {
+  String _collectionTypeLabel(String collectionType) {
     switch (collectionType.toLowerCase()) {
       case '':
-        return 'Mixed content';
+        return context.l10n.settingsMixedContent;
       case 'movies':
-        return 'Movies';
+        return context.l10n.settingsMovies;
       case 'tvshows':
-        return 'Shows';
+        return context.l10n.settingsShows;
       case 'music':
-        return 'Music';
+        return context.l10n.settingsMusic;
       case 'musicvideos':
-        return 'Music videos';
+        return context.l10n.settingsMusicVideos;
       case 'homevideos':
-        return 'Home videos and photos';
+        return context.l10n.settingsHomeVideosAndPhotos;
       case 'books':
-        return 'Books';
+        return context.l10n.settingsBooks;
       case 'boxsets':
-        return 'Collections';
+        return context.l10n.settingsCollections;
       case 'photos':
-        return 'Photos';
+        return context.l10n.settingsPhotos;
       case 'playlists':
-        return 'Playlists';
+        return context.l10n.settingsPlaylists;
       case 'livetv':
-        return 'Live TV';
+        return context.l10n.settingsLiveTv;
       default:
         return collectionType[0].toUpperCase() + collectionType.substring(1);
     }
@@ -2326,9 +2360,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 child: const Icon(Icons.link, color: AppTheme.accent, size: 21),
               ),
               const SizedBox(width: 12),
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'Plex account',
+                  context.l10n.settingsPlexAccount,
                   style: TextStyle(
                     color: AppTheme.textPrimary,
                     fontSize: 16,
@@ -2344,7 +2378,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                   borderRadius: BorderRadius.circular(999),
                 ),
                 child: Text(
-                  linked ? 'Linked' : 'Not linked',
+                  linked
+                      ? context.l10n.settingsLinked
+                      : context.l10n.settingsNotLinked,
                   style: TextStyle(
                     color: linked ? AppTheme.available : AppTheme.textSecondary,
                     fontSize: 11,
@@ -2356,7 +2392,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           ),
           const SizedBox(height: 12),
           if (_plexLinking) ...[
-            const Row(
+            Row(
               children: [
                 SizedBox(
                   width: 18,
@@ -2367,8 +2403,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    'Waiting for approval. Sign in on the plex.tv page that '
-                    'just opened and approve the link.',
+                    context.l10n.settingsWaitingForApprovalSignInOnThePlex,
                     style:
                         TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                   ),
@@ -2382,17 +2417,17 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               children: [
                 OutlinedButton(
                   onPressed: () => _checkPlexLink(),
-                  child: const Text("I've approved, check now"),
+                  child: Text(context.l10n.settingsIVeApprovedCheckNow),
                 ),
                 if (_plexLinkUrl != null)
                   OutlinedButton(
                     onPressed: () => launchUrl(Uri.parse(_plexLinkUrl!),
                         mode: LaunchMode.externalApplication),
-                    child: const Text('Reopen plex.tv'),
+                    child: Text(context.l10n.settingsReopenPlexTv),
                   ),
                 TextButton(
                   onPressed: _cancelPlexLink,
-                  child: const Text('Cancel'),
+                  child: Text(context.l10n.settingsCancel),
                 ),
               ],
             ),
@@ -2400,11 +2435,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             Text(
               linked
                   ? (_plexAccount.isNotEmpty
-                      ? 'Linked as $_plexAccount.'
-                      : 'A linked account is stored. Relink to use another.')
-                  : 'Link the plex.tv account that owns the server. Invites '
-                      'are sent from it, and its token never leaves the '
-                      'Cantinarr server.',
+                      ? context.l10n.settingsMessageLinkedAsValue1(
+                          (_plexAccount).toString())
+                      : context.l10n.settingsALinkedAccountIsStoredRelinkToUse)
+                  : context.l10n.settingsLinkThePlexTvAccountThatOwnsThe,
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
@@ -2412,13 +2446,15 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             OutlinedButton.icon(
               onPressed: _beginPlexLink,
               icon: const Icon(Icons.link, size: 18),
-              label: Text(linked ? 'Relink Plex account' : 'Link Plex account'),
+              label: Text(linked
+                  ? context.l10n.settingsRelinkPlexAccount
+                  : context.l10n.settingsLinkPlexAccount),
             ),
           ],
           if (linked) ...[
             const SizedBox(height: 16),
-            const Text(
-              'Server to share',
+            Text(
+              context.l10n.settingsServerToShare,
               style: TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 13,
@@ -2444,16 +2480,15 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                   ),
                   TextButton(
                     onPressed: _loadPlexServers,
-                    child: const Text('Retry'),
+                    child: Text(context.l10n.settingsRetry),
                   ),
                 ],
               )
             else if (servers == null)
               const SizedBox.shrink()
             else if (servers.isEmpty)
-              const Text(
-                'This account owns no Plex Media Server. The linked account '
-                'must own the server it invites to.',
+              Text(
+                context.l10n.settingsThisAccountOwnsNoPlexMediaServerThe,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
               )
             else
@@ -2462,7 +2497,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 _plexMachineId.isNotEmpty &&
                 !servers.any((s) => s.machineIdentifier == _plexMachineId))
               serverTile(PlexServerChoice(
-                  name: 'Stored server ($_plexMachineId)',
+                  name: context.l10n.settingsMessageStoredServerValue1(
+                      (_plexMachineId).toString()),
                   machineIdentifier: _plexMachineId)),
           ],
         ],
@@ -2473,11 +2509,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   /// Plex: whether sharing a Plex email is enough to be granted this server.
   Widget _buildPlexAutoApproveTile() {
     return SwitchListTile(
-      title: const Text('Auto-approve access requests',
+      title: Text(context.l10n.settingsAutoApproveAccessRequests,
           style: TextStyle(color: AppTheme.textPrimary)),
-      subtitle: const Text(
-        'Anyone who shares a Plex email is granted this server and invited '
-        'right away. Off: they wait until you select them under User Access.',
+      subtitle: Text(
+        context.l10n.settingsAnyoneWhoSharesAPlexEmailIsGranted,
         style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
       ),
       value: _plexAutoApprove,
@@ -2509,7 +2544,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
-        selectedCount == 0 ? 'All' : '$selectedCount selected',
+        selectedCount == 0
+            ? context.l10n.settingsAll
+            : context.l10n
+                .settingsMessageValue1Selected((selectedCount).toString()),
         style: TextStyle(
           color: selectedCount == 0 ? AppTheme.textSecondary : AppTheme.accent,
           fontSize: 11,
@@ -2535,7 +2573,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                _isAbs ? 'Default libraries' : 'Shared libraries',
+                _isAbs
+                    ? context.l10n.settingsDefaultLibraries
+                    : context.l10n.settingsSharedLibraries,
                 style: const TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 16,
@@ -2606,11 +2646,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           const SizedBox(height: 10),
           Text(
             _isAbs
-                ? 'Choose the default libraries for accounts Cantinarr creates. Select different libraries under each user below. Individual selections stay unchanged when this default changes. With nothing chosen, the default includes every library, including ones added later.'
-                : 'Optional. Choose which libraries these accounts can see. '
-                    'Changing it updates accounts Cantinarr created here and still manages; '
-                    'accounts you linked keep what they have. With nothing chosen, '
-                    'every library is shared, including ones you add later.',
+                ? context.l10n
+                    .settingsChooseTheDefaultLibrariesForAccountsCantinarrCreates
+                : context.l10n
+                    .settingsOptionalChooseWhichLibrariesTheseAccountsCanSee,
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 12,
@@ -2638,21 +2677,21 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               message: _mediaServerLibrariesError!,
               action: TextButton(
                 onPressed: _loadMediaServerLibraries,
-                child: const Text('Retry'),
+                child: Text(context.l10n.settingsRetry),
               ),
             )
           else if (libraries == null)
-            const _MediaMappingNotice(
+            _MediaMappingNotice(
               icon: Icons.wifi_tethering,
-              message: 'Test the connection to load the libraries this server '
-                  'reports.',
+              message:
+                  context.l10n.settingsTestTheConnectionToLoadTheLibrariesThis,
             )
           else ...[
             if (libraries.isEmpty)
-              const _MediaMappingNotice(
+              _MediaMappingNotice(
                 icon: Icons.video_library_outlined,
-                message: 'This server reports no libraries yet. Every library '
-                    'you add later will be shared.',
+                message: context
+                    .l10n.settingsThisServerReportsNoLibrariesYetEveryLibrary,
               ),
             for (final library in libraries)
               libraryTile(
@@ -2663,9 +2702,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             for (final id in unknownIds)
               libraryTile(
                 id: id,
-                title: 'Unknown library',
+                title: context.l10n.settingsUnknownLibrary,
                 subtitle:
-                    'No longer reported by the server. Uncheck to drop it.',
+                    context.l10n.settingsNoLongerReportedByTheServerUncheckTo,
               ),
           ],
         ],
@@ -2688,7 +2727,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       ),
       child: Text(
         mappingCount == 0
-            ? 'Off'
+            ? context.l10n.settingsOff
             : '$mappingCount '
                 '${mappingCount == 1 ? 'mapping' : 'mappings'}',
         style: TextStyle(
@@ -2714,9 +2753,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               ),
             ),
             const SizedBox(width: 12),
-            const Expanded(
+            Expanded(
               child: Text(
-                'Media downloads',
+                context.l10n.settingsMediaDownloads,
                 style: TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 16,
@@ -2755,10 +2794,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           ),
           const SizedBox(height: 10),
           Text(
-            'Optional. Map each library path reported by $_serviceLabel to '
-            'where the same files are mounted inside Cantinarr. Only files '
-            'covered by this instance’s mappings can be downloaded. Linux, '
-            'Windows drive, and UNC source paths are supported.',
+            context.l10n
+                .settingsMessageOptionalMapEachLibraryPathReportedByValue1(
+                    (_serviceLabel).toString()),
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 12,
@@ -2789,7 +2827,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                   setState(() => _mediaRootsError = null);
                   _loadMediaRoots();
                 },
-                child: const Text('Retry'),
+                child: Text(context.l10n.settingsRetry),
               ),
             ),
           if (_mediaMappingsError != null)
@@ -2802,19 +2840,23 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                         setState(() => _mediaMappingsError = null);
                         _loadDetails();
                       },
-                      child: const Text('Retry'),
+                      child: Text(context.l10n.settingsRetry),
                     )
                   : null,
             ),
           if (roots != null && roots.isEmpty)
-            const _MediaMappingNotice(
+            _MediaMappingNotice(
               icon: Icons.folder_off_outlined,
-              message: 'No server media folders are available. Mount them '
-                  'read-only, set CANTINARR_MEDIA_ROOTS, and restart the server.',
+              message: context
+                  .l10n.settingsNoServerMediaFoldersAreAvailableMountThem,
             ),
           if (roots != null && roots.isNotEmpty) ...[
             Text(
-              'Allowed Cantinarr ${roots.length == 1 ? 'root' : 'roots'}',
+              context.l10n.settingsMessageAllowedCantinarrValue1(
+                  (roots.length == 1
+                          ? context.l10n.settingsRoot
+                          : context.l10n.settingsRoots)
+                      .toString()),
               style: const TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 11,
@@ -2861,12 +2903,13 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                     setState(() => _arrRootFoldersError = null);
                     _loadArrRootFolders();
                   },
-                  child: const Text('Retry'),
+                  child: Text(context.l10n.settingsRetry),
                 ),
               ),
             if (_arrRootFoldersKnown && _arrRootFolders.isNotEmpty) ...[
               Text(
-                'Reported by $_serviceLabel — tap to map',
+                context.l10n.settingsMessageReportedByValue1TapToMap(
+                    (_serviceLabel).toString()),
                 style: const TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 11,
@@ -2899,10 +2942,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           ],
           if (_mediaMappingsLoaded) ...[
             if (_mediaPathMappings.isEmpty)
-              const Padding(
+              Padding(
                 padding: EdgeInsets.symmetric(vertical: 6),
                 child: Text(
-                  'No paths mapped — downloads are off for this instance.',
+                  context.l10n.settingsNoPathsMappedDownloadsAreOffForThis,
                   style: TextStyle(
                     color: AppTheme.textSecondary,
                     fontSize: 12,
@@ -2918,7 +2961,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             OutlinedButton.icon(
               onPressed: canAdd ? _addMediaPathMapping : null,
               icon: const Icon(Icons.add_link_rounded, size: 18),
-              label: const Text('Add path'),
+              label: Text(context.l10n.settingsAddPath),
             ),
           ],
         ],
@@ -2944,7 +2987,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             children: [
               Expanded(
                 child: Text(
-                  'Path mapping ${index + 1}',
+                  context.l10n
+                      .settingsMessagePathMappingValue1((index + 1).toString()),
                   style: const TextStyle(
                     color: AppTheme.textSecondary,
                     fontSize: 11,
@@ -2953,7 +2997,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 ),
               ),
               IconButton(
-                tooltip: 'Remove path mapping',
+                tooltip: context.l10n.settingsRemovePathMapping,
                 visualDensity: VisualDensity.compact,
                 onPressed: () => _removeMediaPathMapping(index),
                 icon: const Icon(
@@ -2969,7 +3013,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               final source = TextField(
                 controller: mapping.arrPath,
                 decoration: InputDecoration(
-                  labelText: '$_serviceLabel path',
+                  labelText: context.l10n
+                      .settingsMessageValue1Path((_serviceLabel).toString()),
                   hintText: _isChaptarr ? '/ebooks' : '/media/library',
                 ),
                 autocorrect: false,
@@ -2977,7 +3022,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               final target = TextField(
                 controller: mapping.cantinarrPath,
                 decoration: InputDecoration(
-                  labelText: 'Cantinarr path',
+                  labelText: context.l10n.settingsCantinarrPath,
                   hintText: rootHint.isEmpty ? '/media/library' : rootHint,
                 ),
                 autocorrect: false,
@@ -3049,10 +3094,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
-                          '$_serviceLabel does not report any library folder '
-                          'under this path, so downloads are unlikely to '
-                          'match. Tap a reported folder above to use a path '
-                          '$_serviceLabel actually sees.',
+                          context.l10n
+                              .settingsMessageValue1DoesNotReportAnyLibraryFolderUnder(
+                                  (_serviceLabel).toString(),
+                                  (_serviceLabel).toString()),
                           style: const TextStyle(
                             color: AppTheme.warning,
                             fontSize: 11.5,
@@ -3080,7 +3125,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   Widget _buildPage(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.isEditing ? 'Edit Instance' : 'Add Instance'),
+        title: Text(widget.isEditing
+            ? context.l10n.settingsEditInstance
+            : context.l10n.settingsAddInstance),
         actions: [
           if (widget.isEditing)
             IconButton(
@@ -3099,21 +3146,21 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               child: OutlinedButton.icon(
                 onPressed: _isSaving ? null : _openUserImport,
                 icon: const Icon(Icons.group_add_outlined),
-                label: const Text('Import users'),
+                label: Text(context.l10n.settingsImportUsers),
               ),
             ),
-            const Padding(
+            Padding(
               padding: EdgeInsets.only(top: 4, bottom: 16),
               child: Text(
-                'Link existing media accounts to Cantinarr users, then review '
-                'sign-in and request permissions.',
+                context
+                    .l10n.settingsLinkExistingMediaAccountsToCantinarrUsersThen,
                 style: TextStyle(color: AppTheme.textSecondary),
               ),
             ),
           ],
           // Service type (only for new instances)
           if (!widget.isEditing) ...[
-            const Text('Service Type',
+            Text(context.l10n.settingsServiceType,
                 style: TextStyle(
                     color: AppTheme.textSecondary,
                     fontSize: 13,
@@ -3190,7 +3237,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           TextField(
             controller: _nameController,
             decoration: InputDecoration(
-              labelText: 'Name',
+              labelText: context.l10n.settingsName,
               hintText: _nameHint,
             ),
           ),
@@ -3203,8 +3250,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               decoration: InputDecoration(
                 labelText: 'URL',
                 hintText: _urlHint,
-                helperText:
-                    'Reached from the Cantinarr server, not from this device.',
+                helperText: context
+                    .l10n.settingsReachedFromTheCantinarrServerNotFromThis,
               ),
               keyboardType: TextInputType.url,
             ),
@@ -3235,11 +3282,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               TextField(
                 controller: _usernameController,
                 decoration: InputDecoration(
-                  labelText:
-                      _credentialsOptional ? 'Username (optional)' : 'Username',
+                  labelText: _credentialsOptional
+                      ? context.l10n.settingsOptionalUsername
+                      : context.l10n.settingsUsername,
                   hintText: _credentialsOptional
-                      ? 'Only if authentication is enabled'
-                      : 'Web UI username',
+                      ? context.l10n.settingsOnlyIfAuthenticationIsEnabled
+                      : context.l10n.settingsWebUiUsername,
                 ),
                 autocorrect: false,
               ),
@@ -3249,17 +3297,17 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               controller: _passwordController,
               decoration: InputDecoration(
                 labelText: _passwordOnly
-                    ? 'Web UI password'
+                    ? context.l10n.settingsWebUiPassword
                     : (_credentialsOptional
-                        ? 'Password (optional)'
-                        : 'Password'),
+                        ? context.l10n.settingsPasswordOptional
+                        : context.l10n.settingsPassword),
                 hintText: widget.isEditing && !_qbitSwitchingShape
-                    ? 'Leave blank to keep existing'
+                    ? context.l10n.settingsLeaveBlankToKeepExisting
                     : (_passwordOnly
-                        ? "The password Deluge's web UI asks for"
+                        ? context.l10n.settingsThePasswordDelugeSWebUiAsksFor
                         : _credentialsOptional
-                            ? 'Only if authentication is enabled'
-                            : 'Web UI password'),
+                            ? context.l10n.settingsOnlyIfAuthenticationIsEnabled
+                            : context.l10n.settingsWebUiPassword),
               ),
               obscureText: true,
             ),
@@ -3268,23 +3316,23 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               controller: _apiKeyController,
               enabled: !(_isTdarr && _clearTdarrKey),
               decoration: InputDecoration(
-                labelText: _isTdarr ? 'API Key (optional)' : 'API Key',
+                labelText: _isTdarr
+                    ? context.l10n.settingsApiKeyOptional
+                    : context.l10n.settingsApiKey2,
                 hintText: _apiKeyHint,
               ),
               obscureText: true,
             ),
           if (_isTdarr) ...[
             const SizedBox(height: 12),
-            const Text(
-                'Use the Tdarr server API URL (normally port 8266). '
-                'If authentication is enabled, create a key in Tdarr under Tools > API Keys.',
+            Text(context.l10n.settingsUseTheTdarrServerApiUrlNormallyPort,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
             if (widget.isEditing && _tdarrHasKey)
               CheckboxListTile(
                 contentPadding: EdgeInsets.zero,
-                title: const Text('Remove saved API key'),
-                subtitle: const Text(
-                    'For a Tdarr server with authentication disabled.'),
+                title: Text(context.l10n.settingsRemoveSavedApiKey),
+                subtitle: Text(context
+                    .l10n.settingsForATdarrServerWithAuthenticationDisabled),
                 value: _clearTdarrKey,
                 onChanged: (value) => setState(() {
                   _clearTdarrKey = value ?? false;
@@ -3301,12 +3349,14 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             TextField(
               controller: _publicAddressController,
               decoration: InputDecoration(
-                labelText: 'Address users open',
+                labelText: context.l10n.settingsAddressUsersOpen,
                 hintText: 'https://$_serviceType.example.com',
-                helper: Text('The address users can reach in a browser or app. '
-                    'Used for sign-in and Open / '
-                    '${_serviceType == 'audiobookshelf' ? 'Listen' : 'Watch'} '
-                    'links. Leave blank to hide those links.'),
+                helper: Text(context.l10n
+                    .settingsMessageTheAddressUsersCanReachInABrowser(
+                        (_serviceType == 'audiobookshelf'
+                                ? context.l10n.settingsListen
+                                : context.l10n.settingsWatch)
+                            .toString())),
               ),
               keyboardType: TextInputType.url,
               autocorrect: false,
@@ -3322,7 +3372,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                         : () =>
                             _publicAddressController.text = value.text.trim(),
                     icon: const Icon(Icons.copy),
-                    label: const Text('Use same URL'),
+                    label: Text(context.l10n.settingsUseSameUrl),
                   ),
                 ),
               ),
@@ -3330,12 +3380,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             _buildSharedLibrariesSection(),
             if (VideoApps.serviceTypes.contains(_serviceType)) ...[
               const SizedBox(height: 24),
-              Text('Default video app',
+              Text(context.l10n.settingsDefaultVideoApp,
                   style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
-              const Text('Used on iPhone and iPad unless a user chooses their '
-                  'own app in Settings → Account → Video apps. Android uses '
-                  'the service’s app; web and desktop use the browser.'),
+              Text(context.l10n.settingsUsedOnIphoneAndIpadUnlessAUser),
               const SizedBox(height: 16),
               VideoAppField(
                 serviceType: _serviceType,
@@ -3349,12 +3397,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             ],
             if (_serviceType == 'audiobookshelf') ...[
               const SizedBox(height: 24),
-              Text('Default listening apps',
+              Text(context.l10n.settingsDefaultListeningApps,
                   style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
-              const Text('Used unless a user chooses their own apps in '
-                  'Settings → Account → Listening apps. Web and desktop open Audiobookshelf '
-                  'in the browser.'),
+              Text(context.l10n.settingsUsedUnlessAUserChoosesTheirOwnApps),
               const SizedBox(height: 16),
               ListeningAppFields(
                 value: _listeningApps ?? const ListeningApps(),
@@ -3381,7 +3427,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           // prompted form hides the toggle entirely until a type is chosen.
           if (!_serviceTypeUnchosen && !_grantOnly)
             SwitchListTile(
-              title: const Text('Default Instance',
+              title: Text(context.l10n.settingsDefaultInstance,
                   style: TextStyle(color: AppTheme.textPrimary)),
               subtitle: Text(_defaultSubtitle,
                   style: const TextStyle(
@@ -3393,9 +3439,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
           if (_newAssignments) ...[
             SwitchListTile(
-              title: const Text('Automatically add new users'),
-              subtitle: const Text(
-                  'Assign accounts created after this setting is saved, including invitations, imports, and SSO accounts. Existing users stay unchanged.'),
+              title: Text(context.l10n.settingsAutomaticallyAddNewUsers),
+              subtitle: Text(context
+                  .l10n.settingsAssignAccountsCreatedAfterThisSettingIsSaved),
               value: _autoAddUsers,
               onChanged:
                   _isSaving || (widget.isEditing && !_assignmentDetailsLoaded)
@@ -3403,14 +3449,20 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                       : (value) => setState(() => _autoAddUsers = value),
             ),
             ListTile(
-              title: const Text('Manage users'),
+              title: Text(context.l10n.settingsManageUsers2),
               subtitle: Text(!widget.isEditing
-                  ? 'Save this instance to assign existing users.'
+                  ? context.l10n.settingsSaveThisInstanceToAssignExistingUsers
                   : _userSelectError != null
-                      ? 'Could not load assignment count. Open to retry.'
+                      ? context
+                          .l10n.settingsCouldNotLoadAssignmentCountOpenToRetry
                       : _users == null
-                          ? 'Loading assignments…'
-                          : '${_users!.where((u) => _assignedUserIds.contains(u.id)).length} assigned users'),
+                          ? context.l10n.settingsLoadingAssignments
+                          : context.l10n.settingsMessageValue1AssignedUsers(
+                              (_users!
+                                      .where((u) =>
+                                          _assignedUserIds.contains(u.id))
+                                      .length)
+                                  .toString())),
               trailing: const Icon(Icons.chevron_right),
               onTap: !widget.isEditing || _isSaving
                   ? null
@@ -3427,16 +3479,19 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
           if (_supportsRequesterTags)
             SwitchListTile(
-              title: const Text('Tag requests with requester'),
+              title: Text(context.l10n.settingsTagRequestsWithRequester),
               subtitle: Text(
-                'Tag new requests on ${switch (_serviceType) {
-                  'chaptarr' =>
-                    'the Chaptarr author, separately for eBooks and audiobooks',
-                  'lidarr' => 'the Lidarr artist, shared by all their albums',
-                  'sonarr' => 'the Sonarr series',
-                  _ => 'the Radarr movie',
-                }}. Existing tags stay. Turning this off cancels unfinished tagging. '
-                'Check Approvals > History for status and retry.',
+                context.l10n
+                    .settingsMessageTagNewRequestsOnValue1ExistingTagsStay(
+                        (switch (_serviceType) {
+                  'chaptarr' => context.l10n
+                      .settingsTheChaptarrAuthorSeparatelyForEbooksAndAudiobooks,
+                  'lidarr' =>
+                    context.l10n.settingsTheLidarrArtistSharedByAllTheirAlbums,
+                  'sonarr' => context.l10n.settingsTheSonarrSeries,
+                  _ => context.l10n.settingsTheRadarrMovie,
+                })
+                            .toString()),
                 style: const TextStyle(
                     color: AppTheme.textSecondary, fontSize: 13),
               ),
@@ -3461,7 +3516,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                         strokeWidth: 2, color: AppTheme.accent),
                   )
                 : const Icon(Icons.wifi_tethering),
-            label: const Text('Test Connection'),
+            label: Text(context.l10n.settingsTestConnection),
           ),
           if (_testResult != null) ...[
             const SizedBox(height: 8),
@@ -3495,10 +3550,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                         strokeWidth: 2, color: Colors.black),
                   )
                 : Text(_creationComplete
-                    ? 'Instance created'
+                    ? context.l10n.settingsInstanceCreated
                     : widget.isEditing
-                        ? 'Save Changes'
-                        : 'Add Instance'),
+                        ? context.l10n.settingsSaveChanges
+                        : context.l10n.settingsAddInstance),
           ),
 
           // Hardcover (Chaptarr, editing only). The token is verified by the
@@ -3513,10 +3568,16 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             const SizedBox(height: 8),
             Text(
               _hardcoverReconnect
-                  ? 'Hardcover needs you to sign in again. Reconnect to refresh trending books.'
+                  ? context.l10n.settingsHardcoverNeedsYouToSignInAgainReconnect
                   : _hardcoverConnected
-                      ? 'Hardcover is connected ${_hardcoverMethod == 'oauth' ? 'with OAuth' : 'with an API token'}. You can replace this connection or disconnect it.'
-                      : 'Connect Hardcover to show trending books in Cantinarr. Chaptarr manages its own metadata connection.',
+                      ? context.l10n
+                          .settingsMessageHardcoverIsConnectedValue1YouCanReplaceThis(
+                              (_hardcoverMethod == 'oauth'
+                                      ? context.l10n.settingsWithOauth
+                                      : context.l10n.settingsWithAnApiToken)
+                                  .toString())
+                      : context.l10n
+                          .settingsConnectHardcoverToShowTrendingBooksInCantinarr,
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
             ),
@@ -3529,12 +3590,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 enableSuggestions: false,
                 autocorrect: false,
                 decoration: InputDecoration(
-                  labelText: 'Hardcover API token',
+                  labelText: context.l10n.settingsHardcoverApiToken,
                   hintText: _hardcoverConnected
-                      ? 'Connected — paste a token to replace it'
-                      : 'Paste the token from Hardcover',
-                  helperText:
-                      'Hardcover → Settings → API. Allow public catalog reads.',
+                      ? context.l10n.settingsConnectedPasteATokenToReplaceIt
+                      : context.l10n.settingsPasteTheTokenFromHardcover,
+                  helperText: context
+                      .l10n.settingsHardcoverSettingsApiAllowPublicCatalogReads,
                   helperMaxLines: 3,
                 ),
               ),
@@ -3556,18 +3617,18 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                     : const Icon(Icons.link),
                 label: Text(_hardcoverOAuthAvailable && !_hardcoverUseToken
                     ? _hardcoverReconnect
-                        ? 'Reconnect Hardcover'
+                        ? context.l10n.settingsReconnectHardcover
                         : _hardcoverConnected
-                            ? 'Replace Hardcover connection'
-                            : 'Connect Hardcover'
+                            ? context.l10n.settingsReplaceHardcoverConnection
+                            : context.l10n.settingsConnectHardcover
                     : _hardcoverConnected
-                        ? 'Replace Hardcover token'
-                        : 'Connect Hardcover'),
+                        ? context.l10n.settingsReplaceHardcoverToken
+                        : context.l10n.settingsConnectHardcover),
               ),
               if (_hardcoverConnected)
                 TextButton(
                     onPressed: _isSavingHardcover ? null : _clearHardcoverToken,
-                    child: const Text('Disconnect')),
+                    child: Text(context.l10n.settingsDisconnect)),
             ]),
             if (_hardcoverOAuthAvailable)
               Align(
@@ -3578,8 +3639,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                         : () => setState(
                             () => _hardcoverUseToken = !_hardcoverUseToken),
                     child: Text(_hardcoverUseToken
-                        ? 'Sign in with Hardcover instead'
-                        : 'Use an API token instead'),
+                        ? context.l10n.settingsSignInWithHardcoverInstead
+                        : context.l10n.settingsUseAnApiTokenInstead),
                   )),
             if (_hardcoverResult != null) ...[
               const SizedBox(height: 8),
@@ -3599,19 +3660,21 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           // app or clipboard.
           if (widget.isEditing && _supportsWebhook) ...[
             const SizedBox(height: 32),
-            const Text('Instant updates',
+            Text(context.l10n.settingsInstantUpdates,
                 style: TextStyle(
                     color: AppTheme.textSecondary,
                     fontSize: 13,
                     fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             Text(
-              'Cantinarr can create or refresh its Connect → Webhook record in '
-              '$_serviceLabel. ${_isChaptarr ? 'Books that finish downloading '
-                  'are announced the moment they land, instead of on the next '
-                  'check.' : 'Imports, deletes and adds made there will reach '
-                  'Cantinarr immediately.'} '
-              'The callback credential stays securely on the server.',
+              context.l10n.settingsMessageCantinarrCanCreateOrRefreshItsConnectWebhook(
+                  (_serviceLabel).toString(),
+                  (_isChaptarr
+                          ? context.l10n
+                              .settingsBooksThatFinishDownloadingAreAnnouncedTheMoment
+                          : context.l10n
+                              .settingsImportsDeletesAndAddsMadeThereWillReach)
+                      .toString()),
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
             ),
@@ -3626,7 +3689,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                           strokeWidth: 2, color: AppTheme.accent),
                     )
                   : const Icon(Icons.sync),
-              label: const Text('Configure instant updates'),
+              label: Text(context.l10n.settingsConfigureInstantUpdates),
             ),
             if (_webhookResult != null) ...[
               const SizedBox(height: 8),

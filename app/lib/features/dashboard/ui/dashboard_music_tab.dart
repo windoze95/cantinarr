@@ -1,3 +1,4 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -81,9 +82,9 @@ class _DashboardMusicTabState extends ConsumerState<DashboardMusicTab>
         mainAxisSize: MainAxisSize.min,
         children: [
           if (access.needsUpdate(instanceId))
-            const Padding(
-                padding: EdgeInsets.all(16),
-                child: Text(adminCatalogUpdateMessage)),
+            Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(browseLabel(context, adminCatalogUpdateMessage))),
           if (access.canBrowse('lidarr', instanceId)) ...[
             MusicDiscoveryRow(
               query: MusicBrowseQuery(

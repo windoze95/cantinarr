@@ -1,3 +1,6 @@
+import 'package:intl/intl.dart';
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import '../../apple_tv/ui/apple_tv_open_button.dart';
 import 'dart:async';
 
@@ -163,7 +166,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// library reads, even when that library is no longer accessible.
   String? _selectedLibraryId;
 
-  String get _serviceType => widget.mediaType == MediaType.movie ? 'radarr' : 'sonarr';
+  String get _serviceType =>
+      widget.mediaType == MediaType.movie ? 'radarr' : 'sonarr';
   bool get _needsSetup {
     if (_selectedLibraryId != null) return false;
     final access = ref.read(discoveryAccessProvider);
@@ -171,7 +175,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   }
 
   void _checkStatus() {
-    if (!_needsSetup && !_missingSelectedLibrary) _requestNotifier.checkStatus();
+    if (!_needsSetup && !_missingSelectedLibrary)
+      _requestNotifier.checkStatus();
   }
 
   void _loadRequestState() {
@@ -190,14 +195,17 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     WidgetsBinding.instance.addObserver(this);
     final initialInstance = widget.instanceId?.trim();
     _selectedLibraryId = initialInstance == null || initialInstance.isEmpty
-        ? null : initialInstance;
+        ? null
+        : initialInstance;
     final api = ref.read(discoverServiceProvider);
     _detailNotifier = MediaDetailNotifier(
       api: api,
       id: widget.id,
       mediaType: widget.mediaType,
-      libraryLoader: _librarySeries == null ? null : () async =>
-          (_librarySeries!.current ?? await _librarySeries!.load()).detail!,
+      libraryLoader: _librarySeries == null
+          ? null
+          : () async =>
+              (_librarySeries!.current ?? await _librarySeries!.load()).detail!,
     );
     final backendDio = ref.read(backendClientProvider);
     _requestNotifier = RequestNotifier(
@@ -220,8 +228,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     if (widget.mediaType == MediaType.tv) {
       _tvDeliveryPoll = Timer.periodic(const Duration(seconds: 15), (_) {
         final state = _requestNotifier.state;
-        if (mounted && state.deliveryMessages.isNotEmpty &&
-            !state.isCheckingStatus && !state.isRequesting) {
+        if (mounted &&
+            state.deliveryMessages.isNotEmpty &&
+            !state.isCheckingStatus &&
+            !state.isRequesting) {
           _checkStatus();
         }
       });
@@ -256,7 +266,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     if (_requestNotifier.state.status != _watchedStatus) _resolveWatchLinks();
     if (widget.mediaType == MediaType.tv) {
       final state = _requestNotifier.state;
-      final key = '${library?.revision ?? state.match?.revision}:${state.match?.seriesId}:${state.hasStatus}';
+      final key =
+          '${library?.revision ?? state.match?.revision}:${state.match?.seriesId}:${state.hasStatus}';
       if (key != _resolvedMatchKey) {
         _resolvedMatchKey = key;
         _resolveArrLink();
@@ -267,12 +278,15 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
 
   /// Whether the user may pick specific seasons. Defaults to true (the
   /// server's out-of-the-box global setting) until the options load.
-  bool get _canChooseSeasons => !_needsSetup && (_requestOptions?.canChooseSeason ?? true);
+  bool get _canChooseSeasons =>
+      !_needsSetup && (_requestOptions?.canChooseSeason ?? true);
 
-  bool get _librarySeasonsNeedAttention => _librarySeries != null &&
+  bool get _librarySeasonsNeedAttention =>
+      _librarySeries != null &&
       _requestNotifier.state.seasons.any((s) => s.hasRequestIssue);
 
-  bool get _canRequestLibrarySeasons => _librarySeries == null ||
+  bool get _canRequestLibrarySeasons =>
+      _librarySeries == null ||
       _requestNotifier.state.seasons.any((s) => s.isRequestable);
 
   /// Libraries available for browsing, including all instances for admins.
@@ -280,7 +294,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     final connection = ref.read(authProvider).valueOrNull?.connection;
     if (connection == null) return const [];
     return connection.instances
-        .where((i) => i.serviceType == _serviceType &&
+        .where((i) =>
+            i.serviceType == _serviceType &&
             (_librarySeries == null || i.id == _librarySeries!.libraryId))
         .map((i) => LibraryChoice(id: i.id, name: i.name))
         .toList();
@@ -289,15 +304,21 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   List<LibraryChoice> get _requestLibraryChoices {
     final connection = ref.read(authProvider).valueOrNull?.connection;
     return requestLibraries(connection, _serviceType)
-        .where((i) => _librarySeries == null || i.id == _librarySeries!.libraryId)
+        .where(
+            (i) => _librarySeries == null || i.id == _librarySeries!.libraryId)
         .toList();
   }
 
-  bool get _confirmBoundLibrary => _librarySeries != null &&
-      requestLibraries(ref.read(authProvider).valueOrNull?.connection, 'sonarr').length > 1;
+  bool get _confirmBoundLibrary =>
+      _librarySeries != null &&
+      requestLibraries(ref.read(authProvider).valueOrNull?.connection, 'sonarr')
+              .length >
+          1;
 
-  String? get _boundLibraryNote => _librarySeries == null ? null :
-      'These seasons belong to this library. Open the show in Discover to request another library.';
+  String? get _boundLibraryNote => _librarySeries == null
+      ? null
+      : context.l10n
+          .browseTheseSeasonsBelongToThisLibraryOpenTheShowInDiscoverToRequestAnotherLibrary;
 
   /// The connection's default library for this media type.
   String? get _defaultLibraryId {
@@ -311,12 +332,16 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// else the connection's default for this media type.
   String? get _effectiveLibraryId => _selectedLibraryId ?? _defaultLibraryId;
 
-  bool get _missingSelectedLibrary => _selectedLibraryId != null &&
+  bool get _missingSelectedLibrary =>
+      _selectedLibraryId != null &&
       !(ref.read(authProvider).valueOrNull?.connection?.instances.any(
-          (library) => library.id == _selectedLibraryId && library.serviceType == _serviceType) ?? false);
+              (library) =>
+                  library.id == _selectedLibraryId &&
+                  library.serviceType == _serviceType) ??
+          false);
 
-  bool get _libraryUnavailable => _missingSelectedLibrary ||
-      _requestNotifier.state.libraryUnavailable;
+  bool get _libraryUnavailable =>
+      _missingSelectedLibrary || _requestNotifier.state.libraryUnavailable;
 
   /// Switches every read and write on this screen to [libraryId] and
   /// refreshes what depends on it.
@@ -337,10 +362,13 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     ref.watch(discoveryAccessProvider);
     ref.watch(authProvider);
     ref.watch(tvMatchesAllowedProvider);
-    ref.listen(discoveryAccessProvider.select((access) => access.activeId(_serviceType)), (previous, next) {
+    ref.listen(
+        discoveryAccessProvider.select(
+            (access) => access.activeId(_serviceType)), (previous, next) {
       if (previous == null && next != null) _loadRequestState();
       if (previous != next) _loadMyOpenReport();
-      if (next == null && _needsSetup) _requestNotifier.state = const RequestState();
+      if (next == null && _needsSetup)
+        _requestNotifier.state = const RequestState();
     });
     // Live-update the request button when an approval decision for THIS title
     // arrives over the socket (complements the global toast).
@@ -348,7 +376,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       final event = next.valueOrNull;
       if (event == null) return;
       final tmdb = (event.data['tmdb_id'] as num?)?.toInt();
-      if ((tmdb == widget.id || (_librarySeries?.current?.matches.any((m) => m.tmdbId == tmdb) ?? false)) &&
+      if ((tmdb == widget.id ||
+              (_librarySeries?.current?.matches.any((m) => m.tmdbId == tmdb) ??
+                  false)) &&
           event.data['media_type'] == widget.mediaType.name) {
         _checkStatus();
       }
@@ -358,7 +388,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     // and ask the media servers again.
     ref.listen(libraryRefreshTickProvider, (_, __) {
       if (widget.mediaType == MediaType.tv &&
-          !_requestNotifier.state.isCheckingStatus && !_requestNotifier.state.isRequesting) {
+          !_requestNotifier.state.isCheckingStatus &&
+          !_requestNotifier.state.isRequesting) {
         _checkStatus();
       }
       _resolveArrLink();
@@ -392,12 +423,13 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       builder: (context, _) {
         if (_libraryUnavailable) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Library unavailable')),
-            body: const Center(
+            appBar: AppBar(title: Text(context.l10n.browseLibraryUnavailable)),
+            body: Center(
               child: Padding(
                 padding: EdgeInsets.all(24),
                 child: Text(
-                  'This library was removed or you no longer have access to it.',
+                  context.l10n
+                      .browseThisLibraryWasRemovedOrYouNoLongerHaveAccessToIt,
                   textAlign: TextAlign.center,
                 ),
               ),
@@ -422,11 +454,11 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
             state.tvDetail == null) {
           return Scaffold(
             appBar: AppBar(),
-            body: const Center(
+            body: Center(
               child: Padding(
                 padding: EdgeInsets.all(24),
                 child: Text(
-                  "This title isn't available on this account.",
+                  context.l10n.browseThisTitleIsnTAvailableOnThisAccount,
                   textAlign: TextAlign.center,
                   style: TextStyle(color: AppTheme.textSecondary),
                 ),
@@ -441,7 +473,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
           return Scaffold(
             appBar: AppBar(),
             body: Center(
-                child: Text(state.error!,
+                child: Text(browseLabel(context, state.error!),
                     style: const TextStyle(color: AppTheme.error))),
           );
         }
@@ -449,15 +481,18 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
         final size = MediaQuery.sizeOf(context);
         final topPadding = MediaQuery.paddingOf(context).top;
         final now = ref.watch(mediaDetailClockProvider)();
-        final facts = state.facts(now: now);
-        final tvDate = state.tvDetail == null ? null
-            : upcomingTVDateLabel(state.tvDetail!, now: now);
+        final facts =
+            state.facts(now: now, dateLocale: context.l10n.dateLocale);
+        final tvDate = state.tvDetail == null
+            ? null
+            : upcomingTVDateLabel(state.tvDetail!,
+                now: now, strings: context.l10n);
         // Resolve once so the status line and full schedule use the same
         // country's dates. The widget locale is always en_US in this app.
         final movieSchedule = resolveReleaseSchedule(
           state.movieDetail?.releaseDates ?? const [],
-          preferredRegion: watchRegionFor(WidgetsBinding
-              .instance.platformDispatcher.locale.countryCode),
+          preferredRegion: watchRegionFor(
+              WidgetsBinding.instance.platformDispatcher.locale.countryCode),
           now: now,
         );
         return Scaffold(
@@ -521,194 +556,266 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                   ? Column(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        CatalogSetupButton(serviceType: _serviceType),
+                                        CatalogSetupButton(
+                                            serviceType: _serviceType),
                                         if (tvDate != null)
                                           _DateStatusLine(label: tvDate),
                                       ],
                                     )
                                   : AnimatedSize(
-                                duration: const Duration(milliseconds: 220),
-                                curve: Curves.easeOutCubic,
-                                alignment: Alignment.topCenter,
-                                child: ListenableBuilder(
-                                  listenable: _requestNotifier,
-                                  builder: (_, __) => Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      RequestButton(
-                                        status: _requestNotifier.state.status,
-                                        isRequesting:
-                                            _requestNotifier.state.isRequesting,
-                                        error: _requestNotifier.state.error,
-                                        onRequest: widget.mediaType == MediaType.tv &&
-                                            (!_requestNotifier.state.hasStatus || !_canRequestLibrarySeasons)
-                                            ? null : () => _onRequest(),
-                                      ),
-                                      if (_librarySeasonsNeedAttention)
-                                        Padding(padding: const EdgeInsets.only(top: 8),
-                                          child: Text(_canRequestLibrarySeasons
-                                            ? 'Some seasons need attention. You can request the other seasons below.'
-                                            : 'Season requests are unavailable. See the notes beside each season.',
-                                            textAlign: TextAlign.center)),
-                                      if (widget.mediaType == MediaType.tv &&
-                                          (!_requestNotifier.state.hasStatus || _librarySeasonsNeedAttention))
-                                        TextButton.icon(onPressed: _requestNotifier.state.isCheckingStatus
-                                            ? null : _requestNotifier.checkStatus,
-                                          icon: const Icon(Icons.refresh),
-                                          label: Text(_requestNotifier.state.isCheckingStatus ? 'Checking TV match…' : 'Retry TV match')),
-                                      for (final message in _requestNotifier.state.deliveryMessages)
-                                        Padding(padding: const EdgeInsets.only(top: 8), child: Text(message, textAlign: TextAlign.center)),
-                                      // TV dates come from metadata, including
-                                      // when existing episodes are Available.
-                                      if (tvDate != null)
-                                        _DateStatusLine(label: tvDate),
-                                      if (widget.mediaType == MediaType.movie)
-                                        _PendingReleaseLine(
-                                          schedule: movieSchedule,
-                                          status: _requestNotifier.state.status,
-                                          now: now,
+                                      duration:
+                                          const Duration(milliseconds: 220),
+                                      curve: Curves.easeOutCubic,
+                                      alignment: Alignment.topCenter,
+                                      child: ListenableBuilder(
+                                        listenable: _requestNotifier,
+                                        builder: (_, __) => Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            RequestButton(
+                                              status:
+                                                  _requestNotifier.state.status,
+                                              isRequesting: _requestNotifier
+                                                  .state.isRequesting,
+                                              error:
+                                                  _requestNotifier.state.error,
+                                              onRequest: widget.mediaType ==
+                                                          MediaType.tv &&
+                                                      (!_requestNotifier.state
+                                                              .hasStatus ||
+                                                          !_canRequestLibrarySeasons)
+                                                  ? null
+                                                  : () => _onRequest(),
+                                            ),
+                                            if (_librarySeasonsNeedAttention)
+                                              Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          top: 8),
+                                                  child: Text(
+                                                      _canRequestLibrarySeasons
+                                                          ? context.l10n
+                                                              .browseSomeSeasonsNeedAttentionYouCanRequestTheOtherSeasonsBelow
+                                                          : context.l10n
+                                                              .browseSeasonRequestsAreUnavailableSeeTheNotesBesideEachSeason,
+                                                      textAlign:
+                                                          TextAlign.center)),
+                                            if (widget.mediaType ==
+                                                    MediaType.tv &&
+                                                (!_requestNotifier
+                                                        .state.hasStatus ||
+                                                    _librarySeasonsNeedAttention))
+                                              TextButton.icon(
+                                                  onPressed: _requestNotifier
+                                                          .state
+                                                          .isCheckingStatus
+                                                      ? null
+                                                      : _requestNotifier
+                                                          .checkStatus,
+                                                  icon:
+                                                      const Icon(Icons.refresh),
+                                                  label: Text(_requestNotifier
+                                                          .state
+                                                          .isCheckingStatus
+                                                      ? context.l10n
+                                                          .browseCheckingTVMatch
+                                                      : context.l10n
+                                                          .browseRetryTVMatch)),
+                                            for (final message
+                                                in _requestNotifier
+                                                    .state.deliveryMessages)
+                                              Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          top: 8),
+                                                  child: Text(
+                                                      browseLabel(
+                                                          context, message),
+                                                      textAlign:
+                                                          TextAlign.center)),
+                                            // TV dates come from metadata, including
+                                            // when existing episodes are Available.
+                                            if (tvDate != null)
+                                              _DateStatusLine(label: tvDate),
+                                            if (widget.mediaType ==
+                                                MediaType.movie)
+                                              _PendingReleaseLine(
+                                                schedule: movieSchedule,
+                                                status: _requestNotifier
+                                                    .state.status,
+                                                now: now,
+                                              ),
+                                            // One chip per granted library when the
+                                            // user holds more than one (HD vs 4K):
+                                            // each carries that library's own
+                                            // status, and tapping one retargets the
+                                            // whole screen — status, request,
+                                            // downloads — at that library.
+                                            _LibraryStatusChips(
+                                              unknownIds: _requestNotifier
+                                                  .state.unknownInstanceIds,
+                                              statuses: _requestNotifier
+                                                  .state.instanceStatuses,
+                                              libraries: _libraryChoices,
+                                              selectedId: _effectiveLibraryId,
+                                              onSelect: (id) => _selectLibrary(
+                                                  id == _defaultLibraryId
+                                                      ? null
+                                                      : id),
+                                            ),
+                                            const SizedBox(height: 10),
+                                            Wrap(
+                                              alignment: WrapAlignment.center,
+                                              crossAxisAlignment:
+                                                  WrapCrossAlignment.center,
+                                              spacing: 6,
+                                              runSpacing: 4,
+                                              children: [
+                                                if (_requestNotifier
+                                                        .state.status !=
+                                                    RequestStatus.available)
+                                                  TextButton.icon(
+                                                    onPressed: () =>
+                                                        _showStatusSheet(
+                                                      context,
+                                                      state.title,
+                                                      _requestNotifier
+                                                          .state.status,
+                                                    ),
+                                                    icon: const Icon(
+                                                      Icons
+                                                          .info_outline_rounded,
+                                                      size: 17,
+                                                    ),
+                                                    label: Text(
+                                                      browseLabel(
+                                                          context,
+                                                          _requestNotifier.state
+                                                              .status.label),
+                                                    ),
+                                                  ),
+                                                if (_myOpenReportId != null &&
+                                                    !_canCorrectTVMatch)
+                                                  TextButton.icon(
+                                                    onPressed: () =>
+                                                        _viewReport(
+                                                            _myOpenReportId!),
+                                                    icon: const Icon(
+                                                      Icons.flag,
+                                                      size: 17,
+                                                    ),
+                                                    label: Text(
+                                                      context.l10n
+                                                          .browseViewYourReport,
+                                                    ),
+                                                  )
+                                                else if (_canReport ||
+                                                    (_myOpenReportId != null &&
+                                                        _canCorrectTVMatch))
+                                                  TextButton.icon(
+                                                    onPressed: () =>
+                                                        _onReportProblem(state),
+                                                    icon: const Icon(
+                                                      Icons.flag_outlined,
+                                                      size: 17,
+                                                    ),
+                                                    label: Text(
+                                                      context.l10n
+                                                          .browseReportAProblem,
+                                                    ),
+                                                  ),
+                                                if (widget.mediaType ==
+                                                        MediaType.movie &&
+                                                    _downloadInstanceId !=
+                                                        null &&
+                                                    _downloadMovieFile != null)
+                                                  MediaDownloadButton(
+                                                    instanceId:
+                                                        _downloadInstanceId!,
+                                                    fileId:
+                                                        _downloadMovieFile!.id,
+                                                    label: context.l10n
+                                                        .browseDownloadMovie,
+                                                    reportedPath:
+                                                        _downloadMovieFile!
+                                                            .path,
+                                                  ),
+                                                if (_librarySeries == null &&
+                                                    _watchLinks.any((link) =>
+                                                        link.state ==
+                                                        WatchLinkState.found))
+                                                  AppleTVOpenButton(
+                                                      mediaType:
+                                                          widget.mediaType,
+                                                      tmdbId: widget.id),
+                                                for (final link in _watchLinks)
+                                                  if (link.state ==
+                                                      WatchLinkState.found)
+                                                    TextButton.icon(
+                                                      onPressed: () =>
+                                                          _openWatchLink(link),
+                                                      icon: const Icon(
+                                                        Icons
+                                                            .play_circle_outline,
+                                                        size: 17,
+                                                      ),
+                                                      label: Text(
+                                                        _watchActionLabel(link),
+                                                      ),
+                                                    )
+                                                  else if (link
+                                                      .fallbackUrl.isNotEmpty)
+                                                    TextButton.icon(
+                                                      onPressed: () =>
+                                                          _openWatchLink(
+                                                        link,
+                                                        fallback: true,
+                                                      ),
+                                                      icon: const Icon(
+                                                        Icons
+                                                            .open_in_new_rounded,
+                                                        size: 17,
+                                                      ),
+                                                      label: Text(
+                                                        _watchActionLabel(link,
+                                                            fallback: true),
+                                                      ),
+                                                    )
+                                                  else if (link.state ==
+                                                      WatchLinkState.missing)
+                                                    TextButton.icon(
+                                                      onPressed: null,
+                                                      icon: const Icon(
+                                                        Icons.hourglass_empty,
+                                                        size: 17,
+                                                      ),
+                                                      label: Text(
+                                                        context.l10n
+                                                            .detailNotOnServiceYet(
+                                                                _watchLabel(
+                                                                    link)),
+                                                      ),
+                                                    ),
+                                                if (_arrLink != null)
+                                                  TextButton.icon(
+                                                    onPressed: _openInArr,
+                                                    icon: const Icon(
+                                                      Icons.open_in_new_rounded,
+                                                      size: 17,
+                                                    ),
+                                                    label: Text(
+                                                      context.l10n
+                                                          .detailOpenInService(
+                                                              _arrLink!
+                                                                  .moduleLabel),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ],
                                         ),
-                                      // One chip per granted library when the
-                                      // user holds more than one (HD vs 4K):
-                                      // each carries that library's own
-                                      // status, and tapping one retargets the
-                                      // whole screen — status, request,
-                                      // downloads — at that library.
-                                      _LibraryStatusChips(
-                                        unknownIds: _requestNotifier.state.unknownInstanceIds,
-                                        statuses: _requestNotifier
-                                            .state.instanceStatuses,
-                                        libraries: _libraryChoices,
-                                        selectedId: _effectiveLibraryId,
-                                        onSelect: (id) => _selectLibrary(
-                                            id == _defaultLibraryId
-                                                ? null
-                                                : id),
                                       ),
-                                      const SizedBox(height: 10),
-                                      Wrap(
-                                        alignment: WrapAlignment.center,
-                                        crossAxisAlignment:
-                                            WrapCrossAlignment.center,
-                                        spacing: 6,
-                                        runSpacing: 4,
-                                        children: [
-                                          if (_requestNotifier.state.status !=
-                                              RequestStatus.available)
-                                            TextButton.icon(
-                                              onPressed: () => _showStatusSheet(
-                                                context,
-                                                state.title,
-                                                _requestNotifier.state.status,
-                                              ),
-                                              icon: const Icon(
-                                                Icons.info_outline_rounded,
-                                                size: 17,
-                                              ),
-                                              label: Text(
-                                                _requestNotifier
-                                                    .state.status.label,
-                                              ),
-                                            ),
-                                          if (_myOpenReportId != null &&
-                                              !_canCorrectTVMatch)
-                                            TextButton.icon(
-                                              onPressed: () =>
-                                                  _viewReport(_myOpenReportId!),
-                                              icon: const Icon(
-                                                Icons.flag,
-                                                size: 17,
-                                              ),
-                                              label: const Text(
-                                                'View your report',
-                                              ),
-                                            )
-                                          else if (_canReport ||
-                                              (_myOpenReportId != null &&
-                                                  _canCorrectTVMatch))
-                                            TextButton.icon(
-                                              onPressed: () =>
-                                                  _onReportProblem(state),
-                                              icon: const Icon(
-                                                Icons.flag_outlined,
-                                                size: 17,
-                                              ),
-                                              label: const Text(
-                                                'Report a problem',
-                                              ),
-                                            ),
-                                          if (widget.mediaType ==
-                                                  MediaType.movie &&
-                                              _downloadInstanceId != null &&
-                                              _downloadMovieFile != null)
-                                            MediaDownloadButton(
-                                              instanceId:
-                                                  _downloadInstanceId!,
-                                              fileId:
-                                                  _downloadMovieFile!.id,
-                                              label: 'Download movie',
-                                              reportedPath:
-                                                  _downloadMovieFile!.path,
-                                            ),
-                                          if (_librarySeries == null && _watchLinks.any((link) => link.state == WatchLinkState.found))
-                                            AppleTVOpenButton(mediaType: widget.mediaType, tmdbId: widget.id),
-                                          for (final link in _watchLinks)
-                                            if (link.state ==
-                                                WatchLinkState.found)
-                                              TextButton.icon(
-                                                onPressed: () =>
-                                                    _openWatchLink(link),
-                                                icon: const Icon(
-                                                  Icons.play_circle_outline,
-                                                  size: 17,
-                                                ),
-                                                label: Text(
-                                                  _watchActionLabel(link),
-                                                ),
-                                              )
-                                            else if (link.fallbackUrl.isNotEmpty)
-                                              TextButton.icon(
-                                                onPressed: () => _openWatchLink(
-                                                  link,
-                                                  fallback: true,
-                                                ),
-                                                icon: const Icon(
-                                                  Icons.open_in_new_rounded,
-                                                  size: 17,
-                                                ),
-                                                label: Text(
-                                                  _watchActionLabel(link, fallback: true),
-                                                ),
-                                              )
-                                            else if (link.state ==
-                                                WatchLinkState.missing)
-                                              TextButton.icon(
-                                                onPressed: null,
-                                                icon: const Icon(
-                                                  Icons.hourglass_empty,
-                                                  size: 17,
-                                                ),
-                                                label: Text(
-                                                  'Not on ${_watchLabel(link)} yet',
-                                                ),
-                                              ),
-                                          if (_arrLink != null)
-                                            TextButton.icon(
-                                              onPressed: _openInArr,
-                                              icon: const Icon(
-                                                Icons.open_in_new_rounded,
-                                                size: 17,
-                                              ),
-                                              label: Text(
-                                                'Open in ${_arrLink!.moduleLabel}',
-                                              ),
-                                            ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
+                                    ),
                             ),
                           ),
                           const SizedBox(height: 16),
@@ -726,7 +833,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                           label: Text(g.name,
                                               style: const TextStyle(
                                                   fontSize: 12)),
-                                          tooltip: 'Browse ${g.name}',
+                                          tooltip: context.l10n
+                                              .detailBrowseCategory(g.name),
                                           backgroundColor:
                                               AppTheme.surfaceVariant,
                                           side: const BorderSide(
@@ -737,8 +845,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                           onPressed: () => _browse(
                                             BrowseFeed.discover,
                                             title: g.name,
-                                            filters: BrowseFilters(
-                                                genreIds: [g.id]),
+                                            filters:
+                                                BrowseFilters(genreIds: [g.id]),
                                           ),
                                         ))
                                     .toList(),
@@ -817,7 +925,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                 onPressed: () =>
                                     _openTrailer(state.trailerKey!),
                                 icon: const Icon(Icons.play_arrow),
-                                label: const Text('Watch Trailer'),
+                                label: Text(context.l10n.browseWatchTrailer),
                                 style: OutlinedButton.styleFrom(
                                   foregroundColor: AppTheme.textPrimary,
                                   side:
@@ -863,8 +971,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                 onStudio: (studio) => _browse(
                                   BrowseFeed.discover,
                                   title: studio.name!,
-                                  filters:
-                                      BrowseFilters(companies: [studio]),
+                                  filters: BrowseFilters(companies: [studio]),
                                 ),
                                 links: state.links,
                                 onLink: _openTitleLink,
@@ -876,8 +983,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                           // disc releases omitted from the status line.
                           if (state.movieDetail != null)
                             Padding(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 16),
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
                               child: _ReleaseDatesSection(
                                 schedule: movieSchedule,
                               ),
@@ -891,7 +998,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                               key: _seasonsKey,
                               padding:
                                   const EdgeInsets.symmetric(horizontal: 16),
-                              child: const SectionHeader(title: 'Seasons'),
+                              child: SectionHeader(
+                                  title: context.l10n.browseSeasons),
                             ),
                             const SizedBox(height: 12),
                             SeasonTable(
@@ -912,7 +1020,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                           if (state.recommendations.isNotEmpty) ...[
                             const SizedBox(height: 24),
                             _SectionRow(
-                              title: 'Recommended',
+                              title: context.l10n.browseRecommended,
                               items: state.recommendations,
                               onSeeAll: () => _browse(
                                 BrowseFeed.recommendations,
@@ -925,7 +1033,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                           if (state.similar.isNotEmpty) ...[
                             const SizedBox(height: 24),
                             _SectionRow(
-                              title: 'Similar',
+                              title: context.l10n.browseSimilar,
                               items: state.similar,
                               onSeeAll: () =>
                                   _browse(BrowseFeed.similar, title: 'Similar'),
@@ -978,9 +1086,11 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       await confirmRequestLibrary(context, libraries: libraries);
       return;
     }
-    final preferredLibrary = _librarySeries?.libraryId ?? defaultRequestLibrary(
-        ref.read(authProvider).valueOrNull?.connection, _serviceType);
-    final options = await _requestNotifier.fetchOptions(libraryId: preferredLibrary);
+    final preferredLibrary = _librarySeries?.libraryId ??
+        defaultRequestLibrary(
+            ref.read(authProvider).valueOrNull?.connection, _serviceType);
+    final options =
+        await _requestNotifier.fetchOptions(libraryId: preferredLibrary);
     if (!mounted) return;
     if (options != null && preferredLibrary == _effectiveLibraryId) {
       setState(() => _requestOptions = options);
@@ -993,7 +1103,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     // choose seasons fall through to the coarse flow instead (the server
     // applies their default season scope to the missing seasons).
     if (widget.mediaType == MediaType.tv &&
-        (_requestNotifier.state.status == RequestStatus.partial || _librarySeries != null) &&
+        (_requestNotifier.state.status == RequestStatus.partial ||
+            _librarySeries != null) &&
         s.seasons.isNotEmpty &&
         _canChooseSeasons) {
       _scrollToSeasons();
@@ -1005,8 +1116,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
 
     // A multi-library user gets the sheet even with season/quality choice
     // off: the library IS a choice.
-    final hasChoices =
-        (options != null && options.hasChoices) || libraries.length > 1 || _confirmBoundLibrary;
+    final hasChoices = (options != null && options.hasChoices) ||
+        libraries.length > 1 ||
+        _confirmBoundLibrary;
 
     String? seasonScope;
     int? qualityProfileId;
@@ -1015,7 +1127,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       final result = await showAppSheet<RequestOptionsResult>(
         context,
         builder: (_) => RequestOptionsSheet(
-          initialSelection: (_lastRequestOptions?.instanceId == null || _lastRequestOptions?.instanceId == preferredLibrary) ? _lastRequestOptions : null,
+          initialSelection: (_lastRequestOptions?.instanceId == null ||
+                  _lastRequestOptions?.instanceId == preferredLibrary)
+              ? _lastRequestOptions
+              : null,
           options: options ??
               const RequestOptions(
                 canChooseSeason: false,
@@ -1028,7 +1143,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
           showLibrary: _confirmBoundLibrary,
           libraryNote: _boundLibraryNote,
           onLibraryOptions: (libraryId) async {
-            final selected = await _requestNotifier.fetchOptions(libraryId: libraryId);
+            final selected =
+                await _requestNotifier.fetchOptions(libraryId: libraryId);
             optionsByLibrary[libraryId] = selected;
             return selected;
           },
@@ -1080,7 +1196,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       _onRequestSucceeded();
     } else if (quotaMessage != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(quotaMessage)),
+        SnackBar(content: Text(browseLabel(context, quotaMessage))),
       );
     }
   }
@@ -1089,7 +1205,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     final connection = ref.read(authProvider).valueOrNull?.connection;
     final target = await confirmRequestLibrary(context,
         libraries: _requestLibraryChoices,
-        defaultLibraryId: _librarySeries?.libraryId ?? defaultRequestLibrary(connection, 'sonarr'),
+        defaultLibraryId: _librarySeries?.libraryId ??
+            defaultRequestLibrary(connection, 'sonarr'),
         // Native season numbers cannot be carried to another instance. Still
         // confirm their bound destination when the user has multiple libraries.
         confirmSingle: _confirmBoundLibrary,
@@ -1107,8 +1224,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       _loadMyOpenReport();
     }
     if (options?.canChooseSeason != true) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text(
-          'Season selection is unavailable for this library. Use the main Request button.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(context.l10n
+              .browseSeasonSelectionIsUnavailableForThisLibraryUseTheMainRequestButton)));
       return false;
     }
     return true;
@@ -1116,10 +1234,13 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
 
   Future<void> _correctTVMatch() async {
     if (!_canCorrectTVMatch) return;
-    final uri = Uri(path: _librarySeries == null
-        ? '/settings/tv-matches/${widget.id}' : '/settings/tv-matches', queryParameters: {
-      if (_effectiveLibraryId != null) 'instance_id': _effectiveLibraryId!,
-    });
+    final uri = Uri(
+        path: _librarySeries == null
+            ? '/settings/tv-matches/${widget.id}'
+            : '/settings/tv-matches',
+        queryParameters: {
+          if (_effectiveLibraryId != null) 'instance_id': _effectiveLibraryId!,
+        });
     await context.push(uri.toString());
     if (!mounted) return;
     await _requestNotifier.checkStatus();
@@ -1213,23 +1334,36 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
         final serverMatch = _requestNotifier.state.match;
         final library = _librarySeries?.current;
         final correctedServer = connection?.tvMatchCorrections == true;
-        if (correctedServer && (!_requestNotifier.state.hasStatus ||
-            (library == null && (serverMatch?.isResolved != true || serverMatch!.seriesId <= 0)))) {
+        if (correctedServer &&
+            (!_requestNotifier.state.hasStatus ||
+                (library == null &&
+                    (serverMatch?.isResolved != true ||
+                        serverMatch!.seriesId <= 0)))) {
           return;
         }
         final series = await service.getSeries();
-        final exact = correctedServer ? series.where((s) =>
-            s.id == (_librarySeries?.seriesId ?? serverMatch!.seriesId) &&
-            s.tvdbId == (library?.detail?.externalIds?.tvdbId ?? serverMatch!.tvdbId)).toList() : null;
+        final exact = correctedServer
+            ? series
+                .where((s) =>
+                    s.id ==
+                        (_librarySeries?.seriesId ?? serverMatch!.seriesId) &&
+                    s.tvdbId ==
+                        (library?.detail?.externalIds?.tvdbId ??
+                            serverMatch!.tvdbId))
+                .toList()
+            : null;
         final match = correctedServer
             ? (exact!.length == 1 ? exact.single : null)
             : matchSonarrSeries(series,
                 tvdbId: _detailNotifier.state.tvDetail?.externalIds?.tvdbId,
-                tmdbId: widget.id, title: _detailNotifier.state.title,
-                year: tmdbPremiereYear(_detailNotifier.state.tvDetail?.firstAirDate));
+                tmdbId: widget.id,
+                title: _detailNotifier.state.title,
+                year: tmdbPremiereYear(
+                    _detailNotifier.state.tvDetail?.firstAirDate));
         final sourceSeasons = <int, int>{
           if (library != null)
-            for (final season in library.detail!.seasons) season.seasonNumber: season.seasonNumber
+            for (final season in library.detail!.seasons)
+              season.seasonNumber: season.seasonNumber
           else if (correctedServer)
             for (final e in serverMatch!.seasonMap.entries) e.value: e.key,
         };
@@ -1240,12 +1374,13 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
             includeEpisodeFile: true,
           ))
               .where((episode) =>
-                  episode.hasFile && episode.episodeFileId > 0 &&
-                  (!correctedServer || sourceSeasons.containsKey(episode.seasonNumber)))
+                  episode.hasFile &&
+                  episode.episodeFileId > 0 &&
+                  (!correctedServer ||
+                      sourceSeasons.containsKey(episode.seasonNumber)))
               .toList()
             ..sort((left, right) {
-              final season =
-                  left.seasonNumber.compareTo(right.seasonNumber);
+              final season = left.seasonNumber.compareTo(right.seasonNumber);
               return season != 0
                   ? season
                   : left.episodeNumber.compareTo(right.episodeNumber);
@@ -1269,12 +1404,13 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     }
   }
 
-  Map<int, List<MediaDownloadChoice>> get
-      _episodeDownloadChoicesBySeason {
+  Map<int, List<MediaDownloadChoice>> get _episodeDownloadChoicesBySeason {
     final result = <int, List<MediaDownloadChoice>>{};
     for (final episode in _downloadEpisodes) {
-      final sourceSeason = _downloadSourceSeasons[episode.seasonNumber] ?? episode.seasonNumber;
-      final episodeLabel = 'S${sourceSeason.toString().padLeft(2, '0')}E${episode.episodeNumber.toString().padLeft(2, '0')}';
+      final sourceSeason =
+          _downloadSourceSeasons[episode.seasonNumber] ?? episode.seasonNumber;
+      final episodeLabel =
+          'S${sourceSeason.toString().padLeft(2, '0')}E${episode.episodeNumber.toString().padLeft(2, '0')}';
       final title = episode.title?.trim();
       final file = episode.episodeFile;
       final details = <String>[
@@ -1304,9 +1440,11 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     final status = _requestNotifier.state.status;
     _watchedStatus = status;
     final connection = ref.read(authProvider).valueOrNull?.connection;
-    final watchable = status == RequestStatus.available ||
-        status == RequestStatus.partial;
-    final askable = connection?.mediaServerInstances.any((server) => server.serviceType != 'audiobookshelf') ?? false;
+    final watchable =
+        status == RequestStatus.available || status == RequestStatus.partial;
+    final askable = connection?.mediaServerInstances
+            .any((server) => server.serviceType != 'audiobookshelf') ??
+        false;
     final detail = _detailNotifier.state;
     if (_libraryUnavailable || !watchable || !askable) {
       if (_watchLinks.isNotEmpty) setState(() => _watchLinks = const []);
@@ -1321,20 +1459,24 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       for (final sourceId in sources?.map((m) => m.tmdbId) ?? [widget.id]) {
         final source = sources?.where((m) => m.tmdbId == sourceId).firstOrNull;
         final found = await ref.read(mediaAccessServiceProvider).watchLinks(
-            mediaType: widget.mediaType,
-            tmdbId: sourceId,
-            tvdbId: detail.tvDetail?.externalIds?.tvdbId,
-            year: library != null ? null : widget.mediaType == MediaType.movie
-                ? tmdbPremiereYear(detail.movieDetail?.releaseDate)
-                : tmdbPremiereYear(detail.tvDetail?.firstAirDate),
-            title: source?.title ?? detail.title,
-          );
+              mediaType: widget.mediaType,
+              tmdbId: sourceId,
+              tvdbId: detail.tvDetail?.externalIds?.tvdbId,
+              year: library != null
+                  ? null
+                  : widget.mediaType == MediaType.movie
+                      ? tmdbPremiereYear(detail.movieDetail?.releaseDate)
+                      : tmdbPremiereYear(detail.tvDetail?.firstAirDate),
+              title: source?.title ?? detail.title,
+            );
         for (final link in found) {
           // Media servers may also combine these source titles. One verified
           // link to that same native series is enough; separate records stay
           // separate and retain their own canonical action identity.
-          if (links.any((other) => other.instanceId == link.instanceId &&
-              other.url == link.url && other.state == link.state)) {
+          if (links.any((other) =>
+              other.instanceId == link.instanceId &&
+              other.url == link.url &&
+              other.state == link.state)) {
             continue;
           }
           links.add(link);
@@ -1342,7 +1484,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
         }
       }
       if (!mounted || generation != _watchGeneration) return;
-      setState(() { _watchLinks = links; _watchSourceIds = sourceIds; });
+      setState(() {
+        _watchLinks = links;
+        _watchSourceIds = sourceIds;
+      });
     } catch (_) {
       if (!mounted || generation != _watchGeneration) return;
       setState(() => _watchLinks = const []);
@@ -1359,12 +1504,16 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   }
 
   String _watchActionLabel(WatchLink link, {bool fallback = false}) {
-    if (ref.read(mediaAppLauncherProvider).videoAppFor(link.videoApps) == VideoApp.infuse) {
-      final context = _watchLinks.length > 1
-          ? ' · ${mediaServerTypeLabel(link.serviceType)} / ${link.name}' : '';
-      return 'Open in Infuse$context';
+    if (ref.read(mediaAppLauncherProvider).videoAppFor(link.videoApps) ==
+        VideoApp.infuse) {
+      final server = _watchLinks.length > 1
+          ? ' · ${mediaServerTypeLabel(link.serviceType)} / ${link.name}'
+          : '';
+      return context.l10n.detailOpenInfuse(server);
     }
-    return '${fallback ? 'Open' : 'Watch on'} ${_watchLabel(link)}';
+    return fallback
+        ? context.l10n.detailOpenService(_watchLabel(link))
+        : context.l10n.detailWatchOnService(_watchLabel(link));
   }
 
   /// Prefers the installed media app on mobile, retaining the server's web
@@ -1374,7 +1523,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
           serviceType: link.serviceType,
           apps: link.videoApps,
           tmdbId: !fallback && link.state == WatchLinkState.found
-              ? (_watchSourceIds[link] ?? widget.id) : null,
+              ? (_watchSourceIds[link] ?? widget.id)
+              : null,
           webUrl: fallback ? link.fallbackUrl : link.url,
           mediaType: !fallback && link.state == WatchLinkState.found
               ? widget.mediaType
@@ -1382,7 +1532,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
         );
     if (opened || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text("Couldn't open ${_watchLabel(link)}."),
+      content: Text(context.l10n.detailCouldNotOpenService(_watchLabel(link))),
     ));
   }
 
@@ -1399,7 +1549,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     }
     if (opened || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text("Couldn't open ${link.label}."),
+      content: Text(context.l10n.detailCouldNotOpenLink(link.label)),
     ));
   }
 
@@ -1436,7 +1586,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     for (final issue in _myReports) {
       if (issue.closedAt == null &&
           issue.mediaType == widget.mediaType.name &&
-          (issue.tmdbId == widget.id || (_librarySeries?.current?.matches.any((m) => m.tmdbId == issue.tmdbId) ?? false)) &&
+          (issue.tmdbId == widget.id ||
+              (_librarySeries?.current?.matches
+                      .any((m) => m.tmdbId == issue.tmdbId) ??
+                  false)) &&
           issue.instanceId == instanceId) {
         return issue.id;
       }
@@ -1467,15 +1620,20 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   bool get _reportingAllowed =>
       ref.read(authProvider).valueOrNull?.connection?.allowReporting ?? false;
 
-  bool get _canCorrectTVMatch => widget.mediaType == MediaType.tv &&
-      ref.read(tvMatchesAllowedProvider) && !_needsSetup &&
+  bool get _canCorrectTVMatch =>
+      widget.mediaType == MediaType.tv &&
+      ref.read(tvMatchesAllowedProvider) &&
+      !_needsSetup &&
       _reportInstanceId != null;
 
   /// The same state rule covers one-tap requests, season-table requests and
   /// failures that block either. Admin corrections do not enable reporting.
-  bool get _canReport => !_needsSetup && _reportInstanceId != null &&
-      (_librarySeries == null || (_requestNotifier.state.hasStatus &&
-          (_librarySeries!.current?.matches.isNotEmpty ?? false))) &&
+  bool get _canReport =>
+      !_needsSetup &&
+      _reportInstanceId != null &&
+      (_librarySeries == null ||
+          (_requestNotifier.state.hasStatus &&
+              (_librarySeries!.current?.matches.isNotEmpty ?? false))) &&
       (_reportingAllowed || _canCorrectTVMatch) &&
       _requestNotifier.state.canReportProblem;
 
@@ -1503,8 +1661,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
 
     final tvdbId = state.tvDetail?.externalIds?.tvdbId;
     final choice = await _pickTvScope(state, title, tvdbId, instanceId,
-      canCorrect: canCorrect, allowReporting: _reportingAllowed,
-      reportId: _myOpenReportId);
+        canCorrect: canCorrect,
+        allowReporting: _reportingAllowed,
+        reportId: _myOpenReportId);
     if (!mounted || instanceId != _reportInstanceId) return;
     switch (choice) {
       case _CorrectTVMatchChoice():
@@ -1513,8 +1672,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
         await _viewReport(reportId);
       case _ReportTVScopeChoice(:final scope):
         if (!_reportingAllowed) return;
-        await showReportProblemSheet(context, scope: scope,
-          onSubmitted: _loadMyOpenReport);
+        await showReportProblemSheet(context,
+            scope: scope, onSubmitted: _loadMyOpenReport);
       case null:
         return;
     }
@@ -1526,9 +1685,13 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       MediaDetailState state, String title, int? tvdbId, String instanceId,
       {required bool canCorrect, required bool allowReporting, int? reportId}) {
     // Real seasons only (drop a season 0 / specials placeholder when empty).
-    final seasons = state.seasons.where((s) => s.seasonNumber > 0 &&
-        (_librarySeries == null ||
-          _librarySeries!.current?.sourceForSeason(s.seasonNumber) != null)).toList();
+    final seasons = state.seasons
+        .where((s) =>
+            s.seasonNumber > 0 &&
+            (_librarySeries == null ||
+                _librarySeries!.current?.sourceForSeason(s.seasonNumber) !=
+                    null))
+        .toList();
     return showAppSheet<_TVProblemChoice>(
       context,
       builder: (sheetContext) {
@@ -1538,10 +1701,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Padding(
+              Padding(
                 padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
                 child: Text(
-                  'Report a problem',
+                  context.l10n.browseReportAProblem,
                   style: TextStyle(
                       color: AppTheme.textPrimary,
                       fontSize: 20,
@@ -1552,51 +1715,55 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                 ListTile(
                   leading: const Icon(Icons.rule_outlined,
                       color: AppTheme.textSecondary),
-                  title: const Text('Correct TV match',
+                  title: Text(context.l10n.browseCorrectTVMatch,
                       style: TextStyle(color: AppTheme.textPrimary)),
-                  onTap: () => Navigator.of(sheetContext).pop(
-                      const _CorrectTVMatchChoice()),
+                  onTap: () => Navigator.of(sheetContext)
+                      .pop(const _CorrectTVMatchChoice()),
                 ),
               if (reportId != null)
                 ListTile(
                   leading: const Icon(Icons.flag_outlined,
                       color: AppTheme.textSecondary),
-                  title: const Text('View your report',
+                  title: Text(context.l10n.browseViewYourReport,
                       style: TextStyle(color: AppTheme.textPrimary)),
-                  onTap: () => Navigator.of(sheetContext).pop(
-                      _ViewTVReportChoice(reportId)),
+                  onTap: () => Navigator.of(sheetContext)
+                      .pop(_ViewTVReportChoice(reportId)),
                 ),
               if (!allowReporting)
-                const Padding(
+                Padding(
                   padding: EdgeInsets.fromLTRB(20, 8, 20, 8),
-                  child: Text('Problem reporting is disabled. You can still correct this TV match.',
+                  child: Text(
+                      context.l10n
+                          .browseProblemReportingIsDisabledYouCanStillCorrectThisTVMatch,
                       style: TextStyle(color: AppTheme.textSecondary)),
                 ),
               if (allowReporting && reportId == null) ...[
-                const Padding(
+                Padding(
                   padding: EdgeInsets.fromLTRB(20, 12, 20, 8),
-                  child: Text("What's the problem with?",
-                      style: TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
+                  child: Text(context.l10n.browseWhatSTheProblemWith,
+                      style: TextStyle(
+                          color: AppTheme.textSecondary, fontSize: 16)),
                 ),
-                if (_librarySeries == null) ListTile(
-                  leading: const Icon(Icons.tv_outlined,
-                      color: AppTheme.textSecondary),
-                  title: const Text('The whole series',
-                      style: TextStyle(color: AppTheme.textPrimary)),
-                  onTap: () => Navigator.of(sheetContext).pop(
-                    _ReportTVScopeChoice(ReportScope.series(
-                      instanceId: instanceId,
-                      tmdbId: widget.id,
-                      tvdbId: tvdbId,
-                      title: title,
-                    )),
+                if (_librarySeries == null)
+                  ListTile(
+                    leading: const Icon(Icons.tv_outlined,
+                        color: AppTheme.textSecondary),
+                    title: Text(context.l10n.browseTheWholeSeries,
+                        style: TextStyle(color: AppTheme.textPrimary)),
+                    onTap: () => Navigator.of(sheetContext).pop(
+                      _ReportTVScopeChoice(ReportScope.series(
+                        instanceId: instanceId,
+                        tmdbId: widget.id,
+                        tvdbId: tvdbId,
+                        title: title,
+                      )),
+                    ),
                   ),
-                ),
                 for (final s in seasons)
                   ListTile(
                     leading: const Icon(Icons.video_library_outlined,
                         color: AppTheme.textSecondary),
-                    title: Text('Season ${s.seasonNumber}',
+                    title: Text(context.l10n.detailSeasonNumber(s.seasonNumber),
                         style: const TextStyle(color: AppTheme.textPrimary)),
                     trailing: (s.episodeCount ?? 0) > 0
                         ? const Icon(Icons.chevron_right,
@@ -1624,7 +1791,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                           sheetContext, s.seasonNumber, episodes,
                           title: title, tvdbId: tvdbId, instanceId: instanceId);
                       if (scope != null && sheetContext.mounted) {
-                        Navigator.of(sheetContext).pop(_ReportTVScopeChoice(scope));
+                        Navigator.of(sheetContext)
+                            .pop(_ReportTVScopeChoice(scope));
                       }
                     },
                   ),
@@ -1653,7 +1821,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
                 child: Text(
-                  'Season $seasonNumber — which part?',
+                  context.l10n.detailSeasonProblemPart(seasonNumber),
                   style: const TextStyle(
                       color: AppTheme.textPrimary,
                       fontSize: 16,
@@ -1663,7 +1831,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
               ListTile(
                 leading: const Icon(Icons.video_library_outlined,
                     color: AppTheme.textSecondary),
-                title: Text('All of Season $seasonNumber',
+                title: Text(context.l10n.detailWholeSeason(seasonNumber),
                     style: const TextStyle(color: AppTheme.textPrimary)),
                 onTap: () => Navigator.of(sheetContext).pop(
                   ReportScope.series(
@@ -1713,9 +1881,15 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   int _reportSourceId(int season) =>
       _librarySeries?.current?.sourceForSeason(season)?.tmdbId ?? widget.id;
 
-  int _reportSourceSeason(int season) => _librarySeries?.current
-      ?.sourceForSeason(season)?.seasonMap.entries
-      .where((e) => e.value == season).firstOrNull?.key ?? season;
+  int _reportSourceSeason(int season) =>
+      _librarySeries?.current
+          ?.sourceForSeason(season)
+          ?.seasonMap
+          .entries
+          .where((e) => e.value == season)
+          .firstOrNull
+          ?.key ??
+      season;
 
   String _reportSourceTitle(int season, String title) =>
       _librarySeries?.current?.sourceForSeason(season)?.title ?? title;
@@ -1730,10 +1904,12 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     final connection = ref.read(authProvider).valueOrNull?.connection;
     if (widget.mediaType == MediaType.movie) {
       return instances.activeRadarrInstance?.id ??
-          connection?.defaultRadarrInstance?.id ?? _arrLink?.instanceId;
+          connection?.defaultRadarrInstance?.id ??
+          _arrLink?.instanceId;
     }
     return instances.activeSonarrInstance?.id ??
-        connection?.defaultSonarrInstance?.id ?? _arrLink?.instanceId;
+        connection?.defaultSonarrInstance?.id ??
+        _arrLink?.instanceId;
   }
 
   void _showStatusSheet(
@@ -1772,7 +1948,7 @@ class _ReleaseDatesSection extends StatelessWidget {
         // between the trailer button and whatever follows.
         const SizedBox(height: 24),
         SectionHeader(
-          title: 'Release dates',
+          title: context.l10n.browseReleaseDates,
           trailing: Text(
             schedule.regionCode,
             style: const TextStyle(
@@ -1786,11 +1962,12 @@ class _ReleaseDatesSection extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 8),
               child: Row(
                 children: [
-                  Icon(_iconFor(m.type), size: 18, color: AppTheme.textSecondary),
+                  Icon(_iconFor(m.type),
+                      size: 18, color: AppTheme.textSecondary),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      m.label,
+                      browseLabel(context, m.label),
                       style: const TextStyle(
                         color: AppTheme.textSecondary,
                         fontSize: 14,
@@ -1798,11 +1975,10 @@ class _ReleaseDatesSection extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    formatReleaseDate(m.date),
+                    DateFormat.yMMMd(context.l10n.dateLocale).format(m.date),
                     style: TextStyle(
-                      color: m.isUpcoming
-                          ? AppTheme.accent
-                          : AppTheme.textPrimary,
+                      color:
+                          m.isUpcoming ? AppTheme.accent : AppTheme.textPrimary,
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
                     ),
@@ -1852,7 +2028,8 @@ class _PendingReleaseLine extends StatelessWidget {
   Widget build(BuildContext context) {
     final pending = pendingReleases(schedule, status: status, now: now);
     if (pending.isEmpty) return const SizedBox.shrink();
-    return _DateStatusLine(label: formatPendingReleases(pending, now: now));
+    return _DateStatusLine(
+        label: localizedPendingReleases(context, pending, now: now));
   }
 }
 
@@ -1913,7 +2090,8 @@ class _LibraryStatusChips extends StatelessWidget {
     // Connection order (the admin's sort order); ignore libraries the server
     // reported no status for.
     final chips = libraries
-        .where((library) => statuses.containsKey(library.id) || unknownIds.contains(library.id))
+        .where((library) =>
+            statuses.containsKey(library.id) || unknownIds.contains(library.id))
         .toList();
     if (chips.length < 2) return const SizedBox.shrink();
     return Padding(
@@ -1925,7 +2103,8 @@ class _LibraryStatusChips extends StatelessWidget {
         children: chips.map((library) {
           final selected = library.id == selectedId;
           return ChoiceChip(
-            label: Text('${library.name} · ${unknownIds.contains(library.id) ? 'Could not check' : statuses[library.id]!.label}'),
+            label: Text(
+                '${library.name} · ${unknownIds.contains(library.id) ? context.l10n.browseCouldnTCheck : browseLabel(context, statuses[library.id]!.label)}'),
             selected: selected,
             onSelected: (_) => onSelect(library.id),
             showCheckmark: false,
@@ -2009,8 +2188,9 @@ class _CastRow extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: SectionHeader(
-            title: 'Cast',
-            trailing: SeeAllButton(rowTitle: 'Cast', onPressed: onSeeAll),
+            title: context.l10n.browseCast,
+            trailing: SeeAllButton(
+                rowTitle: context.l10n.browseCast, onPressed: onSeeAll),
           ),
         ),
         const SizedBox(height: 12),
@@ -2117,13 +2297,15 @@ class _DetailsSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SectionHeader(title: 'Details'),
+        SectionHeader(title: context.l10n.browseDetails),
         const SizedBox(height: 12),
         for (final fact in facts)
           _row(
-            fact.label,
+            browseLabel(context, fact.label),
             Text(
-              fact.value,
+              fact.label == 'Status'
+                  ? browseLabel(context, fact.value)
+                  : fact.value,
               style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 14,
@@ -2133,7 +2315,7 @@ class _DetailsSection extends StatelessWidget {
           ),
         if (studios.isNotEmpty)
           _row(
-            'Studio',
+            context.l10n.browseStudio,
             Wrap(
               spacing: 6,
               runSpacing: 6,
@@ -2142,7 +2324,7 @@ class _DetailsSection extends StatelessWidget {
                   ActionChip(
                     label: Text(studio.name!,
                         style: const TextStyle(fontSize: 12)),
-                    tooltip: 'Browse ${studio.name}',
+                    tooltip: context.l10n.detailBrowseCategory(studio.name!),
                     backgroundColor: AppTheme.surfaceVariant,
                     side: const BorderSide(color: AppTheme.border),
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -2155,7 +2337,7 @@ class _DetailsSection extends StatelessWidget {
         // Outbound, unlike the studio chips, and marked as such.
         if (links.isNotEmpty)
           _row(
-            'Links',
+            context.l10n.browseLinks,
             Wrap(
               spacing: 6,
               runSpacing: 6,
@@ -2164,9 +2346,9 @@ class _DetailsSection extends StatelessWidget {
                   ActionChip(
                     avatar: const Icon(Icons.open_in_new,
                         size: 14, color: AppTheme.textSecondary),
-                    label: Text(link.label,
-                        style: const TextStyle(fontSize: 12)),
-                    tooltip: 'Open on ${link.label}',
+                    label:
+                        Text(link.label, style: const TextStyle(fontSize: 12)),
+                    tooltip: context.l10n.detailOpenOnService(link.label),
                     backgroundColor: AppTheme.surfaceVariant,
                     side: const BorderSide(color: AppTheme.border),
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,

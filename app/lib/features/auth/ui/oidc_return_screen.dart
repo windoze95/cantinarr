@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/auth_messages.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -39,8 +41,8 @@ class _OIDCReturnScreenState extends ConsumerState<OIDCReturnScreen> {
       if (purpose != 'login') {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(purpose == 'test'
-                ? 'Test sign-in succeeded. No account was created or linked.'
-                : 'Your single sign-on identity is linked.')));
+                ? context.l10n.authOidcTestSuccess
+                : context.l10n.authSsoLinked)));
       }
     } catch (e) {
       if (mounted) {
@@ -57,7 +59,7 @@ class _OIDCReturnScreenState extends ConsumerState<OIDCReturnScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Single sign-on')),
+        appBar: AppBar(title: Text(context.l10n.authSingleSignOn)),
         body: Center(
             child: Padding(
                 padding: const EdgeInsets.all(24),
@@ -67,9 +69,10 @@ class _OIDCReturnScreenState extends ConsumerState<OIDCReturnScreen> {
                     if (_error == null) ...[
                       const CircularProgressIndicator(),
                       const SizedBox(height: 20),
-                      const Text('Completing sign-in…'),
+                      Text(context.l10n.authCompletingSignIn),
                     ] else ...[
-                      Text(_error!, textAlign: TextAlign.center),
+                      Text(localizeAuthMessage(context, _error!),
+                          textAlign: TextAlign.center),
                       const SizedBox(height: 20),
                       FilledButton(
                           onPressed: () => context.go(ref
@@ -79,7 +82,7 @@ class _OIDCReturnScreenState extends ConsumerState<OIDCReturnScreen> {
                                   true
                               ? '/settings'
                               : '/login'),
-                          child: const Text('Back to Cantinarr')),
+                          child: Text(context.l10n.authBackCantinarr)),
                     ],
                   ],
                 ))),

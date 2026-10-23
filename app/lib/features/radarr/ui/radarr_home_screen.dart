@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/storage/library_sort_preferences.dart';
@@ -35,8 +36,8 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
     super.initState();
     // Listen before the first frame so preference restoration cannot race the
     // instance notifier's creation. Its initial selection is also read below.
-    ref.listenManual(librarySortProvider('radarr'), (_, selection) =>
-        _notifier?.sorting.setSelection(selection));
+    ref.listenManual(librarySortProvider('radarr'),
+        (_, selection) => _notifier?.sorting.setSelection(selection));
     WidgetsBinding.instance.addPostFrameCallback((_) => _initNotifier());
   }
 
@@ -90,6 +91,7 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
         notifier?.loadMovies();
       }
     }
+
     showMovieActions(
       context,
       service: RadarrApiService(
@@ -129,65 +131,72 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
         return LibraryCommandLayout(
           key: ValueKey('radarr-$instanceId'),
           headerBuilder: (collapsed) => LibraryCommandHeader(
-              collapsed: collapsed,
-              sort: LibrarySortMenu(module: 'radarr', selection: sort,
-                onSelected: (field) => ref.read(librarySortProvider('radarr').notifier).select(field)),
-              viewMode: viewMode,
-              onViewModeChanged: (value) => ref
-                  .read(libraryViewModeProvider('radarr').notifier).set(value),
-              title: 'Movie library',
-              subtitle: '$instanceName  /  Radarr',
-              stats: [
-                LibraryStat(
-                  label: 'Total',
-                  value: state.movies.length,
-                  color: AppTheme.textPrimary,
-                ),
-                LibraryStat(
-                  label: 'Ready',
-                  value: state.downloadedCount,
-                  color: AppTheme.available,
-                ),
-                LibraryStat(
-                  label: 'Missing',
-                  value: state.missingCount,
-                  color: AppTheme.requested,
-                ),
-              ],
-              searchController: _searchController,
-              onSearch: _notifier!.search,
-              searchHint: 'Filter this movie library…',
-              filter: PopupMenuButton<RadarrFilter>(
-                tooltip: 'Filter movies',
-                icon: const Icon(Icons.tune_rounded),
-                onSelected: _notifier!.setFilter,
-                itemBuilder: (_) => RadarrFilter.values
-                    .map((f) => PopupMenuItem(
-                          value: f,
-                          child: Row(
-                            children: [
-                              if (f == state.filter)
-                                const Icon(
-                                  Icons.check,
-                                  size: 18,
-                                  color: AppTheme.accent,
-                                ),
-                              if (f != state.filter) const SizedBox(width: 18),
-                              const SizedBox(width: 8),
-                              Text(
-                                f.name[0].toUpperCase() + f.name.substring(1),
-                              ),
-                            ],
-                          ),
-                        ))
-                    .toList(),
+            collapsed: collapsed,
+            sort: LibrarySortMenu(
+                module: 'radarr',
+                selection: sort,
+                onSelected: (field) => ref
+                    .read(librarySortProvider('radarr').notifier)
+                    .select(field)),
+            viewMode: viewMode,
+            onViewModeChanged: (value) =>
+                ref.read(libraryViewModeProvider('radarr').notifier).set(value),
+            title: context.l10n.adminMovieLibrary,
+            subtitle: '$instanceName  /  Radarr',
+            stats: [
+              LibraryStat(
+                label: context.l10n.adminTotal,
+                value: state.movies.length,
+                color: AppTheme.textPrimary,
               ),
+              LibraryStat(
+                label: context.l10n.adminReady,
+                value: state.downloadedCount,
+                color: AppTheme.available,
+              ),
+              LibraryStat(
+                label: context.l10n.adminMissing,
+                value: state.missingCount,
+                color: AppTheme.requested,
+              ),
+            ],
+            searchController: _searchController,
+            onSearch: _notifier!.search,
+            searchHint: context.l10n.adminFilterThisMovieLibrary,
+            filter: PopupMenuButton<RadarrFilter>(
+              tooltip: context.l10n.adminFilterMovies,
+              icon: const Icon(Icons.tune_rounded),
+              onSelected: _notifier!.setFilter,
+              itemBuilder: (_) => RadarrFilter.values
+                  .map((f) => PopupMenuItem(
+                        value: f,
+                        child: Row(
+                          children: [
+                            if (f == state.filter)
+                              const Icon(
+                                Icons.check,
+                                size: 18,
+                                color: AppTheme.accent,
+                              ),
+                            if (f != state.filter) const SizedBox(width: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              f.name[0].toUpperCase() + f.name.substring(1),
+                            ),
+                          ],
+                        ),
+                      ))
+                  .toList(),
             ),
-
+          ),
           children: [
             if (_notifier!.sorting.notice != null)
-              ErrorBanner(message: _notifier!.sorting.notice!, maxLines: null,
-                onRetry: _notifier!.sorting.canRetry ? _notifier!.sorting.refresh : null),
+              ErrorBanner(
+                  message: _notifier!.sorting.notice!,
+                  maxLines: null,
+                  onRetry: _notifier!.sorting.canRetry
+                      ? _notifier!.sorting.refresh
+                      : null),
             if (state.error != null)
               ErrorBanner(
                 message: state.error!,
@@ -206,7 +215,8 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
                           color: AppTheme.accent,
                           child: RadarrMovieList(
                             viewMode: viewMode,
-                            scrollKey: 'radarr-$instanceId-${_notifier!.sorting.effectiveSelection.key}',
+                            scrollKey:
+                                'radarr-$instanceId-${_notifier!.sorting.effectiveSelection.key}',
                             movies: state.filtered,
                             onOpen: _openMovie,
                             onAction: _showMovieActions,

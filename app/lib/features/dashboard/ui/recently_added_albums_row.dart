@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -60,7 +61,7 @@ class RecentlyAddedAlbumsRow extends ConsumerWidget {
             padding: EdgeInsets.symmetric(
               horizontal: viewportWidth >= 900 ? 24 : 16,
             ),
-            child: const SectionHeader(title: 'Recently Added'),
+            child: SectionHeader(title: context.l10n.browseRecentlyAdded),
           ),
           const SizedBox(height: 12),
           HorizontalItemRow<RecentAlbum>(
@@ -79,9 +80,9 @@ class RecentlyAddedAlbumsRow extends ConsumerWidget {
                 null => (null, null),
                 OwnedAlbum(status: 'available') ||
                 OwnedAlbum(status: null, downloaded: true) =>
-                  ('Available', AppTheme.available),
+                  (context.l10n.browseAvailable, AppTheme.available),
                 OwnedAlbum(monitored: true) => (
-                    'Requested',
+                    context.l10n.browseRequested,
                     AppTheme.requested
                   ),
                 _ => (null, null),

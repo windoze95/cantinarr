@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -55,7 +57,7 @@ class RequesterSeriesDetailScreen extends ConsumerWidget {
             child: CircularProgressIndicator(color: AppTheme.accent),
           ),
           error: (error, _) =>
-              _SeriesError(message: _seriesErrorMessage(error)),
+              _SeriesError(message: _seriesErrorMessage(context, error)),
           data: (data) => _SeriesBody(detail: data, instanceId: pinned),
         ),
       ),
@@ -65,18 +67,18 @@ class RequesterSeriesDetailScreen extends ConsumerWidget {
 
 /// Says which failure this was. "This library has no such series" and "this
 /// library could not be read" are different answers and must not look alike.
-String _seriesErrorMessage(Object error) {
+String _seriesErrorMessage(BuildContext context, Object error) {
   final status = error is DioException ? error.response?.statusCode : null;
   switch (status) {
     case 404:
-      return 'This series is not in your book library.\n'
-          'Search for one of its books to add it.';
+      return context.l10n
+          .browseThisSeriesIsNotInYourBookLibraryNBrowseSearchForOneOfItsBooksToAddIt;
     case 401:
     case 403:
-      return 'You do not have access to this book library.';
+      return context.l10n.browseYouDoNotHaveAccessToThisBookLibrary;
     default:
-      return 'This series could not be loaded. '
-          'Check the connection and try again.';
+      return context.l10n
+          .browseThisSeriesCouldNotBeLoadedBrowseCheckTheConnectionAndTryAgain;
   }
 }
 
@@ -162,7 +164,7 @@ class _SeriesHeader extends ConsumerWidget {
     final cover = instanceId == null || series.covers.isEmpty
         ? null
         : chaptarrImageSource(ref, series.covers.first, instanceId!);
-    final count = series.countLabel;
+    final count = browseLabel(context, series.countLabel);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
       child: Row(
@@ -226,8 +228,9 @@ class _SeriesBookTile extends ConsumerWidget {
     final fid = title.foreignBookId.trim();
     final subtitle = <String>[
       if (title.author.isNotEmpty) title.author,
-      if (title.year > 0) bookPublicationYearLabel(title.year),
-      if (status?.subtitle != null) status!.subtitle!,
+      if (title.year > 0)
+        browseLabel(context, bookPublicationYearLabel(title.year)),
+      if (status?.subtitle != null) browseLabel(context, status!.subtitle!),
     ].join(' · ');
 
     return ListTile(
@@ -292,7 +295,9 @@ class _SeriesBookTile extends ConsumerWidget {
                     ),
                   if (status != null) ...[
                     if (subtitle.isNotEmpty) const SizedBox(height: 4),
-                    _StatusPill(label: status.label, color: status.color),
+                    _StatusPill(
+                        label: browseLabel(context, status.label),
+                        color: status.color),
                   ],
                 ],
               ),

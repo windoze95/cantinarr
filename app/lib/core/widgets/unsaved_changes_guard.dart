@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -50,22 +51,22 @@ Future<bool> confirmDiscardChanges(BuildContext context) async =>
     await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Discard unsaved changes?'),
-        content: const Text(
-          'You have changes that haven’t been saved. If you leave, they will be lost.',
+        title: Text(context.l10n.commonDiscardTitle),
+        content: Text(
+          context.l10n.commonDiscardExplanation,
         ),
         actions: [
           TextButton(
             autofocus: true,
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Keep editing'),
+            child: Text(context.l10n.commonKeepEditing),
           ),
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
             style: TextButton.styleFrom(
               foregroundColor: Theme.of(dialogContext).colorScheme.error,
             ),
-            child: const Text('Discard changes'),
+            child: Text(context.l10n.commonDiscardChanges),
           ),
         ],
       ),

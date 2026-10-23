@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -38,11 +39,10 @@ const String _nbsp = ' ';
 /// Colour follows the library tile's grammar: green only once every episode is
 /// on disk, red for a gap nothing is working on, amber for a gap nobody
 /// monitors, and the info tone for a season that is caught up or busy.
-SeasonAvailability seasonAvailabilityLine(
-  SonarrStatistics? stats, {
-  required bool moreToCome,
-  List<SonarrQueueItem> queue = const [],
-}) {
+SeasonAvailability seasonAvailabilityLine(SonarrStatistics? stats,
+    {required bool moreToCome,
+    List<SonarrQueueItem> queue = const [],
+    AppLocalizations? strings}) {
   final files = stats?.episodeFileCount ?? 0;
   // Sonarr's episodeCount already counts every episode with a file; clamping
   // keeps a degenerate payload (a file count without an episodeCount) from
@@ -52,7 +52,8 @@ SeasonAvailability seasonAvailabilityLine(
   final total = math.max(stats?.totalEpisodeCount ?? 0, obtainable);
   if (total == 0) {
     return (
-      text: _phrase('0/0 Episodes Available'),
+      text: _phrase((strings ?? lookupAppLocalizations(const Locale('en')))
+          .admin00EpisodesAvailable),
       color: AppTheme.textSecondary,
     );
   }
@@ -98,16 +99,27 @@ SeasonAvailability seasonAvailabilityLine(
   }
 
   final parts = [
-    if (missing > 0) _phrase('$missing missing'),
-    if (downloading > 0) _phrase('$downloading downloading'),
-    if (waiting > 0) _phrase('$waiting waiting to import'),
+    if (missing > 0)
+      _phrase((strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminMissing2((missing).toString())),
+    if (downloading > 0)
+      _phrase((strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminDownloading2((downloading).toString())),
+    if (waiting > 0)
+      _phrase((strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminWaitingToImport((waiting).toString())),
     if (remaining > 0)
-      _phrase(moreToCome ? '$remaining unaired' : '$remaining unmonitored'),
+      _phrase(moreToCome
+          ? (strings ?? lookupAppLocalizations(const Locale('en')))
+              .adminUnaired2((remaining).toString())
+          : (strings ?? lookupAppLocalizations(const Locale('en')))
+              .adminUnmonitored3((remaining).toString())),
   ];
 
   return (
-    text: '${_phrase('$files/$obtainable Episodes Available')}'
-        '${parts.isEmpty ? '' : ' •$_nbsp${parts.join(', ')}'}',
+    text:
+        '${_phrase((strings ?? lookupAppLocalizations(const Locale('en'))).adminEpisodesAvailable(files, obtainable))}'
+            '${parts.isEmpty ? '' : ' •$_nbsp${parts.join(', ')}'}',
     color: files >= total
         ? AppTheme.available
         : missing > 0

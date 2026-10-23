@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -41,7 +42,7 @@ class PhoneAppsSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const AppSheet(
+    return AppSheet(
       padding: EdgeInsets.fromLTRB(
         AppTheme.spaceXl,
         0,
@@ -54,7 +55,7 @@ class PhoneAppsSheet extends StatelessWidget {
           Icon(Icons.smartphone, color: AppTheme.accent, size: 36),
           SizedBox(height: AppTheme.spaceMd),
           Text(
-            'Get the Cantinarr app',
+            context.l10n.commonGetApp,
             style: TextStyle(
               color: AppTheme.textPrimary,
               fontSize: 20,
@@ -63,8 +64,7 @@ class PhoneAppsSheet extends StatelessWidget {
           ),
           SizedBox(height: AppTheme.spaceXs),
           Text(
-            'Browse and request from your phone, and get a push notification '
-            'the moment something is ready.',
+            context.l10n.commonPhoneAppExplanation,
             textAlign: TextAlign.center,
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 14),
           ),
@@ -72,14 +72,14 @@ class PhoneAppsSheet extends StatelessWidget {
           _AppLinkTile(
             icon: Icons.phone_iphone,
             title: 'iPhone',
-            subtitle: 'Join the beta on TestFlight',
+            subtitle: context.l10n.commonTestflight,
             url: _iosBetaUrl,
           ),
           SizedBox(height: AppTheme.spaceSm),
           _AppLinkTile(
             icon: Icons.android,
             title: 'Android',
-            subtitle: 'Download on Google Play',
+            subtitle: context.l10n.commonGooglePlay,
             url: _androidStoreUrl,
           ),
         ],

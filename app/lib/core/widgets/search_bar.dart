@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 
@@ -6,7 +7,7 @@ import '../theme/app_theme.dart';
 class CantinarrSearchBar extends StatelessWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
-  final String hintText;
+  final String? hintText;
   final ValueChanged<String>? onChanged;
   final VoidCallback? onSubmitted;
   final VoidCallback? onClear;
@@ -37,7 +38,7 @@ class CantinarrSearchBar extends StatelessWidget {
     super.key,
     required this.controller,
     required this.focusNode,
-    this.hintText = 'Search movies & TV shows...',
+    this.hintText,
     this.onChanged,
     this.onSubmitted,
     this.onClear,
@@ -120,13 +121,13 @@ class CantinarrSearchBar extends StatelessWidget {
                     fontWeight: FontWeight.w500,
                   ),
               decoration: InputDecoration(
-                hintText: hintText,
+                hintText: hintText ?? context.l10n.commonSearchMedia,
                 hintStyle: Theme.of(context).textTheme.bodyLarge?.copyWith(
                       color: AppTheme.textMuted,
                       fontWeight: FontWeight.w400,
                     ),
                 prefixIcon: _buildPrefixIcon(focused),
-                suffixIcon: _buildSuffixIcon(),
+                suffixIcon: _buildSuffixIcon(context),
                 filled: false,
                 border: InputBorder.none,
                 enabledBorder: InputBorder.none,
@@ -168,7 +169,7 @@ class CantinarrSearchBar extends StatelessWidget {
     );
   }
 
-  Widget? _buildSuffixIcon() {
+  Widget? _buildSuffixIcon(BuildContext context) {
     final hasSend = onSend != null;
 
     if (hasSend && controller.text.isNotEmpty) {
@@ -176,7 +177,7 @@ class CantinarrSearchBar extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
-            tooltip: 'Clear message',
+            tooltip: context.l10n.commonClearMessage,
             icon: const Icon(Icons.close,
                 size: 20, color: AppTheme.textSecondary),
             onPressed: () {
@@ -185,7 +186,7 @@ class CantinarrSearchBar extends StatelessWidget {
             },
           ),
           IconButton(
-            tooltip: 'Send',
+            tooltip: context.l10n.commonSend,
             icon: Icon(
               Icons.send_rounded,
               color: aiEnabled ? AppTheme.signal : AppTheme.accent,
@@ -198,7 +199,7 @@ class CantinarrSearchBar extends StatelessWidget {
 
     if (controller.text.isNotEmpty) {
       return IconButton(
-        tooltip: 'Clear search',
+        tooltip: context.l10n.commonClearSearch,
         icon: const Icon(Icons.close_rounded, color: AppTheme.textSecondary),
         onPressed: () {
           controller.clear();
@@ -215,13 +216,13 @@ class CantinarrSearchBar extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
-            tooltip: 'Exit AI mode',
+            tooltip: context.l10n.commonExitAiMode,
             icon: const Icon(Icons.close,
                 size: 20, color: AppTheme.textSecondary),
             onPressed: () => onClear?.call(),
           ),
           IconButton(
-            tooltip: 'Send',
+            tooltip: context.l10n.commonSend,
             icon: Icon(Icons.send_rounded,
                 color: AppTheme.textSecondary.withValues(alpha: 0.5)),
             onPressed: null,

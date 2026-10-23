@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:cantinarr/app.dart';
+import 'package:cantinarr/core/storage/locale_preferences.dart';
+import 'package:flutter/widgets.dart';
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
@@ -21,6 +23,20 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// passkey links must route only when the link's server matches the connected
 /// one (after normalization), and anything else must be ignored quietly.
 void main() {
+  testWidgets('the app restores French and switches the sign-in screen live',
+      (tester) async {
+    final app = await _pumpApp(tester,
+        authState: const AuthState(), prefs: {'app_language': 'fr'});
+    expect(find.text('Se connecter à Cantinarr'), findsOneWidget);
+    await app.container
+        .read(appLocaleProvider.notifier)
+        .setLocale(const Locale('en'));
+    await tester.pumpAndSettle();
+    expect(find.text('Connect to Cantinarr'), findsOneWidget);
+    expect((await SharedPreferences.getInstance()).getString('app_language'),
+        'en');
+  });
+
   testWidgets('request decisions refresh live state without an in-app banner',
       (tester) async {
     final events = StreamController<WsEvent>.broadcast();
@@ -138,7 +154,8 @@ void main() {
       expect(app.container.read(authProvider).value!.isAuthenticated, isTrue);
     }, variant: const TargetPlatformVariant({TargetPlatform.iOS}));
 
-    testWidgets('failed OIDC return clears the route query and keeps the session',
+    testWidgets(
+        'failed OIDC return clears the route query and keeps the session',
         (tester) async {
       final app = await _pumpApp(tester, authState: _authedState);
       app.auth.oidcFailure = 'Your provider did not supply a permitted group.';
@@ -146,7 +163,8 @@ void main() {
       router.go('/oidc/return?code=used-handoff&flow=denied-flow');
       await tester.pumpAndSettle();
 
-      expect(router.routeInformationProvider.value.uri.toString(), '/oidc/return');
+      expect(
+          router.routeInformationProvider.value.uri.toString(), '/oidc/return');
       expect(find.text(app.auth.oidcFailure!), findsOneWidget);
       expect(app.auth.oidcReturns, hasLength(1));
       expect(app.container.read(authProvider).value!.isAuthenticated, isTrue);
@@ -429,8 +447,9 @@ Future<
   Uri? initialLink,
   Object? initialLinkError,
   Stream<WsEvent>? events,
+  Map<String, Object> prefs = const {},
 }) async {
-  SharedPreferences.setMockInitialValues({});
+  SharedPreferences.setMockInitialValues(prefs);
   final links = _FakeDeepLinks(
     initialLink: initialLink,
     initialLinkError: initialLinkError,
@@ -508,7 +527,8 @@ class _FakeAuthNotifier extends AuthNotifier {
   bool switchResult = true;
 
   @override
-  Future<AuthState> build() async => restore == null ? _initial : await restore!;
+  Future<AuthState> build() async =>
+      restore == null ? _initial : await restore!;
 
   @override
   Future<void> connectWithLink(String link) async {

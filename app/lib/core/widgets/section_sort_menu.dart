@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/shell_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
@@ -45,7 +47,7 @@ class SectionSortMenu<T> extends StatelessWidget {
                 else
                   const SizedBox(width: 18),
                 const SizedBox(width: 8),
-                Text(labelOf(option)),
+                Text(localizeShellLabel(context, labelOf(option))),
               ],
             ),
           ),
@@ -61,7 +63,7 @@ class SectionSortMenu<T> extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              labelOf(selected),
+              localizeShellLabel(context, labelOf(selected)),
               style: const TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 12.5,
@@ -98,7 +100,7 @@ class SectionTruncationNote extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(right: 10),
       child: Text(
-        '$shown of $total',
+        context.l10n.commonShownTotal(shown, total),
         style: const TextStyle(
           color: AppTheme.textMuted,
           fontSize: 12,

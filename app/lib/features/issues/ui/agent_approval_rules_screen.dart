@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,9 +14,9 @@ import '../logic/issues_provider.dart';
 /// checkbox. Each card shows the rule's fixed server-authored label, its
 /// active/paused state (with the server's pause reason), and its track record,
 /// with explicit Pause / Resume / Delete actions.
-String _dayLabel(DateTime when) {
+String _dayLabel(BuildContext context, DateTime when) {
   final local = when.toLocal();
-  return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}';
+  return MaterialLocalizations.of(context).formatMediumDate(local);
 }
 
 class AgentApprovalRulesScreen extends ConsumerStatefulWidget {
@@ -46,7 +47,7 @@ class _AgentApprovalRulesScreenState
 
   String _friendlyError(Object e) {
     final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
-    return m != null ? m.group(1)! : 'Something went wrong';
+    return m != null ? m.group(1)! : context.l10n.opsSomethingWentWrongMessage;
   }
 
   Future<void> _armCandidate(Map<String, dynamic> candidate) async {
@@ -123,19 +124,18 @@ class _AgentApprovalRulesScreenState
       context: context,
       builder: (dialogContext) => AlertDialog(
         backgroundColor: AppTheme.surface,
-        title: const Text(
-          'Delete this rule?',
+        title: Text(
+          context.l10n.opsDeleteThisRule,
           style: TextStyle(color: AppTheme.textPrimary),
         ),
-        content: const Text(
-          'Future matching fixes will wait for manual approval. Decided fixes '
-          'keep their audit history.',
+        content: Text(
+          context.l10n.opsFutureMatchingFixesWillWaitForManual,
           style: TextStyle(color: AppTheme.textSecondary),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.opsCancel),
           ),
           ElevatedButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
@@ -143,7 +143,7 @@ class _AgentApprovalRulesScreenState
               backgroundColor: AppTheme.error,
               foregroundColor: AppTheme.background,
             ),
-            child: const Text('Delete'),
+            child: Text(context.l10n.opsDelete),
           ),
         ],
       ),
@@ -176,7 +176,7 @@ class _AgentApprovalRulesScreenState
     ref.listen(agentActionsChangedProvider, (_, __) => _load());
     ref.listen(autoApprovalPausedProvider, (_, __) => _load());
     return Scaffold(
-      appBar: AppBar(title: const Text('Agent Auto-Approvals')),
+      appBar: AppBar(title: Text(context.l10n.opsAgentAutoApprovals)),
       body: CenteredContent(
         child: _isLoading
             ? const Center(
@@ -189,14 +189,15 @@ class _AgentApprovalRulesScreenState
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            _friendlyError(_error ?? 'Something went wrong'),
+                            _friendlyError(_error ??
+                                context.l10n.opsSomethingWentWrongMessage),
                             style: const TextStyle(color: AppTheme.error),
                             textAlign: TextAlign.center,
                           ),
                           const SizedBox(height: 12),
                           ElevatedButton(
                             onPressed: _load,
-                            child: const Text('Retry'),
+                            child: Text(context.l10n.opsRetry),
                           ),
                         ],
                       ),
@@ -216,12 +217,12 @@ class _AgentApprovalRulesScreenState
       return ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.all(24),
-        children: const [
+        children: [
           SizedBox(height: 48),
           Icon(Icons.rule_outlined, size: 40, color: AppTheme.textSecondary),
           SizedBox(height: 12),
           Text(
-            'No standing rules yet.',
+            context.l10n.opsNoStandingRulesYet,
             textAlign: TextAlign.center,
             style: TextStyle(
               color: AppTheme.textPrimary,
@@ -230,9 +231,7 @@ class _AgentApprovalRulesScreenState
           ),
           SizedBox(height: 6),
           Text(
-            'Approve an agent fix and check "Always approve this fix for this '
-            'problem" to create one. Rules approve matching fixes without '
-            'paging you and pause themselves if a fix fails.',
+            context.l10n.opsApproveAnAgentFixAndCheckAlways,
             textAlign: TextAlign.center,
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
@@ -282,8 +281,7 @@ class _RuleCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final statusColor =
-        rule.isPaused ? AppTheme.requested : AppTheme.available;
+    final statusColor = rule.isPaused ? AppTheme.requested : AppTheme.available;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -299,7 +297,9 @@ class _RuleCard extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  rule.label.isEmpty ? 'Auto-approval rule' : rule.label,
+                  rule.label.isEmpty
+                      ? context.l10n.opsAutoApprovalRule
+                      : rule.label,
                   style: const TextStyle(
                     color: AppTheme.textPrimary,
                     fontSize: 14,
@@ -309,14 +309,15 @@ class _RuleCard extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
                   color: statusColor.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(999),
                 ),
                 child: Text(
-                  rule.isPaused ? 'Paused' : 'Active',
+                  rule.isPaused
+                      ? context.l10n.opsPaused
+                      : context.l10n.opsActive,
                   style: TextStyle(
                     color: statusColor,
                     fontSize: 11,
@@ -330,7 +331,8 @@ class _RuleCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               rule.pausedAt != null
-                  ? '${rule.pausedReason!} (since ${_dayLabel(rule.pausedAt!)})'
+                  ? context.l10n.opsRulePausedSince(
+                      rule.pausedReason!, _dayLabel(context, rule.pausedAt!))
                   : rule.pausedReason!,
               style: const TextStyle(
                 color: AppTheme.requested,
@@ -343,8 +345,8 @@ class _RuleCard extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 4),
                 child: InkWell(
                   onTap: () => context.push('/issues/${rule.pausedByIssueId}'),
-                  child: const Text(
-                    'See the issue that paused it →',
+                  child: Text(
+                    context.l10n.opsSeeTheIssueThatPausedIt,
                     style: TextStyle(
                       color: AppTheme.textSecondary,
                       fontSize: 12,
@@ -357,7 +359,8 @@ class _RuleCard extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  "You've approved this exact fix ${rule.approvedSincePause} time(s) by hand since it paused — Resume puts it back on autopilot.",
+                  context.l10n.opsApprovedManuallySincePause(
+                      rule.approvedSincePause.toString()),
                   style: const TextStyle(
                     color: AppTheme.textPrimary,
                     fontSize: 12,
@@ -368,7 +371,7 @@ class _RuleCard extends StatelessWidget {
           ],
           const SizedBox(height: 8),
           Text(
-            _trackRecord(rule),
+            _trackRecord(context, rule),
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 12,
@@ -381,20 +384,20 @@ class _RuleCard extends StatelessWidget {
                 OutlinedButton.icon(
                   onPressed: busy ? null : onResume,
                   icon: const Icon(Icons.play_arrow, size: 16),
-                  label: const Text('Resume'),
+                  label: Text(context.l10n.opsResume),
                 )
               else
                 OutlinedButton.icon(
                   onPressed: busy ? null : onPause,
                   icon: const Icon(Icons.pause, size: 16),
-                  label: const Text('Pause'),
+                  label: Text(context.l10n.opsPause),
                 ),
               const Spacer(),
               TextButton.icon(
                 onPressed: busy ? null : onDelete,
                 style: TextButton.styleFrom(foregroundColor: AppTheme.error),
                 icon: const Icon(Icons.delete_outline, size: 16),
-                label: const Text('Delete'),
+                label: Text(context.l10n.opsDelete),
               ),
             ],
           ),
@@ -403,28 +406,29 @@ class _RuleCard extends StatelessWidget {
     );
   }
 
-  static String _trackRecord(AgentApprovalRule rule) {
+  static String _trackRecord(BuildContext context, AgentApprovalRule rule) {
     final parts = <String>[
-      'Approved ${rule.approvedCount}',
-      'Resolved ${rule.resolvedCount}',
+      context.l10n.opsApprovedCount(rule.approvedCount.toString()),
+      context.l10n.opsResolvedCount(rule.resolvedCount.toString()),
     ];
     final last = rule.lastApprovedAt;
     if (last != null) {
-      parts.add('last used ${_relative(last)}');
+      parts.add(context.l10n.opsLastUsed(_relative(context, last)));
     }
     final creator = rule.createdByName;
     if (creator != null && creator.isNotEmpty) {
-      parts.add('by $creator');
+      parts.add(context.l10n.opsByName(creator));
     }
     return parts.join(' · ');
   }
 
-  static String _relative(DateTime t) {
+  static String _relative(BuildContext context, DateTime t) {
     final d = DateTime.now().difference(t);
-    if (d.inSeconds < 45) return 'just now';
-    if (d.inMinutes < 60) return '${d.inMinutes}m ago';
-    if (d.inHours < 24) return '${d.inHours}h ago';
-    return '${d.inDays}d ago';
+    if (d.inSeconds < 45) return context.l10n.opsJustNow;
+    if (d.inMinutes < 60)
+      return context.l10n.opsMinutesAgo(d.inMinutes.toString());
+    if (d.inHours < 24) return context.l10n.opsHoursAgo(d.inHours.toString());
+    return context.l10n.opsDaysAgo(d.inDays.toString());
   }
 }
 
@@ -448,16 +452,16 @@ class _ReadyToAutomateCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Ready to automate',
+          Text(
+            context.l10n.opsReadyToAutomate,
             style: TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 14,
                 fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 4),
-          const Text(
-            "Fixes you've already approved by hand. Arming one approves future matches automatically; it pauses itself if a fix fails.",
+          Text(
+            context.l10n.opsFixesYouVeAlreadyApprovedByHand,
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
           ),
           const SizedBox(height: 8),
@@ -468,14 +472,16 @@ class _ReadyToAutomateCard extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      '${c['label'] ?? ''} · approved ${c['approved_count'] ?? 0}x by hand',
+                      context.l10n.opsArmCandidate(
+                          (c['label'] ?? '').toString(),
+                          (c['approved_count'] ?? 0).toString()),
                       style: const TextStyle(
                           color: AppTheme.textPrimary, fontSize: 13),
                     ),
                   ),
                   TextButton(
                     onPressed: () => onArm(c),
-                    child: const Text('Arm'),
+                    child: Text(context.l10n.opsArm),
                   ),
                 ],
               ),

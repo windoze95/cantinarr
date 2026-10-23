@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/app_localizations.dart';
 import '../settings/settings_anchors.dart';
 
 class PushCategory {
@@ -7,6 +8,47 @@ class PushCategory {
   final String? serverTitle;
   const PushCategory(this.key, this.title, this.subtitle, this.anchor,
       {this.admin = false, this.service, this.serverTitle});
+
+  String localizedTitle(AppLocalizations l10n) => switch (key) {
+        'request_decision' => l10n.notificationRequestDecision,
+        'new_movie' => l10n.notificationNewMovie,
+        'new_episode' => l10n.notificationNewEpisodes,
+        'new_book' => l10n.notificationNewBook,
+        'new_music' => l10n.notificationNewMusic,
+        'media_server_access' => l10n.settingsMediaServerAccess,
+        'issue_report_update' => l10n.notificationProblemResolved,
+        'request_pending' => l10n.notificationRequestsToReview,
+        'request_auto_approved' => l10n.notificationAutoApproved,
+        'issue_created' => l10n.notificationProblemReports,
+        'agent_action_pending' => l10n.notificationFixesToReview,
+        'agent_digest' => l10n.notificationWeeklySummary,
+        'plex_access_request' => l10n.notificationPlexAccessRequests,
+        'content_upgraded' => l10n.notificationQualityUpgrades,
+        _ => title,
+      };
+
+  String localizedSubtitle(AppLocalizations l10n) => switch (key) {
+        'request_decision' => l10n.notificationRequestDecisionHelp,
+        'new_movie' => l10n.notificationNewMovieHelp,
+        'new_episode' => l10n.notificationNewEpisodesHelp,
+        'new_book' => l10n.notificationNewBookHelp,
+        'new_music' => l10n.notificationNewMusicHelp,
+        'media_server_access' => l10n.notificationMediaAccessHelp,
+        'issue_report_update' => l10n.notificationProblemResolvedHelp,
+        'request_pending' => l10n.notificationRequestsToReviewHelp,
+        'request_auto_approved' => l10n.notificationAutoApprovedHelp,
+        'issue_created' => l10n.notificationProblemReportsHelp,
+        'agent_action_pending' => l10n.notificationFixesToReviewHelp,
+        'agent_digest' => l10n.notificationWeeklySummaryHelp,
+        'plex_access_request' => l10n.notificationPlexAccessRequestsHelp,
+        'content_upgraded' => l10n.notificationQualityUpgradesHelp,
+        _ => subtitle,
+      };
+
+  String localizedServerTitle(AppLocalizations l10n) =>
+      key == 'issue_report_update'
+          ? l10n.notificationReportedProblemsResolved
+          : localizedTitle(l10n);
 }
 
 const pushCategories = [

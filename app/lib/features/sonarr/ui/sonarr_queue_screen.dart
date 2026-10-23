@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -75,7 +76,7 @@ class _SonarrQueueScreenState extends ConsumerState<SonarrQueueScreen> {
     if (service == null) {
       setState(() {
         _isLoading = false;
-        _error = 'No Sonarr instance configured';
+        _error = context.l10n.adminNoSonarrInstanceConfigured;
       });
       return;
     }
@@ -95,7 +96,7 @@ class _SonarrQueueScreenState extends ConsumerState<SonarrQueueScreen> {
       if (silent) return;
       setState(() {
         _isLoading = false;
-        _error = 'Failed to load queue: $e';
+        _error = context.l10n.adminFailedToLoadQueue((e).toString());
       });
     }
   }
@@ -129,13 +130,13 @@ class _SonarrQueueScreenState extends ConsumerState<SonarrQueueScreen> {
         blocklist: result.blocklist,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Removed from queue')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.l10n.adminRemovedFromQueue)));
       _loadQueue(silent: true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to remove: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(context.l10n.adminFailedToRemove((e).toString()))));
     }
   }
 
@@ -169,7 +170,8 @@ class _SonarrQueueScreenState extends ConsumerState<SonarrQueueScreen> {
             Text(_error!,
                 style: const TextStyle(color: AppTheme.textSecondary)),
             const SizedBox(height: 16),
-            ElevatedButton(onPressed: _loadQueue, child: const Text('Retry')),
+            ElevatedButton(
+                onPressed: _loadQueue, child: Text(context.l10n.adminRetry)),
           ],
         ),
       );
@@ -180,13 +182,13 @@ class _SonarrQueueScreenState extends ConsumerState<SonarrQueueScreen> {
         color: AppTheme.accent,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
-          children: const [
+          children: [
             SizedBox(height: 160),
             Icon(Icons.check_circle_outline,
                 size: 48, color: AppTheme.available),
             SizedBox(height: 12),
             Center(
-              child: Text('Queue is empty',
+              child: Text(context.l10n.adminQueueIsEmpty,
                   style:
                       TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
             ),
@@ -215,8 +217,7 @@ class _SonarrQueueScreenState extends ConsumerState<SonarrQueueScreen> {
             primaryTitle: primaryTitle,
             releaseTitle: item.seriesTitle != null ? item.title : null,
             onRemove: () => _removeItem(item),
-            onShowIssues:
-                item.hasIssues ? () => _showDoctor(item) : null,
+            onShowIssues: item.hasIssues ? () => _showDoctor(item) : null,
           );
         },
       ),
@@ -241,14 +242,14 @@ class _RemoveQueueItemDialogState extends State<_RemoveQueueItemDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: AppTheme.surface,
-      title: const Text('Remove from Queue'),
+      title: Text(context.l10n.adminRemoveFromQueue),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           CheckboxListTile(
             value: _removeFromClient,
             onChanged: (v) => setState(() => _removeFromClient = v ?? true),
-            title: const Text('Remove from download client',
+            title: Text(context.l10n.adminRemoveFromDownloadClient,
                 style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
             controlAffinity: ListTileControlAffinity.leading,
             contentPadding: EdgeInsets.zero,
@@ -257,7 +258,7 @@ class _RemoveQueueItemDialogState extends State<_RemoveQueueItemDialog> {
           CheckboxListTile(
             value: _blocklist,
             onChanged: (v) => setState(() => _blocklist = v ?? false),
-            title: const Text('Add to blocklist',
+            title: Text(context.l10n.adminAddToBlocklist,
                 style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
             controlAffinity: ListTileControlAffinity.leading,
             contentPadding: EdgeInsets.zero,
@@ -268,12 +269,12 @@ class _RemoveQueueItemDialogState extends State<_RemoveQueueItemDialog> {
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel')),
+            child: Text(context.l10n.adminCancel)),
         TextButton(
           onPressed: () => Navigator.pop(context,
               (removeFromClient: _removeFromClient, blocklist: _blocklist)),
           style: TextButton.styleFrom(foregroundColor: AppTheme.error),
-          child: const Text('Remove'),
+          child: Text(context.l10n.adminRemove),
         ),
       ],
     );

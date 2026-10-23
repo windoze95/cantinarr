@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/storage/library_view_preferences.dart';
@@ -29,20 +30,26 @@ class LidarrArtistList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => LibraryCollection(
-    viewMode: viewMode, scrollKey: scrollKey, embedded: embedded,
-    emptyMessage: 'No artists found', itemCount: artists.length,
-    itemBuilder: (context, index) {
-      final artist = artists[index];
-      return _ArtistTile(
-        key: ValueKey(artist.id), grid: viewMode == LibraryViewMode.grid,
-        artist: artist,
-        onTap: () => onTap(artist),
-        onAction: onAction == null ? null : (action) => onAction!(artist, action),
-        image: imageSourceFor == null
-            ? (url: artist.imageUrl ?? '', headers: null) : imageSourceFor!(artist),
+        viewMode: viewMode,
+        scrollKey: scrollKey,
+        embedded: embedded,
+        emptyMessage: context.l10n.adminNoArtistsFound,
+        itemCount: artists.length,
+        itemBuilder: (context, index) {
+          final artist = artists[index];
+          return _ArtistTile(
+            key: ValueKey(artist.id),
+            grid: viewMode == LibraryViewMode.grid,
+            artist: artist,
+            onTap: () => onTap(artist),
+            onAction:
+                onAction == null ? null : (action) => onAction!(artist, action),
+            image: imageSourceFor == null
+                ? (url: artist.imageUrl ?? '', headers: null)
+                : imageSourceFor!(artist),
+          );
+        },
       );
-    },
-  );
 }
 
 class _ArtistTile extends StatelessWidget {
@@ -51,8 +58,13 @@ class _ArtistTile extends StatelessWidget {
   final VoidCallback onTap;
   final ValueChanged<LibraryAction>? onAction;
   final ImageSource? image;
-  const _ArtistTile({super.key, required this.grid, required this.artist,
-    required this.onTap, this.onAction, this.image});
+  const _ArtistTile(
+      {super.key,
+      required this.grid,
+      required this.artist,
+      required this.onTap,
+      this.onAction,
+      this.image});
 
   @override
   Widget build(BuildContext context) {
@@ -64,8 +76,12 @@ class _ArtistTile extends StatelessWidget {
       name: artist.artistName,
       artworkAspectRatio: 1,
       onTap: onTap,
-      onLongPress: onAction == null ? null : () => showLibraryActionMenu(
-        context, title: artist.artistName, actions: libraryActions('artist', monitored: artist.monitored), onSelected: onAction!),
+      onLongPress: onAction == null
+          ? null
+          : () => showLibraryActionMenu(context,
+              title: artist.artistName,
+              actions: libraryActions('artist', monitored: artist.monitored),
+              onSelected: onAction!),
       artwork: CachedImage(
         url: image?.url,
         headers: image?.headers,
@@ -81,24 +97,27 @@ class _ArtistTile extends StatelessWidget {
             runSpacing: 4,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              if (!grid) Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                decoration: BoxDecoration(
-                  color: _statusColor.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  _statusText,
-                  style: TextStyle(
-                    color: _statusColor,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
+              if (!grid)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: _statusColor.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    _statusText(context),
+                    style: TextStyle(
+                      color: _statusColor,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ),
-              ),
               if (stats != null) ...[
                 Text(
-                  artist.albumCountLabel,
+                  context.l10n
+                      .browseAlbumsCount(artist.statistics?.albumCount ?? 0),
                   style: const TextStyle(
                       color: AppTheme.textSecondary, fontSize: 11),
                 ),
@@ -119,8 +138,12 @@ class _ArtistTile extends StatelessWidget {
           ],
         ],
       ),
-      actions: onAction == null ? null : LibraryActionMenu(
-        title: artist.artistName, actions: libraryActions('artist', monitored: artist.monitored), onSelected: onAction!),
+      actions: onAction == null
+          ? null
+          : LibraryActionMenu(
+              title: artist.artistName,
+              actions: libraryActions('artist', monitored: artist.monitored),
+              onSelected: onAction!),
     );
   }
 
@@ -130,10 +153,10 @@ class _ArtistTile extends StatelessWidget {
         _ => AppTheme.requested,
       };
 
-  String get _statusText => switch (artist.status) {
-        'continuing' => 'Active',
-        'ended' => 'Ended',
-        _ => 'Unknown',
+  String _statusText(BuildContext context) => switch (artist.status) {
+        'continuing' => context.l10n.adminActive,
+        'ended' => context.l10n.adminEnded,
+        _ => context.l10n.adminUnknown,
       };
 
   /// Mirrors the author tile's progress grammar: green only when an ended

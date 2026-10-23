@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -79,8 +81,8 @@ class _MusicSearchResultsViewState
     _scope = scope;
     if (!ref.watch(discoveryAccessProvider).canBrowse('lidarr', id) ||
         widget.error == MusicSearchError.forbidden) {
-      return const Center(
-          child: Text('Music is not available for this account.'));
+      return Center(
+          child: Text(context.l10n.browseMusicIsNotAvailableForThisAccount));
     }
     final library = id == null
         ? const AsyncData(<OwnedAlbum>[])
@@ -126,7 +128,7 @@ class _MusicSearchResultsViewState
           Expanded(
               child: Text(text, style: Theme.of(context).textTheme.bodySmall)),
           if (retry != null)
-            TextButton(onPressed: retry, child: const Text('Retry'))
+            TextButton(onPressed: retry, child: Text(context.l10n.browseRetry))
         ]));
     return Material(
         type: MaterialType.transparency,
@@ -139,7 +141,7 @@ class _MusicSearchResultsViewState
                             constraints.maxWidth,
                             minPadding: 0)),
                     children: [
-                      label('Albums'),
+                      label(context.l10n.browseAlbums),
                       for (var i = 0; i < widget.results.length; i++)
                         MusicAlbumResultTile(
                             key: ValueKey(
@@ -167,26 +169,31 @@ class _MusicSearchResultsViewState
                             child: LinearProgressIndicator()),
                       if (widget.error != null)
                         notice(
-                            'The album catalog could not be searched. Library matches remain usable.',
+                            context.l10n
+                                .browseTheAlbumCatalogCouldNotBeSearchedLibraryMatchesRemainUsable,
                             retry: notifier.retryAlbums),
                       if (widget.searched &&
                           widget.results.isEmpty &&
                           supplements.isEmpty)
-                        notice(
-                            'No albums, EPs, or singles matched this catalog page.'),
+                        notice(context.l10n
+                            .browseNoAlbumsEPsOrSinglesMatchedThisCatalogPage),
                       if (state.nextPage != null && !widget.isLoading)
                         TextButton(
                             onPressed: notifier.loadMore,
-                            child: const Text('More albums')),
+                            child: Text(context.l10n.browseMoreAlbums)),
                       if (id != null)
                         notice(library.hasError
-                            ? 'Library availability could not be checked.'
+                            ? context
+                                .l10n.browseLibraryAvailabilityCouldNotBeChecked
                             : saved.hasError
-                                ? 'Saved requests could not be checked.'
+                                ? context
+                                    .l10n.browseSavedRequestsCouldNotBeChecked
                                 : library.isLoading || saved.isLoading
-                                    ? 'Checking library and saved requests…'
-                                    : 'Library and saved requests checked.'),
-                      label('Artists'),
+                                    ? context.l10n
+                                        .browseCheckingLibraryAndSavedRequests
+                                    : context.l10n
+                                        .browseLibraryAndSavedRequestsChecked),
+                      label(context.l10n.browseArtists),
                       for (var i = 0; i < widget.artists.length; i++)
                         _artist(widget.artists[i], id, i),
                       for (var i = 0; i < extraArtists.length; i++)
@@ -202,20 +209,22 @@ class _MusicSearchResultsViewState
                             padding: EdgeInsets.all(16),
                             child: LinearProgressIndicator()),
                       if (widget.artistsUnavailable)
-                        notice('Artists could not be searched.',
+                        notice(context.l10n.browseArtistsCouldNotBeSearched,
                             retry: notifier.retryArtists),
                       if (artistLibrary.hasError)
-                        notice('Library artists could not be checked.'),
+                        notice(
+                            context.l10n.browseLibraryArtistsCouldNotBeChecked),
                       if (!widget.artistsLoading &&
                           !widget.artistsUnavailable &&
                           widget.artists.isEmpty &&
                           extraArtists.isEmpty)
-                        notice('No artists matched this catalog page.'),
+                        notice(
+                            context.l10n.browseNoArtistsMatchedThisCatalogPage),
                       if (state.nextArtistPage != null &&
                           !widget.artistsLoading)
                         TextButton(
                             onPressed: notifier.loadMoreArtists,
-                            child: const Text('More artists')),
+                            child: Text(context.l10n.browseMoreArtists)),
                     ])));
   }
 
@@ -276,7 +285,7 @@ class MusicAlbumResultTile extends ConsumerWidget {
               overflow: TextOverflow.ellipsis),
           trailing: SizedBox(
               width: 92,
-              child: Text(badge ?? '',
+              child: Text(browseLabel(context, badge ?? ''),
                   textAlign: TextAlign.end,
                   style: Theme.of(context).textTheme.labelSmall)),
           onTap: () {

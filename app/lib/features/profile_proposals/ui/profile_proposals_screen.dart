@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/operations_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -82,7 +84,7 @@ class _ProfileProposalsScreenState extends ConsumerState<ProfileProposalsScreen>
 
   String _friendlyError(Object error) {
     final match = RegExp(r'"error":"([^"]+)"').firstMatch(error.toString());
-    return match?.group(1) ?? 'Something went wrong.';
+    return match?.group(1) ?? context.l10n.opsSomethingWentWrong;
   }
 
   Future<void> _decide(
@@ -104,19 +106,25 @@ class _ProfileProposalsScreenState extends ConsumerState<ProfileProposalsScreen>
     try {
       if (approve) {
         final updated = await service.approveProposal(proposal.id);
+        if (!mounted) return;
         message = updated.status == 'applied'
-            ? 'Applied and verified on ${proposal.instanceName.isEmpty ? proposal.service : proposal.instanceName}.'
-            : updated.statusLabel;
+            ? context.l10n.opsAppliedVerified(proposal.instanceName.isEmpty
+                ? proposal.service
+                : proposal.instanceName)
+            : localizeOperationsLabel(context, updated.statusLabel);
       } else {
         await service.rejectProposal(proposal.id, note: note);
-        message = 'Proposal rejected. Nothing was changed.';
+        if (!mounted) return;
+        message = context.l10n.opsProposalRejectedNothingWasChanged;
       }
     } catch (e) {
+      if (!mounted) return;
       message = _friendlyError(e);
     }
     if (!mounted) return;
     setState(() => _busyIds.remove(proposal.id));
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
     await _load();
   }
 
@@ -124,20 +132,18 @@ class _ProfileProposalsScreenState extends ConsumerState<ProfileProposalsScreen>
     return showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Apply this profile change?'),
+        title: Text(context.l10n.opsApplyThisProfileChange),
         content: Text(
-          'Cantinarr will re-check that "${proposal.profileName}" still matches '
-          'what the assistant saw, apply the change, verify the stored result, '
-          'and record it in Configuration history.',
+          context.l10n.opsApproveProfileDescription(proposal.profileName),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.opsCancel),
           ),
           ElevatedButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Approve'),
+            child: Text(context.l10n.opsApprove),
           ),
         ],
       ),
@@ -149,23 +155,23 @@ class _ProfileProposalsScreenState extends ConsumerState<ProfileProposalsScreen>
     final note = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Reject this proposal?'),
+        title: Text(context.l10n.opsRejectThisProposal),
         content: TextField(
           controller: controller,
-          decoration: const InputDecoration(
-            labelText: 'Reason (optional)',
+          decoration: InputDecoration(
+            labelText: context.l10n.opsReasonOptional,
           ),
           maxLines: 2,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.opsCancel),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
             onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('Reject'),
+            child: Text(context.l10n.opsReject),
           ),
         ],
       ),
@@ -180,7 +186,8 @@ class _ProfileProposalsScreenState extends ConsumerState<ProfileProposalsScreen>
   Widget build(BuildContext context) {
     final proposals = _proposals;
     final pending =
-        proposals?.where((p) => p.isPending).toList(growable: false) ?? const [];
+        proposals?.where((p) => p.isPending).toList(growable: false) ??
+            const [];
     final decided =
         proposals?.where((p) => !p.isPending).toList(growable: false) ??
             const [];
@@ -188,7 +195,7 @@ class _ProfileProposalsScreenState extends ConsumerState<ProfileProposalsScreen>
     // the loading, error, and empty states — a hidden drawer entry's only
     // in-place recovery is this control (Settings has the other copy).
     return Scaffold(
-      appBar: AppBar(title: const Text('Profile Change Approvals')),
+      appBar: AppBar(title: Text(context.l10n.opsProfileChangeApprovals)),
       body: Column(
         children: [
           Expanded(child: _buildBody(proposals, pending, decided)),
@@ -215,59 +222,57 @@ class _ProfileProposalsScreenState extends ConsumerState<ProfileProposalsScreen>
           )
         : proposals == null
             ? FullScreenError(
-                title: 'Approvals unavailable',
-                message: _error ?? 'Could not load profile change proposals.',
+                title: context.l10n.opsApprovalsUnavailable,
+                message: _error ??
+                    context.l10n.opsCouldNotLoadProfileChangeProposals,
                 onRetry: _load,
               )
             : RefreshIndicator(
-                  color: AppTheme.accent,
-                  onRefresh: _load,
-                  child: LayoutBuilder(builder: (context, constraints) {
-                    final hPad = AppBreakpoints.centeredContentPadding(
-                      constraints.maxWidth,
-                    );
-                    return ListView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      padding: EdgeInsets.fromLTRB(hPad, 12, hPad, 32),
-                      children: [
-                        if (_error != null)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 12),
-                            child: ErrorBanner(message: _error!),
+                color: AppTheme.accent,
+                onRefresh: _load,
+                child: LayoutBuilder(builder: (context, constraints) {
+                  final hPad = AppBreakpoints.centeredContentPadding(
+                    constraints.maxWidth,
+                  );
+                  return ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: EdgeInsets.fromLTRB(hPad, 12, hPad, 32),
+                    children: [
+                      if (_error != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: ErrorBanner(message: _error!),
+                        ),
+                      if (pending.isEmpty)
+                        const _EmptyState()
+                      else
+                        for (final proposal in pending)
+                          _ProposalCard(
+                            key: ValueKey('${proposal.id}-${proposal.status}'),
+                            proposal: proposal,
+                            busy: _busyIds.contains(proposal.id),
+                            onApprove: () => _decide(proposal, approve: true),
+                            onReject: () => _decide(proposal, approve: false),
                           ),
-                        if (pending.isEmpty)
-                          const _EmptyState()
-                        else
-                          for (final proposal in pending)
-                            _ProposalCard(
-                              key: ValueKey(
-                                  '${proposal.id}-${proposal.status}'),
-                              proposal: proposal,
-                              busy: _busyIds.contains(proposal.id),
-                              onApprove: () =>
-                                  _decide(proposal, approve: true),
-                              onReject: () =>
-                                  _decide(proposal, approve: false),
-                            ),
-                        if (decided.isNotEmpty) ...[
-                          const Padding(
-                            padding: EdgeInsets.fromLTRB(4, 20, 4, 8),
-                            child: Text(
-                              'Recent',
-                              style: TextStyle(
-                                color: AppTheme.textSecondary,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                              ),
+                      if (decided.isNotEmpty) ...[
+                        Padding(
+                          padding: EdgeInsets.fromLTRB(4, 20, 4, 8),
+                          child: Text(
+                            context.l10n.opsRecent,
+                            style: TextStyle(
+                              color: AppTheme.textSecondary,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
-                          for (final proposal in decided)
-                            _DecidedTile(proposal: proposal),
-                        ],
+                        ),
+                        for (final proposal in decided)
+                          _DecidedTile(proposal: proposal),
                       ],
-                    );
-                  }),
-                );
+                    ],
+                  );
+                }),
+              );
   }
 }
 
@@ -276,20 +281,19 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Padding(
+    return Padding(
       padding: EdgeInsets.symmetric(vertical: 40),
       child: Column(
         children: [
           Icon(Icons.fact_check_outlined, size: 40, color: AppTheme.textMuted),
           SizedBox(height: 12),
           Text(
-            'Nothing awaiting approval',
+            context.l10n.opsNothingAwaitingApproval,
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 15),
           ),
           SizedBox(height: 6),
           Text(
-            'When an external assistant proposes a quality-profile change, '
-            'it appears here for your review before anything is written.',
+            context.l10n.opsWhenAnExternalAssistantProposesAQuality,
             textAlign: TextAlign.center,
             style: TextStyle(color: AppTheme.textMuted, fontSize: 12.5),
           ),
@@ -313,17 +317,18 @@ class _ProposalCard extends StatelessWidget {
     required this.onReject,
   });
 
-  String get _target {
+  String _target(BuildContext context) {
     final instance = proposal.instanceName.isEmpty
         ? proposal.service
         : proposal.instanceName;
-    return '$instance · profile ${proposal.profileId}';
+    return context.l10n
+        .opsProfileTarget(instance, proposal.profileId.toString());
   }
 
-  String get _meta {
+  String _meta(BuildContext context) {
     final parts = [
       if (proposal.proposedByName.isNotEmpty)
-        'Proposed by ${proposal.proposedByName}',
+        context.l10n.opsProposedBy(proposal.proposedByName),
       if (proposal.sourceClient.isNotEmpty) proposal.sourceClient,
     ];
     return parts.join(' · ');
@@ -344,19 +349,20 @@ class _ProposalCard extends StatelessWidget {
         children: [
           Text(
             proposal.profileName.isEmpty
-                ? 'Quality profile'
+                ? context.l10n.opsQualityProfile
                 : proposal.profileName,
             style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 2),
           Text(
-            _target,
-            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12.5),
+            _target(context),
+            style:
+                const TextStyle(color: AppTheme.textSecondary, fontSize: 12.5),
           ),
-          if (_meta.isNotEmpty) ...[
+          if (_meta(context).isNotEmpty) ...[
             const SizedBox(height: 2),
             Text(
-              _meta,
+              _meta(context),
               style: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
             ),
           ],
@@ -392,7 +398,7 @@ class _ProposalCard extends StatelessWidget {
               const Spacer(),
               OutlinedButton(
                 onPressed: busy ? null : onReject,
-                child: const Text('Reject'),
+                child: Text(context.l10n.opsReject),
               ),
               const SizedBox(width: 10),
               ElevatedButton.icon(
@@ -404,7 +410,7 @@ class _ProposalCard extends StatelessWidget {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.check, size: 16),
-                label: const Text('Approve'),
+                label: Text(context.l10n.opsApprove),
               ),
             ],
           ),
@@ -422,8 +428,9 @@ class _DecidedTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final detail = [
-      proposal.statusLabel,
-      if (proposal.decidedByName.isNotEmpty) 'by ${proposal.decidedByName}',
+      localizeOperationsLabel(context, proposal.statusLabel),
+      if (proposal.decidedByName.isNotEmpty)
+        context.l10n.opsDecidedBy(proposal.decidedByName),
       if (proposal.rejectNote.isNotEmpty) '— ${proposal.rejectNote}',
       if (proposal.resultText.isNotEmpty && proposal.rejectNote.isEmpty)
         '— ${proposal.resultText}',

@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:dio/dio.dart';
@@ -171,19 +173,20 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
       final quota = requestQuotaError(e);
       if (quota != null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(quota)),
+          SnackBar(content: Text(browseLabel(context, quota))),
         );
         return;
       }
       final body = e.response?.data;
       setState(() => _error = body is Map && body['error'] is String
           ? body['error'] as String
-          : 'Could not update this request. Please retry.');
+          : context.l10n.browseCouldNotUpdateThisRequestPleaseRetry);
     } catch (_) {
       if (mounted &&
           _key == key &&
           ref.read(catalogDiscoveryScopeProvider) == scope) {
-        setState(() => _error = 'Could not update this request. Please retry.');
+        setState(() =>
+            _error = context.l10n.browseCouldNotUpdateThisRequestPleaseRetry);
       }
     } finally {
       if (mounted &&
@@ -217,10 +220,11 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
         return TextButton.icon(
           onPressed: () => ref.invalidate(savedDeliveryProvider(key)),
           icon: const Icon(Icons.refresh),
-          label: const Text('Could not check request progress. Try again.'),
+          label: Text(context.l10n.browseCouldNotCheckRequestProgressTryAgain),
         );
       }
-      if (saved.isLoading) return const Text('Checking request progress…');
+      if (saved.isLoading)
+        return Text(context.l10n.browseCheckingRequestProgress);
       return const SizedBox.shrink();
     }
     final canonical = _knownNativeId ??
@@ -311,23 +315,29 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
             Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 child: Row(children: [
-                  Text(format.label),
+                  Text(browseLabel(context, format.label)),
                   const SizedBox(width: 16),
-                  Text(bookTruth!.formats[format]?.label ?? 'Requested')
+                  Text(browseLabel(
+                      context,
+                      bookTruth!.formats[format]?.label ??
+                          context.l10n.browseRequested))
                 ])),
       if (_error != null)
         Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: Text(_error!,
+            child: Text(browseLabel(context, _error!),
                 style: TextStyle(color: Theme.of(context).colorScheme.error))),
       for (final delivery in active)
         ListTile(
           contentPadding: EdgeInsets.zero,
           title: Text(
-              '${delivery['format'] == 'ebook' ? 'eBook · ' : delivery['format'] == 'audiobook' ? 'Audiobook · ' : ''}${delivery['message'] ?? 'Request saved'}'),
+              '${delivery['format'] == 'ebook' ? '${context.l10n.browseEBook} · ' : delivery['format'] == 'audiobook' ? '${context.l10n.browseAudiobook} · ' : ''}${delivery['message'] ?? context.l10n.browseRequestSaved}'),
           subtitle: delivery['next_attempt_at'] is String
-              ? Text(
-                  'Next retry: ${DateTime.tryParse(delivery['next_attempt_at'] as String)?.toLocal()}')
+              ? Text(context.l10n.requestNextRetry(
+                  DateTime.tryParse(delivery['next_attempt_at'] as String)
+                          ?.toLocal()
+                          .toString() ??
+                      ''))
               : null,
         ),
       if (active.isNotEmpty)
@@ -343,14 +353,14 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
                   onPressed: _busy
                       ? null
                       : () => _perform(requestId: id, action: 'retry'),
-                  child: const Text('Try again')),
+                  child: Text(context.l10n.browseTryAgain)),
             if (active
                 .any((d) => d['request_id'] == id && d['can_cancel'] != false))
               TextButton(
                   onPressed: _busy
                       ? null
                       : () => _perform(requestId: id, action: 'cancel'),
-                  child: const Text('Cancel request')),
+                  child: Text(context.l10n.browseCancelRequest)),
           ],
         ]),
       if (active.any((d) => d['code'] == 'catalog_retired'))
@@ -364,19 +374,19 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
                     ? null
                     : () => _perform(format: format.isEmpty ? null : format),
                 child: Text(format == 'ebook'
-                    ? 'Request eBook'
+                    ? context.l10n.browseRequestEBook
                     : format == 'audiobook'
-                        ? 'Request audiobook'
-                        : 'Request album')),
+                        ? context.l10n.browseRequestAudiobook
+                        : context.l10n.browseRequestAlbum)),
           if (requestable.length == 2)
             OutlinedButton(
                 onPressed: _busy || saved.isLoading
                     ? null
                     : () => _perform(format: 'both'),
-                child: const Text('Request both')),
+                child: Text(context.l10n.browseRequestBoth)),
         ]),
       if (!widget.progressOnly && requestable.isEmpty && active.isEmpty)
-        const Text('This title is already covered by your library.'),
+        Text(context.l10n.browseThisTitleIsAlreadyCoveredByYourLibrary),
       if (_busy)
         const Padding(
             padding: EdgeInsets.only(top: 12),

@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -17,7 +18,7 @@ class ListeningAppsScreen extends ConsumerWidget {
     final auth = ref.watch(authProvider).valueOrNull;
     final preferences = ref.watch(listeningAppPreferencesProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Listening apps')),
+      appBar: AppBar(title: Text(context.l10n.settingsListeningApps)),
       body: CenteredContent(
         child: preferences.when(
           skipLoadingOnReload: false,
@@ -30,7 +31,7 @@ class ListeningAppsScreen extends ConsumerWidget {
             child: TextButton.icon(
               onPressed: () => ref.invalidate(listeningAppPreferencesProvider),
               icon: const Icon(Icons.refresh),
-              label: const Text("Couldn't load listening apps · Retry"),
+              label: Text(context.l10n.settingsListeningAppsLoadError),
             ),
           ),
         ),
@@ -64,8 +65,7 @@ class _PreferencesFormState extends ConsumerState<_PreferencesForm> {
       if (!mounted) return;
       setState(() => _formVersion++);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text("Couldn't save your listening apps. Try again.")),
+        SnackBar(content: Text(context.l10n.settingsListeningAppsSaveError)),
       );
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -76,11 +76,9 @@ class _PreferencesFormState extends ConsumerState<_PreferencesForm> {
   Widget build(BuildContext context) => ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text('Choose which app Cantinarr opens for audiobooks. '
-              'Your choices follow your account on this Cantinarr server.'),
+          Text(context.l10n.settingsListeningAppsHelp),
           const SizedBox(height: 8),
-          const Text('Use admin default follows each shared Audiobookshelf '
-              'server’s settings. Choose an app to override that default.'),
+          Text(context.l10n.settingsListeningAppsDefaultHelp),
           const SizedBox(height: 24),
           ListeningAppFields(
             key: ValueKey(_formVersion),
@@ -93,13 +91,9 @@ class _PreferencesFormState extends ConsumerState<_PreferencesForm> {
             const LinearProgressIndicator(),
           ],
           const SizedBox(height: 24),
-          const Text('Install your chosen app and sign in to Audiobookshelf '
-              'there first. ShelfPlayer opens a search for a verified book; '
-              'TheShelf and the Audiobookshelf app open their home screen. '
-              'Playback does not start automatically.'),
+          Text(context.l10n.settingsListeningAppsPlaybackHelp),
           const SizedBox(height: 12),
-          const Text('If the app cannot open, Cantinarr opens Audiobookshelf '
-              'in your browser. Web and desktop always use the browser.'),
+          Text(context.l10n.settingsListeningAppsFallbackHelp),
         ],
       );
 }

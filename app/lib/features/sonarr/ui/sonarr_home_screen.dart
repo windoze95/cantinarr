@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/storage/library_sort_preferences.dart';
@@ -35,8 +36,8 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
     super.initState();
     // Listen before the first frame so preference restoration cannot race the
     // instance notifier's creation. Its initial selection is also read below.
-    ref.listenManual(librarySortProvider('sonarr'), (_, selection) =>
-        _notifier?.sorting.setSelection(selection));
+    ref.listenManual(librarySortProvider('sonarr'),
+        (_, selection) => _notifier?.sorting.setSelection(selection));
     WidgetsBinding.instance.addPostFrameCallback((_) => _initNotifier());
   }
 
@@ -90,6 +91,7 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
         notifier?.loadSeries();
       }
     }
+
     showSeriesActions(
       context,
       service: SonarrApiService(
@@ -129,64 +131,72 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
         return LibraryCommandLayout(
           key: ValueKey('sonarr-$instanceId'),
           headerBuilder: (collapsed) => LibraryCommandHeader(
-              collapsed: collapsed,
-              sort: LibrarySortMenu(module: 'sonarr', selection: sort,
-                onSelected: (field) => ref.read(librarySortProvider('sonarr').notifier).select(field)),
-              viewMode: viewMode,
-              onViewModeChanged: (value) => ref
-                  .read(libraryViewModeProvider('sonarr').notifier).set(value),
-              title: 'Series library',
-              subtitle: '$instanceName  /  Sonarr',
-              stats: [
-                LibraryStat(
-                  label: 'Total',
-                  value: state.series.length,
-                  color: AppTheme.textPrimary,
-                ),
-                LibraryStat(
-                  label: 'Complete',
-                  value: state.completeCount,
-                  color: AppTheme.available,
-                ),
-                LibraryStat(
-                  label: 'Partial',
-                  value: state.partialCount,
-                  color: AppTheme.requested,
-                ),
-              ],
-              searchController: _searchController,
-              onSearch: _notifier!.search,
-              searchHint: 'Filter this series library…',
-              filter: PopupMenuButton<SonarrFilter>(
-                tooltip: 'Filter series',
-                icon: const Icon(Icons.tune_rounded),
-                onSelected: _notifier!.setFilter,
-                itemBuilder: (_) => SonarrFilter.values
-                    .map((f) => PopupMenuItem(
-                          value: f,
-                          child: Row(
-                            children: [
-                              if (f == state.filter)
-                                const Icon(
-                                  Icons.check,
-                                  size: 18,
-                                  color: AppTheme.accent,
-                                ),
-                              if (f != state.filter) const SizedBox(width: 18),
-                              const SizedBox(width: 8),
-                              Text(
-                                f.name[0].toUpperCase() + f.name.substring(1),
-                              ),
-                            ],
-                          ),
-                        ))
-                    .toList(),
+            collapsed: collapsed,
+            sort: LibrarySortMenu(
+                module: 'sonarr',
+                selection: sort,
+                onSelected: (field) => ref
+                    .read(librarySortProvider('sonarr').notifier)
+                    .select(field)),
+            viewMode: viewMode,
+            onViewModeChanged: (value) =>
+                ref.read(libraryViewModeProvider('sonarr').notifier).set(value),
+            title: context.l10n.adminSeriesLibrary,
+            subtitle: '$instanceName  /  Sonarr',
+            stats: [
+              LibraryStat(
+                label: context.l10n.adminTotal,
+                value: state.series.length,
+                color: AppTheme.textPrimary,
               ),
+              LibraryStat(
+                label: context.l10n.adminComplete,
+                value: state.completeCount,
+                color: AppTheme.available,
+              ),
+              LibraryStat(
+                label: context.l10n.adminPartial,
+                value: state.partialCount,
+                color: AppTheme.requested,
+              ),
+            ],
+            searchController: _searchController,
+            onSearch: _notifier!.search,
+            searchHint: context.l10n.adminFilterThisSeriesLibrary,
+            filter: PopupMenuButton<SonarrFilter>(
+              tooltip: context.l10n.adminFilterSeries,
+              icon: const Icon(Icons.tune_rounded),
+              onSelected: _notifier!.setFilter,
+              itemBuilder: (_) => SonarrFilter.values
+                  .map((f) => PopupMenuItem(
+                        value: f,
+                        child: Row(
+                          children: [
+                            if (f == state.filter)
+                              const Icon(
+                                Icons.check,
+                                size: 18,
+                                color: AppTheme.accent,
+                              ),
+                            if (f != state.filter) const SizedBox(width: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              f.name[0].toUpperCase() + f.name.substring(1),
+                            ),
+                          ],
+                        ),
+                      ))
+                  .toList(),
             ),
+          ),
           children: [
             if (_notifier!.sorting.notice != null)
-              ErrorBanner(message: _notifier!.sorting.notice!, maxLines: null,
-                onRetry: _notifier!.sorting.canRetry ? _notifier!.sorting.refresh : null),
+              ErrorBanner(
+                  message: _notifier!.sorting.notice!,
+                  maxLines: null,
+                  onRetry: _notifier!.sorting.canRetry
+                      ? _notifier!.sorting.refresh
+                      : null),
             if (state.error != null)
               ErrorBanner(
                 message: state.error!,
@@ -203,7 +213,8 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
                           color: AppTheme.accent,
                           child: SonarrSeriesList(
                             viewMode: viewMode,
-                            scrollKey: 'sonarr-$instanceId-${_notifier!.sorting.effectiveSelection.key}',
+                            scrollKey:
+                                'sonarr-$instanceId-${_notifier!.sorting.effectiveSelection.key}',
                             series: state.filtered,
                             onOpen: _openSeries,
                             onAction: _showSeriesActions,

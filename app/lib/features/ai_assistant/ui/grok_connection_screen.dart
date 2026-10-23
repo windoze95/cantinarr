@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:dio/dio.dart';
@@ -99,12 +100,12 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
       setState(() {
         _flowError = serverMessage.isNotEmpty
             ? serverMessage
-            : 'Could not start xAI sign-in. Try again.';
+            : context.l10n.settingsCouldNotStartXaiSignInTryAgain;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _flowError = 'Could not start xAI sign-in. Try again.';
+        _flowError = context.l10n.settingsCouldNotStartXaiSignInTryAgain;
       });
     } finally {
       if (mounted) setState(() => _starting = false);
@@ -121,7 +122,7 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
     _expiryTimer = Timer(flow.expiresIn, () {
       if (_flow?.flowId != flow.flowId) return;
       _finishFlowWithError(
-        'That one-time code expired. Start again.',
+        context.l10n.settingsThatOneTimeCodeExpiredStartAgain,
         cancelFlow: flow,
       );
     });
@@ -136,9 +137,9 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
     }
     if (!opened && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Could not open the xAI sign-in page. Copy the code and try Reopen.',
+            context.l10n.settingsCouldNotOpenTheXaiSignInPage,
           ),
         ),
       );
@@ -150,7 +151,7 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
     if (flow == null || _checking) return;
     if (_flowExpiresAt?.isBefore(DateTime.now()) == true) {
       _finishFlowWithError(
-        'That one-time code expired. Start again.',
+        context.l10n.settingsThatOneTimeCodeExpiredStartAgain,
         cancelFlow: flow,
       );
       return;
@@ -164,8 +165,9 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
         case GrokDeviceFlowStatus.pending:
           if (!silent) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Still waiting for approval on x.ai.'),
+              SnackBar(
+                content:
+                    Text(context.l10n.settingsStillWaitingForApprovalOnXAi),
               ),
             );
           }
@@ -185,19 +187,20 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(_isShared
-                    ? 'Shared xAI Grok connected'
-                    : 'Personal xAI Grok connected'),
+                    ? context.l10n.settingsSharedXaiGrokConnected
+                    : context.l10n.settingsPersonalXaiGrokConnected),
               ),
             );
           }
           return;
         case GrokDeviceFlowStatus.expired:
-          _finishFlowWithError('That one-time code expired. Start again.');
+          _finishFlowWithError(
+              context.l10n.settingsThatOneTimeCodeExpiredStartAgain);
           return;
         case GrokDeviceFlowStatus.failed:
           _finishFlowWithError(
             result.error.isEmpty
-                ? 'xAI did not approve the connection. Start again.'
+                ? context.l10n.settingsXaiDidNotApproveTheConnectionStartAgain
                 : result.error,
           );
           _invalidateStatus();
@@ -207,8 +210,9 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
     } catch (_) {
       if (!silent && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not check the connection. Try again.'),
+          SnackBar(
+            content:
+                Text(context.l10n.settingsCouldNotCheckTheConnectionTryAgain),
           ),
         );
       }
@@ -270,24 +274,22 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: Text(_isShared
-            ? 'Disconnect shared xAI Grok?'
-            : 'Disconnect personal xAI Grok?'),
+            ? context.l10n.settingsDisconnectSharedXaiGrok
+            : context.l10n.settingsDisconnectPersonalXaiGrok),
         content: Text(
           _isShared
-              ? 'Included AI will stop working for every user who relies on '
-                  'this shared account. Cantinarr conversations are not deleted.'
-              : 'Cantinarr will forget this personal account connection. If it '
-                  'is your selected provider, AI stays unavailable until you '
-                  'choose another source. Cantinarr conversations are not deleted.',
+              ? context.l10n.settingsIncludedAiWillStopWorkingForEveryUser
+              : context.l10n
+                  .settingsCantinarrWillForgetThisPersonalAccountConnectionIf,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.settingsCancel),
           ),
           ElevatedButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Disconnect'),
+            child: Text(context.l10n.settingsDisconnect),
           ),
         ],
       ),
@@ -304,16 +306,17 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(_isShared
-                ? 'Shared xAI Grok disconnected'
-                : 'Personal xAI Grok disconnected'),
+                ? context.l10n.settingsSharedXaiGrokDisconnected
+                : context.l10n.settingsPersonalXaiGrokDisconnected),
           ),
         );
       }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not disconnect xAI Grok. Try again.'),
+          SnackBar(
+            content:
+                Text(context.l10n.settingsCouldNotDisconnectXaiGrokTryAgain),
           ),
         );
       }
@@ -334,7 +337,7 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
     await Clipboard.setData(ClipboardData(text: code));
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('One-time code copied')),
+        SnackBar(content: Text(context.l10n.settingsOneTimeCodeCopied)),
       );
     }
   }
@@ -349,13 +352,15 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          _isShared ? 'Shared xAI Grok (OAuth)' : 'Personal xAI Grok (OAuth)',
+          _isShared
+              ? context.l10n.settingsSharedXaiGrokOauth
+              : context.l10n.settingsPersonalXaiGrokOauth,
         ),
         actions: [
           IconButton(
             onPressed: _invalidateStatus,
             icon: const Icon(Icons.refresh),
-            tooltip: 'Refresh connection',
+            tooltip: context.l10n.settingsRefreshConnection,
           ),
         ],
       ),
@@ -403,17 +408,13 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
         children: [
           Text(
             _isShared
-                ? 'The xAI sign-in page opens in your browser. The resulting '
-                    'authorization becomes the server-wide included provider '
-                    'funded by this account.'
-                : 'The xAI sign-in page opens in your browser and gives your '
-                    'Cantinarr account its own Grok connection.',
+                ? context.l10n.settingsTheXaiSignInPageOpensInYour
+                : context.l10n.settingsTheXaiSignInPageOpensInYour2,
             style: const TextStyle(color: AppTheme.textSecondary, height: 1.45),
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Works with a SuperGrok subscription or X Premium+. No API key '
-            'is needed; tokens stay encrypted on your Cantinarr server.',
+          Text(
+            context.l10n.settingsWorksWithASupergrokSubscriptionOrXPremium,
             style: TextStyle(
               color: AppTheme.textMuted,
               fontSize: 12.5,
@@ -431,13 +432,15 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
                   )
                 : const Icon(Icons.open_in_browser_rounded, size: 18),
             label: Text(
-              _isShared ? 'Connect shared xAI Grok' : 'Connect xAI Grok',
+              _isShared
+                  ? context.l10n.settingsConnectSharedXaiGrok
+                  : context.l10n.settingsConnectXaiGrok,
             ),
           ),
           if (!status.available) ...[
             const SizedBox(height: 10),
-            const Text(
-              'Grok OAuth is unavailable on this server right now.',
+            Text(
+              context.l10n.settingsGrokOauthIsUnavailableOnThisServerRight,
               style: TextStyle(color: AppTheme.textMuted, fontSize: 12.5),
             ),
           ],
@@ -460,9 +463,9 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
               const SizedBox(width: 10),
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'Waiting for xAI approval',
+                  context.l10n.settingsWaitingForXaiApproval,
                   style: TextStyle(fontWeight: FontWeight.w600),
                 ),
               ),
@@ -474,9 +477,8 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
             ],
           ),
           const SizedBox(height: 12),
-          const Text(
-            'Approve the request on the xAI page. If it asks for a code, '
-            'enter this one:',
+          Text(
+            context.l10n.settingsApproveTheRequestOnTheXaiPageIf,
             style: TextStyle(color: AppTheme.textSecondary, height: 1.4),
           ),
           const SizedBox(height: 10),
@@ -497,7 +499,7 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
               IconButton(
                 onPressed: () => _copyCode(flow.userCode),
                 icon: const Icon(Icons.copy_rounded),
-                tooltip: 'Copy code',
+                tooltip: context.l10n.settingsCopyCode,
               ),
             ],
           ),
@@ -508,18 +510,18 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
                 child: OutlinedButton.icon(
                   onPressed: () => _openVerificationPage(flow.verificationUri),
                   icon: const Icon(Icons.open_in_new_rounded, size: 17),
-                  label: const Text('Reopen xAI sign-in'),
+                  label: Text(context.l10n.settingsReopenXaiSignIn),
                 ),
               ),
               const SizedBox(width: 8),
               TextButton(
                 onPressed: _checking ? null : () => _checkConnection(),
-                child: const Text('Check now'),
+                child: Text(context.l10n.settingsCheckNow),
               ),
               const SizedBox(width: 8),
               TextButton(
                 onPressed: _cancelling ? null : _cancelConnection,
-                child: const Text('Cancel'),
+                child: Text(context.l10n.settingsCancel),
               ),
             ],
           ),
@@ -542,7 +544,7 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
               Expanded(
                 child: Text(
                   status.accountEmail.isEmpty
-                      ? 'xAI account connected'
+                      ? context.l10n.settingsXaiAccountConnected
                       : status.accountEmail,
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
@@ -552,7 +554,8 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
           if (status.planType.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text(
-              'Plan: ${status.planType}',
+              context.l10n
+                  .settingsMessagePlanValue1((status.planType).toString()),
               style: const TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 13,
@@ -562,10 +565,8 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
           const SizedBox(height: 8),
           Text(
             _isShared
-                ? 'This account funds included AI for every granted user. '
-                    'Usage draws on its Grok subscription allowance.'
-                : 'Chat turns using this provider draw on this account\'s '
-                    'Grok subscription allowance.',
+                ? context.l10n.settingsThisAccountFundsIncludedAiForEveryGranted
+                : context.l10n.settingsChatTurnsUsingThisProviderDrawOnThis,
             style: const TextStyle(
               color: AppTheme.textMuted,
               fontSize: 12.5,
@@ -584,7 +585,9 @@ class _GrokConnectionScreenState extends ConsumerState<GrokConnectionScreen> {
                 : const Icon(Icons.link_off_rounded, size: 18),
             style: OutlinedButton.styleFrom(foregroundColor: AppTheme.error),
             label: Text(
-              _isShared ? 'Disconnect shared xAI Grok' : 'Disconnect xAI Grok',
+              _isShared
+                  ? context.l10n.settingsDisconnectSharedXaiGrok2
+                  : context.l10n.settingsDisconnectXaiGrok,
             ),
           ),
         ],
@@ -606,16 +609,21 @@ class _ConnectionIntro extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            shared ? 'Included AI, one allowance' : 'Use your Grok plan',
+            shared
+                ? context.l10n.settingsIncludedAiOneAllowance
+                : context.l10n.settingsUseYourGrokPlan,
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 6),
           Text(
             connected
-                ? 'Grok answers with this ${shared ? 'shared' : 'personal'} '
-                    'xAI account. Manage or disconnect it below.'
-                : 'Sign in with an xAI account instead of paying per token '
-                    'with an API key.',
+                ? context.l10n
+                    .settingsMessageGrokAnswersWithThisValue1XaiAccountManage(
+                        (shared
+                                ? context.l10n.settingsShared
+                                : context.l10n.settingsPersonal3)
+                            .toString())
+                : context.l10n.settingsSignInWithAnXaiAccountInsteadOf,
             style: const TextStyle(color: AppTheme.textSecondary, height: 1.45),
           ),
         ],
@@ -642,9 +650,10 @@ class _StatusError extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text('Could not load the Grok connection status.'),
+          Text(context.l10n.settingsCouldNotLoadTheGrokConnectionStatus),
           const SizedBox(height: 10),
-          OutlinedButton(onPressed: onRetry, child: const Text('Retry')),
+          OutlinedButton(
+              onPressed: onRetry, child: Text(context.l10n.settingsRetry)),
         ],
       ),
     );

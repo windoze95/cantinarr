@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -62,8 +63,8 @@ class _BookListenActionsState extends ConsumerState<BookListenActions>
     );
     if (!opened && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(
-              "Couldn't open ${launcher.listeningAppFor(apps).actionName}.")));
+          content: Text(context.l10n.adminCouldnTOpen(
+              (launcher.listeningAppFor(apps).actionName).toString()))));
     }
   }
 
@@ -82,7 +83,7 @@ class _BookListenActionsState extends ConsumerState<BookListenActions>
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Choose an audiobook',
+                  Text(context.l10n.mediaChooseAnAudiobook,
                       style: Theme.of(context).textTheme.titleLarge),
                   const SizedBox(height: 12),
                   Flexible(
@@ -112,7 +113,8 @@ class _BookListenActionsState extends ConsumerState<BookListenActions>
   String _actionLabel(ListenLink link, int count, {required bool verified}) {
     final app =
         ref.watch(mediaAppLauncherProvider).listeningAppFor(link.listeningApps);
-    final action = verified ? 'Listen in' : 'Open';
+    final action =
+        verified ? context.l10n.mediaListenIn : context.l10n.mediaOpen;
     return '$action ${app.actionName}${count == 1 ? '' : ' · ${link.name}'}';
   }
 
@@ -125,7 +127,7 @@ class _BookListenActionsState extends ConsumerState<BookListenActions>
             error: (error, stack) => TextButton.icon(
                 onPressed: _retry,
                 icon: const Icon(Icons.refresh),
-                label: const Text("Couldn't check Audiobookshelf · Retry")),
+                label: Text(context.l10n.mediaCouldnTCheckAudiobookshelfRetry)),
             data: (links) =>
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               for (final link in links)

@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 
@@ -42,7 +43,7 @@ class ErrorBanner extends StatelessWidget {
           if (onRetry != null)
             TextButton(
               onPressed: onRetry,
-              child: const Text('Retry'),
+              child: Text(context.l10n.commonRetry),
             ),
           if (onDismiss != null)
             IconButton(
@@ -58,13 +59,13 @@ class ErrorBanner extends StatelessWidget {
 
 /// A full-screen error view with retry.
 class FullScreenError extends StatelessWidget {
-  final String title;
+  final String? title;
   final String message;
   final VoidCallback? onRetry;
 
   const FullScreenError({
     super.key,
-    this.title = 'Something went wrong',
+    this.title,
     required this.message,
     this.onRetry,
   });
@@ -80,7 +81,7 @@ class FullScreenError extends StatelessWidget {
             const Icon(Icons.wifi_off_rounded,
                 size: 48, color: AppTheme.requested),
             const SizedBox(height: 16),
-            Text(title,
+            Text(title ?? context.l10n.commonSomethingWrong,
                 style: Theme.of(context).textTheme.titleLarge,
                 textAlign: TextAlign.center),
             const SizedBox(height: 8),
@@ -90,7 +91,7 @@ class FullScreenError extends StatelessWidget {
             if (onRetry != null) ...[
               const SizedBox(height: 20),
               ElevatedButton(
-                  onPressed: onRetry, child: const Text('Try Again')),
+                  onPressed: onRetry, child: Text(context.l10n.commonTryAgain)),
             ],
           ],
         ),

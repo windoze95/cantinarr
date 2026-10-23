@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -134,8 +135,8 @@ class _ChaptarrBookDetailSheetState
         (event) => (record: event, format: result.format),
       ));
     }
-    history.sort((a, b) => (b.record.date ?? DateTime(0))
-        .compareTo(a.record.date ?? DateTime(0)));
+    history.sort((a, b) =>
+        (b.record.date ?? DateTime(0)).compareTo(a.record.date ?? DateTime(0)));
     final error = _historyErrorMessage(failedFormats, results.length);
     if (!mounted) return;
     setState(() {
@@ -148,17 +149,18 @@ class _ChaptarrBookDetailSheetState
   String? _historyErrorMessage(Set<BookFormat> failed, int total) {
     if (failed.isEmpty) return null;
     if (failed.length == total || failed.contains(BookFormat.unknown)) {
-      return 'Could not load history.';
+      return context.l10n.adminCouldNotLoadHistory;
     }
     final labels = [BookFormat.ebook, BookFormat.audiobook]
         .where(failed.contains)
-        .map(chaptarrFormatLabel)
-        .join(' and ');
-    return 'Could not load $labels history.';
+        .map((format) => chaptarrFormatLabel(format, strings: context.l10n))
+        .join(context.l10n.polishAndSeparator);
+    return context.l10n.adminCouldNotLoadHistory2((labels).toString());
   }
 
   // Pick the format (when the title has both), close the sheet, then search.
   Future<void> _automaticSearch() async {
+    final translations = context.l10n;
     final chosen = await pickFormatRecords(context, _records);
     if (chosen == null || !mounted) return;
     final primary = chosen.first;
@@ -166,11 +168,14 @@ class _ChaptarrBookDetailSheetState
     try {
       await _service.searchBook(chosen.map((record) => record.id).toList());
       messenger.showSnackBar(SnackBar(
-          content: Text(
-              'Searching for ${chaptarrFormatLabel(primary.format)} — ${primary.title}…')));
+          content: Text(translations.adminSearchingFor(
+              (chaptarrFormatLabel(primary.format, strings: translations))
+                  .toString(),
+              (primary.title).toString()))));
     } catch (e) {
-      messenger
-          .showSnackBar(SnackBar(content: Text('Failed to start search: $e')));
+      messenger.showSnackBar(SnackBar(
+          content:
+              Text(translations.adminFailedToStartSearch((e).toString()))));
     }
     if (mounted) Navigator.of(context).pop(true);
   }
@@ -192,7 +197,7 @@ class _ChaptarrBookDetailSheetState
   }
 
   ({String label, Color color}) get _shortStatus {
-    final line = bookFileStatusLine(_primary);
+    final line = bookFileStatusLine(_primary, strings: context.l10n);
     return (label: line.text, color: line.color);
   }
 
@@ -200,7 +205,7 @@ class _ChaptarrBookDetailSheetState
   Widget build(BuildContext context) {
     final title = _primary.title.isNotEmpty
         ? _primary.title
-        : (widget.bookTitle ?? 'Book');
+        : (widget.bookTitle ?? context.l10n.adminBook);
     final status = _shortStatus;
     final release = _primary.releaseDate;
     final knownRecords = _records
@@ -241,22 +246,23 @@ class _ChaptarrBookDetailSheetState
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               if (hasUnknownFormat)
-                const StatusPill(
-                  text: 'Book format: Needs attention',
+                StatusPill(
+                  text: context.l10n.adminBookFormatNeedsAttention,
                   color: AppTheme.requested,
                 ),
               if (knownRecords.isEmpty && !hasUnknownFormat)
                 StatusPill(text: status.label, color: status.color),
               if (knownRecords.isNotEmpty)
                 ...[BookFormat.ebook, BookFormat.audiobook]
-                    .where((format) => knownRecords
-                        .any((record) => record.format == format))
+                    .where((format) =>
+                        knownRecords.any((record) => record.format == format))
                     .map((format) {
-                  final formatStatus =
-                      bookFormatStatusLine(knownRecords, format);
+                  final formatStatus = bookFormatStatusLine(
+                      knownRecords, format,
+                      strings: context.l10n);
                   return StatusPill(
                     text:
-                        '${chaptarrFormatLabel(format)}: ${formatStatus.text}',
+                        '${chaptarrFormatLabel(format, strings: context.l10n)}: ${formatStatus.text}',
                     color: formatStatus.color,
                   );
                 }),
@@ -276,12 +282,10 @@ class _ChaptarrBookDetailSheetState
             const SizedBox(height: 14),
             Text(overview,
                 style: const TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 14,
-                    height: 1.4)),
+                    color: AppTheme.textPrimary, fontSize: 14, height: 1.4)),
           ],
           const SizedBox(height: 16),
-          const Text('History',
+          Text(context.l10n.adminHistory,
               style: TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 13,
@@ -311,7 +315,7 @@ class _ChaptarrBookDetailSheetState
       );
     }
     if (_history.isEmpty && _historyError == null) {
-      return const Text('No history yet.',
+      return Text(context.l10n.adminNoHistoryYet2,
           style: TextStyle(color: AppTheme.textSecondary, fontSize: 13));
     }
     return Column(
@@ -323,11 +327,13 @@ class _ChaptarrBookDetailSheetState
               Expanded(
                 child: Text(
                   _historyError!,
-                  style: const TextStyle(
-                      color: AppTheme.requested, fontSize: 13),
+                  style:
+                      const TextStyle(color: AppTheme.requested, fontSize: 13),
                 ),
               ),
-              TextButton(onPressed: _loadHistory, child: const Text('Retry')),
+              TextButton(
+                  onPressed: _loadHistory,
+                  child: Text(context.l10n.adminRetry)),
             ],
           ),
         ..._history
@@ -339,54 +345,71 @@ class _ChaptarrBookDetailSheetState
 
 /// Exported for the wire-vocabulary test: every event name Chaptarr's
 /// history enum can emit must map to a readable label, never the raw name.
-String chaptarrBookHistoryEventLabel(ChaptarrHistoryRecord r) {
+String chaptarrBookHistoryEventLabel(ChaptarrHistoryRecord r,
+    {AppLocalizations? strings}) {
   switch (r.eventType) {
     case 'grabbed':
       final indexer = r.indexer;
       return indexer != null && indexer.isNotEmpty
-          ? 'Grabbed from $indexer'
-          : 'Grabbed';
+          ? (strings ?? lookupAppLocalizations(const Locale('en')))
+              .adminGrabbedFrom((indexer).toString())
+          : (strings ?? lookupAppLocalizations(const Locale('en')))
+              .adminGrabbed;
     // Chaptarr's history enum spells whole-download imports downloadImported;
     // the previously matched downloadFolderImported never occurs on the wire.
     case 'bookFileImported':
     case 'downloadImported':
-      return 'Imported';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminImported;
     case 'bookImportIncomplete':
-      return 'Import incomplete';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminImportIncomplete;
     case 'downloadFailed':
-      return 'Download failed';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminDownloadFailed;
     case 'bookFileDeleted':
-      return 'File deleted';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminFileDeleted;
     case 'bookFileRenamed':
-      return 'File renamed';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminFileRenamed;
     case 'bookFileRetagged':
-      return 'File retagged';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminFileRetagged;
     case 'bookFileConverted':
-      return 'File converted';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminFileConverted;
     case 'bookFileConversionFailed':
-      return 'Conversion failed';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminConversionFailed;
     case 'downloadIgnored':
-      return 'Download ignored';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminDownloadIgnored;
     default:
-      return r.eventType.isEmpty ? 'Event' : r.eventType;
+      return r.eventType.isEmpty
+          ? (strings ?? lookupAppLocalizations(const Locale('en'))).adminEvent
+          : r.eventType;
   }
 }
 
-String _historyTime(DateTime? date) {
+String _historyTime(DateTime? date, {AppLocalizations? strings}) {
   if (date == null) return '';
   final local = date.toLocal();
   final diff = DateTime.now().difference(local);
   final String rel;
   if (diff.inMinutes < 1) {
-    rel = 'Just now';
+    rel = (strings ?? lookupAppLocalizations(const Locale('en'))).adminJustNow;
   } else if (diff.inMinutes < 60) {
-    rel = '${diff.inMinutes}m ago';
+    rel = (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminMAgo((diff.inMinutes).toString());
   } else if (diff.inHours < 24) {
-    rel = '${diff.inHours}h ago';
+    rel = (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminHAgo((diff.inHours).toString());
   } else if (diff.inDays < 30) {
-    rel = '${diff.inDays}d ago';
+    rel = (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminDAgo((diff.inDays).toString());
   } else {
-    rel = DateFormat('MMM d, yyyy').format(local);
+    rel = DateFormat.yMMMd(strings?.dateLocale ?? 'en_US').format(local);
   }
   return '$rel • ${DateFormat('MMM d, yyyy • h:mm a').format(local)}';
 }
@@ -406,7 +429,7 @@ class _HistoryTile extends StatelessWidget {
           Text(
             record.sourceTitle.isNotEmpty
                 ? record.sourceTitle
-                : chaptarrBookHistoryEventLabel(record),
+                : chaptarrBookHistoryEventLabel(record, strings: context.l10n),
             style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 13,
@@ -415,11 +438,11 @@ class _HistoryTile extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 2),
-          Text(_historyTime(record.date),
+          Text(_historyTime(record.date, strings: context.l10n),
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
           const SizedBox(height: 2),
-          Text(chaptarrBookHistoryEventLabel(record),
+          Text(chaptarrBookHistoryEventLabel(record, strings: context.l10n),
               style: const TextStyle(color: AppTheme.requested, fontSize: 12)),
           if (format != BookFormat.unknown) ...[
             const SizedBox(height: 4),

@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -90,7 +91,7 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _error = 'Failed to load book: $e';
+        _error = context.l10n.adminFailedToLoadBook((e).toString());
       });
     }
   }
@@ -103,12 +104,14 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
       await _service.searchBook(chosen.map((record) => record.id).toList());
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(
-              'Searching for ${chaptarrFormatLabel(primary.format)} — ${primary.title}…')));
+          content: Text(context.l10n.adminSearchingFor(
+              (chaptarrFormatLabel(primary.format, strings: context.l10n))
+                  .toString(),
+              (primary.title).toString()))));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Search failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(context.l10n.adminSearchFailed((e).toString()))));
     }
   }
 
@@ -140,8 +143,9 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
   @override
   Widget build(BuildContext context) {
     final primary = _records.first;
-    final title =
-        primary.title.isNotEmpty ? primary.title : (widget.bookTitle ?? 'Book');
+    final title = primary.title.isNotEmpty
+        ? primary.title
+        : (widget.bookTitle ?? context.l10n.adminBook);
     final author = primary.author?.authorName;
 
     return Scaffold(
@@ -215,7 +219,7 @@ class _BookHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final book = records.first;
-    final status = groupedBookStatusLine(records);
+    final status = groupedBookStatusLine(records, strings: context.l10n);
     final release = book.releaseDate;
     return InkWell(
       onTap: onTap,
@@ -278,12 +282,12 @@ class _FormatSection extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final status = bookFileStatusLine(record);
+    final status = bookFileStatusLine(record, strings: context.l10n);
     final file = files.isNotEmpty ? files.first : null;
     final hasFile = file != null;
     final line = hasFile
-        ? '${file.qualityName ?? 'Downloaded'} — ${file.sizeFormatted}'
-        : (loading ? 'Checking…' : status.text);
+        ? '${file.qualityName ?? context.l10n.adminDownloaded} — ${file.sizeFormatted}'
+        : (loading ? context.l10n.adminChecking : status.text);
     final connection = ref.watch(authProvider).valueOrNull?.connection;
     final downloadsEnabled =
         connection?.mediaDownloadsEnabledFor(instanceId) ?? false;
@@ -292,7 +296,7 @@ class _FormatSection extends ConsumerWidget {
         if (files[i].id > 0)
           MediaDownloadChoice(
             fileId: files[i].id,
-            label: _chaptarrFileLabel(files[i], i),
+            label: _chaptarrFileLabel(files[i], i, strings: context.l10n),
             subtitle: _chaptarrFileSubtitle(files[i]),
             reportedPath: files[i].path,
           ),
@@ -312,7 +316,7 @@ class _FormatSection extends ConsumerWidget {
                     children: [
                       ChaptarrFormatBadge(format: record.format),
                       if (record.format == BookFormat.unknown)
-                        const Text('Book',
+                        Text(context.l10n.adminBook,
                             style: TextStyle(
                                 color: AppTheme.textPrimary,
                                 fontSize: 14,
@@ -336,16 +340,24 @@ class _FormatSection extends ConsumerWidget {
               MediaDownloadChoiceButton(
                 instanceId: instanceId,
                 choices: choices,
-                label:
-                    'Download ${chaptarrFormatLabel(record.format)}',
-                sheetTitle:
-                    'Download ${chaptarrFormatLabel(record.format)}',
+                label: context.l10n.adminDownload(
+                    (chaptarrFormatLabel(record.format, strings: context.l10n))
+                        .toString()),
+                sheetTitle: context.l10n.adminDownload(
+                    (chaptarrFormatLabel(record.format, strings: context.l10n))
+                        .toString()),
                 iconOnly: true,
               ),
             Tooltip(
               message: record.monitored
-                  ? 'Tracked ${chaptarrFormatLabel(record.format)}'
-                  : 'Not tracked ${chaptarrFormatLabel(record.format)}',
+                  ? context.l10n.adminTracked((chaptarrFormatLabel(
+                          record.format,
+                          strings: context.l10n))
+                      .toString())
+                  : context.l10n.adminNotTracked((chaptarrFormatLabel(
+                          record.format,
+                          strings: context.l10n))
+                      .toString()),
               child: SizedBox(
                 width: 48,
                 height: 48,
@@ -365,10 +377,14 @@ class _FormatSection extends ConsumerWidget {
   }
 }
 
-String _chaptarrFileLabel(ChaptarrBookFile file, int index) {
+String _chaptarrFileLabel(ChaptarrBookFile file, int index,
+    {AppLocalizations? strings}) {
   final path = file.path?.replaceAll('\\', '/') ?? '';
   final parts = path.split('/').where((part) => part.isNotEmpty).toList();
-  return parts.isEmpty ? 'File ${index + 1}' : parts.last;
+  return parts.isEmpty
+      ? (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminFile((index + 1).toString())
+      : parts.last;
 }
 
 String? _chaptarrFileSubtitle(ChaptarrBookFile file) {

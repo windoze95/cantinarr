@@ -7,6 +7,14 @@ sidebar:
 
 Open **Settings > Account** for choices tied to your Cantinarr user. The account tile identifies the signed-in user and role. A kids account also shows its movie and TV limits there.
 
+## Interface language
+
+Choose **Settings > Account > Language** to follow your device language or select **English** or **Français**. French devices use French automatically; other unsupported languages use English. The choice takes effect immediately and stays on this device when you sign out.
+
+This controls interface text. It does not change the Discover language filter, original media titles, or the country used for streaming services and release dates. Media descriptions, connected-service messages, and assistant replies can still use their source language.
+
+If the language is unexpected, select it explicitly in Settings. Choose **System default** to follow the device again.
+
 ## Passwords and passkeys
 
 Your administrator chooses whether your account can use passwords, passkeys, or both. Manage the permitted methods from your account settings.

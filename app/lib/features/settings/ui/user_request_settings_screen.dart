@@ -1,3 +1,5 @@
+import '../../discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import '../../request/ui/request_allowance_screen.dart';
 import 'dart:async';
 
@@ -42,7 +44,9 @@ class UserRequestSettingsScreen extends ConsumerStatefulWidget {
 class _UserRequestSettingsScreenState
     extends ConsumerState<UserRequestSettingsScreen> {
   late final RequestSettingsService _service;
-  bool get _assignmentModel => ref.read(authProvider).valueOrNull?.connection?.instanceAssignments ?? false;
+  bool get _assignmentModel =>
+      ref.read(authProvider).valueOrNull?.connection?.instanceAssignments ??
+      false;
   late final ContentPolicyService _policyService;
 
   final _draft = SettingsDraft();
@@ -134,7 +138,7 @@ class _UserRequestSettingsScreenState
       }
     }
     final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
-    return m != null ? m.group(1)! : 'Something went wrong';
+    return m != null ? m.group(1)! : context.l10n.notificationSomethingWrong;
   }
 
   Future<void> _load() async {
@@ -277,7 +281,9 @@ class _UserRequestSettingsScreenState
     return catalog
             .movieFor(_ratingRegion)
             .any((o) => o.certification == _maxMovieRating) &&
-        catalog.tvFor(_ratingRegion).any((o) => o.certification == _maxTvRating);
+        catalog
+            .tvFor(_ratingRegion)
+            .any((o) => o.certification == _maxTvRating);
   }
 
   void _onChildToggled(bool on) {
@@ -296,8 +302,8 @@ class _UserRequestSettingsScreenState
   void _applyRegionDefaults(String region) {
     final catalog = _catalog;
     if (catalog == null) return;
-    _maxMovieRating =
-        CertificationCatalog.defaultFor(catalog.movieFor(region))?.certification;
+    _maxMovieRating = CertificationCatalog.defaultFor(catalog.movieFor(region))
+        ?.certification;
     _maxTvRating =
         CertificationCatalog.defaultFor(catalog.tvFor(region))?.certification;
   }
@@ -335,7 +341,8 @@ class _UserRequestSettingsScreenState
         for (final type in _instancesByType().keys)
           type: _defaultInstances[type],
       };
-      if (!_assignmentModel) await _service.updateUserDefaultInstances(widget.userId, defaults);
+      if (!_assignmentModel)
+        await _service.updateUserDefaultInstances(widget.userId, defaults);
       // Same rule for grants: name every visible type so an emptied set
       // clears its rows instead of being silently skipped.
       final grants = <String, List<String>>{
@@ -353,7 +360,7 @@ class _UserRequestSettingsScreenState
         _saving = false;
       });
       ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Saved')));
+          .showSnackBar(SnackBar(content: Text(context.l10n.settingsSaved)));
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -377,7 +384,9 @@ class _UserRequestSettingsScreenState
     // on whatever had loaded at first build.
     ref.watch(authProvider);
     return Scaffold(
-      appBar: AppBar(title: Text('User Settings — ${widget.username}')),
+      appBar: AppBar(
+          title: Text(context.l10n.settingsMessageUserSettingsValue1(
+              (widget.username).toString()))),
       body: CenteredContent(
           child: _isLoading
               ? const Center(
@@ -394,7 +403,8 @@ class _UserRequestSettingsScreenState
                                 textAlign: TextAlign.center),
                             const SizedBox(height: 12),
                             ElevatedButton(
-                                onPressed: _load, child: const Text('Retry')),
+                                onPressed: _load,
+                                child: Text(context.l10n.settingsRetry)),
                           ],
                         ),
                       ),
@@ -409,28 +419,29 @@ class _UserRequestSettingsScreenState
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
         ..._buildKidsSection(),
-        Padding(padding: const EdgeInsets.all(16), child: RequestAllowanceSection(userId: widget.userId, username: widget.username)),
-
-        const Padding(
+        Padding(
+            padding: const EdgeInsets.all(16),
+            child: RequestAllowanceSection(
+                userId: widget.userId, username: widget.username)),
+        Padding(
           padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: Text(
-            'Override the global request defaults for this user. Inherit keeps '
-            'the global default.',
+            context.l10n.settingsOverrideTheGlobalRequestDefaultsForThisUser,
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
         _TriBool(
-          title: 'Require approval',
+          title: context.l10n.settingsRequireApproval,
           subtitle:
-              'Requests from this user must be approved before being sent.',
+              context.l10n.settingsRequestsFromThisUserMustBeApprovedBefore,
           value: _requireApproval,
           inheritedDefault: global.requireApproval,
           onChanged: (v) => setState(() => _requireApproval = v),
         ),
         const Divider(color: AppTheme.border),
         _TriBool(
-          title: 'Allow season choice',
-          subtitle: 'Let this user pick which seasons to request for TV.',
+          title: context.l10n.settingsAllowSeasonChoice,
+          subtitle: context.l10n.settingsLetThisUserPickWhichSeasonsToRequest,
           value: _allowSeasonChoice,
           inheritedDefault: global.allowSeasonChoice,
           onChanged: (v) => setState(() => _allowSeasonChoice = v),
@@ -438,20 +449,20 @@ class _UserRequestSettingsScreenState
         _seasonScopeField(global),
         const Divider(color: AppTheme.border),
         _TriBool(
-          title: 'Allow quality choice',
-          subtitle: 'Let this user pick a quality profile for requests.',
+          title: context.l10n.settingsAllowQualityChoice,
+          subtitle: context.l10n.settingsLetThisUserPickAQualityProfileFor,
           value: _allowQualityChoice,
           inheritedDefault: global.allowQualityChoice,
           onChanged: (v) => setState(() => _allowQualityChoice = v),
         ),
         _qualityField(
-          label: 'Radarr quality',
+          label: context.l10n.settingsRadarrQuality,
           profiles: _radarrProfiles,
           value: _qualityRadarr,
           onChanged: (v) => setState(() => _qualityRadarr = v),
         ),
         _qualityField(
-          label: 'Sonarr quality',
+          label: context.l10n.settingsSonarrQuality,
           profiles: _sonarrProfiles,
           value: _qualitySonarr,
           onChanged: (v) => setState(() => _qualitySonarr = v),
@@ -476,7 +487,7 @@ class _UserRequestSettingsScreenState
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: AppTheme.onAccent),
                     )
-                  : const Text('Save'),
+                  : Text(context.l10n.settingsSave),
             ),
           ),
         ),
@@ -491,10 +502,10 @@ class _UserRequestSettingsScreenState
     if (widget.targetIsAdmin || !_kidsSupported) return const [];
     final catalog = _catalog;
     return [
-      const Padding(
+      Padding(
         padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
         child: Text(
-          'Kids account',
+          context.l10n.settingsKidsAccount,
           style: TextStyle(
             color: AppTheme.textPrimary,
             fontWeight: FontWeight.w600,
@@ -503,7 +514,7 @@ class _UserRequestSettingsScreenState
       ),
       if (_policyUnreadable)
         _kidsNotice(
-          "Couldn't read this user's kids account settings.",
+          context.l10n.settingsCouldnTReadThisUserSKidsAccount,
           onRetry: _loadKidsSection,
         )
       else ...[
@@ -512,34 +523,33 @@ class _UserRequestSettingsScreenState
           onChanged: _kidsLoading || (catalog == null && !_childEnabled)
               ? null
               : _onChildToggled,
-          title: const Text(
-            'Kids account',
+          title: Text(
+            context.l10n.settingsKidsAccount,
             style: TextStyle(
                 color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
           ),
-          subtitle: const Text(
-            'Only shows this user titles within the limits below. The server '
-            'filters every row, search, and page for this account.',
+          subtitle: Text(
+            context.l10n.settingsOnlyShowsThisUserTitlesWithinTheLimits,
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
         if (_childEnabled) ...[
           if (_catalogFailed)
             _kidsNotice(
-              "Couldn't load the ratings list. The stored ratings are kept.",
+              context.l10n.settingsCouldnTLoadTheRatingsListTheStored,
               onRetry: _loadKidsSection,
             ),
           _regionField(),
           _ratingField(
             key: ValueKey('movie-rating-$_ratingRegion'),
-            label: 'Movies up to',
+            label: context.l10n.settingsMoviesUpTo,
             options: catalog?.movieFor(_ratingRegion) ?? const [],
             value: _maxMovieRating,
             onChanged: (v) => setState(() => _maxMovieRating = v),
           ),
           _ratingField(
             key: ValueKey('tv-rating-$_ratingRegion'),
-            label: 'Shows up to',
+            label: context.l10n.settingsShowsUpTo,
             options: catalog?.tvFor(_ratingRegion) ?? const [],
             value: _maxTvRating,
             onChanged: (v) => setState(() => _maxTvRating = v),
@@ -547,20 +557,20 @@ class _UserRequestSettingsScreenState
           SwitchListTile(
             value: _blockUnrated,
             onChanged: (v) => setState(() => _blockUnrated = v),
-            title: const Text(
-              'Hide unrated titles',
+            title: Text(
+              context.l10n.settingsHideUnratedTitles,
               style: TextStyle(
                   color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
             ),
-            subtitle: const Text(
-              'A title with no rating in this region stays hidden.',
+            subtitle: Text(
+              context.l10n.settingsATitleWithNoRatingInThisRegion,
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ),
-          const Padding(
+          Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
             child: Text(
-              'Hidden genres',
+              context.l10n.settingsHiddenGenres,
               style: TextStyle(
                 color: AppTheme.textPrimary,
                 fontWeight: FontWeight.w500,
@@ -568,7 +578,7 @@ class _UserRequestSettingsScreenState
             ),
           ),
           _genreChips(
-            label: 'Movies',
+            label: context.l10n.settingsMovies,
             genres: _movieGenres,
             hidden: _blockedMovieGenres,
             onToggle: (id, on) => setState(() {
@@ -576,7 +586,7 @@ class _UserRequestSettingsScreenState
             }),
           ),
           _genreChips(
-            label: 'Shows',
+            label: context.l10n.settingsShows,
             genres: _tvGenres,
             hidden: _blockedTvGenres,
             onToggle: (id, on) => setState(() {
@@ -598,7 +608,8 @@ class _UserRequestSettingsScreenState
             child: Text(message,
                 style: const TextStyle(color: AppTheme.warning, fontSize: 13)),
           ),
-          TextButton(onPressed: onRetry, child: const Text('Retry')),
+          TextButton(
+              onPressed: onRetry, child: Text(context.l10n.settingsRetry)),
         ],
       ),
     );
@@ -615,8 +626,8 @@ class _UserRequestSettingsScreenState
         initialValue: _ratingRegion,
         isExpanded: true,
         dropdownColor: AppTheme.surfaceVariant,
-        decoration: const InputDecoration(
-          labelText: 'Ratings region',
+        decoration: InputDecoration(
+          labelText: context.l10n.settingsRatingsRegion,
           labelStyle: TextStyle(color: AppTheme.textSecondary),
           enabledBorder: OutlineInputBorder(
             borderSide: BorderSide(color: AppTheme.border),
@@ -677,7 +688,7 @@ class _UserRequestSettingsScreenState
               : null,
           helperMaxLines: 3,
           errorText: !known && !_catalogFailed && options.isNotEmpty
-              ? 'Choose a rating for this region'
+              ? context.l10n.settingsChooseARatingForThisRegion
               : null,
           enabledBorder: const OutlineInputBorder(
             borderSide: BorderSide(color: AppTheme.border),
@@ -713,7 +724,7 @@ class _UserRequestSettingsScreenState
                   fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
           if (genres == null)
-            _kidsNotice("Couldn't load the genre list.",
+            _kidsNotice(context.l10n.settingsCouldnTLoadTheGenreList,
                 onRetry: _loadKidsSection)
           else
             Wrap(
@@ -773,10 +784,10 @@ class _UserRequestSettingsScreenState
     if (grouped.isEmpty) return const [];
     return [
       const Divider(color: AppTheme.border),
-      const Padding(
+      Padding(
         padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
         child: Text(
-          'Default instances',
+          context.l10n.settingsDefaultInstances,
           style: TextStyle(
             color: AppTheme.textPrimary,
             fontWeight: FontWeight.w600,
@@ -786,12 +797,10 @@ class _UserRequestSettingsScreenState
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
         child: Text(
-          _assignmentModel ? 'Assign libraries, then choose a preferred request destination. Without a preference, the accessible global default or first assigned library is used. Defaults do not grant access.' : 'Pin which instance this user defaults to per service. For regular '
-          'users, choosing a Chaptarr instance grants Books access and a '
-          'Lidarr instance grants Music access. Admins can pin their own '
-          'request target here too. Below each default, extra libraries can '
-          'be granted so the user chooses per request — a grant never moves '
-          'the default.',
+          _assignmentModel
+              ? context.l10n
+                  .settingsAssignLibrariesThenChooseAPreferredRequestDestination
+              : context.l10n.settingsPinWhichInstanceThisUserDefaultsToPer,
           style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
         ),
       ),
@@ -817,7 +826,11 @@ class _UserRequestSettingsScreenState
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            _assignmentModel ? 'Assigned ${_serviceLabel(serviceType)} libraries' : 'Also grant ${_serviceLabel(serviceType)} libraries',
+            _assignmentModel
+                ? context.l10n.settingsMessageAssignedValue1Libraries(
+                    (_serviceLabel(serviceType)).toString())
+                : context.l10n.settingsMessageAlsoGrantValue1Libraries(
+                    (_serviceLabel(serviceType)).toString()),
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 13,
@@ -839,7 +852,9 @@ class _UserRequestSettingsScreenState
                   next.add(inst.id);
                 } else {
                   next.remove(inst.id);
-                  if (_assignmentModel && _defaultInstances[serviceType] == inst.id) _defaultInstances[serviceType] = null;
+                  if (_assignmentModel &&
+                      _defaultInstances[serviceType] == inst.id)
+                    _defaultInstances[serviceType] = null;
                 }
                 _instanceGrants[serviceType] = next;
               }),
@@ -857,7 +872,9 @@ class _UserRequestSettingsScreenState
     // also use this setting to pin their own request target.
     final isGrantOnly = serviceType == 'chaptarr' || serviceType == 'lidarr';
     if (_assignmentModel) {
-      instances = instances.where((i) => _instanceGrants[serviceType]?.contains(i.id) == true).toList();
+      instances = instances
+          .where((i) => _instanceGrants[serviceType]?.contains(i.id) == true)
+          .toList();
     }
     final value = _defaultInstances[serviceType];
     // Guard against a stored id that's no longer in the instance list.
@@ -869,7 +886,8 @@ class _UserRequestSettingsScreenState
         isExpanded: true,
         dropdownColor: AppTheme.surfaceVariant,
         decoration: InputDecoration(
-          labelText: 'Default ${_serviceLabel(serviceType)} instance',
+          labelText: context.l10n.settingsMessageDefaultValue1Instance(
+              (_serviceLabel(serviceType)).toString()),
           labelStyle: const TextStyle(color: AppTheme.textSecondary),
           enabledBorder: const OutlineInputBorder(
             borderSide: BorderSide(color: AppTheme.border),
@@ -883,9 +901,12 @@ class _UserRequestSettingsScreenState
           DropdownMenuItem<String?>(
             value: null,
             child: Text(
-              _assignmentModel ? 'Automatic (among assigned instances)' : isGrantOnly
-                  ? 'No per-user ${_serviceLabel(serviceType)} assignment'
-                  : 'Inherit (global default)',
+              _assignmentModel
+                  ? context.l10n.settingsAutomaticAmongAssignedInstances
+                  : isGrantOnly
+                      ? context.l10n.settingsMessageNoPerUserValue1Assignment(
+                          (_serviceLabel(serviceType)).toString())
+                      : context.l10n.settingsInheritGlobalDefault,
               style: const TextStyle(color: AppTheme.textSecondary),
             ),
           ),
@@ -939,15 +960,16 @@ class _UserRequestSettingsScreenState
   }
 
   Widget _seasonScopeField(GlobalRequestSettings global) {
-    final inheritedLabel = SeasonScope.labelFor(global.defaultSeasonScope);
+    final inheritedLabel =
+        browseLabel(context, SeasonScope.labelFor(global.defaultSeasonScope));
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
       child: DropdownButtonFormField<String?>(
         initialValue: _seasonScope,
         isExpanded: true,
         dropdownColor: AppTheme.surfaceVariant,
-        decoration: const InputDecoration(
-          labelText: 'Default season scope',
+        decoration: InputDecoration(
+          labelText: context.l10n.settingsDefaultSeasonScope,
           labelStyle: TextStyle(color: AppTheme.textSecondary),
           enabledBorder: OutlineInputBorder(
             borderSide: BorderSide(color: AppTheme.border),
@@ -960,13 +982,15 @@ class _UserRequestSettingsScreenState
         items: [
           DropdownMenuItem<String?>(
             value: null,
-            child: Text('Inherit ($inheritedLabel)',
+            child: Text(
+                context.l10n
+                    .settingsMessageInheritValue1((inheritedLabel).toString()),
                 style: const TextStyle(color: AppTheme.textSecondary)),
           ),
           ...SeasonScope.choices.map(
             (c) => DropdownMenuItem<String?>(
               value: c.value,
-              child: Text(c.label),
+              child: Text(browseLabel(context, c.label)),
             ),
           ),
         ],
@@ -1001,9 +1025,9 @@ class _UserRequestSettingsScreenState
         ),
         style: const TextStyle(color: AppTheme.textPrimary),
         items: [
-          const DropdownMenuItem<int?>(
+          DropdownMenuItem<int?>(
             value: null,
-            child: Text('Inherit',
+            child: Text(context.l10n.settingsInherit,
                 style: TextStyle(color: AppTheme.textSecondary)),
           ),
           ...profiles.map(
@@ -1037,7 +1061,9 @@ class _TriBool extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final inheritLabel = 'Inherit (${inheritedDefault ? 'On' : 'Off'})';
+    final inheritLabel = context.l10n.settingsMessageInheritValue1(
+        (inheritedDefault ? context.l10n.settingsOn : context.l10n.settingsOff)
+            .toString());
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       child: Column(
@@ -1063,8 +1089,10 @@ class _TriBool extends StatelessWidget {
             spacing: 8,
             children: [
               _chip(inheritLabel, value == null, () => onChanged(null)),
-              _chip('On', value == true, () => onChanged(true)),
-              _chip('Off', value == false, () => onChanged(false)),
+              _chip(context.l10n.settingsOn, value == true,
+                  () => onChanged(true)),
+              _chip(context.l10n.settingsOff, value == false,
+                  () => onChanged(false)),
             ],
           ),
         ],

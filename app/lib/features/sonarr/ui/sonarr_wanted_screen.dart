@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -76,7 +77,7 @@ class _SonarrWantedScreenState extends ConsumerState<SonarrWantedScreen> {
     if (service == null) {
       setState(() {
         _isLoading = false;
-        _error = 'No Sonarr instance configured';
+        _error = context.l10n.adminNoSonarrInstanceConfigured;
       });
       return;
     }
@@ -101,7 +102,7 @@ class _SonarrWantedScreenState extends ConsumerState<SonarrWantedScreen> {
       if (!mounted || gen != _loadGeneration || view != _view) return;
       setState(() {
         _isLoading = false;
-        _error = 'Failed to load wanted episodes: $e';
+        _error = context.l10n.adminFailedToLoadWantedEpisodes((e).toString());
       });
     }
   }
@@ -153,12 +154,14 @@ class _SonarrWantedScreenState extends ConsumerState<SonarrWantedScreen> {
         if (record.seriesTitle != null) record.seriesTitle,
         record.seasonEpisodeLabel,
       ].join(' ');
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Search started for $label')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text(context.l10n.adminSearchStartedFor2((label).toString()))));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to start search: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text(context.l10n.adminFailedToStartSearch((e).toString()))));
     }
   }
 
@@ -172,7 +175,7 @@ class _SonarrWantedScreenState extends ConsumerState<SonarrWantedScreen> {
           instanceId: instanceId,
           seriesId: record.seriesId,
           seasonNumber: record.seasonNumber,
-          seriesTitle: record.seriesTitle ?? 'Series',
+          seriesTitle: record.seriesTitle ?? context.l10n.adminSeries,
         ),
       ),
     );
@@ -205,10 +208,13 @@ class _SonarrWantedScreenState extends ConsumerState<SonarrWantedScreen> {
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
           child: SegmentedButton<_WantedView>(
             showSelectedIcon: false,
-            segments: const [
-              ButtonSegment(value: _WantedView.missing, label: Text('Missing')),
+            segments: [
               ButtonSegment(
-                  value: _WantedView.cutoff, label: Text('Cutoff Unmet')),
+                  value: _WantedView.missing,
+                  label: Text(context.l10n.adminMissing)),
+              ButtonSegment(
+                  value: _WantedView.cutoff,
+                  label: Text(context.l10n.adminCutoffUnmet)),
             ],
             selected: {_view},
             onSelectionChanged: (value) => _onViewChanged(value.first),
@@ -241,8 +247,8 @@ class _SonarrWantedScreenState extends ConsumerState<SonarrWantedScreen> {
             Center(
               child: Text(
                 _view == _WantedView.missing
-                    ? 'Nothing missing — library is healthy'
-                    : 'No cutoff unmet episodes — quality goals met',
+                    ? context.l10n.adminNothingMissingLibraryIsHealthy
+                    : context.l10n.adminNoCutoffUnmetEpisodesQualityGoalsMet,
                 style: const TextStyle(
                     color: AppTheme.textSecondary, fontSize: 16),
               ),
@@ -289,12 +295,14 @@ class _SonarrWantedScreenState extends ConsumerState<SonarrWantedScreen> {
   }
 }
 
-String _airDateLabel(DateTime? airDateUtc) {
-  if (airDateUtc == null) return 'Unaired';
+String _airDateLabel(DateTime? airDateUtc, {AppLocalizations? strings}) {
+  if (airDateUtc == null)
+    return (strings ?? lookupAppLocalizations(const Locale('en'))).adminUnaired;
   final local = airDateUtc.toLocal();
   final now = DateTime.now();
-  if (local.year == now.year) return DateFormat('MMM d').format(local);
-  return DateFormat('MMM d, yyyy').format(local);
+  if (local.year == now.year)
+    return DateFormat.MMMd(strings?.dateLocale ?? 'en_US').format(local);
+  return DateFormat.yMMMd(strings?.dateLocale ?? 'en_US').format(local);
 }
 
 class _WantedTile extends StatelessWidget {
@@ -319,8 +327,9 @@ class _WantedTile extends StatelessWidget {
         record.seasonEpisodeLabel,
         if (record.title != null && record.title!.isNotEmpty) record.title!,
       ].join(' • '),
-      if (showQuality && record.quality != null) 'Current: ${record.quality}',
-      _airDateLabel(record.airDateUtc),
+      if (showQuality && record.quality != null)
+        context.l10n.adminCurrent((record.quality).toString()),
+      _airDateLabel(record.airDateUtc, strings: context.l10n),
     ];
 
     return ListTile(
@@ -339,7 +348,7 @@ class _WantedTile extends StatelessWidget {
         ),
       ),
       title: Text(
-        record.seriesTitle ?? 'Unknown series',
+        record.seriesTitle ?? context.l10n.adminUnknownSeries,
         style: const TextStyle(
             color: AppTheme.textPrimary,
             fontSize: 13.5,
@@ -358,13 +367,13 @@ class _WantedTile extends StatelessWidget {
         children: [
           IconButton(
             icon: const Icon(Icons.search, color: AppTheme.accent, size: 22),
-            tooltip: 'Automatic search',
+            tooltip: context.l10n.adminAutomaticSearch2,
             onPressed: onAutomaticSearch,
           ),
           IconButton(
             icon: const Icon(Icons.manage_search,
                 color: AppTheme.textSecondary, size: 22),
-            tooltip: 'Interactive search',
+            tooltip: context.l10n.adminInteractiveSearch2,
             onPressed: onInteractiveSearch,
           ),
         ],

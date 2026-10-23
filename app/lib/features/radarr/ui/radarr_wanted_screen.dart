@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -76,7 +77,7 @@ class _RadarrWantedScreenState extends ConsumerState<RadarrWantedScreen> {
     if (service == null) {
       setState(() {
         _isLoading = false;
-        _error = 'No Radarr instance configured';
+        _error = context.l10n.adminNoRadarrInstanceConfigured;
       });
       return;
     }
@@ -101,7 +102,7 @@ class _RadarrWantedScreenState extends ConsumerState<RadarrWantedScreen> {
       if (!mounted || gen != _loadGeneration || view != _view) return;
       setState(() {
         _isLoading = false;
-        _error = 'Failed to load wanted movies: $e';
+        _error = context.l10n.adminFailedToLoadWantedMovies((e).toString());
       });
     }
   }
@@ -149,12 +150,14 @@ class _RadarrWantedScreenState extends ConsumerState<RadarrWantedScreen> {
     try {
       await service.searchMovie(movie.id);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Search started for "${movie.title}"')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              context.l10n.adminSearchStartedFor((movie.title).toString()))));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to start search: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text(context.l10n.adminFailedToStartSearch((e).toString()))));
     }
   }
 
@@ -198,10 +201,13 @@ class _RadarrWantedScreenState extends ConsumerState<RadarrWantedScreen> {
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
           child: SegmentedButton<_WantedView>(
             showSelectedIcon: false,
-            segments: const [
-              ButtonSegment(value: _WantedView.missing, label: Text('Missing')),
+            segments: [
               ButtonSegment(
-                  value: _WantedView.cutoff, label: Text('Cutoff Unmet')),
+                  value: _WantedView.missing,
+                  label: Text(context.l10n.adminMissing)),
+              ButtonSegment(
+                  value: _WantedView.cutoff,
+                  label: Text(context.l10n.adminCutoffUnmet)),
             ],
             selected: {_view},
             onSelectionChanged: (value) => _onViewChanged(value.first),
@@ -234,8 +240,8 @@ class _RadarrWantedScreenState extends ConsumerState<RadarrWantedScreen> {
             Center(
               child: Text(
                 _view == _WantedView.missing
-                    ? 'Nothing missing — library is healthy'
-                    : 'No cutoff unmet movies — quality goals met',
+                    ? context.l10n.adminNothingMissingLibraryIsHealthy
+                    : context.l10n.adminNoCutoffUnmetMoviesQualityGoalsMet,
                 style: const TextStyle(
                     color: AppTheme.textSecondary, fontSize: 16),
               ),
@@ -282,21 +288,25 @@ class _RadarrWantedScreenState extends ConsumerState<RadarrWantedScreen> {
   }
 }
 
-String _releaseLabel(RadarrMovie movie) {
+String _releaseLabel(RadarrMovie movie, {AppLocalizations? strings}) {
   // Release dates are calendar dates; format their components directly —
   // converting time zones would shift a midnight-UTC date to the prior day.
-  String fmt(DateTime d) =>
-      DateFormat('MMM d, yyyy').format(DateTime(d.year, d.month, d.day));
+  String fmt(DateTime d) => DateFormat.yMMMd(strings?.dateLocale ?? 'en_US')
+      .format(DateTime(d.year, d.month, d.day));
   if (movie.digitalRelease != null) {
-    return 'Digital ${fmt(movie.digitalRelease!)}';
+    return (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminDigital((fmt(movie.digitalRelease!)).toString());
   }
   if (movie.physicalRelease != null) {
-    return 'Physical ${fmt(movie.physicalRelease!)}';
+    return (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminPhysical((fmt(movie.physicalRelease!)).toString());
   }
   if (movie.inCinemas != null) {
-    return 'In cinemas ${fmt(movie.inCinemas!)}';
+    return (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminInCinemas2((fmt(movie.inCinemas!)).toString());
   }
-  return movie.status ?? 'Unreleased';
+  return movie.status ??
+      (strings ?? lookupAppLocalizations(const Locale('en'))).adminUnreleased;
 }
 
 class _WantedTile extends StatelessWidget {
@@ -318,8 +328,8 @@ class _WantedTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final subtitleParts = [
       if (showQuality && movie.movieFile?.quality != null)
-        'Current: ${movie.movieFile!.quality}',
-      _releaseLabel(movie),
+        context.l10n.adminCurrent((movie.movieFile!.quality).toString()),
+      _releaseLabel(movie, strings: context.l10n),
     ];
 
     return ListTile(
@@ -357,13 +367,13 @@ class _WantedTile extends StatelessWidget {
         children: [
           IconButton(
             icon: const Icon(Icons.search, color: AppTheme.accent, size: 22),
-            tooltip: 'Automatic search',
+            tooltip: context.l10n.adminAutomaticSearch2,
             onPressed: onAutomaticSearch,
           ),
           IconButton(
             icon: const Icon(Icons.manage_search,
                 color: AppTheme.textSecondary, size: 22),
-            tooltip: 'Interactive search',
+            tooltip: context.l10n.adminInteractiveSearch2,
             onPressed: onInteractiveSearch,
           ),
         ],

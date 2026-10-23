@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -40,8 +41,7 @@ class _ServerPushNotificationsScreenState
       }
     } catch (_) {
       if (mounted) {
-        setState(() =>
-            _error = 'Could not read server notification settings. Try again.');
+        setState(() => _error = context.l10n.notificationServerReadError);
       }
     }
   }
@@ -59,8 +59,7 @@ class _ServerPushNotificationsScreenState
       if (mounted) setState(() => _policy = saved);
     } catch (_) {
       if (mounted) {
-        setState(() =>
-            _error = 'Could not save server notification settings. Try again.');
+        setState(() => _error = context.l10n.notificationServerSaveError);
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -71,7 +70,7 @@ class _ServerPushNotificationsScreenState
   Widget build(BuildContext context) {
     final policy = _policy;
     return Scaffold(
-      appBar: AppBar(title: const Text('Server Push Notifications')),
+      appBar: AppBar(title: Text(context.l10n.notificationServerPush)),
       body: CenteredContent(
           child: policy == null
               ? Center(
@@ -80,7 +79,8 @@ class _ServerPushNotificationsScreenState
                       : Column(mainAxisSize: MainAxisSize.min, children: [
                           Text(_error!, textAlign: TextAlign.center),
                           TextButton(
-                              onPressed: _load, child: const Text('Retry')),
+                              onPressed: _load,
+                              child: Text(context.l10n.settingsRetry)),
                         ]))
               : ListView(
                   cacheExtent:
@@ -88,17 +88,16 @@ class _ServerPushNotificationsScreenState
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   children: [
                     if (_saving) const LinearProgressIndicator(),
-                    const Padding(
+                    Padding(
                         padding: EdgeInsets.symmetric(horizontal: 16),
-                        child: Text(
-                            'Choose what this server may send. Each person can turn off all push notifications or any allowed type in their own settings.')),
+                        child: Text(context.l10n.notificationServerPolicyHelp)),
                     SettingsHighlight(
                         anchorId: 'push-server.enabled',
                         highlightId: widget.highlightId,
                         child: SwitchListTile(
-                          title: const Text('Allow push notifications'),
+                          title: Text(context.l10n.notificationAllowPush),
                           subtitle:
-                              const Text('Applies to everyone on this server.'),
+                              Text(context.l10n.notificationAppliesEveryone),
                           value: policy.enabled,
                           onChanged: _saving
                               ? null
@@ -113,23 +112,26 @@ class _ServerPushNotificationsScreenState
                               style: TextStyle(
                                   color: Theme.of(context).colorScheme.error))),
                     if (!policy.enabled)
-                      const Padding(
+                      Padding(
                           padding: EdgeInsets.all(16),
-                          child: Text(
-                              'Push notifications are off. The choices below are saved for when you turn them back on.')),
+                          child: Text(context.l10n.notificationServerOffSaved)),
                     for (final admin in [false, true]) ...[
                       Padding(
                           padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
-                          child: Text(admin ? 'Administrators' : 'Everyone',
+                          child: Text(
+                              admin
+                                  ? context.l10n.notificationAdministrators
+                                  : context.l10n.notificationEveryone,
                               style: Theme.of(context).textTheme.titleMedium)),
                       for (final category
                           in pushCategories.where((c) => c.admin == admin))
                         SettingsHighlight(
-                            anchorId: 'push-server.${category.key.replaceAll('_', '-')}',
+                            anchorId:
+                                'push-server.${category.key.replaceAll('_', '-')}',
                             highlightId: widget.highlightId,
                             child: SwitchListTile(
-                              title:
-                                  Text(category.serverTitle ?? category.title),
+                              title: Text(
+                                  category.localizedServerTitle(context.l10n)),
                               value: policy.categories[category.key] ?? false,
                               onChanged: _saving || !policy.enabled
                                   ? null

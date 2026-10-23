@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
@@ -18,19 +19,26 @@ class DownloadsMenuBadge extends ConsumerWidget {
     // The badge is a number or nothing. When the server cannot produce an
     // exact count (a source could not be read), the Content view says so;
     // a placeholder here would only read as a help button.
-    final count = value?.complete == true && value?.stale == false ? value?.count : null;
+    final count =
+        value?.complete == true && value?.stale == false ? value?.count : null;
     if (count == null || count == 0) return const SizedBox.shrink();
     return Tooltip(
-      message: '$count active downloads',
+      message: context.l10n.adminActiveDownloads((count).toString()),
       child: Container(
         key: const Key('downloads-menu-count'),
         margin: const EdgeInsets.only(right: 3),
         constraints: const BoxConstraints(maxWidth: 30),
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-        decoration: BoxDecoration(color: AppTheme.accent.withValues(alpha: 0.16),
+        decoration: BoxDecoration(
+            color: AppTheme.accent.withValues(alpha: 0.16),
             borderRadius: BorderRadius.circular(12)),
-        child: FittedBox(fit: BoxFit.scaleDown, child: Text(count > 99 ? '99+' : '$count',
-            style: const TextStyle(color: AppTheme.accent, fontSize: 12, fontWeight: FontWeight.w600))),
+        child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(count > 99 ? '99+' : '$count',
+                style: const TextStyle(
+                    color: AppTheme.accent,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600))),
       ),
     );
   }

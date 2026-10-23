@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -58,8 +59,8 @@ class _MediaDownloadButtonState extends ConsumerState<MediaDownloadButton> {
       final launcher = ref.read(mediaDownloadLauncherProvider);
       final opened = await launcher(ticket.url);
       if (!opened) {
-        throw const MediaDownloadException(
-          'Could not open the download. Try again.',
+        throw MediaDownloadException(
+          context.l10n.mediaCouldNotOpenTheDownloadTryAgain,
         );
       }
     } on MediaDownloadException catch (error) {
@@ -69,8 +70,8 @@ class _MediaDownloadButtonState extends ConsumerState<MediaDownloadButton> {
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Could not prepare the download. Try again.'),
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(context.l10n.mediaCouldNotPrepareTheDownloadTryAgain),
         ));
       }
     } finally {
@@ -91,8 +92,8 @@ class _MediaDownloadButtonState extends ConsumerState<MediaDownloadButton> {
     final path = widget.reportedPath?.trim() ?? '';
     if (path.isNotEmpty) {
       final key = MediaCoverageNotifier.keyFor(widget.instanceId, path);
-      final verdict = ref
-          .watch(mediaCoverageProvider.select((verdicts) => verdicts[key]));
+      final verdict =
+          ref.watch(mediaCoverageProvider.select((verdicts) => verdicts[key]));
       ref.read(mediaCoverageProvider.notifier).ensure(widget.instanceId, path);
       if (verdict == false) return const SizedBox.shrink();
     }
@@ -149,8 +150,7 @@ class MediaDownloadChoiceButton extends ConsumerWidget {
       final path = choice.reportedPath?.trim() ?? '';
       if (path.isNotEmpty) {
         notifier.ensure(instanceId, path);
-        if (verdicts[MediaCoverageNotifier.keyFor(instanceId, path)] ==
-            false) {
+        if (verdicts[MediaCoverageNotifier.keyFor(instanceId, path)] == false) {
           continue;
         }
       }
@@ -218,7 +218,7 @@ class MediaDownloadChoiceButton extends ConsumerWidget {
                 trailing: MediaDownloadButton(
                   instanceId: instanceId,
                   fileId: choice.fileId,
-                  label: 'Download ${choice.label}',
+                  label: context.l10n.adminDownload((choice.label).toString()),
                   iconOnly: true,
                   reportedPath: choice.reportedPath,
                 ),

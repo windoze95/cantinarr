@@ -1,9 +1,11 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:math' as math;
 import 'dart:ui' as ui show ImageFilter;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show OverScrollHeaderStretchConfiguration;
+import 'package:flutter/rendering.dart'
+    show OverScrollHeaderStretchConfiguration;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/automation/web_semantics.dart';
@@ -183,7 +185,8 @@ class _MediaHeroBodyState extends State<_MediaHeroBody> {
     if (!_pointerParallaxEnabled) return;
     final dx = (event.localPosition.dx / widget.width - 0.5) * 2;
     final dy = (event.localPosition.dy / widget.height - 0.5) * 2;
-    _pointerTarget.value = Offset(dx.clamp(-1.0, 1.0) * 8, dy.clamp(-1.0, 1.0) * 5);
+    _pointerTarget.value =
+        Offset(dx.clamp(-1.0, 1.0) * 8, dy.clamp(-1.0, 1.0) * 5);
   }
 
   @override
@@ -483,13 +486,13 @@ class _BackdropPlaneState extends State<_BackdropPlane>
 
   @override
   Widget build(BuildContext context) => kIsWeb
-      ? Consumer(builder: (context, ref, _) => _buildImage(
-          context, auth: ref.watch(authProvider).valueOrNull))
+      ? Consumer(
+          builder: (context, ref, _) =>
+              _buildImage(context, auth: ref.watch(authProvider).valueOrNull))
       : _buildImage(context);
 
   Widget _buildImage(BuildContext context, {AuthState? auth}) {
-    final physicalWidth =
-        widget.width * MediaQuery.devicePixelRatioOf(context);
+    final physicalWidth = widget.width * MediaQuery.devicePixelRatioOf(context);
     // Decode capped near the display size, quantized so window resizes reuse
     // the cached decode instead of re-decoding per pixel of width change.
     final cacheWidth = (physicalWidth / 320).ceil() * 320;
@@ -683,20 +686,17 @@ class _HeroForeground extends StatelessWidget {
                             TextSpan(
                               text: ' ($year)',
                               style: TextStyle(
-                                fontSize: expandedLayout
-                                    ? 28
-                                    : mobileFontSize * 0.6,
+                                fontSize:
+                                    expandedLayout ? 28 : mobileFontSize * 0.6,
                                 fontWeight: FontWeight.w600,
-                                letterSpacing:
-                                    expandedLayout ? -0.5 : -0.25,
+                                letterSpacing: expandedLayout ? -0.5 : -0.25,
                                 color: AppTheme.textPrimary
                                     .withValues(alpha: 0.75),
                               ),
                             ),
                         ],
                       ),
-                      style:
-                          Theme.of(context).textTheme.displaySmall?.copyWith(
+                      style: Theme.of(context).textTheme.displaySmall?.copyWith(
                         color: AppTheme.textPrimary,
                         fontSize: expandedLayout ? 56 : mobileFontSize,
                         height: 1.02,
@@ -706,8 +706,7 @@ class _HeroForeground extends StatelessWidget {
                           Shadow(color: Colors.black, blurRadius: 16),
                         ],
                       ),
-                      maxLines:
-                          expandedLayout ? 2 : (textScale > 1.3 ? 4 : 3),
+                      maxLines: expandedLayout ? 2 : (textScale > 1.3 ? 4 : 3),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
@@ -910,7 +909,7 @@ class _MarqueeBar extends StatelessWidget {
                 child: IconButton(
                   icon: const Icon(Icons.arrow_back),
                   color: AppTheme.textPrimary,
-                  tooltip: 'Back',
+                  tooltip: context.l10n.browseBack,
                   onPressed: onBack,
                 ),
               ),

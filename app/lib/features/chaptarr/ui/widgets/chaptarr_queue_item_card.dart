@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/status_pill.dart';
@@ -5,40 +6,56 @@ import '../../data/chaptarr_models.dart';
 import 'format_badge.dart';
 
 /// Short status label for a queue item (e.g. "Import pending", "Downloading").
-String chaptarrQueueStatusLabel(ChaptarrQueueItem item) {
+String chaptarrQueueStatusLabel(ChaptarrQueueItem item,
+    {AppLocalizations? strings}) {
   if (item.trackedDownloadStatus == 'error' || item.status == 'failed') {
-    return 'Error';
+    return (strings ?? lookupAppLocalizations(const Locale('en'))).adminError;
   }
   switch (item.trackedDownloadState) {
     case 'importPending':
-      return 'Import pending';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminImportPending;
     case 'importing':
-      return 'Importing';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminImporting;
     case 'imported':
-      return 'Imported';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminImported;
     case 'importBlocked':
-      return 'Import blocked';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminImportBlocked;
     case 'failedPending':
-      return 'Failed';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminFailed2;
   }
-  if (item.trackedDownloadStatus == 'warning') return 'Warning';
+  if (item.trackedDownloadStatus == 'warning')
+    return (strings ?? lookupAppLocalizations(const Locale('en'))).adminWarning;
   switch (item.status) {
     case 'downloading':
-      return 'Downloading';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminDownloading;
     case 'paused':
-      return 'Paused';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminPaused;
     case 'queued':
-      return 'Queued';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminQueued;
     case 'completed':
-      return 'Completed';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminCompleted;
     case 'delay':
-      return 'Delayed';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminDelayed;
     case 'downloadClientUnavailable':
-      return 'Client unavailable';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminClientUnavailable;
     case 'warning':
-      return 'Warning';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminWarning;
     default:
-      return item.status.isEmpty ? 'Unknown' : item.status;
+      return item.status.isEmpty
+          ? (strings ?? lookupAppLocalizations(const Locale('en'))).adminUnknown
+          : item.status;
   }
 }
 
@@ -155,7 +172,7 @@ class ChaptarrQueueItemCard extends StatelessWidget {
                   onSelected: (value) {
                     if (value == 'remove') onRemove!();
                   },
-                  itemBuilder: (_) => const [
+                  itemBuilder: (_) => [
                     PopupMenuItem(
                       value: 'remove',
                       child: Row(
@@ -163,7 +180,7 @@ class ChaptarrQueueItemCard extends StatelessWidget {
                           Icon(Icons.delete_outline,
                               size: 18, color: AppTheme.error),
                           SizedBox(width: 8),
-                          Text('Remove'),
+                          Text(context.l10n.adminRemove),
                         ],
                       ),
                     ),
@@ -181,7 +198,8 @@ class ChaptarrQueueItemCard extends StatelessWidget {
               runSpacing: 4,
               children: [
                 StatusPill(
-                    text: chaptarrQueueStatusLabel(item), color: statusColor),
+                    text: chaptarrQueueStatusLabel(item, strings: context.l10n),
+                    color: statusColor),
                 if (item.format != BookFormat.unknown)
                   ChaptarrFormatBadge(format: item.format),
                 StatusPill(
@@ -223,8 +241,10 @@ class ChaptarrQueueItemCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    '${(item.progress * 100).toStringAsFixed(1)}% • '
-                    '${item.downloadedFormatted} of ${item.sizeFormatted}',
+                    context.l10n.adminOf2(
+                        ((item.progress * 100).toStringAsFixed(1)).toString(),
+                        (item.downloadedFormatted).toString(),
+                        (item.sizeFormatted).toString()),
                     style: const TextStyle(
                         color: AppTheme.textSecondary, fontSize: 11),
                     overflow: TextOverflow.ellipsis,
@@ -311,8 +331,9 @@ class _IssuesButton extends StatelessWidget {
             Expanded(
               child: Text(
                 count == 1
-                    ? '1 message — tap to resolve'
-                    : '$count messages — tap to resolve',
+                    ? context.l10n.admin1MessageTapToResolve
+                    : context.l10n
+                        .adminMessagesTapToResolve((count).toString()),
                 style: const TextStyle(
                     color: AppTheme.requested,
                     fontSize: 12,

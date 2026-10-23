@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../discover/data/music_discovery_service.dart';
@@ -342,7 +343,8 @@ class _ErrorContainer extends StatelessWidget {
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
                 icon: const Icon(Icons.refresh_rounded, size: 16),
-                label: const Text('Retry', style: TextStyle(fontSize: 13)),
+                label: Text(context.l10n.settingsRetry,
+                    style: TextStyle(fontSize: 13)),
               ),
             )
           else
@@ -508,17 +510,24 @@ class _ModelFallbackCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(10),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('AI model fallback',
+          Text(context.l10n.aiFallback,
               style: TextStyle(fontWeight: FontWeight.w600)),
-          Text(
-              'Selected: ${notice.selectedModel}\n${notice.status == 'used' ? 'Using' : notice.status == 'failed' ? 'Failed replacement' : 'Replacement attempt'}: ${notice.replacementModel}'),
+          Text(context.l10n.settingsMessageSelectedValue1Value2Value3(
+              (notice.selectedModel).toString(),
+              (notice.status == 'used'
+                      ? context.l10n.settingsUsing
+                      : notice.status == 'failed'
+                          ? context.l10n.settingsFailedReplacement
+                          : context.l10n.settingsReplacementAttempt)
+                  .toString(),
+              (notice.replacementModel).toString())),
           Text(
               '${notice.reason} ${notice.recommendationSource}. ${notice.differences}'),
           TextButton(
             onPressed: () => context.push('/settings/ai'),
             child: Text(notice.source == 'personal'
-                ? 'Review personal AI settings'
-                : 'Review included AI access'),
+                ? context.l10n.aiReviewPersonalSettings
+                : context.l10n.aiReviewIncludedAccess),
           ),
         ]),
       );

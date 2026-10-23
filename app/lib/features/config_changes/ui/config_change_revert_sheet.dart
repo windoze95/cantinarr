@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/operations_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -23,16 +25,15 @@ Future<bool> showConfigChangeRevertConfirmation(
         children: [
           Text(
             change.canRestore
-                ? 'Restore previous settings?'
-                : 'Restore unavailable',
+                ? context.l10n.opsRestorePreviousSettingsMessage
+                : context.l10n.opsRestoreUnavailable,
             style: Theme.of(sheetContext).textTheme.titleLarge,
           ),
           const SizedBox(height: 8),
           Text(
             change.canRestore
-                ? 'Cantinarr will restore only the settings recorded below. '
-                    'The restore will be added to change history.'
-                : _unavailableReason(change),
+                ? context.l10n.opsCantinarrWillRestoreOnlyTheSettingsRecorded
+                : _unavailableReason(context, change),
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 14,
@@ -45,8 +46,7 @@ Future<bool> showConfigChangeRevertConfirmation(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
               color: AppTheme.surfaceVariant,
-              borderRadius:
-                  BorderRadius.circular(AppTheme.radiusMedium),
+              borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
               border: Border.all(color: AppTheme.border),
             ),
             child: ConfigChangeTarget(
@@ -56,8 +56,8 @@ Future<bool> showConfigChangeRevertConfirmation(
           ),
           if (change.changes.isNotEmpty) ...[
             const SizedBox(height: 18),
-            const Text(
-              'Settings to restore',
+            Text(
+              context.l10n.opsSettingsToRestore,
               style: TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 13,
@@ -65,8 +65,7 @@ Future<bool> showConfigChangeRevertConfirmation(
               ),
             ),
             const SizedBox(height: 6),
-            for (final field in change.changes)
-              _ReverseDiffRow(field: field),
+            for (final field in change.changes) _ReverseDiffRow(field: field),
           ],
           const SizedBox(height: 20),
           if (change.canRestore)
@@ -74,12 +73,12 @@ Future<bool> showConfigChangeRevertConfirmation(
               final narrow = constraints.maxWidth < 390;
               final cancel = OutlinedButton(
                 onPressed: () => Navigator.of(sheetContext).pop(false),
-                child: const Text('Cancel'),
+                child: Text(context.l10n.opsCancel),
               );
               final restore = ElevatedButton.icon(
                 onPressed: () => Navigator.of(sheetContext).pop(true),
                 icon: const Icon(Icons.restore_rounded, size: 18),
-                label: const Text('Restore previous settings'),
+                label: Text(context.l10n.opsRestorePreviousSettings),
               );
               if (narrow) {
                 return Column(
@@ -97,7 +96,7 @@ Future<bool> showConfigChangeRevertConfirmation(
               alignment: Alignment.centerRight,
               child: ElevatedButton(
                 onPressed: () => Navigator.of(sheetContext).pop(false),
-                child: const Text('Done'),
+                child: Text(context.l10n.opsDone),
               ),
             ),
         ],
@@ -107,20 +106,17 @@ Future<bool> showConfigChangeRevertConfirmation(
   return confirmed == true;
 }
 
-String _unavailableReason(ConfigChange change) {
+String _unavailableReason(BuildContext context, ConfigChange change) {
   if (change.currentError != null) return change.currentError!;
   if (change.isAppliedRestore) {
-    return 'This record is the completed restore. It stays in change history '
-        'and cannot be restored again.';
+    return context.l10n.opsThisRecordIsTheCompletedRestoreIt;
   }
   return switch (change.currentStatus) {
     ConfigCurrentStatus.different =>
-      'These settings changed after Cantinarr applied them. Review the live '
-          'values before deciding what to keep.',
+      context.l10n.opsTheseSettingsChangedAfterCantinarrAppliedThem,
     ConfigCurrentStatus.unavailable =>
-      'Cantinarr could not read the connected app, so it cannot safely restore '
-          'the recorded values.',
-    _ => 'This change cannot be restored safely.',
+      context.l10n.opsCantinarrCouldNotReadTheConnectedApp,
+    _ => context.l10n.opsThisChangeCannotBeRestoredSafely,
   };
 }
 
@@ -146,7 +142,7 @@ class _ReverseDiffRow extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              field.label,
+              localizeOperationsLabel(context, field.label),
               style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 12,
@@ -155,7 +151,7 @@ class _ReverseDiffRow extends StatelessWidget {
             ),
             const SizedBox(height: 5),
             SelectableText(
-              '${formatConfigValue(current)}  →  ${formatConfigValue(field.before)}',
+              '${localizedConfigValue(context, current)}  →  ${localizedConfigValue(context, field.before)}',
               style: const TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 12,

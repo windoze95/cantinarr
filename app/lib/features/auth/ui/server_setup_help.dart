@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,9 +6,8 @@ import 'package:url_launcher/url_launcher.dart';
 
 const cantinarrSetupGuideUrl = 'https://docs.cantinarr.com/start/quickstart/';
 
-final serverSetupGuideLauncherProvider =
-    Provider<Future<bool> Function(Uri)>((ref) =>
-        (uri) => launchUrl(uri, mode: LaunchMode.externalApplication));
+final serverSetupGuideLauncherProvider = Provider<Future<bool> Function(Uri)>(
+    (ref) => (uri) => launchUrl(uri, mode: LaunchMode.externalApplication));
 
 class ServerSetupHelp extends ConsumerWidget {
   const ServerSetupHelp({super.key});
@@ -24,13 +24,12 @@ class ServerSetupHelp extends ConsumerWidget {
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Open the setup guide'),
-        content: const Column(
+        title: Text(context.l10n.authOpenSetupGuide),
+        content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Could not open your browser. Copy this address and open it '
-                'in a browser to install your Cantinarr server.'),
+            Text(context.l10n.authBrowserSetupHelp),
             SizedBox(height: 16),
             SelectableText(cantinarrSetupGuideUrl),
           ],
@@ -38,7 +37,7 @@ class ServerSetupHelp extends ConsumerWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
+            child: Text(context.l10n.authClose),
           ),
           TextButton(
             onPressed: () async {
@@ -47,11 +46,11 @@ class ServerSetupHelp extends ConsumerWidget {
               if (!context.mounted) return;
               final messenger = ScaffoldMessenger.of(context);
               Navigator.of(context).pop();
-              messenger.showSnackBar(const SnackBar(
-                content: Text('Setup guide address copied'),
+              messenger.showSnackBar(SnackBar(
+                content: Text(context.l10n.authSetupAddressCopied),
               ));
             },
-            child: const Text('Copy address'),
+            child: Text(context.l10n.authCopyAddress),
           ),
         ],
       ),
@@ -63,13 +62,13 @@ class ServerSetupHelp extends ConsumerWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text('Setting up your own server?',
+        Text(context.l10n.authOwnServerQuestion,
             style: Theme.of(context).textTheme.bodyMedium),
         TextButton.icon(
           onPressed: () => _open(context, ref),
           icon: const Icon(Icons.open_in_new, size: 16),
-          label: const Text('Set up a Cantinarr server',
-              textAlign: TextAlign.center),
+          label:
+              Text(context.l10n.authSetupServer, textAlign: TextAlign.center),
         ),
       ],
     );

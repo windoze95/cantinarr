@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/auth_messages.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -43,7 +45,7 @@ class _PasskeyManagementScreenState
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = 'Failed to load passkeys';
+          _error = context.l10n.authLoadPasskeysError;
           _isLoading = false;
         });
       }
@@ -61,18 +63,17 @@ class _PasskeyManagementScreenState
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Remove Passkey'),
-        content: Text(
-            'Remove "${passkey.name}"? You won\'t be able to use it to sign in anymore.'),
+        title: Text(context.l10n.authRemovePasskey),
+        content: Text(context.l10n.authRemovePasskeyPrompt(passkey.name)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
+            child: Text(context.l10n.authCancel),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error),
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Remove'),
+            child: Text(context.l10n.authRemove),
           ),
         ],
       ),
@@ -84,14 +85,15 @@ class _PasskeyManagementScreenState
       await ref.read(authProvider.notifier).deletePasskey(passkey.id);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Passkey removed')),
+          SnackBar(content: Text(context.l10n.authPasskeyRemoved)),
         );
         _loadPasskeys();
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to remove passkey: $e')),
+          SnackBar(
+              content: Text(context.l10n.authRemovePasskeyError(e.toString()))),
         );
       }
     }
@@ -100,7 +102,7 @@ class _PasskeyManagementScreenState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Passkeys')),
+      appBar: AppBar(title: Text(context.l10n.authPasskeys)),
       body: CenteredContent(
           child: _isLoading
               ? const Center(child: CircularProgressIndicator())
@@ -109,12 +111,12 @@ class _PasskeyManagementScreenState
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(_error!,
+                          Text(localizeAuthMessage(context, _error!),
                               style: const TextStyle(color: AppTheme.error)),
                           const SizedBox(height: 16),
                           ElevatedButton(
                               onPressed: _loadPasskeys,
-                              child: const Text('Retry')),
+                              child: Text(context.l10n.authRetry)),
                         ],
                       ),
                     )
@@ -130,16 +132,16 @@ class _PasskeyManagementScreenState
 
   Widget _buildList() {
     if (_passkeys == null || _passkeys!.isEmpty) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(Icons.fingerprint, size: 48, color: AppTheme.textSecondary),
             SizedBox(height: 16),
-            Text('No passkeys registered',
+            Text(context.l10n.authNoPasskeys,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
             SizedBox(height: 8),
-            Text('Tap + to add a passkey',
+            Text(context.l10n.authAddPasskeyHint,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 14)),
           ],
         ),
@@ -171,8 +173,11 @@ class _PasskeyManagementScreenState
                 style: const TextStyle(
                     color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),
             subtitle: Text(
-              'Added ${_formatDate(passkey.createdAt)}'
-              '${passkey.lastUsedAt != null ? ' \u00b7 Last used ${_formatDate(passkey.lastUsedAt!)}' : ''}',
+              context.l10n.authPasskeyAdded(_formatDate(passkey.createdAt)) +
+                  (passkey.lastUsedAt != null
+                      ? context.l10n
+                          .authPasskeyLastUsed(_formatDate(passkey.lastUsedAt!))
+                      : ''),
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
@@ -193,10 +198,10 @@ class _PasskeyManagementScreenState
       final now = DateTime.now();
       final diff = now.difference(date);
 
-      if (diff.inDays == 0) return 'today';
-      if (diff.inDays == 1) return 'yesterday';
-      if (diff.inDays < 30) return '${diff.inDays}d ago';
-      return '${date.month}/${date.day}/${date.year}';
+      if (diff.inDays == 0) return context.l10n.authToday;
+      if (diff.inDays == 1) return context.l10n.authYesterday;
+      if (diff.inDays < 30) return context.l10n.authDaysAgo(diff.inDays);
+      return MaterialLocalizations.of(context).formatMediumDate(date);
     } catch (_) {
       return isoDate;
     }

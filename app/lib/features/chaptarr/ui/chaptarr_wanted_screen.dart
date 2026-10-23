@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -74,7 +75,7 @@ class _ChaptarrWantedScreenState extends ConsumerState<ChaptarrWantedScreen> {
     if (service == null) {
       setState(() {
         _isLoading = false;
-        _error = 'No Chaptarr instance configured';
+        _error = context.l10n.adminNoChaptarrInstanceConfigured;
       });
       return;
     }
@@ -99,7 +100,7 @@ class _ChaptarrWantedScreenState extends ConsumerState<ChaptarrWantedScreen> {
       if (!mounted || gen != _loadGeneration || view != _view) return;
       setState(() {
         _isLoading = false;
-        _error = 'Failed to load wanted books: $e';
+        _error = context.l10n.adminFailedToLoadWantedBooks((e).toString());
       });
     }
   }
@@ -152,12 +153,14 @@ class _ChaptarrWantedScreenState extends ConsumerState<ChaptarrWantedScreen> {
         if (record.title != null) record.title,
       ].whereType<String>().join(' — ');
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content:
-              Text('Search started${label.isNotEmpty ? ' for $label' : ''}')));
+          content: Text(label.isNotEmpty
+              ? context.l10n.adminSearchStartedFor(label)
+              : context.l10n.adminSearchStarted(''))));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to start search: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text(context.l10n.adminFailedToStartSearch((e).toString()))));
     }
   }
 
@@ -173,10 +176,13 @@ class _ChaptarrWantedScreenState extends ConsumerState<ChaptarrWantedScreen> {
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
           child: SegmentedButton<_WantedView>(
             showSelectedIcon: false,
-            segments: const [
-              ButtonSegment(value: _WantedView.missing, label: Text('Missing')),
+            segments: [
               ButtonSegment(
-                  value: _WantedView.cutoff, label: Text('Cutoff Unmet')),
+                  value: _WantedView.missing,
+                  label: Text(context.l10n.adminMissing)),
+              ButtonSegment(
+                  value: _WantedView.cutoff,
+                  label: Text(context.l10n.adminCutoffUnmet)),
             ],
             selected: {_view},
             onSelectionChanged: (value) => _onViewChanged(value.first),
@@ -209,8 +215,8 @@ class _ChaptarrWantedScreenState extends ConsumerState<ChaptarrWantedScreen> {
             Center(
               child: Text(
                 _view == _WantedView.missing
-                    ? 'Nothing missing — library is healthy'
-                    : 'No cutoff unmet books — quality goals met',
+                    ? context.l10n.adminNothingMissingLibraryIsHealthy
+                    : context.l10n.adminNoCutoffUnmetBooksQualityGoalsMet,
                 style: const TextStyle(
                     color: AppTheme.textSecondary, fontSize: 16),
               ),
@@ -254,12 +260,15 @@ class _ChaptarrWantedScreenState extends ConsumerState<ChaptarrWantedScreen> {
   }
 }
 
-String _releaseDateLabel(DateTime? releaseDate) {
-  if (releaseDate == null) return 'No release date';
+String _releaseDateLabel(DateTime? releaseDate, {AppLocalizations? strings}) {
+  if (releaseDate == null)
+    return (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminNoReleaseDate;
   final local = releaseDate.toLocal();
   final now = DateTime.now();
-  if (local.year == now.year) return DateFormat('MMM d').format(local);
-  return DateFormat('MMM d, yyyy').format(local);
+  if (local.year == now.year)
+    return DateFormat.MMMd(strings?.dateLocale ?? 'en_US').format(local);
+  return DateFormat.yMMMd(strings?.dateLocale ?? 'en_US').format(local);
 }
 
 class _WantedTile extends StatelessWidget {
@@ -275,13 +284,13 @@ class _WantedTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final subtitleParts = [
       if (record.title != null && record.title!.isNotEmpty) record.title!,
-      _releaseDateLabel(record.releaseDate),
+      _releaseDateLabel(record.releaseDate, strings: context.l10n),
     ];
 
     return ListTile(
       contentPadding: const EdgeInsets.only(left: 16, right: 4),
       title: Text(
-        record.authorTitle ?? record.title ?? 'Unknown author',
+        record.authorTitle ?? record.title ?? context.l10n.adminUnknownAuthor,
         style: const TextStyle(
             color: AppTheme.textPrimary,
             fontSize: 13.5,
@@ -297,7 +306,7 @@ class _WantedTile extends StatelessWidget {
       ),
       trailing: IconButton(
         icon: const Icon(Icons.search, color: AppTheme.accent, size: 22),
-        tooltip: 'Find automatically',
+        tooltip: context.l10n.adminFindAutomatically,
         onPressed: onAutomaticSearch,
       ),
       leading: record.format == BookFormat.unknown

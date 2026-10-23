@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -96,62 +97,62 @@ class _PersonDetailSheetState extends ConsumerState<_PersonDetailSheet> {
               controller: scrollController,
               padding: EdgeInsets.zero,
               children: [
-            // Drag handle
-            Center(
-              child: Container(
-                margin: const EdgeInsets.symmetric(vertical: 12),
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: AppTheme.textSecondary,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-
-            // Header
-            _buildHeader(state),
-
-            const Divider(color: AppTheme.border, height: 24),
-
-            // Biography
-            if (state.isLoading && state.person == null)
-              _buildShimmerBio()
-            else if (state.person?.biography != null &&
-                state.person!.biography!.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Text(
-                  state.person!.biography!,
-                  maxLines: 6,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: AppTheme.textSecondary,
-                    fontSize: 13,
-                    height: 1.4,
+                // Drag handle
+                Center(
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(vertical: 12),
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: AppTheme.textSecondary,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
                 ),
-              ),
 
-            if (state.error != null) _buildError(state.error!),
+                // Header
+                _buildHeader(state),
 
-            const SizedBox(height: 16),
+                const Divider(color: AppTheme.border, height: 24),
 
-            // Filter row
-            if (state.allCredits.isNotEmpty || !state.isLoading)
-              _buildFilterRow(state),
+                // Biography
+                if (state.isLoading && state.person == null)
+                  _buildShimmerBio()
+                else if (state.person?.biography != null &&
+                    state.person!.biography!.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      state.person!.biography!,
+                      maxLines: 6,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 13,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
 
-            const SizedBox(height: 8),
+                if (state.error != null) _buildError(state.error!),
 
-            // Credits by year
-            if (state.isLoading && state.allCredits.isEmpty)
-              _buildShimmerCredits()
-            else
-              ..._buildCreditsByYear(state),
+                const SizedBox(height: 16),
 
-            const SizedBox(height: 48),
-          ],
-        ),
+                // Filter row
+                if (state.allCredits.isNotEmpty || !state.isLoading)
+                  _buildFilterRow(state),
+
+                const SizedBox(height: 8),
+
+                // Credits by year
+                if (state.isLoading && state.allCredits.isEmpty)
+                  _buildShimmerCredits()
+                else
+                  ..._buildCreditsByYear(state),
+
+                const SizedBox(height: 48),
+              ],
+            ),
             // Bottom fade gradient
             Positioned(
               left: 0,
@@ -222,8 +223,8 @@ class _PersonDetailSheetState extends ConsumerState<_PersonDetailSheet> {
                     const SizedBox(height: 4),
                     Text(
                       person.deathday != null
-                          ? 'Died at age ${person.age}'
-                          : 'Age ${person.age}',
+                          ? context.l10n.personDiedAtAge(person.age!)
+                          : context.l10n.personAge(person.age!),
                       style: TextStyle(
                         color: person.deathday != null
                             ? AppTheme.error
@@ -235,7 +236,7 @@ class _PersonDetailSheetState extends ConsumerState<_PersonDetailSheet> {
                   if (person.birthday != null) ...[
                     const SizedBox(height: 2),
                     Text(
-                      'Born ${person.birthday}',
+                      context.l10n.personBornOn(person.birthday!),
                       style: const TextStyle(
                         color: AppTheme.textSecondary,
                         fontSize: 12,
@@ -245,7 +246,7 @@ class _PersonDetailSheetState extends ConsumerState<_PersonDetailSheet> {
                   if (person.deathday != null) ...[
                     const SizedBox(height: 2),
                     Text(
-                      'Died ${person.deathday}',
+                      context.l10n.personDiedOn(person.deathday!),
                       style: const TextStyle(
                         color: AppTheme.error,
                         fontSize: 12,
@@ -285,21 +286,26 @@ class _PersonDetailSheetState extends ConsumerState<_PersonDetailSheet> {
               spacing: 8,
               runSpacing: 4,
               children: [
-                _filterChip('ALL', PersonCreditFilter.all, state.filter),
-                _filterChip('MOVIES', PersonCreditFilter.movies, state.filter),
-                _filterChip(
-                    'TV SHOWS', PersonCreditFilter.tvShows, state.filter),
+                _filterChip(context.l10n.browseALL, PersonCreditFilter.all,
+                    state.filter),
+                _filterChip(context.l10n.browseMOVIES,
+                    PersonCreditFilter.movies, state.filter),
+                _filterChip(context.l10n.browseTVSHOWS,
+                    PersonCreditFilter.tvShows, state.filter),
               ],
             ),
           ),
           PopupMenuButton<PersonCreditSort>(
-            icon: const Icon(Icons.sort, color: AppTheme.textSecondary, size: 20),
+            icon:
+                const Icon(Icons.sort, color: AppTheme.textSecondary, size: 20),
             color: AppTheme.surfaceVariant,
             onSelected: _notifier.setSort,
             itemBuilder: (_) => [
-              _sortItem(PersonCreditSort.date, 'Date', state),
-              _sortItem(PersonCreditSort.title, 'Title', state),
-              _sortItem(PersonCreditSort.rating, 'Rating', state),
+              _sortItem(PersonCreditSort.date, context.l10n.browseDate, state),
+              _sortItem(
+                  PersonCreditSort.title, context.l10n.browseTitle, state),
+              _sortItem(
+                  PersonCreditSort.rating, context.l10n.browseRating, state),
             ],
           ),
         ],
@@ -490,12 +496,11 @@ class _PersonDetailSheetState extends ConsumerState<_PersonDetailSheet> {
       child: Column(
         children: [
           Text(error,
-              style:
-                  const TextStyle(color: AppTheme.error, fontSize: 13)),
+              style: const TextStyle(color: AppTheme.error, fontSize: 13)),
           const SizedBox(height: 8),
           TextButton(
             onPressed: _notifier.load,
-            child: const Text('Retry'),
+            child: Text(context.l10n.browseRetry),
           ),
         ],
       ),

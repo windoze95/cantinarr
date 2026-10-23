@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/storage/library_sort_preferences.dart';
@@ -37,8 +38,8 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
     super.initState();
     // Listen before the first frame so preference restoration cannot race the
     // instance notifier's creation. Its initial selection is also read below.
-    ref.listenManual(librarySortProvider('lidarr'), (_, selection) =>
-        _notifier?.sorting.setSelection(selection));
+    ref.listenManual(librarySortProvider('lidarr'),
+        (_, selection) => _notifier?.sorting.setSelection(selection));
     WidgetsBinding.instance.addPostFrameCallback((_) => _initNotifier());
   }
 
@@ -76,12 +77,19 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
         notifier?.loadArtists();
       }
     }
+
     showArtistActions(context,
-      service: LidarrApiService(backendDio: dio, instanceId: instanceId),
-      settings: LibrarySettingsService(dio: dio, instanceId: instanceId,
-        kind: LibrarySettingsKind.artist, id: artist.id),
-      instanceId: instanceId, artist: artist, selectedAction: action,
-      onChanged: reload, onRemoved: reload);
+        service: LidarrApiService(backendDio: dio, instanceId: instanceId),
+        settings: LibrarySettingsService(
+            dio: dio,
+            instanceId: instanceId,
+            kind: LibrarySettingsKind.artist,
+            id: artist.id),
+        instanceId: instanceId,
+        artist: artist,
+        selectedAction: action,
+        onChanged: reload,
+        onRemoved: reload);
   }
 
   Future<void> _openArtist(LidarrArtist artist) async {
@@ -125,64 +133,72 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
         return LibraryCommandLayout(
           key: ValueKey('lidarr-$instanceId'),
           headerBuilder: (collapsed) => LibraryCommandHeader(
-              collapsed: collapsed,
-              sort: LibrarySortMenu(module: 'lidarr', selection: sort,
-                onSelected: (field) => ref.read(librarySortProvider('lidarr').notifier).select(field)),
-              viewMode: viewMode,
-              onViewModeChanged: (value) => ref
-                  .read(libraryViewModeProvider('lidarr').notifier).set(value),
-              title: 'Artist library',
-              subtitle: '$instanceName  /  Lidarr',
-              stats: [
-                LibraryStat(
-                  label: 'Total',
-                  value: state.artists.length,
-                  color: AppTheme.textPrimary,
-                ),
-                LibraryStat(
-                  label: 'Complete',
-                  value: state.completeCount,
-                  color: AppTheme.available,
-                ),
-                LibraryStat(
-                  label: 'Partial',
-                  value: state.partialCount,
-                  color: AppTheme.requested,
-                ),
-              ],
-              searchController: _searchController,
-              onSearch: _notifier!.search,
-              searchHint: 'Filter this artist library…',
-              filter: PopupMenuButton<LidarrLibraryFilter>(
-                tooltip: 'Filter artists',
-                icon: const Icon(Icons.tune_rounded),
-                onSelected: _notifier!.setFilter,
-                itemBuilder: (_) => LidarrLibraryFilter.values
-                    .map((f) => PopupMenuItem(
-                          value: f,
-                          child: Row(
-                            children: [
-                              if (f == state.filter)
-                                const Icon(
-                                  Icons.check,
-                                  size: 18,
-                                  color: AppTheme.accent,
-                                ),
-                              if (f != state.filter) const SizedBox(width: 18),
-                              const SizedBox(width: 8),
-                              Text(
-                                f.name[0].toUpperCase() + f.name.substring(1),
-                              ),
-                            ],
-                          ),
-                        ))
-                    .toList(),
+            collapsed: collapsed,
+            sort: LibrarySortMenu(
+                module: 'lidarr',
+                selection: sort,
+                onSelected: (field) => ref
+                    .read(librarySortProvider('lidarr').notifier)
+                    .select(field)),
+            viewMode: viewMode,
+            onViewModeChanged: (value) =>
+                ref.read(libraryViewModeProvider('lidarr').notifier).set(value),
+            title: context.l10n.adminArtistLibrary,
+            subtitle: '$instanceName  /  Lidarr',
+            stats: [
+              LibraryStat(
+                label: context.l10n.adminTotal,
+                value: state.artists.length,
+                color: AppTheme.textPrimary,
               ),
+              LibraryStat(
+                label: context.l10n.adminComplete,
+                value: state.completeCount,
+                color: AppTheme.available,
+              ),
+              LibraryStat(
+                label: context.l10n.adminPartial,
+                value: state.partialCount,
+                color: AppTheme.requested,
+              ),
+            ],
+            searchController: _searchController,
+            onSearch: _notifier!.search,
+            searchHint: context.l10n.adminFilterThisArtistLibrary,
+            filter: PopupMenuButton<LidarrLibraryFilter>(
+              tooltip: context.l10n.adminFilterArtists,
+              icon: const Icon(Icons.tune_rounded),
+              onSelected: _notifier!.setFilter,
+              itemBuilder: (_) => LidarrLibraryFilter.values
+                  .map((f) => PopupMenuItem(
+                        value: f,
+                        child: Row(
+                          children: [
+                            if (f == state.filter)
+                              const Icon(
+                                Icons.check,
+                                size: 18,
+                                color: AppTheme.accent,
+                              ),
+                            if (f != state.filter) const SizedBox(width: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              f.name[0].toUpperCase() + f.name.substring(1),
+                            ),
+                          ],
+                        ),
+                      ))
+                  .toList(),
             ),
+          ),
           children: [
             if (_notifier!.sorting.notice != null)
-              ErrorBanner(message: _notifier!.sorting.notice!, maxLines: null,
-                onRetry: _notifier!.sorting.canRetry ? _notifier!.sorting.refresh : null),
+              ErrorBanner(
+                  message: _notifier!.sorting.notice!,
+                  maxLines: null,
+                  onRetry: _notifier!.sorting.canRetry
+                      ? _notifier!.sorting.refresh
+                      : null),
             if (state.error != null)
               ErrorBanner(
                 message: state.error!,
@@ -199,10 +215,12 @@ class _LidarrHomeScreenState extends ConsumerState<LidarrHomeScreen> {
                           color: AppTheme.accent,
                           child: LidarrArtistList(
                             viewMode: viewMode,
-                            scrollKey: 'lidarr-$instanceId-${_notifier!.sorting.effectiveSelection.key}',
+                            scrollKey:
+                                'lidarr-$instanceId-${_notifier!.sorting.effectiveSelection.key}',
                             imageSourceFor: (item) => instanceId == null
                                 ? null
-                                : lidarrImageSource(ref, item.portraitUrl, instanceId),
+                                : lidarrImageSource(
+                                    ref, item.portraitUrl, instanceId),
                             artists: state.filtered,
                             onTap: _openArtist,
                             onAction: _showActions,

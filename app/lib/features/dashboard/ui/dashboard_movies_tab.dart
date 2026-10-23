@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -39,7 +41,8 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
   Future<void> _refresh() async {
     await Future.wait([
       ref.read(movieDiscoverProvider.notifier).bootstrap(),
-      ref.read(librarySnapshotProvider.notifier)
+      ref
+          .read(librarySnapshotProvider.notifier)
           .refresh(force: true, type: MediaType.movie),
     ]);
   }
@@ -87,109 +90,123 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
           color: AppTheme.accent,
           child: Stack(children: [
             ListView(
-            key: PageStorageKey(('discover-movie', scope)),
-            padding: const EdgeInsets.only(bottom: 24),
-            children: [
-              if (discover.featured.isNotEmpty)
-                FeaturedMediaHero(
-                  item: discover.featured.first,
-                  eyebrow: 'Movie spotlight',
-                  onTap: () => context.push(
-                    '/detail/movie/${discover.featured.first.id}',
+              key: PageStorageKey(('discover-movie', scope)),
+              padding: const EdgeInsets.only(bottom: 24),
+              children: [
+                if (discover.featured.isNotEmpty)
+                  FeaturedMediaHero(
+                    item: discover.featured.first,
+                    eyebrow: context.l10n.browseMovieSpotlight,
+                    onTap: () => context.push(
+                      '/detail/movie/${discover.featured.first.id}',
+                    ),
                   ),
-                ),
-              // Discovery rows
-              CategoryRow(
-                paginationRevision: discover.refreshRevision,
-                key: const PageStorageKey('featured'),
-                title: discover.featuredTitle,
-                items: discover.featured.skip(1).toList(growable: false),
-                isLoading: discover.isLoadingFeatured,
-                isTvRow: false,
-                libraryStatus: libraryStatus,
-                // The grid continues whichever source answered; until one has,
-                // there is nothing to continue.
-                onSeeAll: discover.featuredSource.isEmpty
-                    ? null
-                    : () => _seeAll(BrowseFeed.featured, discover.featuredTitle),
-              ),
-              // Every row below grows as it is scrolled toward its end; the
-              // headline row above is the one server-capped page.
-              if (discover.nowPlaying.isNotEmpty)
+                // Discovery rows
                 CategoryRow(
                   paginationRevision: discover.refreshRevision,
-                  key: const PageStorageKey('In Theaters'),
-                  title: 'In Theaters',
-                  items: discover.nowPlaying,
-                  isLoading: discover.isLoadingNowPlaying,
+                  key: const PageStorageKey('featured'),
+                  title: browseLabel(context, discover.featuredTitle),
+                  items: discover.featured.skip(1).toList(growable: false),
+                  isLoading: discover.isLoadingFeatured,
                   isTvRow: false,
                   libraryStatus: libraryStatus,
-                  onLoadMore: (_) => discoverNotifier.loadMoreNowPlaying(),
-                  onSeeAll: () => _seeAll(BrowseFeed.nowPlaying, 'In Theaters'),
+                  // The grid continues whichever source answered; until one has,
+                  // there is nothing to continue.
+                  onSeeAll: discover.featuredSource.isEmpty
+                      ? null
+                      : () =>
+                          _seeAll(BrowseFeed.featured, discover.featuredTitle),
                 ),
-              if (discover.topRated.isNotEmpty)
-                CategoryRow(
-                  paginationRevision: discover.refreshRevision,
-                  key: const PageStorageKey('Top Rated'),
-                  title: 'Top Rated',
-                  items: discover.topRated,
-                  isLoading: discover.isLoadingTopRated,
-                  isTvRow: false,
-                  libraryStatus: libraryStatus,
-                  onLoadMore: (_) => discoverNotifier.loadMoreTopRated(),
-                  onSeeAll: () => _seeAll(BrowseFeed.topRated, 'Top Rated'),
-                ),
-              if (discover.upcoming.isNotEmpty)
-                CategoryRow(
-                  paginationRevision: discover.refreshRevision,
-                  key: const PageStorageKey('Coming Soon'),
-                  title: 'Coming Soon',
-                  items: discover.upcoming,
-                  isLoading: discover.isLoadingUpcoming,
-                  isTvRow: false,
-                  libraryStatus: libraryStatus,
-                  onLoadMore: (_) => discoverNotifier.loadMoreUpcoming(),
-                  onSeeAll: () => _seeAll(BrowseFeed.upcoming, 'Coming Soon'),
-                ),
-              if (discover.anticipated.isNotEmpty)
-                CategoryRow(
-                  paginationRevision: discover.refreshRevision,
-                  key: const PageStorageKey('Most Anticipated'),
-                  title: 'Most Anticipated',
-                  items: discover.anticipated,
-                  isLoading: discover.isLoadingAnticipated,
-                  isTvRow: false,
-                  libraryStatus: libraryStatus,
-                  onLoadMore: (_) => discoverNotifier.loadMoreAnticipated(),
-                  onSeeAll: () =>
-                      _seeAll(BrowseFeed.anticipated, 'Most Anticipated'),
-                ),
-              GenreChipStrip(genres: discover.genres, mediaType: MediaType.movie),
+                // Every row below grows as it is scrolled toward its end; the
+                // headline row above is the one server-capped page.
+                if (discover.nowPlaying.isNotEmpty)
+                  CategoryRow(
+                    paginationRevision: discover.refreshRevision,
+                    key: const PageStorageKey('In Theaters'),
+                    title: context.l10n.browseInTheaters,
+                    items: discover.nowPlaying,
+                    isLoading: discover.isLoadingNowPlaying,
+                    isTvRow: false,
+                    libraryStatus: libraryStatus,
+                    onLoadMore: (_) => discoverNotifier.loadMoreNowPlaying(),
+                    onSeeAll: () =>
+                        _seeAll(BrowseFeed.nowPlaying, 'In Theaters'),
+                  ),
+                if (discover.topRated.isNotEmpty)
+                  CategoryRow(
+                    paginationRevision: discover.refreshRevision,
+                    key: const PageStorageKey('Top Rated'),
+                    title: context.l10n.browseTopRated,
+                    items: discover.topRated,
+                    isLoading: discover.isLoadingTopRated,
+                    isTvRow: false,
+                    libraryStatus: libraryStatus,
+                    onLoadMore: (_) => discoverNotifier.loadMoreTopRated(),
+                    onSeeAll: () => _seeAll(BrowseFeed.topRated, 'Top Rated'),
+                  ),
+                if (discover.upcoming.isNotEmpty)
+                  CategoryRow(
+                    paginationRevision: discover.refreshRevision,
+                    key: const PageStorageKey('Coming Soon'),
+                    title: context.l10n.browseComingSoon,
+                    items: discover.upcoming,
+                    isLoading: discover.isLoadingUpcoming,
+                    isTvRow: false,
+                    libraryStatus: libraryStatus,
+                    onLoadMore: (_) => discoverNotifier.loadMoreUpcoming(),
+                    onSeeAll: () => _seeAll(BrowseFeed.upcoming, 'Coming Soon'),
+                  ),
+                if (discover.anticipated.isNotEmpty)
+                  CategoryRow(
+                    paginationRevision: discover.refreshRevision,
+                    key: const PageStorageKey('Most Anticipated'),
+                    title: context.l10n.browseMostAnticipated,
+                    items: discover.anticipated,
+                    isLoading: discover.isLoadingAnticipated,
+                    isTvRow: false,
+                    libraryStatus: libraryStatus,
+                    onLoadMore: (_) => discoverNotifier.loadMoreAnticipated(),
+                    onSeeAll: () =>
+                        _seeAll(BrowseFeed.anticipated, 'Most Anticipated'),
+                  ),
+                GenreChipStrip(
+                    genres: discover.genres, mediaType: MediaType.movie),
 
-              // Radarr library rows (same style as discovery)
-              if (_downloadingSoon.isNotEmpty || _isLoadingLibrary)
-                _buildRow(
-                  title: 'Downloading Soon',
-                  items: _downloadingSoon,
-                  badgeBuilder: (movie) => _downloadingMovieIds.contains(movie.id)
-                      ? (label: 'Downloading', color: AppTheme.downloading)
-                      : (label: 'Requested', color: AppTheme.requested),
-                ),
-              if (_recentlyDownloaded.isNotEmpty || _isLoadingLibrary)
-                _buildRow(
-                  title: 'Recently Downloaded',
-                  items: _recentlyDownloaded,
-                  badgeBuilder: (_) =>
-                      (label: 'Downloaded', color: AppTheme.available),
-                  mark4K: show4K,
-                ),
-            ],
-          ),
+                // Radarr library rows (same style as discovery)
+                if (_downloadingSoon.isNotEmpty || _isLoadingLibrary)
+                  _buildRow(
+                    title: context.l10n.browseDownloadingSoon,
+                    items: _downloadingSoon,
+                    badgeBuilder: (movie) =>
+                        _downloadingMovieIds.contains(movie.id)
+                            ? (
+                                label: context.l10n.browseDownloading,
+                                color: AppTheme.downloading
+                              )
+                            : (
+                                label: context.l10n.browseRequested,
+                                color: AppTheme.requested
+                              ),
+                  ),
+                if (_recentlyDownloaded.isNotEmpty || _isLoadingLibrary)
+                  _buildRow(
+                    title: context.l10n.browseRecentlyDownloaded,
+                    items: _recentlyDownloaded,
+                    badgeBuilder: (_) => (
+                      label: context.l10n.browseDownloaded,
+                      color: AppTheme.available
+                    ),
+                    mark4K: show4K,
+                  ),
+              ],
+            ),
             if (discover.failedRows.isNotEmpty || library.moviesFailed)
               Align(
                 alignment: Alignment.bottomCenter,
-                child: SafeArea(child: ErrorBanner(
-                  message: 'Some titles could not be loaded. Retry to check for updates.',
+                child: SafeArea(
+                    child: ErrorBanner(
+                  message: context.l10n
+                      .browseSomeTitlesCouldNotBeLoadedRetryToCheckForUpdates,
                   onRetry: _refresh,
                 )),
               ),
@@ -230,7 +247,8 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
             itemKey: (item) => item.id,
             itemExtent: cardWidth + 14,
             isLoading: _isLoadingLibrary,
-            height: cardWidth * 1.5 + MediaCard.rowExtraHeight(context, withSubtitle: false),
+            height: cardWidth * 1.5 +
+                MediaCard.rowExtraHeight(context, withSubtitle: false),
             itemBuilder: (movie) {
               final badge = badgeBuilder(movie);
               return MediaCard(

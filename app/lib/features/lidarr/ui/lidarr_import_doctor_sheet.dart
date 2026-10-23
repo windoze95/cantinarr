@@ -1,3 +1,5 @@
+import 'package:cantinarr/l10n/doctor_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
@@ -32,8 +34,7 @@ class _LidarrImportDoctorSheet extends StatefulWidget {
       _LidarrImportDoctorSheetState();
 }
 
-class _LidarrImportDoctorSheetState
-    extends State<_LidarrImportDoctorSheet> {
+class _LidarrImportDoctorSheetState extends State<_LidarrImportDoctorSheet> {
   LidarrApiService get _service => widget.service;
   bool _busy = false;
 
@@ -55,7 +56,7 @@ class _LidarrImportDoctorSheetState
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+              child: Text(context.l10n.adminCancel)),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: TextButton.styleFrom(foregroundColor: AppTheme.error),
@@ -80,41 +81,42 @@ class _LidarrImportDoctorSheetState
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
-      _toast('Failed: $e');
+      _toast(context.l10n.adminFailed((e).toString()));
     }
   }
 
   Future<void> _onAction(DoctorAction action) async {
+    final translations = context.l10n;
     final item = widget.item;
     switch (action) {
       case DoctorAction.process:
-        await _run(
-            _service.processMonitoredDownloads, 'Running the import pass…');
+        await _run(_service.processMonitoredDownloads,
+            translations.adminRunningTheImportPass);
       case DoctorAction.rescan:
         if (item.artistId == null) {
-          _toast('No artist to rescan.');
+          _toast(translations.adminNoArtistToRescan);
           return;
         }
         await _run(() => _service.rescanArtist(item.artistId!),
-            'Rescanning the artist…');
+            translations.adminRescanningTheArtist);
       case DoctorAction.manualImport:
         await _runManualImport(force: false);
       case DoctorAction.forceImport:
         await _runManualImport(force: true);
       case DoctorAction.remove:
         if (!await _confirm(
-            'Remove download',
-            'This deletes the download from the client. The release is not blocklisted, so it could be grabbed again.',
-            'Remove')) {
+            translations.adminRemoveDownload2,
+            translations.adminThisDeletesTheDownloadFromTheClient,
+            translations.adminRemove)) {
           return;
         }
-        await _run(
-            () => _service.deleteQueueItem(item.id), 'Removed from the queue.');
+        await _run(() => _service.deleteQueueItem(item.id),
+            translations.adminRemovedFromTheQueue);
       case DoctorAction.blocklistSearch:
         if (!await _confirm(
-            'Remove, blocklist & search',
-            'This deletes the download, blocklists the release so it is not grabbed again, and starts a fresh search for a different one.',
-            'Do it')) {
+            translations.adminRemoveBlocklistSearch,
+            translations.adminThisDeletesTheDownloadBlocklistsTheRelease,
+            translations.adminDoIt)) {
           return;
         }
         await _run(() async {
@@ -122,25 +124,25 @@ class _LidarrImportDoctorSheetState
           if (item.albumId != null) {
             await _service.searchAlbums([item.albumId!]);
           }
-        }, 'Blocklisted and searching for a replacement…');
+        }, translations.adminBlocklistedAndSearchingForAReplacement);
       case DoctorAction.changeCategory:
         if (!await _confirm(
-            'Hand off to download client',
-            'This stops Lidarr managing the download and moves it to the post-import category (for tools like Unpackerr). It stays in your client.',
-            'Hand off')) {
+            translations.adminHandOffToDownloadClient,
+            translations.adminThisStopsLidarrManagingTheDownloadAnd,
+            translations.adminHandOff)) {
           return;
         }
         await _run(
             () => _service.deleteQueueItem(item.id,
                 removeFromClient: false, changeCategory: true),
-            'Handed off to the download client.');
+            translations.adminHandedOffToTheDownloadClient);
     }
   }
 
   Future<void> _runManualImport({required bool force}) async {
     final downloadId = widget.item.downloadId;
     if (downloadId == null || downloadId.isEmpty) {
-      _toast('This download has no client id yet — nothing to import.');
+      _toast(context.l10n.adminThisDownloadHasNoClientIdYet);
       return;
     }
     setState(() => _busy = true);
@@ -150,13 +152,13 @@ class _LidarrImportDoctorSheetState
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
-      _toast('Could not fetch files: $e');
+      _toast(context.l10n.adminCouldNotFetchFiles((e).toString()));
       return;
     }
     if (!mounted) return;
     setState(() => _busy = false);
     if (candidates.isEmpty) {
-      _toast('No importable files found in the download folder.');
+      _toast(context.l10n.adminNoImportableFilesFoundInTheDownload);
       return;
     }
 
@@ -176,15 +178,15 @@ class _LidarrImportDoctorSheetState
 
     if (importable.isEmpty) {
       _toast(force
-          ? "None of the files are matched to an album's tracks, so they cannot be imported."
-          : 'No files qualify — use Force import to import despite the warnings.');
+          ? context.l10n.adminNoneOfTheFilesAreMatchedTo3
+          : context.l10n.adminNoFilesQualifyUseForceImportTo);
       return;
     }
 
     final files = importable.map((c) => c.toImportFile()).toList();
     final mode = widget.item.protocol == 'torrent' ? 'copy' : 'move';
     await _run(() => _service.executeManualImport(files, importMode: mode),
-        'Importing ${files.length} file(s)…');
+        context.l10n.adminImportingFileS((files.length).toString()));
   }
 
   @override
@@ -216,8 +218,8 @@ class _LidarrImportDoctorSheetState
               Expanded(
                 child: Text(
                   diagnosis.problem.isNotEmpty
-                      ? diagnosis.problem
-                      : 'Download status',
+                      ? localizeDoctorLabel(context, diagnosis.problem)
+                      : context.l10n.adminDownloadStatus,
                   style: const TextStyle(
                       color: AppTheme.textPrimary,
                       fontSize: 18,
@@ -228,21 +230,19 @@ class _LidarrImportDoctorSheetState
           ),
           const SizedBox(height: 4),
           Text(item.albumLabel ?? item.title,
-              style: const TextStyle(
-                  color: AppTheme.textSecondary, fontSize: 12),
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
               maxLines: 2,
               overflow: TextOverflow.ellipsis),
           if (diagnosis.transparency.isNotEmpty) ...[
             const SizedBox(height: 14),
-            Text(diagnosis.transparency,
+            Text(localizeDoctorLabel(context, diagnosis.transparency),
                 style: const TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 14,
-                    height: 1.4)),
+                    color: AppTheme.textPrimary, fontSize: 14, height: 1.4)),
           ],
           if (rawMessages.isNotEmpty) ...[
             const SizedBox(height: 16),
-            const Text('Messages',
+            Text(context.l10n.adminMessages,
                 style: TextStyle(
                     color: AppTheme.textSecondary,
                     fontSize: 13,
@@ -279,14 +279,13 @@ class _LidarrImportDoctorSheetState
                   child: CircularProgressIndicator(color: AppTheme.accent)),
             )
           else if (diagnosis.actions.isEmpty)
-            const Text('No automatic fix is needed.',
-                style:
-                    TextStyle(color: AppTheme.textSecondary, fontSize: 13))
+            Text(context.l10n.adminNoAutomaticFixIsNeeded,
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13))
           else
             ...diagnosis.actions.asMap().entries.map((e) => Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: _ActionButton(
-                    meta: _actionMeta(e.value),
+                    meta: _actionMeta(e.value, strings: context.l10n),
                     primary: e.key == 0,
                     onTap: () => _onAction(e.value),
                   ),
@@ -314,20 +313,37 @@ class _ActionMeta {
   const _ActionMeta(this.label, this.icon, {this.destructive = false});
 }
 
-_ActionMeta _actionMeta(DoctorAction action) => switch (action) {
-      DoctorAction.process =>
-        const _ActionMeta('Process now', Icons.play_arrow_rounded),
-      DoctorAction.manualImport =>
-        const _ActionMeta('Manual import', Icons.download_done),
-      DoctorAction.forceImport => const _ActionMeta('Force import', Icons.bolt),
-      DoctorAction.rescan => const _ActionMeta('Rescan files', Icons.refresh),
-      DoctorAction.remove =>
-        const _ActionMeta('Remove', Icons.delete_outline, destructive: true),
-      DoctorAction.blocklistSearch => const _ActionMeta(
-          'Remove, block & search', Icons.block,
+_ActionMeta _actionMeta(DoctorAction action, {AppLocalizations? strings}) =>
+    switch (action) {
+      DoctorAction.process => _ActionMeta(
+          (strings ?? lookupAppLocalizations(const Locale('en')))
+              .adminProcessNow,
+          Icons.play_arrow_rounded),
+      DoctorAction.manualImport => _ActionMeta(
+          (strings ?? lookupAppLocalizations(const Locale('en')))
+              .adminManualImport,
+          Icons.download_done),
+      DoctorAction.forceImport => _ActionMeta(
+          (strings ?? lookupAppLocalizations(const Locale('en')))
+              .adminForceImport,
+          Icons.bolt),
+      DoctorAction.rescan => _ActionMeta(
+          (strings ?? lookupAppLocalizations(const Locale('en')))
+              .adminRescanFiles,
+          Icons.refresh),
+      DoctorAction.remove => _ActionMeta(
+          (strings ?? lookupAppLocalizations(const Locale('en'))).adminRemove,
+          Icons.delete_outline,
           destructive: true),
-      DoctorAction.changeCategory => const _ActionMeta(
-          'Hand off to client', Icons.outbox,
+      DoctorAction.blocklistSearch => _ActionMeta(
+          (strings ?? lookupAppLocalizations(const Locale('en')))
+              .adminRemoveBlockSearch,
+          Icons.block,
+          destructive: true),
+      DoctorAction.changeCategory => _ActionMeta(
+          (strings ?? lookupAppLocalizations(const Locale('en')))
+              .adminHandOffToClient,
+          Icons.outbox,
           destructive: true),
     };
 
@@ -393,7 +409,9 @@ class _CandidatesDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: AppTheme.surface,
-      title: Text(force ? 'Force import' : 'Manual import'),
+      title: Text(force
+          ? context.l10n.adminForceImport
+          : context.l10n.adminManualImport),
       content: SizedBox(
         width: double.maxFinite,
         child: Column(
@@ -402,8 +420,10 @@ class _CandidatesDialog extends StatelessWidget {
           children: [
             Text(
               importableCount == 0
-                  ? 'None of these files can be imported as-is:'
-                  : 'Will import $importableCount of ${candidates.length} file(s):',
+                  ? context.l10n.adminNoneOfTheseFilesCanBeImported
+                  : context.l10n.adminWillImportOfFileS(
+                      (importableCount).toString(),
+                      (candidates.length).toString()),
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
@@ -446,7 +466,10 @@ class _CandidatesDialog extends StatelessWidget {
                           child: Text(
                             [
                               c.sizeFormatted,
-                              if (c.isMapped) 'matched' else 'no album match',
+                              if (c.isMapped)
+                                'matched'
+                              else
+                                context.l10n.adminNoAlbumMatch,
                             ].join(' • '),
                             style: const TextStyle(
                                 color: AppTheme.textSecondary, fontSize: 11),
@@ -473,11 +496,12 @@ class _CandidatesDialog extends StatelessWidget {
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel')),
+            child: Text(context.l10n.adminCancel)),
         TextButton(
           onPressed:
               importableCount == 0 ? null : () => Navigator.pop(context, true),
-          child: Text(force ? 'Force import' : 'Import'),
+          child: Text(
+              force ? context.l10n.adminForceImport : context.l10n.adminImport),
         ),
       ],
     );

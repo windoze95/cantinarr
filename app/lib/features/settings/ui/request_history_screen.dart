@@ -1,3 +1,6 @@
+import '../../discover/ui/browse_labels.dart';
+import 'settings_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
 import 'package:dio/dio.dart';
@@ -20,7 +23,8 @@ class RequestHistoryScreen extends ConsumerStatefulWidget {
   const RequestHistoryScreen({super.key});
 
   @override
-  ConsumerState<RequestHistoryScreen> createState() => _RequestHistoryScreenState();
+  ConsumerState<RequestHistoryScreen> createState() =>
+      _RequestHistoryScreenState();
 }
 
 class _RequestHistoryScreenState extends ConsumerState<RequestHistoryScreen> {
@@ -67,7 +71,8 @@ class _RequestHistoryScreenState extends ConsumerState<RequestHistoryScreen> {
       _retryOlder = older;
     });
     try {
-      final page = await RequestHistoryService(ref.read(backendClientProvider)).list(
+      final page =
+          await RequestHistoryService(ref.read(backendClientProvider)).list(
         query: _search.text,
         mediaType: _mediaType,
         decision: _decision,
@@ -87,12 +92,14 @@ class _RequestHistoryScreenState extends ConsumerState<RequestHistoryScreen> {
       setState(() {
         _loading = _loadingOlder = false;
         _error = e is DioException && e.response?.statusCode == 404
-            ? 'Request history needs a newer server. Update Cantinarr and try again.'
+            ? context
+                .l10n.settingsRequestHistoryNeedsANewerServerUpdateCantinarr
             : older
-                ? 'Couldn’t load older requests. Try again.'
+                ? context.l10n.settingsCouldnTLoadOlderRequestsTryAgain
                 : _items == null
-                    ? 'Couldn’t load request history. Try again.'
-                    : 'Couldn’t refresh request history. Showing the last update.';
+                    ? context.l10n.settingsCouldnTLoadRequestHistoryTryAgain
+                    : context.l10n
+                        .settingsCouldnTRefreshRequestHistoryShowingTheLast;
       });
     }
   }
@@ -116,8 +123,11 @@ class _RequestHistoryScreenState extends ConsumerState<RequestHistoryScreen> {
     }
   }
 
-  bool get _filtered => _search.text.trim().isNotEmpty ||
-      _mediaType.isNotEmpty || _decision.isNotEmpty || _userId != null;
+  bool get _filtered =>
+      _search.text.trim().isNotEmpty ||
+      _mediaType.isNotEmpty ||
+      _decision.isNotEmpty ||
+      _userId != null;
 
   void _clearFilters() {
     _search.clear();
@@ -128,26 +138,36 @@ class _RequestHistoryScreenState extends ConsumerState<RequestHistoryScreen> {
 
   Future<void> _open(RequestHistoryItem item) async {
     final route = await showAppSheet<String>(context,
-      builder: (_) => _HistoryDetail(
-        item: item,
-        showTagging: ref.read(authProvider).valueOrNull?.connection?.requesterTagging ?? false,
-        onTaggingChanged: (tagging) {
-          if (!mounted) return;
-          setState(() {
-            _items = _items?.map((row) => row.id == item.id
-                ? RequestHistoryItem.withTagging(row, tagging) : row).toList();
-          });
-        },
-      ));
+        builder: (_) => _HistoryDetail(
+              item: item,
+              showTagging: ref
+                      .read(authProvider)
+                      .valueOrNull
+                      ?.connection
+                      ?.requesterTagging ??
+                  false,
+              onTaggingChanged: (tagging) {
+                if (!mounted) return;
+                setState(() {
+                  _items = _items
+                      ?.map((row) => row.id == item.id
+                          ? RequestHistoryItem.withTagging(row, tagging)
+                          : row)
+                      .toList();
+                });
+              },
+            ));
     if (mounted && route != null) context.push(route);
   }
 
   @override
   Widget build(BuildContext context) {
-    final showTagging = ref.watch(authProvider).valueOrNull?.connection?.requesterTagging ?? false;
+    final showTagging =
+        ref.watch(authProvider).valueOrNull?.connection?.requesterTagging ??
+            false;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Request history'),
+        title: Text(context.l10n.settingsRequestHistory),
         leading: BackButton(onPressed: () {
           if (context.canPop()) {
             context.pop();
@@ -157,7 +177,7 @@ class _RequestHistoryScreenState extends ConsumerState<RequestHistoryScreen> {
         }),
         actions: [
           IconButton(
-            tooltip: 'Refresh history',
+            tooltip: context.l10n.settingsRefreshHistory,
             onPressed: _loading || _loadingOlder ? null : _load,
             icon: const Icon(Icons.refresh),
           ),
@@ -167,50 +187,79 @@ class _RequestHistoryScreenState extends ConsumerState<RequestHistoryScreen> {
         child: Column(children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               TextField(
                 controller: _search,
                 maxLength: 200,
                 onChanged: (_) => _changeFilters(debounce: true),
                 onSubmitted: (_) => _load(),
                 decoration: InputDecoration(
-                  labelText: 'Search titles',
+                  labelText: context.l10n.settingsSearchTitles,
                   counterText: '',
                   prefixIcon: const Icon(Icons.search),
-                  suffixIcon: _search.text.isEmpty ? null : IconButton(
-                    tooltip: 'Clear search',
-                    onPressed: () { _search.clear(); _changeFilters(); },
-                    icon: const Icon(Icons.close),
-                  ),
+                  suffixIcon: _search.text.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: context.l10n.settingsClearSearch2,
+                          onPressed: () {
+                            _search.clear();
+                            _changeFilters();
+                          },
+                          icon: const Icon(Icons.close),
+                        ),
                 ),
               ),
               const SizedBox(height: 10),
               Wrap(spacing: 8, runSpacing: 8, children: [
                 _FilterMenu<String>(
-                  label: 'Requester',
+                  label: context.l10n.settingsRequester,
                   value: _userId?.toString() ?? '',
                   choices: {
-                    '': 'All requesters',
-                    for (final user in _requesters) '${user.id}': user.label,
-                    if (_userId != null && !_requesters.any((u) => u.id == _userId))
-                      '$_userId': 'Selected requester',
+                    '': context.l10n.settingsAllRequesters,
+                    for (final user in _requesters)
+                      '${user.id}': (user.name.isEmpty
+                          ? context.l10n.settingsUnknownRequester
+                          : user.name),
+                    if (_userId != null &&
+                        !_requesters.any((u) => u.id == _userId))
+                      '$_userId': context.l10n.settingsSelectedRequester,
                   },
-                  onChanged: (value) { _userId = int.tryParse(value); _changeFilters(); },
+                  onChanged: (value) {
+                    _userId = int.tryParse(value);
+                    _changeFilters();
+                  },
                 ),
                 _FilterMenu<String>(
-                  label: 'Media type',
+                  label: context.l10n.settingsMediaType,
                   value: _mediaType,
-                  choices: const {'': 'All media', ...historyMediaTypes},
-                  onChanged: (value) { _mediaType = value; _changeFilters(); },
+                  choices: {
+                    '': context.l10n.settingsAllMedia,
+                    ...historyMediaTypes.map((key, value) =>
+                        MapEntry(key, settingsModelLabel(context, value)))
+                  },
+                  onChanged: (value) {
+                    _mediaType = value;
+                    _changeFilters();
+                  },
                 ),
                 _FilterMenu<String>(
-                  label: 'Decision',
+                  label: context.l10n.settingsDecision,
                   value: _decision,
-                  choices: const {'': 'All decisions', ...historyDecisions},
-                  onChanged: (value) { _decision = value; _changeFilters(); },
+                  choices: {
+                    '': context.l10n.settingsAllDecisions,
+                    ...historyDecisions.map((key, value) =>
+                        MapEntry(key, settingsModelLabel(context, value)))
+                  },
+                  onChanged: (value) {
+                    _decision = value;
+                    _changeFilters();
+                  },
                 ),
                 if (_filtered)
-                  TextButton(onPressed: _clearFilters, child: const Text('Clear filters')),
+                  TextButton(
+                      onPressed: _clearFilters,
+                      child: Text(context.l10n.settingsClearFilters)),
               ]),
             ]),
           ),
@@ -223,57 +272,88 @@ class _RequestHistoryScreenState extends ConsumerState<RequestHistoryScreen> {
                 Text(_error!, style: const TextStyle(color: AppTheme.error)),
                 TextButton(
                   onPressed: () => _load(older: _retryOlder),
-                  child: const Text('Retry'),
+                  child: Text(context.l10n.settingsRetry),
                 ),
               ]),
             ),
-          Expanded(child: _items == null
-              ? _loading ? const Center(child: CircularProgressIndicator()) : const SizedBox()
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: ListView.builder(
-                    controller: _scroll,
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    itemCount: _items!.isEmpty ? 1 : _items!.length + 1,
-                    itemBuilder: (context, index) {
-                      if (_items!.isEmpty) {
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 64),
-                          child: Column(children: [
-                            const Icon(Icons.history, size: 40, color: AppTheme.textMuted),
-                            const SizedBox(height: 16),
-                            Text(_filtered ? 'No matching requests' : 'No saved requests yet',
-                              style: Theme.of(context).textTheme.titleMedium),
-                            const SizedBox(height: 8),
-                            Text(_filtered
-                                ? 'Try a different title or clear the filters.'
-                                : 'Requests from everyone on this server will appear here, including automatically approved requests.',
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(color: AppTheme.textSecondary)),
-                          ]),
-                        );
-                      }
-                      if (index == _items!.length) {
-                        return Padding(
-                          padding: const EdgeInsets.all(20),
-                          child: Center(child: _nextBefore == null
-                              ? const Text('All matching saved requests shown',
-                                  style: TextStyle(color: AppTheme.textMuted, fontSize: 12))
-                              : OutlinedButton.icon(
-                                  onPressed: _loadingOlder || _loading ? null : () => _load(older: true),
-                                  icon: _loadingOlder
-                                      ? const SizedBox(width: 16, height: 16,
-                                          child: CircularProgressIndicator(strokeWidth: 2))
-                                      : const Icon(Icons.expand_more),
-                                  label: const Text('Load older requests'),
-                                )),
-                        );
-                      }
-                      final item = _items![index];
-                      return _HistoryTile(item: item, showTagging: showTagging, onTap: () => _open(item));
-                    },
-                  ),
-                )),
+          Expanded(
+              child: _items == null
+                  ? _loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : const SizedBox()
+                  : RefreshIndicator(
+                      onRefresh: _load,
+                      child: ListView.builder(
+                        controller: _scroll,
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        itemCount: _items!.isEmpty ? 1 : _items!.length + 1,
+                        itemBuilder: (context, index) {
+                          if (_items!.isEmpty) {
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 24, vertical: 64),
+                              child: Column(children: [
+                                const Icon(Icons.history,
+                                    size: 40, color: AppTheme.textMuted),
+                                const SizedBox(height: 16),
+                                Text(
+                                    _filtered
+                                        ? context
+                                            .l10n.settingsNoMatchingRequests
+                                        : context
+                                            .l10n.settingsNoSavedRequestsYet,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium),
+                                const SizedBox(height: 8),
+                                Text(
+                                    _filtered
+                                        ? context.l10n
+                                            .settingsTryADifferentTitleOrClearTheFilters
+                                        : context.l10n
+                                            .settingsRequestsFromEveryoneOnThisServerWillAppear,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                        color: AppTheme.textSecondary)),
+                              ]),
+                            );
+                          }
+                          if (index == _items!.length) {
+                            return Padding(
+                              padding: const EdgeInsets.all(20),
+                              child: Center(
+                                  child: _nextBefore == null
+                                      ? Text(
+                                          context.l10n
+                                              .settingsAllMatchingSavedRequestsShown,
+                                          style: TextStyle(
+                                              color: AppTheme.textMuted,
+                                              fontSize: 12))
+                                      : OutlinedButton.icon(
+                                          onPressed: _loadingOlder || _loading
+                                              ? null
+                                              : () => _load(older: true),
+                                          icon: _loadingOlder
+                                              ? const SizedBox(
+                                                  width: 16,
+                                                  height: 16,
+                                                  child:
+                                                      CircularProgressIndicator(
+                                                          strokeWidth: 2))
+                                              : const Icon(Icons.expand_more),
+                                          label: Text(context
+                                              .l10n.settingsLoadOlderRequests),
+                                        )),
+                            );
+                          }
+                          final item = _items![index];
+                          return _HistoryTile(
+                              item: item,
+                              showTagging: showTagging,
+                              onTap: () => _open(item));
+                        },
+                      ),
+                    )),
         ]),
       ),
     );
@@ -285,117 +365,172 @@ class _FilterMenu<T> extends StatelessWidget {
   final T value;
   final Map<T, String> choices;
   final ValueChanged<T> onChanged;
-  const _FilterMenu({required this.label, required this.value,
-    required this.choices, required this.onChanged});
+  const _FilterMenu(
+      {required this.label,
+      required this.value,
+      required this.choices,
+      required this.onChanged});
 
   @override
   Widget build(BuildContext context) => PopupMenuButton<T>(
-    tooltip: label,
-    initialValue: value,
-    onSelected: onChanged,
-    itemBuilder: (_) => choices.entries.map((entry) => PopupMenuItem<T>(
-      value: entry.key, child: Text(entry.value))).toList(),
-    child: Chip(
-      label: Text(choices[value]!),
-      avatar: const Icon(Icons.expand_more, size: 18),
-    ),
-  );
+        tooltip: label,
+        initialValue: value,
+        onSelected: onChanged,
+        itemBuilder: (_) => choices.entries
+            .map((entry) =>
+                PopupMenuItem<T>(value: entry.key, child: Text(entry.value)))
+            .toList(),
+        child: Chip(
+          label: Text(choices[value]!),
+          avatar: const Icon(Icons.expand_more, size: 18),
+        ),
+      );
 }
 
 Color _decisionColor(String decision) => switch (decision) {
-  'approved' => AppTheme.success,
-  'pending' => AppTheme.warning,
-  'denied' => AppTheme.error,
-  _ => AppTheme.textMuted,
-};
+      'approved' => AppTheme.success,
+      'pending' => AppTheme.warning,
+      'denied' => AppTheme.error,
+      _ => AppTheme.textMuted,
+    };
 
-String _date(DateTime? date) => date == null ? 'Date not recorded' : DateFormat.yMMMd().add_jm().format(date);
+String _date(BuildContext context, DateTime? date) => date == null
+    ? context.l10n.settingsDateNotRecorded
+    : DateFormat.yMMMd(context.l10n.dateLocale).add_jm().format(date);
 
 class _HistoryTile extends StatelessWidget {
   final RequestHistoryItem item;
   final bool showTagging;
   final VoidCallback onTap;
-  const _HistoryTile({required this.item, required this.showTagging, required this.onTap});
+  const _HistoryTile(
+      {required this.item, required this.showTagging, required this.onTap});
 
   @override
   Widget build(BuildContext context) => InkWell(
-    onTap: onTap,
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: SizedBox(width: 48, height: 72,
-            child: CachedImage(
-              url: item.posterPath.isEmpty ? null : AppConfig.tmdbPoster(item.posterPath, width: 185),
-              fit: BoxFit.cover,
-              icon: switch (item.mediaType) {
-                'tv' => Icons.tv,
-                'book' => Icons.menu_book,
-                'music' => Icons.album,
-                _ => Icons.movie,
-              },
-            )),
-        ),
-        const SizedBox(width: 14),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(item.title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-          const SizedBox(height: 4),
-          Wrap(spacing: 10, runSpacing: 4, children: [
-            Text(item.decisionLabel, style: TextStyle(color: _decisionColor(item.decision), fontSize: 12, fontWeight: FontWeight.w600)),
-            Text(item.mediaLabel, style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
-            if (item.scopeLabel.isNotEmpty)
-              Text(item.scopeLabel, style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: SizedBox(
+                  width: 48,
+                  height: 72,
+                  child: CachedImage(
+                    url: item.posterPath.isEmpty
+                        ? null
+                        : AppConfig.tmdbPoster(item.posterPath, width: 185),
+                    fit: BoxFit.cover,
+                    icon: switch (item.mediaType) {
+                      'tv' => Icons.tv,
+                      'book' => Icons.menu_book,
+                      'music' => Icons.album,
+                      _ => Icons.movie,
+                    },
+                  )),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Text(item.title,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w700, fontSize: 15)),
+                  const SizedBox(height: 4),
+                  Wrap(spacing: 10, runSpacing: 4, children: [
+                    Text(settingsModelLabel(context, item.decisionLabel),
+                        style: TextStyle(
+                            color: _decisionColor(item.decision),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600)),
+                    Text(settingsModelLabel(context, item.mediaLabel),
+                        style: const TextStyle(
+                            color: AppTheme.textMuted, fontSize: 12)),
+                    if (browseLabel(context, item.scopeLabel).isNotEmpty)
+                      Text(browseLabel(context, item.scopeLabel),
+                          style: const TextStyle(
+                              color: AppTheme.textMuted, fontSize: 12)),
+                  ]),
+                  const SizedBox(height: 6),
+                  Text(
+                      context.l10n.settingsMessageRequestedByValue1(
+                          (settingsHistoryRequester(context, item)).toString()),
+                      style: const TextStyle(
+                          color: AppTheme.textSecondary, fontSize: 12)),
+                  Text(_date(context, item.requestedAt),
+                      style: const TextStyle(
+                          color: AppTheme.textMuted, fontSize: 12)),
+                  Text(
+                      (item.instanceName.isEmpty
+                          ? context.l10n.settingsLibraryNotRecordedOrRemoved
+                          : item.instanceName),
+                      style: const TextStyle(
+                          color: AppTheme.textMuted, fontSize: 12)),
+                  if (showTagging && item.requesterTagging != null)
+                    Text(
+                        settingsModelLabel(
+                            context, item.requesterTagging!.label),
+                        style: TextStyle(
+                          color: item.requesterTagging!.status == 'failed'
+                              ? AppTheme.warning
+                              : AppTheme.textMuted,
+                          fontSize: 12,
+                        )),
+                ])),
+            const Padding(
+                padding: EdgeInsets.only(top: 4, left: 8),
+                child: Icon(Icons.chevron_right,
+                    size: 18, color: AppTheme.textMuted)),
           ]),
-          const SizedBox(height: 6),
-          Text('Requested by ${item.requesterLabel}', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-          Text(_date(item.requestedAt), style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
-          Text(item.libraryLabel, style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
-          if (showTagging && item.requesterTagging != null)
-            Text(item.requesterTagging!.label, style: TextStyle(
-              color: item.requesterTagging!.status == 'failed' ? AppTheme.warning : AppTheme.textMuted,
-              fontSize: 12,
-            )),
-        ])),
-        const Padding(padding: EdgeInsets.only(top: 4, left: 8),
-          child: Icon(Icons.chevron_right, size: 18, color: AppTheme.textMuted)),
-      ]),
-    ),
-  );
+        ),
+      );
 }
 
 class _HistoryDetail extends ConsumerStatefulWidget {
   final RequestHistoryItem item;
   final bool showTagging;
   final ValueChanged<RequesterTagStatus> onTaggingChanged;
-  const _HistoryDetail({required this.item, required this.showTagging, required this.onTaggingChanged});
+  const _HistoryDetail(
+      {required this.item,
+      required this.showTagging,
+      required this.onTaggingChanged});
 
   @override
   ConsumerState<_HistoryDetail> createState() => _HistoryDetailState();
 }
 
 class _HistoryDetailState extends ConsumerState<_HistoryDetail> {
-  late RequesterTagStatus? _tagging = widget.showTagging ? widget.item.requesterTagging : null;
+  late RequesterTagStatus? _tagging =
+      widget.showTagging ? widget.item.requesterTagging : null;
   bool _retrying = false;
   String? _tagError;
 
   Future<void> _retryTag() async {
-    setState(() { _retrying = true; _tagError = null; });
+    setState(() {
+      _retrying = true;
+      _tagError = null;
+    });
     final onTaggingChanged = widget.onTaggingChanged;
     try {
-      final tagging = await RequestHistoryService(ref.read(backendClientProvider)).retryTag(widget.item.id);
+      final tagging =
+          await RequestHistoryService(ref.read(backendClientProvider))
+              .retryTag(widget.item.id);
       // The sheet may have closed while the request was in flight. The parent
       // still updates its existing pages, filters and scroll position.
       onTaggingChanged(tagging);
       if (!mounted) return;
-      setState(() { _tagging = tagging; _retrying = false; });
+      setState(() {
+        _tagging = tagging;
+        _retrying = false;
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _retrying = false;
         _tagError = e is DioException && e.response?.statusCode == 409
-            ? 'This tag can no longer be retried. Close this detail and refresh History.'
-            : 'Couldn’t retry the requester tag. Try again.';
+            ? context.l10n.settingsThisTagCanNoLongerBeRetriedClose
+            : context.l10n.settingsCouldnTRetryTheRequesterTagTryAgain;
       });
     }
   }
@@ -404,74 +539,132 @@ class _HistoryDetailState extends ConsumerState<_HistoryDetail> {
   Widget build(BuildContext context) {
     final item = widget.item;
     final route = item.detailRoute;
-    return AppSheet(child: Column(
+    return AppSheet(
+        child: Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(item.title, style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 8),
-        Text(item.decisionLabel, style: TextStyle(color: _decisionColor(item.decision), fontWeight: FontWeight.w600)),
+        Text(settingsModelLabel(context, item.decisionLabel),
+            style: TextStyle(
+                color: _decisionColor(item.decision),
+                fontWeight: FontWeight.w600)),
         const SizedBox(height: 20),
-        _field(context, 'Requested', _date(item.requestedAt)),
-        _field(context, 'Requesters', item.requesters.isEmpty ? 'Unknown requester' : item.requesters.map((user) {
-          final format = BookRequestFormat.tryFromValue(user.bookFormat);
-          return '${user.label}${format == null || item.mediaType != 'book' ? '' : ' (${format.label})'}';
-        }).join('\n')),
-        _field(context, 'Library', item.libraryLabel),
-        _field(context, 'Media', item.mediaLabel),
-        if (item.scopeLabel.isNotEmpty) _field(context, 'Requested scope', item.scopeLabel),
+        _field(context, context.l10n.settingsRequested,
+            _date(context, item.requestedAt)),
+        _field(
+            context,
+            context.l10n.settingsRequesters,
+            item.requesters.isEmpty
+                ? context.l10n.settingsUnknownRequester
+                : item.requesters.map((user) {
+                    final format =
+                        BookRequestFormat.tryFromValue(user.bookFormat);
+                    return '${(user.name.isEmpty ? context.l10n.settingsUnknownRequester : user.name)}${format == null || item.mediaType != 'book' ? '' : ' (${browseLabel(context, format.label)})'}';
+                  }).join('\n')),
+        _field(
+            context,
+            context.l10n.settingsLibrary,
+            (item.instanceName.isEmpty
+                ? context.l10n.settingsLibraryNotRecordedOrRemoved
+                : item.instanceName)),
+        _field(context, context.l10n.settingsMedia,
+            settingsModelLabel(context, item.mediaLabel)),
+        if (browseLabel(context, item.scopeLabel).isNotEmpty)
+          _field(context, context.l10n.settingsRequestedScope,
+              browseLabel(context, item.scopeLabel)),
         if (item.decision != 'pending') ...[
-          _field(context, 'Reviewed by', item.decidedBy.isEmpty ? 'No reviewer recorded' : item.decidedBy),
-          _field(context, 'Decision date', _date(item.decidedAt)),
+          _field(
+              context,
+              context.l10n.settingsReviewedBy,
+              item.decidedBy.isEmpty
+                  ? context.l10n.settingsNoReviewerRecorded
+                  : item.decidedBy),
+          _field(context, context.l10n.settingsDecisionDate,
+              _date(context, item.decidedAt)),
         ],
-        if (item.denyReason.isNotEmpty) _field(context, item.decision == 'cancelled' ? 'Reason' : 'Denial reason', item.denyReason),
+        if (item.denyReason.isNotEmpty)
+          _field(
+              context,
+              item.decision == 'cancelled'
+                  ? context.l10n.settingsReason
+                  : context.l10n.settingsDenialReason,
+              item.denyReason),
         if (_tagging case final tagging?) ...[
-          _field(context, 'Requester tag', tagging.label),
+          _field(context, context.l10n.settingsRequesterTag,
+              settingsModelLabel(context, tagging.label)),
           if (item.mediaType == 'book' || item.mediaType == 'music')
-            Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(
-              item.mediaType == 'book'
-                  ? 'Chaptarr tags the author for the requested format. The tag also applies to their other books in that format.'
-                  : 'Lidarr tags the artist. The tag also applies to their other albums.',
-            )),
+            Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Text(
+                  item.mediaType == 'book'
+                      ? context.l10n
+                          .settingsChaptarrTagsTheAuthorForTheRequestedFormat
+                      : context
+                          .l10n.settingsLidarrTagsTheArtistTheTagAlsoApplies,
+                )),
           for (final receipt in tagging.recipients) ...[
-            _field(context, receipt.label, receipt.tagging.label),
+            _field(
+                context,
+                '${receipt.username.isEmpty ? context.l10n.settingsUnknownRequester : receipt.username} • ${browseLabel(context, receipt.format == 'ebook' ? 'eBook' : receipt.format == 'audiobook' ? 'Audiobook' : 'Request')}',
+                settingsModelLabel(context, receipt.tagging.label)),
             if (receipt.tagging.tagLabel.isNotEmpty)
-              _field(context, 'Tag', receipt.tagging.tagLabel),
+              _field(
+                  context, context.l10n.settingsTag, receipt.tagging.tagLabel),
             if (receipt.tagging.appliedAt != null)
-              _field(context, 'Applied', _date(receipt.tagging.appliedAt)),
+              _field(context, context.l10n.settingsApplied,
+                  _date(context, receipt.tagging.appliedAt)),
             if (receipt.tagging.message.isNotEmpty)
-              Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(receipt.tagging.message)),
+              Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(receipt.tagging.message)),
           ],
-          if (tagging.tagLabel.isNotEmpty) _field(context, 'Tag', tagging.tagLabel),
-          if (tagging.appliedAt != null) _field(context, 'Applied', _date(tagging.appliedAt)),
+          if (tagging.tagLabel.isNotEmpty)
+            _field(context, context.l10n.settingsTag, tagging.tagLabel),
+          if (tagging.appliedAt != null)
+            _field(context, context.l10n.settingsApplied,
+                _date(context, tagging.appliedAt)),
           if (tagging.message.isNotEmpty)
-            Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(tagging.message)),
+            Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Text(tagging.message)),
           if (tagging.status == 'applied')
-            const Padding(padding: EdgeInsets.only(bottom: 12), child: Text(
-              'Records when Cantinarr applied the tag. Later changes in the library are not tracked.',
-              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-            )),
+            Padding(
+                padding: EdgeInsets.only(bottom: 12),
+                child: Text(
+                  context.l10n
+                      .settingsRecordsWhenCantinarrAppliedTheTagLaterChanges,
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                )),
           if (_tagError != null)
-            Padding(padding: const EdgeInsets.only(bottom: 8),
-              child: Text(_tagError!, style: const TextStyle(color: AppTheme.error))),
+            Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(_tagError!,
+                    style: const TextStyle(color: AppTheme.error))),
           if (tagging.canRetry)
-            Padding(padding: const EdgeInsets.only(bottom: 16), child: OutlinedButton.icon(
-              onPressed: _retrying ? null : _retryTag,
-              icon: _retrying
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.refresh),
-              label: const Text('Retry tag'),
-            )),
+            Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: OutlinedButton.icon(
+                  onPressed: _retrying ? null : _retryTag,
+                  icon: _retrying
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.refresh),
+                  label: Text(context.l10n.settingsRetryTag),
+                )),
         ],
         if (route != null) ...[
           const SizedBox(height: 4),
-          const Text('Open the title to check current availability.',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+          Text(context.l10n.settingsOpenTheTitleToCheckCurrentAvailability,
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
           const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: () => Navigator.of(context).pop(route),
             icon: const Icon(Icons.open_in_new),
-            label: const Text('View title'),
+            label: Text(context.l10n.settingsViewTitle),
           ),
         ],
         const SizedBox(height: 20),
@@ -480,11 +673,12 @@ class _HistoryDetailState extends ConsumerState<_HistoryDetail> {
   }
 
   Widget _field(BuildContext context, String label, String value) => Padding(
-    padding: const EdgeInsets.only(bottom: 14),
-    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(label, style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
-      const SizedBox(height: 3),
-      Text(value),
-    ]),
-  );
+        padding: const EdgeInsets.only(bottom: 14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label,
+              style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
+          const SizedBox(height: 3),
+          Text(value),
+        ]),
+      );
 }

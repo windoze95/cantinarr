@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../data/chaptarr_models.dart';
@@ -7,31 +8,54 @@ typedef BookStatus = ({String text, Color color});
 
 /// Computes one format record's availability line. A monitored record without
 /// a file is an active request in Chaptarr, not an unrequested/missing title.
-BookStatus bookFileStatusLine(ChaptarrBook book) {
+BookStatus bookFileStatusLine(ChaptarrBook book, {AppLocalizations? strings}) {
   if (book.hasFile) {
     final size = book.statistics?.sizeFormatted;
     final formats = book.formats;
-    final label =
-        formats.length == 1 ? _formatLabel(formats.first) : 'Downloaded';
+    final label = formats.length == 1
+        ? _formatLabel(formats.first, strings: strings)
+        : (strings ?? lookupAppLocalizations(const Locale('en')))
+            .adminDownloaded;
     final suffix = (size != null && size != '0 B') ? ' — $size' : '';
     return (text: '$label$suffix', color: AppTheme.available);
   }
   if (book.monitored) {
     return _isReleased(book.releaseDate)
-        ? (text: 'Requested — Not downloaded yet', color: AppTheme.requested)
-        : (text: 'Requested — Not released yet', color: AppTheme.requested);
+        ? (
+            text: (strings ?? lookupAppLocalizations(const Locale('en')))
+                .adminRequestedNotDownloadedYet,
+            color: AppTheme.requested
+          )
+        : (
+            text: (strings ?? lookupAppLocalizations(const Locale('en')))
+                .adminRequestedNotReleasedYet,
+            color: AppTheme.requested
+          );
   }
   return _isReleased(book.releaseDate)
-      ? (text: 'Not requested — No file', color: AppTheme.unavailable)
-      : (text: 'Not requested — Not released yet', color: AppTheme.unavailable);
+      ? (
+          text: (strings ?? lookupAppLocalizations(const Locale('en')))
+              .adminNotRequestedNoFile,
+          color: AppTheme.unavailable
+        )
+      : (
+          text: (strings ?? lookupAppLocalizations(const Locale('en')))
+              .adminNotRequestedNotReleasedYet,
+          color: AppTheme.unavailable
+        );
 }
 
 /// Computes a title summary from every ebook/audiobook record rather than
 /// letting whichever record happened to arrive first define the whole title.
-BookStatus groupedBookStatusLine(Iterable<ChaptarrBook> records) {
+BookStatus groupedBookStatusLine(Iterable<ChaptarrBook> records,
+    {AppLocalizations? strings}) {
   final books = records.toList();
   if (books.isEmpty) {
-    return (text: 'Status unavailable', color: AppTheme.unavailable);
+    return (
+      text: (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminStatusUnavailable,
+      color: AppTheme.unavailable
+    );
   }
 
   final parts = <String>[];
@@ -47,29 +71,39 @@ BookStatus groupedBookStatusLine(Iterable<ChaptarrBook> records) {
       // An unknown sibling may actually be this format. Keep the known record's
       // state visible, but do not also claim the missing slot is requestable.
       if (hasKnownFormat && !hasUnknownFormat) {
-        final formatStatus = bookFormatStatusLine(books, format);
+        final formatStatus =
+            bookFormatStatusLine(books, format, strings: strings);
         hasNotRequested = true;
-        parts.add('${_formatLabel(format)}: ${formatStatus.text}');
+        parts.add(
+            '${_formatLabel(format, strings: strings)}: ${formatStatus.text}');
       }
       continue;
     }
-    final formatStatus = bookFormatStatusLine(books, format);
-    final available = formatStatus.text == 'Available';
-    final requested = formatStatus.text == 'Requested';
-    final notRequested = formatStatus.text == 'Not requested';
+    final formatStatus = bookFormatStatusLine(books, format, strings: strings);
+    final available = matching.any((book) => book.hasFile);
+    final requested = !available && matching.any((book) => book.monitored);
+    final notRequested = !available && !requested;
     hasFile |= available;
     hasRequested |= requested;
     hasNotRequested |= notRequested;
-    parts.add('${_formatLabel(format)}: ${formatStatus.text}');
+    parts
+        .add('${_formatLabel(format, strings: strings)}: ${formatStatus.text}');
   }
 
   if (hasUnknownFormat) {
-    parts.insert(0, 'Book format: Needs attention');
+    parts.insert(
+        0,
+        (strings ?? lookupAppLocalizations(const Locale('en')))
+            .adminBookFormatNeedsAttention);
   }
 
   if (parts.isEmpty) {
-    final fallback = bookFileStatusLine(books.first);
-    return (text: 'Book: ${_shortState(fallback.text)}', color: fallback.color);
+    final fallback = bookFileStatusLine(books.first, strings: strings);
+    return (
+      text: (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminBook2((_shortState(fallback.text)).toString()),
+      color: fallback.color
+    );
   }
   final color = hasUnknownFormat || hasRequested || (hasFile && hasNotRequested)
       ? AppTheme.requested
@@ -82,20 +116,35 @@ BookStatus groupedBookStatusLine(Iterable<ChaptarrBook> records) {
 /// Reduces all records for one format. Duplicate records cannot hide a file or
 /// an active request merely because an older record appeared first.
 BookStatus bookFormatStatusLine(
-  Iterable<ChaptarrBook> records,
-  BookFormat format,
-) {
+    Iterable<ChaptarrBook> records, BookFormat format,
+    {AppLocalizations? strings}) {
   final matching = records.where((book) => book.format == format).toList();
   if (matching.isEmpty) {
-    return (text: 'Not requested', color: AppTheme.unavailable);
+    return (
+      text: (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminNotRequested,
+      color: AppTheme.unavailable
+    );
   }
   if (matching.any((book) => book.hasFile)) {
-    return (text: 'Available', color: AppTheme.available);
+    return (
+      text: (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminAvailable,
+      color: AppTheme.available
+    );
   }
   if (matching.any((book) => book.monitored)) {
-    return (text: 'Requested', color: AppTheme.requested);
+    return (
+      text: (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminRequested,
+      color: AppTheme.requested
+    );
   }
-  return (text: 'Not requested', color: AppTheme.unavailable);
+  return (
+    text: (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminNotRequested,
+    color: AppTheme.unavailable
+  );
 }
 
 String _shortState(String text) => text.split(' — ').first;
@@ -107,8 +156,12 @@ bool _isReleased(DateTime? releaseDate) {
   return !releaseDate.isAfter(DateTime.now());
 }
 
-String _formatLabel(BookFormat format) => switch (format) {
-      BookFormat.audiobook => 'Audiobook',
-      BookFormat.ebook => 'eBook',
-      BookFormat.unknown => 'Downloaded',
+String _formatLabel(BookFormat format, {AppLocalizations? strings}) =>
+    switch (format) {
+      BookFormat.audiobook =>
+        (strings ?? lookupAppLocalizations(const Locale('en'))).adminAudiobook,
+      BookFormat.ebook =>
+        (strings ?? lookupAppLocalizations(const Locale('en'))).adminEBook,
+      BookFormat.unknown =>
+        (strings ?? lookupAppLocalizations(const Locale('en'))).adminDownloaded,
     };

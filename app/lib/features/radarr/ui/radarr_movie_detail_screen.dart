@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -90,7 +91,7 @@ class _RadarrMovieDetailScreenState
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _error = 'Failed to load movie: $e';
+        _error = context.l10n.adminFailedToLoadMovie((e).toString());
       });
     }
   }
@@ -99,12 +100,13 @@ class _RadarrMovieDetailScreenState
     try {
       await _service.searchMovie(_movie.id);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Searching for ${_movie.title}…')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              context.l10n.adminSearchingFor2((_movie.title).toString()))));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Search failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(context.l10n.adminSearchFailed((e).toString()))));
     }
   }
 
@@ -176,7 +178,7 @@ class _RadarrMovieDetailScreenState
         SheetAction(link.url, _linkIcon(link.label), link.label),
     ];
     if (links.isEmpty) {
-      _toast('No external links available');
+      _toast(context.l10n.adminNoExternalLinksAvailable);
       return;
     }
     final url = await showActionSheet<String>(context,
@@ -201,17 +203,17 @@ class _RadarrMovieDetailScreenState
         actions: [
           IconButton(
             icon: const Icon(Icons.link, color: AppTheme.textPrimary),
-            tooltip: 'External links',
+            tooltip: context.l10n.adminExternalLinks,
             onPressed: _openLinks,
           ),
           IconButton(
             icon: const Icon(Icons.edit_outlined, color: AppTheme.textPrimary),
-            tooltip: 'Edit movie',
+            tooltip: context.l10n.adminEditMovie2,
             onPressed: _openEdit,
           ),
           IconButton(
             icon: const Icon(Icons.more_vert, color: AppTheme.textPrimary),
-            tooltip: 'Movie actions',
+            tooltip: context.l10n.adminMovieActions,
             onPressed: _showMovieMenu,
           ),
         ],
@@ -282,7 +284,7 @@ class _RadarrMovieDetailScreenState
             ),
           ],
           const SizedBox(height: 16),
-          const Text('History',
+          Text(context.l10n.adminHistory,
               style: TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 13,
@@ -307,7 +309,7 @@ class _RadarrMovieDetailScreenState
       );
     }
     if (_history.isEmpty) {
-      return const Text('No history yet.',
+      return Text(context.l10n.adminNoHistoryYet2,
           style: TextStyle(color: AppTheme.textSecondary, fontSize: 13));
     }
     return Column(
@@ -319,10 +321,14 @@ class _RadarrMovieDetailScreenState
   String get _statusLabel {
     if (_movie.hasFile) {
       final met = !(_movie.movieFile?.qualityCutoffNotMet ?? false);
-      return met ? 'Downloaded' : 'Upgrade available';
+      return met
+          ? context.l10n.adminDownloaded
+          : context.l10n.adminUpgradeAvailable;
     }
-    if (!_movie.monitored) return 'Unmonitored';
-    return _movie.isAvailable ? 'Missing' : 'Not yet available';
+    if (!_movie.monitored) return context.l10n.adminUnmonitored;
+    return _movie.isAvailable
+        ? context.l10n.adminMissing
+        : context.l10n.adminNotYetAvailable;
   }
 
   Color get _statusColor {
@@ -352,7 +358,7 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) {
     final meta = <String>[
       if (movie.year > 0) '${movie.year}',
-      if (movie.runtime > 0) '${movie.runtime} min',
+      if (movie.runtime > 0) context.l10n.adminMin((movie.runtime).toString()),
       if (movie.sizeOnDisk > 0 || movie.movieFile?.size != null)
         movie.sizeOnDiskFormatted,
     ];
@@ -440,14 +446,15 @@ class _FileCard extends ConsumerWidget {
                 Row(
                   children: [
                     StatusPill(
-                      text: file.quality ?? 'Downloaded',
+                      text: file.quality ?? context.l10n.adminDownloaded,
                       color:
                           cutoffMet ? AppTheme.available : AppTheme.requested,
                     ),
                     if (!cutoffMet) ...[
                       const SizedBox(width: 6),
-                      const StatusPill(
-                          text: 'Upgrade available', color: AppTheme.requested),
+                      StatusPill(
+                          text: context.l10n.adminUpgradeAvailable,
+                          color: AppTheme.requested),
                     ],
                   ],
                 ),
@@ -478,7 +485,7 @@ class _FileCard extends ConsumerWidget {
             MediaDownloadButton(
               instanceId: instanceId,
               fileId: file.id,
-              label: 'Download movie file',
+              label: context.l10n.adminDownloadMovieFile,
               iconOnly: true,
               reportedPath: file.path,
             ),
@@ -488,45 +495,57 @@ class _FileCard extends ConsumerWidget {
   }
 }
 
-String _historyEventLabel(RadarrHistoryRecord r) {
+String _historyEventLabel(RadarrHistoryRecord r, {AppLocalizations? strings}) {
   switch (r.eventType) {
     case 'grabbed':
       final indexer = r.indexer;
       return indexer != null && indexer.isNotEmpty
-          ? 'Grabbed from $indexer'
-          : 'Grabbed';
+          ? (strings ?? lookupAppLocalizations(const Locale('en')))
+              .adminGrabbedFrom((indexer).toString())
+          : (strings ?? lookupAppLocalizations(const Locale('en')))
+              .adminGrabbed;
     case 'downloadFolderImported':
-      return 'Imported';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminImported;
     case 'downloadFailed':
-      return 'Download failed';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminDownloadFailed;
     case 'movieFileDeleted':
-      return 'File deleted';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminFileDeleted;
     case 'movieFileRenamed':
-      return 'File renamed';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminFileRenamed;
     case 'movieAdded':
-      return 'Added';
+      return (strings ?? lookupAppLocalizations(const Locale('en'))).adminAdded;
     case 'downloadIgnored':
-      return 'Download ignored';
+      return (strings ?? lookupAppLocalizations(const Locale('en')))
+          .adminDownloadIgnored;
     default:
-      return r.eventType.isEmpty ? 'Event' : r.eventType;
+      return r.eventType.isEmpty
+          ? (strings ?? lookupAppLocalizations(const Locale('en'))).adminEvent
+          : r.eventType;
   }
 }
 
-String _historyTime(DateTime? date) {
+String _historyTime(DateTime? date, {AppLocalizations? strings}) {
   if (date == null) return '';
   final local = date.toLocal();
   final diff = DateTime.now().difference(local);
   final String rel;
   if (diff.inMinutes < 1) {
-    rel = 'Just now';
+    rel = (strings ?? lookupAppLocalizations(const Locale('en'))).adminJustNow;
   } else if (diff.inMinutes < 60) {
-    rel = '${diff.inMinutes}m ago';
+    rel = (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminMAgo((diff.inMinutes).toString());
   } else if (diff.inHours < 24) {
-    rel = '${diff.inHours}h ago';
+    rel = (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminHAgo((diff.inHours).toString());
   } else if (diff.inDays < 30) {
-    rel = '${diff.inDays}d ago';
+    rel = (strings ?? lookupAppLocalizations(const Locale('en')))
+        .adminDAgo((diff.inDays).toString());
   } else {
-    rel = DateFormat('MMM d, yyyy').format(local);
+    rel = DateFormat.yMMMd(strings?.dateLocale ?? 'en_US').format(local);
   }
   return '$rel • ${DateFormat('MMM d, yyyy • h:mm a').format(local)}';
 }
@@ -545,7 +564,7 @@ class _HistoryTile extends StatelessWidget {
           Text(
             record.sourceTitle.isNotEmpty
                 ? record.sourceTitle
-                : _historyEventLabel(record),
+                : _historyEventLabel(record, strings: context.l10n),
             style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 13,
@@ -554,11 +573,11 @@ class _HistoryTile extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 2),
-          Text(_historyTime(record.date),
+          Text(_historyTime(record.date, strings: context.l10n),
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
           const SizedBox(height: 2),
-          Text(_historyEventLabel(record),
+          Text(_historyEventLabel(record, strings: context.l10n),
               style: const TextStyle(color: AppTheme.requested, fontSize: 12)),
         ],
       ),
@@ -588,7 +607,7 @@ class _ActionBar extends StatelessWidget {
               onPressed: onAutomatic,
               icon:
                   const Icon(Icons.search, size: 18, color: AppTheme.available),
-              label: const Text('Automatic',
+              label: Text(context.l10n.adminAutomatic,
                   style: TextStyle(color: AppTheme.textPrimary)),
               style: OutlinedButton.styleFrom(
                 side: const BorderSide(color: AppTheme.border),
@@ -604,7 +623,7 @@ class _ActionBar extends StatelessWidget {
               onPressed: onInteractive,
               icon: const Icon(Icons.person_outline,
                   size: 18, color: AppTheme.available),
-              label: const Text('Interactive',
+              label: Text(context.l10n.adminInteractive,
                   style: TextStyle(color: AppTheme.textPrimary)),
               style: OutlinedButton.styleFrom(
                 side: const BorderSide(color: AppTheme.border),

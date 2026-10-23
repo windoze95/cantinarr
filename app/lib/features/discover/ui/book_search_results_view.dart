@@ -1,3 +1,5 @@
+import 'package:cantinarr/features/discover/ui/browse_labels.dart';
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -70,11 +72,12 @@ class BookSearchResultsView extends ConsumerWidget {
       // user-facing contract text (FAIL-01/02/03). Reword nothing,
       // interpolate nothing (threat T-03-04).
       final message = switch (error!) {
-        BookSearchError.noInstance => 'No Chaptarr instance is available.',
+        BookSearchError.noInstance =>
+          context.l10n.browseNoChaptarrInstanceIsAvailable,
         BookSearchError.forbidden =>
-          'You do not have access to search this book library.',
-        BookSearchError.requestFailed =>
-          'Books could not be searched. Check the connection and try again.',
+          context.l10n.browseYouDoNotHaveAccessToSearchThisBookLibrary,
+        BookSearchError.requestFailed => context
+            .l10n.browseBooksCouldNotBeSearchedCheckTheConnectionAndTryAgain,
       };
       return Center(
         child: Padding(
@@ -216,9 +219,10 @@ class BookSearchResultsView extends ConsumerWidget {
               // this cannot claim no author matched — only that no book did.
               Text(
                 authorsUnavailable
-                    ? 'No books found, and authors could not be searched. '
-                        'Try a different search.'
-                    : 'No books or authors found. Try a different search.',
+                    ? context.l10n
+                        .browseNoBooksFoundAndAuthorsCouldNotBeSearchedBrowseTryADifferentSearch
+                    : context
+                        .l10n.browseNoBooksOrAuthorsFoundTryADifferentSearch,
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: AppTheme.textSecondary),
               ),
@@ -258,7 +262,7 @@ class BookSearchResultsView extends ConsumerWidget {
         isResult.add(result);
       }
 
-      if (ordered.isNotEmpty) addRow(const _SectionLabel('Books'));
+      if (ordered.isNotEmpty) addRow(_SectionLabel(context.l10n.browseBooks));
       for (final result in ordered) {
         addRow(
           _BookResultTile(
@@ -279,7 +283,7 @@ class BookSearchResultsView extends ConsumerWidget {
       }
 
       if (orderedAuthors.isNotEmpty || authorsLoading || authorsUnavailable) {
-        addRow(const _SectionLabel('Authors'));
+        addRow(_SectionLabel(context.l10n.browseAuthors));
       }
       for (final resolved in orderedAuthors) {
         addRow(
@@ -296,9 +300,10 @@ class BookSearchResultsView extends ConsumerWidget {
         );
       }
       if (authorsUnavailable) {
-        addRow(const _OverlayNotice('Authors could not be searched.'));
+        addRow(_OverlayNotice(context.l10n.browseAuthorsCouldNotBeSearched));
       }
-      if (authorsLoading) addRow(const _OverlayNotice('Searching authors…'));
+      if (authorsLoading)
+        addRow(_OverlayNotice(context.l10n.browseSearchingAuthors));
 
       return ListView.separated(
         padding: EdgeInsets.fromLTRB(hPad, 8, hPad, 8),
@@ -440,22 +445,23 @@ class _AuthorResultTile extends StatelessWidget {
     final count = resolved.countLabel;
     final String subtitle;
     if (resolved.ambiguous) {
-      subtitle = 'Author';
+      subtitle = context.l10n.browseAuthor;
     } else if (resolved.inLibrary) {
-      subtitle = count.isEmpty ? 'Author · in your library' : 'Author · $count';
+      subtitle = count.isEmpty
+          ? context.l10n.browseAuthorInYourLibrary
+          : context.l10n.browseAuthorWithCount(browseLabel(context, count));
     } else {
-      subtitle = 'Author · not in your library';
+      subtitle = context.l10n.browseAuthorNotInYourLibrary;
     }
 
     // Says what is missing, never guessing which record was meant.
     final String? guidance;
     if (resolved.ambiguous) {
-      guidance = 'Two authors in your library share this name — open the one '
-          'you want from the Authors row';
+      guidance = context.l10n.browseAmbiguousAuthors;
     } else if (resolved.inLibrary && !canOpen) {
-      guidance = 'Ask an admin to check this author\u2019s library record';
+      guidance = context.l10n.browseAskAnAdminToCheckThisAuthorSLibraryRecord;
     } else if (canDrillDown) {
-      guidance = 'Tap to see their books';
+      guidance = context.l10n.browseTapToSeeTheirBooks;
     } else {
       guidance = null;
     }
@@ -590,12 +596,12 @@ class _BookResultTile extends StatelessWidget {
     final fid = selectedForeignId.trim();
     final lookupId = book.foreignBookId?.trim() ?? '';
     final o = ownership;
-    final chip = _ownershipChip(o);
+    final chip = _ownershipChip(context, o);
     final canOpen = fid.isNotEmpty;
     final identityGuidance = identityAmbiguous
-        ? 'Library match needs attention'
+        ? context.l10n.browseLibraryMatchNeedsAttention
         : fid.isEmpty
-            ? 'Ask an admin to check this book’s library record'
+            ? context.l10n.browseAskAnAdminToCheckThisBookSLibraryRecord
             : null;
     final resultKey = ValueKey('book-result:$lookupId:$fid:$sourceIdentity');
     // The shell overlay wraps this view in an opaque ColoredBox (see
@@ -687,17 +693,17 @@ class _BookResultTile extends StatelessWidget {
   }
 }
 
-Widget? _ownershipChip(BookOwnership? o) {
+Widget? _ownershipChip(BuildContext context, BookOwnership? o) {
   if (o == null || !o.anyOwned) return null;
   final states = <String>[
     if (o.ebook.downloaded)
-      'eBook available'
+      context.l10n.browseEBookAvailable
     else if (o.ebook.monitored)
-      'eBook requested',
+      context.l10n.browseEBookRequested,
     if (o.audiobook.downloaded)
-      'Audiobook available'
+      context.l10n.browseAudiobookAvailable
     else if (o.audiobook.monitored)
-      'Audiobook requested',
+      context.l10n.browseAudiobookRequested,
   ];
   // The grouped chip describes every represented format. A downloaded eBook
   // must not make the whole group look available while its audiobook is

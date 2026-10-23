@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -17,10 +18,10 @@ class CatalogSetupButton extends ConsumerWidget {
     }
     final buttonLabel = label ??
         switch (serviceType) {
-          'radarr' => 'Connect Radarr to request movies',
-          'sonarr' => 'Connect Sonarr to request TV shows',
-          'chaptarr' => 'Connect Chaptarr to request books',
-          'lidarr' => 'Connect Lidarr to request music',
+          'radarr' => context.l10n.browseConnectRadarrToRequestMovies,
+          'sonarr' => context.l10n.browseConnectSonarrToRequestTVShows,
+          'chaptarr' => context.l10n.browseConnectChaptarrToRequestBooks,
+          'lidarr' => context.l10n.browseConnectLidarrToRequestMusic,
           _ => throw ArgumentError.value(serviceType),
         };
     return OutlinedButton.icon(

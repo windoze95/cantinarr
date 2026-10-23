@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -42,7 +43,7 @@ class _SonarrCalendarScreenState extends ConsumerState<SonarrCalendarScreen> {
     if (instanceId == null) {
       setState(() {
         _isLoading = false;
-        _error = 'No Sonarr instance configured';
+        _error = context.l10n.adminNoSonarrInstanceConfigured;
       });
       return;
     }
@@ -62,9 +63,7 @@ class _SonarrCalendarScreenState extends ConsumerState<SonarrCalendarScreen> {
       );
       if (!mounted || gen != _loadGeneration) return;
       setState(() {
-        _entries = events
-            .map((e) => SonarrCalendarEntry.fromJson(e))
-            .toList();
+        _entries = events.map((e) => SonarrCalendarEntry.fromJson(e)).toList();
         _isLoading = false;
         _error = null;
       });
@@ -72,7 +71,7 @@ class _SonarrCalendarScreenState extends ConsumerState<SonarrCalendarScreen> {
       if (!mounted || gen != _loadGeneration) return;
       setState(() {
         _isLoading = false;
-        _error = 'Failed to load calendar: $e';
+        _error = context.l10n.adminFailedToLoadCalendar((e).toString());
       });
     }
   }
@@ -109,15 +108,15 @@ class _SonarrCalendarScreenState extends ConsumerState<SonarrCalendarScreen> {
         color: AppTheme.accent,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
-          children: const [
+          children: [
             SizedBox(height: 160),
             Icon(Icons.calendar_today_outlined,
                 size: 48, color: AppTheme.textSecondary),
             SizedBox(height: 12),
             Center(
-              child: Text('No upcoming episodes',
-                  style: TextStyle(
-                      color: AppTheme.textSecondary, fontSize: 16)),
+              child: Text(context.l10n.adminNoUpcomingEpisodes,
+                  style:
+                      TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
             ),
           ],
         ),
@@ -190,7 +189,7 @@ class _CalendarTile extends StatelessWidget {
         ),
       ),
       title: Text(
-        entry.series?.title ?? 'Unknown series',
+        entry.series?.title ?? context.l10n.adminUnknownSeries,
         style: const TextStyle(
             color: AppTheme.textPrimary,
             fontSize: 13.5,
@@ -211,9 +210,9 @@ class _CalendarTile extends StatelessWidget {
         children: [
           if (air != null)
             Text(
-              DateFormat('h:mm a').format(air),
-              style: const TextStyle(
-                  color: AppTheme.textSecondary, fontSize: 12),
+              DateFormat.jm(context.l10n.dateLocale).format(air),
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
             ),
           if (entry.hasFile)
             Padding(

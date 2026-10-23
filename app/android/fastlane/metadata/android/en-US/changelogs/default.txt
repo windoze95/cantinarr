@@ -1,5 +1,7 @@
-Browse and request movies, TV, books, and music from your Cantinarr server. Follow downloads and receive notifications when requests are ready.
+Browse and request movies, TV, books, and music. Follow downloads and receive notifications when requests are ready.
 
-Optional AI fallback uses provider-managed defaults or rolling aliases for OpenAI OAuth, Gemini, xAI API, and Grok OAuth. Your account and saved choice stay the same. Chat and administrator notices identify the replacement.
+French interface: follow your device language or choose English or Français in Settings > Account > Language. Your choice stays on this device.
 
-Import Plex, Jellyfin, Emby and Audiobookshelf users. Review sign-in, request permissions and library access.
+Import Plex, Jellyfin, Emby and Audiobookshelf users with explicit account linking. Review sign-in, request permissions and library access.
+
+Optional AI fallback identifies the replacement provider in chat.

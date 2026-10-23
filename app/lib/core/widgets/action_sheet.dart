@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/shell_labels.dart';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import 'app_sheet.dart';
@@ -44,10 +45,11 @@ Future<T?> showActionSheet<T>(
           ),
           ...actions.map((a) => ListTile(
                 enabled: a.enabled,
-                leading: Icon(a.icon, color: a.enabled
-                    ? a.color ?? AppTheme.accent
-                    : AppTheme.textSecondary),
-                title: Text(a.label,
+                leading: Icon(a.icon,
+                    color: a.enabled
+                        ? a.color ?? AppTheme.accent
+                        : AppTheme.textSecondary),
+                title: Text(localizeLibraryAction(context, a.label),
                     style: TextStyle(
                         color: a.enabled
                             ? a.color ?? AppTheme.textPrimary
