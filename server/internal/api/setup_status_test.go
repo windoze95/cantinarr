@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/config"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
@@ -19,8 +20,8 @@ import (
 
 func TestBuildSetupItemsNothingConfigured(t *testing.T) {
 	items := buildSetupItems(setupFacts{})
-	if len(items) != 15 {
-		t.Fatalf("items = %d, want 15", len(items))
+	if len(items) != 16 {
+		t.Fatalf("items = %d, want 16", len(items))
 	}
 	for _, item := range items {
 		if item.Configured {
@@ -56,6 +57,7 @@ func TestBuildSetupItemsMapsFacts(t *testing.T) {
 		"tmdb":            true,
 		"push":            false,
 		"media_servers":   false,
+		"users":           false,
 		"download_client": true,
 		"media_downloads": true,
 		"tautulli":        false,
@@ -70,6 +72,72 @@ func TestBuildSetupItemsMapsFacts(t *testing.T) {
 		if got[key] != expect {
 			t.Errorf("%s configured = %v, want %v", key, got[key], expect)
 		}
+	}
+}
+
+func TestSetupStatusAddPeopleUsesCurrentNonAdminAccounts(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x31}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := instance.NewStore(database, cipher)
+	creds := credentials.NewRegistry(database, cipher)
+	server := &instance.Instance{ServiceType: "audiobookshelf", Name: "Audiobooks", URL: "http://abs:13378", APIKey: "test-key"}
+	if err := store.Create(server); err != nil {
+		t.Fatal(err)
+	}
+	handler := setupStatusHandler(&config.Config{}, store, creds, nil, nil, nil, auth.NewService(database, "test-secret"))
+	check := func(want bool) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		handler(rec, httptest.NewRequest(http.MethodGet, "/api/admin/setup-status", nil))
+		var response struct {
+			Items []setupItem `json:"items"`
+		}
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &response) != nil {
+			t.Fatalf("setup = %d %s", rec.Code, rec.Body.String())
+		}
+		found := false
+		for _, item := range response.Items {
+			if item.Key == "users" {
+				found = true
+				if item.Configured != want || !item.Optional || item.Title != "Add people" {
+					t.Fatalf("people step = %+v, want configured=%v", item, want)
+				}
+			}
+			if item.Key == "media_servers" && (!item.Configured || !strings.Contains(item.Description, "Audiobookshelf")) {
+				t.Fatalf("Audiobookshelf missing from media server step: %+v", item)
+			}
+		}
+		if !found {
+			t.Fatal("missing Add people step")
+		}
+	}
+	check(false)
+	if _, err := database.Exec("INSERT INTO users(username,password_hash,role) VALUES ('admin','','admin')"); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+	if _, err := database.Exec("INSERT INTO users(username,password_hash,role) VALUES ('friend','','user')"); err != nil {
+		t.Fatal(err)
+	}
+	check(true)
+	if _, err := database.Exec("UPDATE users SET role='admin' WHERE username='friend'"); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	handler(rec, httptest.NewRequest(http.MethodGet, "/api/admin/setup-status", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("unreadable user state returned %d", rec.Code)
 	}
 }
 
@@ -231,7 +299,7 @@ func TestSetupSkipsPersistForEveryItem(t *testing.T) {
 	get := func() []setupItem {
 		t.Helper()
 		rec := httptest.NewRecorder()
-		setupStatusHandler(&config.Config{}, store, creds, nil, settings, nil)(rec, httptest.NewRequest(http.MethodGet, "/api/admin/setup-status", nil))
+		setupStatusHandler(&config.Config{}, store, creds, nil, settings, nil, auth.NewService(database, "test-secret"))(rec, httptest.NewRequest(http.MethodGet, "/api/admin/setup-status", nil))
 		var response struct {
 			Items []setupItem `json:"items"`
 		}
@@ -244,7 +312,7 @@ func TestSetupSkipsPersistForEveryItem(t *testing.T) {
 		return response.Items
 	}
 	items := get()
-	if len(items) != 15 {
+	if len(items) != 16 {
 		t.Fatalf("read %d items", len(items))
 	}
 	for _, item := range items {

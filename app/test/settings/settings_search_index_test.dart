@@ -61,18 +61,28 @@ const _routableSettingsPaths = {
 
 void main() {
   test('Apple TVs require an admin and server capability', () {
-    final entry = settingsSearchIndex.singleWhere((e) => e.id == 'screen.apple-tvs');
-    expect(entry.gate(const SettingsSearchGates(user: _admin, appleTvRemote: true)), isTrue);
+    final entry =
+        settingsSearchIndex.singleWhere((e) => e.id == 'screen.apple-tvs');
+    expect(
+        entry
+            .gate(const SettingsSearchGates(user: _admin, appleTvRemote: true)),
+        isTrue);
     expect(entry.gate(const SettingsSearchGates(user: _admin)), isFalse);
-    expect(entry.gate(const SettingsSearchGates(user: _user, appleTvRemote: true)), isFalse);
+    expect(
+        entry.gate(const SettingsSearchGates(user: _user, appleTvRemote: true)),
+        isFalse);
   });
 
   test('video app search follows the configured video-server gate', () {
-    final entry = settingsSearchIndex.singleWhere((e) => e.id == 'screen.video-apps');
+    final entry =
+        settingsSearchIndex.singleWhere((e) => e.id == 'screen.video-apps');
     expect(entry.route, '/settings/video-apps');
     expect(entry.keywords, containsAll(['infuse', 'plex', 'jellyfin', 'emby']));
     expect(entry.gate(const SettingsSearchGates(user: null)), isFalse);
-    expect(entry.gate(const SettingsSearchGates(user: null, videoServersVisible: true)), isTrue);
+    expect(
+        entry.gate(
+            const SettingsSearchGates(user: null, videoServersVisible: true)),
+        isTrue);
   });
 
   group('registry invariants', () {
@@ -111,13 +121,37 @@ void main() {
   });
 
   group('matching', () {
-    test('listening apps is searchable for either role with Audiobookshelf', () {
+    test('media-user import and linking terms find Users for administrators',
+        () {
+      for (final query in [
+        'import Plex users',
+        'import Jellyfin users',
+        'import Emby users',
+        'import Audiobookshelf users',
+        'sync users',
+        'shared users',
+        'account linking',
+      ]) {
+        expect(searchSettingsIndex(query, _adminGates).map((entry) => entry.id),
+            contains('screen.users'),
+            reason: query);
+        expect(searchSettingsIndex(query, _userGates).map((entry) => entry.id),
+            isNot(contains('screen.users')),
+            reason: query);
+      }
+    });
+
+    test('listening apps is searchable for either role with Audiobookshelf',
+        () {
       for (final user in [_admin, _user]) {
         for (final query in ['ShelfPlayer', 'TheShelf', 'listening apps']) {
           expect(
-            searchSettingsIndex(query, SettingsSearchGates(
-              user: user, audiobookshelfVisible: true,
-            )).map((e) => e.route),
+            searchSettingsIndex(
+                query,
+                SettingsSearchGates(
+                  user: user,
+                  audiobookshelfVisible: true,
+                )).map((e) => e.route),
             contains('/settings/listening-apps'),
           );
           expect(
@@ -221,8 +255,7 @@ void main() {
         mediaServersVisible: true,
       );
       expect(
-        searchSettingsIndex('media server access', requester)
-            .map((e) => e.id),
+        searchSettingsIndex('media server access', requester).map((e) => e.id),
         contains('screen.media-servers'),
       );
     });

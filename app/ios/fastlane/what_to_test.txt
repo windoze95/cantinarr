@@ -7,3 +7,5 @@ When reporting an issue, include your device, iOS version, and Cantinarr server 
 AI provider choices now use current model IDs and the matching API or OAuth endpoint. Check saving your selected provider/model and an AI conversation with tool lookups.
 
 Optional fallback uses provider-managed defaults or rolling aliases for OpenAI OAuth, Gemini, xAI API, and Grok OAuth. Check that unsupported providers hide the switch, the saved choice stays unchanged, and chat and administrator notices identify the replacement.
+
+User onboarding now has labeled Import users and Invite user actions, explicit account linking for Plex/Jellyfin/Emby/Audiobookshelf, and separate sign-in, request, and media-access status. Test importing, existing-account mapping, interrupted retries, and recipient account setup.

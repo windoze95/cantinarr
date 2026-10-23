@@ -393,6 +393,12 @@ The router guard redirects unauthenticated users to `/login`, remembers safe int
 - The browser Back regression uses release-mode Flutter screens and local API/artwork fixtures in Chrome and Firefox. Build with `flutter build web --release --no-pub -t test/preview/discover_return_main.dart --output=/tmp/discover-return-web`, then run `node tool/screenshots/discover_return.js /tmp/discover-return-web /tmp/discover-return-evidence`. It uses the existing Playwright package in `tool/screenshots/` (`npm ci`, then `npx playwright install firefox` there; system Chrome must also be installed). It also covers a movie detail page opening Recommended and Similar movies, then returning to its parallax backdrop without scrolling. Evidence includes before/after screenshots, artwork pixel comparisons, and image request counts for normal, slow and failed refreshes. Fixture results prove browser rendering and cache reuse, not live third-party availability.
 - Store listing copy, graphics, and screenshots live in `android/fastlane` + `ios/fastlane` and sync to both consoles on merge (`storelisting.yml`). Screenshots are generated from the demo-data harness `test/preview/screenshot_main.dart` via `tool/screenshots/` — see [docs/store-release.md](../docs/store-release.md).
 
+## User onboarding and library access
+
+**Settings > Users** offers visible **Import users** and **Invite user** actions on desktop and mobile. The shared `/settings/users/import` route accepts an optional `instanceId` query parameter; saved media-server settings and the post-connection prompt open it with a server selected. It supports Plex, Jellyfin, Emby, and Audiobookshelf, explicit existing-user mappings, searchable selection, and per-account outcomes. It requires the server's `media_user_import_explicit_linking` capability and keeps remote access management off by default.
+
+Selecting a person opens `/settings/users/:userId/access`. **Cantinarr sign-in**, **Request permissions**, and **Media server accounts** report independent state and direct the administrator to existing editors. Import results retain invitation links and offer add-only request-library assignments. Required SSO changes the invitation instructions; Plex identity confirmation does not bypass the SSO policy. Recipient media-server controls name the provider and distinguish linking an external account from signing into Cantinarr.
+
 ## License
 
 See the root repository for license information.

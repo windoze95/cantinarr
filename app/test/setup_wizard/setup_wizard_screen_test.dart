@@ -103,6 +103,9 @@ void main() {
           },
         ),
         GoRoute(
+            path: '/settings/users',
+            builder: (_, __) => const Scaffold(body: Text('People settings'))),
+        GoRoute(
           path: '/settings',
           builder: (_, state) {
             capturedSettingsUri = state.uri;
@@ -118,6 +121,7 @@ void main() {
       ..httpClientAdapter = _WizardAdapter([
         for (final key in expectedExtras.keys) (key, false, true),
         ('push', false, true),
+        ('users', false, false),
       ]);
     await tester.pumpWidget(
       ProviderScope(
@@ -145,6 +149,13 @@ void main() {
       router.pop();
       await tester.pumpAndSettle();
     }
+
+    await tester.ensureVisible(find.text('users'));
+    await tester.tap(find.text('users'));
+    await tester.pumpAndSettle();
+    expect(find.text('People settings'), findsOneWidget);
+    router.pop();
+    await tester.pumpAndSettle();
 
     await tester.ensureVisible(find.text('push'));
     await tester.tap(find.text('push'));

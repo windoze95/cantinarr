@@ -27,7 +27,9 @@ Revoking a grant can disable the linked Jellyfin or Emby account, or remove the 
 
 ## Existing accounts
 
-Import or explicitly link an existing media-server account where offered. Check the actual external identity. Similar usernames or a typed email are not enough to prove that two accounts belong together.
+Open **Settings > Users > Import users**, or **Import users** on the saved instance. Choose the server, select accounts, and explicitly select a Cantinarr user for any existing-account mapping. Search and selection work the same way for Plex, Jellyfin, Emby, and Audiobookshelf. See [accounts and invitations](/admin/users/#import-people-from-a-media-server) for the full workflow.
+
+Import results lead to separate sign-in, request-permission, and media-access steps. Remote access management starts off. Check the actual external identity; similar usernames or a typed email do not select an existing Cantinarr account.
 
 A media-account link and a Cantinarr sign-in identity are separate. Plex library access does not automatically enable **Continue with Plex**. Configure and review that under [Plex sign-in](/integrations/guides/plex-sign-in/).
 

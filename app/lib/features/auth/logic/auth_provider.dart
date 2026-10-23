@@ -227,6 +227,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         adminCatalogBrowsing: meta['admin_catalog_browsing'] as bool? ?? false,
         mediaAccountManagement:
             meta['media_account_management'] as bool? ?? false,
+        mediaUserImportExplicitLinking:
+            meta['media_user_import_explicit_linking'] as bool? ?? false,
         appleTvRemote: meta['apple_tv_remote'] as bool? ?? false,
         tvMatchCorrections: meta['tv_match_corrections'] as bool? ?? false,
         tvLibraryNavigation: meta['tv_library_navigation'] as bool? ?? false,
@@ -316,6 +318,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
           plexAccessRequestable: config.plexAccessRequestable,
           adminCatalogBrowsing: config.adminCatalogBrowsing,
           mediaAccountManagement: config.mediaAccountManagement,
+          mediaUserImportExplicitLinking: config.mediaUserImportExplicitLinking,
           appleTvRemote: config.appleTvRemote,
           tvMatchCorrections: config.tvMatchCorrections,
           tvLibraryNavigation: config.tvLibraryNavigation,
@@ -411,6 +414,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
         mediaAccountManagement: config.mediaAccountManagement,
+        mediaUserImportExplicitLinking: config.mediaUserImportExplicitLinking,
         appleTvRemote: config.appleTvRemote,
         tvMatchCorrections: config.tvMatchCorrections,
         tvLibraryNavigation: config.tvLibraryNavigation,
@@ -493,8 +497,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   Future<({String serverUrl, ServerStatus status})> checkServer(
       String serverUrl) async {
     final schemeProbe = serverUrl.trim().toLowerCase();
-    final hasScheme = schemeProbe.startsWith('http://') ||
-        schemeProbe.startsWith('https://');
+    final hasScheme =
+        schemeProbe.startsWith('http://') || schemeProbe.startsWith('https://');
     final normalizedUrl = normalizeServerUrl(serverUrl);
     try {
       final status = await _authService.getServerStatus(normalizedUrl);
@@ -562,6 +566,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
         mediaAccountManagement: config.mediaAccountManagement,
+        mediaUserImportExplicitLinking: config.mediaUserImportExplicitLinking,
         appleTvRemote: config.appleTvRemote,
         tvMatchCorrections: config.tvMatchCorrections,
         tvLibraryNavigation: config.tvLibraryNavigation,
@@ -606,15 +611,18 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       final normalized = normalizeServerUrl(server);
       if (purpose != 'login' &&
           (current.connection == null ||
-              normalizeServerUrl(current.connection!.serverUrl) != normalized)) {
-        throw StateError('Sign in to this server before linking or testing single sign-on.');
+              normalizeServerUrl(current.connection!.serverUrl) !=
+                  normalized)) {
+        throw StateError(
+            'Sign in to this server before linking or testing single sign-on.');
       }
       final identity = await ref.read(deviceIdentityProvider).resolve();
       await ref.read(oidcServiceProvider).start(normalized,
           purpose: purpose,
           invitation: invitation,
           externalOrigin: externalOrigin,
-          accessToken: purpose == 'login' ? null : current.connection?.accessToken,
+          accessToken:
+              purpose == 'login' ? null : current.connection?.accessToken,
           deviceName: identity.displayName,
           hardwareId: identity.hardwareId);
       state = AsyncData(current.copyWith(isLoading: false, clearError: true));
@@ -700,7 +708,9 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     final service = ref.read(plexAuthServiceProvider);
     final generation = service.epoch;
     final identity = await ref.read(deviceIdentityProvider).resolve();
-    if (generation != service.epoch) throw StateError('Plex sign-in cancelled.');
+    if (generation != service.epoch) {
+      throw StateError('Plex sign-in cancelled.');
+    }
     final pending = await service.start(normalized,
         purpose: purpose,
         accessToken: current.connection?.accessToken,
@@ -760,6 +770,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
         mediaAccountManagement: config.mediaAccountManagement,
+        mediaUserImportExplicitLinking: config.mediaUserImportExplicitLinking,
         appleTvRemote: config.appleTvRemote,
         tvMatchCorrections: config.tvMatchCorrections,
         tvLibraryNavigation: config.tvLibraryNavigation,
@@ -823,7 +834,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   /// current session intact until the browser sign-in succeeds. The old
   /// session's teardown mirrors [logout] and is best-effort — an unreachable
   /// old server never blocks the switch.
-  Future<ServerSwitchResult> switchServer(String serverUrl, String token) async {
+  Future<ServerSwitchResult> switchServer(
+      String serverUrl, String token) async {
     final oldConn = state.valueOrNull?.connection;
 
     final String normalizedUrl;
@@ -912,6 +924,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       plexAccessRequestable: config.plexAccessRequestable,
       adminCatalogBrowsing: config.adminCatalogBrowsing,
       mediaAccountManagement: config.mediaAccountManagement,
+      mediaUserImportExplicitLinking: config.mediaUserImportExplicitLinking,
       appleTvRemote: config.appleTvRemote,
       tvMatchCorrections: config.tvMatchCorrections,
       tvLibraryNavigation: config.tvLibraryNavigation,
@@ -1004,6 +1017,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
         mediaAccountManagement: config.mediaAccountManagement,
+        mediaUserImportExplicitLinking: config.mediaUserImportExplicitLinking,
         appleTvRemote: config.appleTvRemote,
         tvMatchCorrections: config.tvMatchCorrections,
         tvLibraryNavigation: config.tvLibraryNavigation,
@@ -1242,6 +1256,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
         mediaAccountManagement: config.mediaAccountManagement,
+        mediaUserImportExplicitLinking: config.mediaUserImportExplicitLinking,
         appleTvRemote: config.appleTvRemote,
         tvMatchCorrections: config.tvMatchCorrections,
         tvLibraryNavigation: config.tvLibraryNavigation,
@@ -1425,6 +1440,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         'allow_reporting': conn.allowReporting,
         'admin_catalog_browsing': conn.adminCatalogBrowsing,
         'media_account_management': conn.mediaAccountManagement,
+        'media_user_import_explicit_linking':
+            conn.mediaUserImportExplicitLinking,
         'apple_tv_remote': conn.appleTvRemote,
         'tv_match_corrections': conn.tvMatchCorrections,
         'tv_library_navigation': conn.tvLibraryNavigation,

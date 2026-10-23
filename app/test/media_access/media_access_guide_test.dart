@@ -130,8 +130,8 @@ class _FakeAuthNotifier extends AuthNotifier {
   Future<void> refreshConfig() async {
     final current = state.valueOrNull;
     if (current != null) {
-      state = AsyncData(current.copyWith(
-        connection: current.connection!.copyWith()));
+      state = AsyncData(
+          current.copyWith(connection: current.connection!.copyWith()));
     }
   }
 }
@@ -285,7 +285,8 @@ Future<void> _unmount(WidgetTester tester) async {
 
 /// Opens the password sheet from the account card.
 Future<void> _openSheet(WidgetTester tester) async {
-  await tester.tap(find.widgetWithText(ElevatedButton, 'Create my account'));
+  await tester
+      .tap(find.widgetWithText(ElevatedButton, 'Create my Jellyfin account'));
   await tester.pumpAndSettle();
   expect(find.text('Create your Jellyfin account'), findsOneWidget);
 }
@@ -537,6 +538,132 @@ void main() {
         findsOneWidget);
   });
 
+  for (final server in [_jellyfin, _emby, _audiobookshelf]) {
+    testWidgets(
+        '${server.serviceType} names both account actions and explains credentials on a phone',
+        (tester) async {
+      final label = mediaServerTypeLabel(server.serviceType);
+      await _pumpGuide(tester,
+          instances: [server],
+          size: const Size(320, 1200),
+          handlers: {
+            'GET /api/media-servers': (_, __) => _Reply(200, [
+                  {
+                    'instance_id': server.id,
+                    'service_type': server.serviceType,
+                    'name': server.name,
+                  }
+                ]),
+          });
+      expect(find.text('Create my $label account'), findsOneWidget);
+      expect(find.text('Link my $label account'), findsOneWidget);
+      expect(find.text('Account not linked'), findsOneWidget);
+      expect(find.textContaining('These credentials are separate'),
+          findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('unverified remote access remains unknown instead of active',
+      (tester) async {
+    await _pumpGuide(tester, handlers: {
+      'GET /api/media-servers': (_, __) =>
+          _Reply(200, [_server(account: _account(verified: false))]),
+    });
+    expect(find.text('Access could not be verified'), findsOneWidget);
+    expect(find.text('Access active'), findsNothing);
+  });
+
+  for (final server in [_jellyfin, _emby, _audiobookshelf, _plex]) {
+    testWidgets(
+        '${server.serviceType} failed refresh replaces active access with unknown and retains identity',
+        (tester) async {
+      var unavailable = false;
+      final adapter = await _pumpGuide(tester,
+          instances: [server],
+          size: const Size(390, 1200),
+          handlers: {
+            'GET /api/media-servers': (_, __) => unavailable
+                ? const _Reply(0, {})
+                : _Reply(200, [
+                    {
+                      'instance_id': server.id,
+                      'service_type': server.serviceType,
+                      'name': server.name,
+                      'public_address': 'https://media.example.com',
+                      'account': _account(),
+                    }
+                  ]),
+          });
+      expect(find.text('Access active'), findsOneWidget);
+
+      unavailable = true;
+      await _lastAuth!.refreshConfig();
+      await tester.pumpAndSettle();
+
+      expect(find.text('Access active'), findsNothing);
+      expect(find.text('Access could not be verified'), findsOneWidget);
+      expect(find.text('Last known account: alice'), findsOneWidget);
+      expect(
+          find.text(
+              '${mediaServerTypeLabel(server.serviceType)} · ${server.name}'),
+          findsOneWidget);
+      expect(find.text('https://media.example.com'), findsOneWidget);
+      expect(find.text('Retry'), findsOneWidget);
+      expect(find.text('Open ${mediaServerTypeLabel(server.serviceType)}'),
+          findsOneWidget);
+      expect(find.textContaining('Create my'), findsNothing);
+      expect(find.textContaining('Link my'), findsNothing);
+      expect(find.text('Share my Plex email'), findsNothing);
+      expect(find.text('Wrong email?'), findsNothing);
+      expect(
+          adapter.requests.every((request) => request.method == 'GET'), isTrue);
+      expect(tester.takeException(), isNull);
+
+      unavailable = false;
+      await tester.tap(find.widgetWithText(TextButton, 'Retry'));
+      await tester.pumpAndSettle();
+      expect(find.text('Access active'), findsOneWidget);
+      expect(find.text('Access could not be verified'), findsNothing);
+    });
+  }
+
+  testWidgets(
+      'successful retry restores pending and intentionally unlinked states',
+      (tester) async {
+    var unavailable = false;
+    await _pumpGuide(tester,
+        instances: const [_plex, _jellyfin],
+        size: const Size(390, 1600),
+        handlers: {
+          'GET /api/media-servers': (_, __) => unavailable
+              ? const _Reply(503, {})
+              : _Reply(200, [
+                  _plexServer(account: _share()),
+                  {..._server(), 'auto_link_suppressed': true},
+                ]),
+        });
+    expect(find.text('Awaiting invitation acceptance'), findsOneWidget);
+    expect(find.text('Account intentionally unlinked'), findsOneWidget);
+
+    unavailable = true;
+    await _lastAuth!.refreshConfig();
+    await tester.pumpAndSettle();
+    expect(find.text('Access could not be verified'), findsNWidgets(2));
+    expect(find.text('Awaiting invitation acceptance'), findsNothing);
+    expect(find.text('Account intentionally unlinked'), findsNothing);
+    expect(find.text('Wrong email?'), findsNothing);
+    expect(find.text('Link my Jellyfin account'), findsNothing);
+
+    unavailable = false;
+    await tester.tap(find.widgetWithText(TextButton, 'Retry'));
+    await tester.pumpAndSettle();
+    expect(find.text('Awaiting invitation acceptance'), findsOneWidget);
+    expect(find.text('Account intentionally unlinked'), findsOneWidget);
+    expect(find.text('Wrong email?'), findsOneWidget);
+    expect(find.text('Link my Jellyfin account'), findsOneWidget);
+  });
+
   testWidgets('explicitly unlinked Plex server offers per-server relink',
       (tester) async {
     await _pumpGuide(tester, supportsManagement: true, instances: const [
@@ -549,6 +676,7 @@ void main() {
     expect(find.text('Link my Plex account'), findsOneWidget);
     expect(find.text('Sign in with Plex'), findsNothing);
     expect(find.textContaining('was unlinked from'), findsOneWidget);
+    expect(find.text('Account intentionally unlinked'), findsOneWidget);
   });
 
   testWidgets(
@@ -564,8 +692,9 @@ void main() {
 
     expect(find.text('Watch on Jellyfin'), findsOneWidget);
     expect(
-      find.text('You have access to Home Jellyfin. Create your account to '
-          'get started.'),
+      find.text(
+          'Your admin has offered access to Home Jellyfin. Create or link '
+          'your account to get started.'),
       findsOneWidget,
     );
     expect(find.text('Your account'), findsOneWidget);
@@ -599,32 +728,51 @@ void main() {
     expect(find.text('alice'), findsOneWidget);
     expect(find.text('Sign in at https://jf.example.com'), findsOneWidget);
     expect(find.widgetWithText(TextButton, 'Copy address'), findsOneWidget);
-    expect(find.widgetWithText(TextButton, 'Open'), findsOneWidget);
-    expect(
-        find.widgetWithText(ElevatedButton, 'Create my account'), findsNothing);
+    expect(find.widgetWithText(TextButton, 'Open Jellyfin'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Create my Jellyfin account'),
+        findsNothing);
   });
 
   for (final type in ['plex', 'jellyfin', 'emby']) {
-    testWidgets('$type guide opens Infuse home and refreshes changed preferences', (tester) async {
+    testWidgets(
+        '$type guide opens Infuse home and refreshes changed preferences',
+        (tester) async {
       final urls = <Uri>[];
       var app = 'infuse';
-      final row = type == 'plex' ? _plexServer(account: _share(pending: false))
-          : type == 'emby' ? _embyServer(account: _account()) : _server(account: _account());
-      await _pumpGuide(tester, handlers: {
-        'GET /api/media-servers': (_, __) => _Reply(200, [{...row, 'video_apps': {'ios': app}}]),
-      }, launcher: MediaAppLauncher(platform: TargetPlatform.iOS, isWeb: false,
-        launchExternal: (uri) async { urls.add(uri); return true; }));
+      final row = type == 'plex'
+          ? _plexServer(account: _share(pending: false))
+          : type == 'emby'
+              ? _embyServer(account: _account())
+              : _server(account: _account());
+      await _pumpGuide(tester,
+          handlers: {
+            'GET /api/media-servers': (_, __) => _Reply(200, [
+                  {
+                    ...row,
+                    'video_apps': {'ios': app}
+                  }
+                ]),
+          },
+          launcher: MediaAppLauncher(
+              platform: TargetPlatform.iOS,
+              isWeb: false,
+              launchExternal: (uri) async {
+                urls.add(uri);
+                return true;
+              }));
       await tester.ensureVisible(find.text('Open in Infuse'));
       await tester.tap(find.text('Open in Infuse'));
       await tester.pumpAndSettle();
       expect(urls.single.toString(), 'infuse://');
       app = 'browser';
       ProviderScope.containerOf(tester.element(find.byType(MediaAccessGuide)))
-        .read(videoAppRevisionProvider.notifier).state++;
+          .read(videoAppRevisionProvider.notifier)
+          .state++;
       await tester.pumpAndSettle();
       expect(find.text('Open in Infuse'), findsNothing);
-      await tester.ensureVisible(find.text('Open'));
-      await tester.tap(find.text('Open'));
+      await tester
+          .ensureVisible(find.text('Open ${mediaServerTypeLabel(type)}'));
+      await tester.tap(find.text('Open ${mediaServerTypeLabel(type)}'));
       await tester.pumpAndSettle();
       expect(urls.last.toString(), row['public_address']);
       app = 'infuse';
@@ -639,25 +787,37 @@ void main() {
     });
   }
 
-  testWidgets('ABS guide refreshes the chosen listening app on resume', (tester) async {
+  testWidgets('ABS guide refreshes the chosen listening app on resume',
+      (tester) async {
     var iosApp = 'browser';
     final opened = <Uri>[];
-    await _pumpGuide(tester, instances: [_audiobookshelf], handlers: {
-      'GET /api/media-servers': (_, __) => _Reply(200, [{
-        'instance_id': 'abs-a', 'service_type': 'audiobookshelf',
-        'name': 'Shared books', 'public_address': 'https://books.example.com',
-        'account': _account(),
-        'listening_apps': {'ios': iosApp, 'android': 'browser'},
-      }]),
-    }, launcher: MediaAppLauncher(
-      platform: TargetPlatform.iOS, isWeb: false,
-      launchExternal: (uri) async { opened.add(uri); return true; },
-    ));
+    await _pumpGuide(tester,
+        instances: [_audiobookshelf],
+        handlers: {
+          'GET /api/media-servers': (_, __) => _Reply(200, [
+                {
+                  'instance_id': 'abs-a',
+                  'service_type': 'audiobookshelf',
+                  'name': 'Shared books',
+                  'public_address': 'https://books.example.com',
+                  'account': _account(),
+                  'listening_apps': {'ios': iosApp, 'android': 'browser'},
+                }
+              ]),
+        },
+        launcher: MediaAppLauncher(
+          platform: TargetPlatform.iOS,
+          isWeb: false,
+          launchExternal: (uri) async {
+            opened.add(uri);
+            return true;
+          },
+        ));
     iosApp = 'shelfplayer';
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pumpAndSettle();
-    final open = find.widgetWithText(TextButton, 'Open').first;
+    final open = find.widgetWithText(TextButton, 'Open Audiobookshelf').first;
     await tester.ensureVisible(open);
     await tester.tap(open);
     await tester.pumpAndSettle();
@@ -698,10 +858,8 @@ void main() {
           scrollable: find.byType(Scrollable).first);
       expect(find.textContaining('separate Chaptarr access'), findsOneWidget);
       expect(
-          find.textContaining('Listen opens a verified copy'),
-          findsOneWidget);
-      expect(find.textContaining('Open is a general shortcut'),
-          findsOneWidget);
+          find.textContaining('Listen opens a verified copy'), findsOneWidget);
+      expect(find.textContaining('Open is a general shortcut'), findsOneWidget);
       expect(find.textContaining('Settings → Account → Listening apps'),
           findsOneWidget);
       if (mixed) {
@@ -716,7 +874,7 @@ void main() {
           .position
           .jumpTo(0);
       await tester.pumpAndSettle();
-      final open = find.widgetWithText(TextButton, 'Open').first;
+      final open = find.widgetWithText(TextButton, 'Open Audiobookshelf').first;
       await tester.ensureVisible(open);
       await tester.tap(open);
       await tester.pumpAndSettle();
@@ -751,7 +909,8 @@ void main() {
                 return true;
               },
             ));
-        final button = find.widgetWithText(TextButton, 'Open');
+        final button = find.widgetWithText(
+            TextButton, 'Open ${mediaServerTypeLabel(server.serviceType)}');
         await tester.ensureVisible(button);
         await tester.tap(button);
         await tester.pumpAndSettle();
@@ -784,7 +943,7 @@ void main() {
             return false;
           },
         ));
-    await tester.tap(find.widgetWithText(TextButton, 'Open'));
+    await tester.tap(find.widgetWithText(TextButton, 'Open Jellyfin'));
     await tester.pumpAndSettle();
     expect(launched.map((uri) => uri.toString()),
         ['org.jellyfin.expo://', 'https://jf.example.com']);
@@ -837,7 +996,8 @@ void main() {
     expect(find.textContaining('Install the Jellyfin app'), findsOneWidget);
 
     // Only the Emby card has no account, and its sheet speaks Emby.
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Create my account'));
+    await tester
+        .tap(find.widgetWithText(ElevatedButton, 'Create my Emby account'));
     await tester.pumpAndSettle();
     expect(find.text('Create your Emby account'), findsOneWidget);
     expect(
@@ -862,7 +1022,7 @@ void main() {
 
     expect(
       find.text('The name alice is already taken on Home Jellyfin. If that '
-          "account is yours, go back and tap 'I already have an account' to "
+          "account is yours, go back and tap 'Link my Jellyfin account' to "
           'sign in with its password. Otherwise ask your admin.'),
       findsOneWidget,
     );
@@ -898,17 +1058,18 @@ void main() {
           "If it's yours, sign in with its password to link it."),
       findsOneWidget,
     );
-    expect(find.widgetWithText(ElevatedButton, 'Sign in to link it'),
+    expect(find.widgetWithText(ElevatedButton, 'Link my Jellyfin account'),
         findsOneWidget);
     expect(find.text('Not yours? Ask your admin.'), findsOneWidget);
-    expect(
-        find.widgetWithText(ElevatedButton, 'Create my account'), findsNothing);
-    expect(find.widgetWithText(TextButton, 'I already have an account'),
+    expect(find.widgetWithText(ElevatedButton, 'Create my Jellyfin account'),
+        findsNothing);
+    expect(find.widgetWithText(TextButton, 'Link my Jellyfin account'),
         findsNothing);
     // The flag is a hint about the layout, never a claim of an account.
     expect(find.text('Username'), findsNothing);
 
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Sign in to link it'));
+    await tester
+        .tap(find.widgetWithText(ElevatedButton, 'Link my Jellyfin account'));
     await tester.pumpAndSettle();
     expect(find.text('Link your Jellyfin account'), findsOneWidget);
     await tester.enterText(
@@ -924,7 +1085,7 @@ void main() {
     // The card re-read the server: the linked account is shown and the
     // hint is gone with it.
     expect(find.text('Username'), findsOneWidget);
-    expect(find.widgetWithText(ElevatedButton, 'Sign in to link it'),
+    expect(find.widgetWithText(ElevatedButton, 'Link my Jellyfin account'),
         findsNothing);
   });
 
@@ -1008,8 +1169,8 @@ void main() {
           "if you think that's a mistake."),
       findsOneWidget,
     );
-    expect(
-        find.widgetWithText(ElevatedButton, 'Create my account'), findsNothing);
+    expect(find.widgetWithText(ElevatedButton, 'Create my Jellyfin account'),
+        findsNothing);
     expect(find.text('Username'), findsNothing);
   });
 
@@ -1048,7 +1209,7 @@ void main() {
           'where to sign in.'),
       findsOneWidget,
     );
-    expect(find.widgetWithText(TextButton, 'Open'), findsNothing);
+    expect(find.widgetWithText(TextButton, 'Open Jellyfin'), findsNothing);
     expect(find.textContaining('Sign in at'), findsNothing);
   });
 
@@ -1095,8 +1256,29 @@ void main() {
 
     expect(adapter.calls('GET', '/api/media-servers'), 2);
     expect(find.text("Couldn't load your media servers."), findsNothing);
-    expect(find.widgetWithText(ElevatedButton, 'Create my account'),
+    expect(find.widgetWithText(ElevatedButton, 'Create my Jellyfin account'),
         findsOneWidget);
+  });
+
+  testWidgets('a failed refresh does not preserve an empty ready state',
+      (tester) async {
+    var unavailable = false;
+    await _pumpGuide(tester, instances: const [], handlers: {
+      'GET /api/media-servers': (_, __) =>
+          unavailable ? const _Reply(503, {}) : const _Reply(200, <Object>[]),
+    });
+    expect(find.textContaining('No media server is shared with you yet'),
+        findsOneWidget);
+
+    unavailable = true;
+    await _lastAuth!.refreshConfig();
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('No media server is shared with you yet'),
+        findsNothing);
+    expect(find.text("Couldn't load your media servers."), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Retry'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('the password never reaches the safe HTTP log', (tester) async {
@@ -1178,7 +1360,7 @@ void main() {
           'the email of your Plex account.'),
       findsOneWidget,
     );
-    expect(find.widgetWithText(ElevatedButton, 'Sign in with Plex'),
+    expect(find.widgetWithText(ElevatedButton, 'Link my Plex account'),
         findsOneWidget);
     expect(find.textContaining('Install the Plex app'), findsOneWidget);
     expect(find.text('Download Plex apps'), findsOneWidget);
@@ -1227,7 +1409,7 @@ void main() {
     expect(find.text('Cantina Plex is shared with alice@example.com'),
         findsOneWidget);
     expect(find.text('Sign in at https://app.plex.tv'), findsOneWidget);
-    expect(find.widgetWithText(TextButton, 'Open'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Open Plex'), findsOneWidget);
     expect(find.textContaining("couldn't confirm your server access"),
         findsOneWidget);
   });
@@ -1290,7 +1472,7 @@ void main() {
     expect(find.textContaining('Install the Plex app'), findsOneWidget);
     expect(
         find.widgetWithText(TextButton, 'Share my Plex email'), findsOneWidget);
-    expect(find.widgetWithText(TextButton, 'I already have an account'),
+    expect(find.widgetWithText(TextButton, 'Link my Jellyfin account'),
         findsNothing);
     expect(find.textContaining('open it and accept'), findsOneWidget);
     expect(find.text('Sign in at https://jf.example.com'), findsOneWidget);
@@ -1325,7 +1507,7 @@ void main() {
     );
 
     await tester
-        .tap(find.widgetWithText(TextButton, 'I already have an account'));
+        .tap(find.widgetWithText(TextButton, 'Link my Jellyfin account'));
     await tester.pumpAndSettle();
     expect(find.text('Link your Jellyfin account'), findsOneWidget);
     expect(
@@ -1372,7 +1554,7 @@ void main() {
 
     // The card re-read the server: the linked account is shown.
     expect(find.text('Alice'), findsOneWidget);
-    expect(find.widgetWithText(TextButton, 'I already have an account'),
+    expect(find.widgetWithText(TextButton, 'Link my Jellyfin account'),
         findsNothing);
     expect(find.text('Administrator account. Cantinarr never changes it.'),
         findsNothing);
@@ -1402,7 +1584,7 @@ void main() {
       },
     );
     await tester
-        .tap(find.widgetWithText(TextButton, 'I already have an account'));
+        .tap(find.widgetWithText(TextButton, 'Link my Jellyfin account'));
     await tester.pumpAndSettle();
     await tester.enterText(find.widgetWithText(TextField, 'Password'), 'pw');
     await tester.tap(find.widgetWithText(ElevatedButton, 'Link account'));
@@ -1471,7 +1653,8 @@ void main() {
 
     // The sheet shows a spinner, so settle by hand: pumpAndSettle would run
     // the clock until the poll itself finished the flow.
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Sign in with Plex'));
+    await tester
+        .tap(find.widgetWithText(ElevatedButton, 'Link my Plex account'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
     expect(find.text('Waiting for approval.'), findsOneWidget);
@@ -1518,7 +1701,8 @@ void main() {
             }),
       },
     );
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Sign in with Plex'));
+    await tester
+        .tap(find.widgetWithText(ElevatedButton, 'Link my Plex account'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
     await tester
@@ -1542,7 +1726,8 @@ void main() {
             const _Reply(404, {'error': 'not found'}),
       },
     );
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Sign in with Plex'));
+    await tester
+        .tap(find.widgetWithText(ElevatedButton, 'Link my Plex account'));
     await tester.pumpAndSettle();
     expect(
       find.text("This server doesn't support signing in with Plex yet. Ask "

@@ -162,6 +162,15 @@ jobs:
       - name: Test
         run: flutter test --no-pub
 
+      - name: Save golden comparison failures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-golden-failures-${{ github.run_attempt }}
+          path: app/test/**/failures/*.png
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Build web
         run: flutter build web --release --no-pub
 

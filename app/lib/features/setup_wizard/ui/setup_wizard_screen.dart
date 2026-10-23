@@ -48,6 +48,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return '/settings/instance/new';
       case 'media_downloads':
         return '/settings';
+      case 'users':
+        return '/settings/users';
       case 'ai':
         return '/settings/credentials';
       case 'tmdb':
@@ -87,6 +89,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return Icons.notifications_outlined;
       case 'media_servers':
         return Icons.live_tv_outlined;
+      case 'users':
+        return Icons.people_outline;
       case 'books':
         return Icons.menu_book;
       case 'music':

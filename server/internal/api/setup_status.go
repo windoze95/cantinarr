@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/windoze95/cantinarr-server/internal/ai"
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/config"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/downloads"
@@ -43,6 +44,7 @@ type setupFacts struct {
 	HasWatchHistory   bool
 	HasTdarr          bool
 	HasMediaServer    bool
+	HasUsers          bool
 	TMDB              bool
 	Trakt             bool
 	AI                bool
@@ -117,8 +119,14 @@ func buildSetupItems(f setupFacts) []setupItem {
 		{
 			Key:         "media_servers",
 			Title:       "Media server access",
-			Description: "Connect Plex, Jellyfin, or Emby so users can get access from the app: a Plex invite, or an account they create themselves.",
+			Description: "Connect Plex, Jellyfin, Emby, or Audiobookshelf so users can get library access from the app.",
 			Configured:  f.HasMediaServer,
+		},
+		{
+			Key:         "users",
+			Title:       "Add people",
+			Description: "Import people from a media server or invite them to Cantinarr, then choose what they can request.",
+			Configured:  f.HasUsers,
 		},
 		{
 			Key:         "trakt",
@@ -191,9 +199,17 @@ func buildSetupItems(f setupFacts) []setupItem {
 
 // setupStatusHandler answers the admin setup checklist: which features are
 // configured right now. Everything is re-derived per request.
-func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, aiHandler *ai.Handler, serverSettings *serversettings.Service, remediationSvc *remediation.Service) http.HandlerFunc {
+func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, aiHandler *ai.Handler, serverSettings *serversettings.Service, remediationSvc *remediation.Service, authService *auth.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var facts setupFacts
+		if authService != nil {
+			var err error
+			facts.HasUsers, err = authService.HasNonAdminUsers()
+			if err != nil {
+				http.Error(w, `{"error":"could not read user setup status"}`, http.StatusInternalServerError)
+				return
+			}
+		}
 		if instances, err := store.ListAll(); err == nil {
 			for _, inst := range instances {
 				if inst.MediaDownloadsConfigured(cfg.MediaDownloadRoots) {

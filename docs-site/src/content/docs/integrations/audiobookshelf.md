@@ -13,6 +13,10 @@ Open **Settings > Add Instance**, select Audiobookshelf, and enter its reachable
 
 Set **Address users open** to the browser or app address the listeners can reach. An internal Docker hostname is usually unsuitable for a phone outside that network.
 
+## Import existing listeners
+
+Choose **Import users** on the saved Audiobookshelf instance, or open **Settings > Users > Import users**. Select listeners and explicitly choose an existing Cantinarr user when linking accounts. Importing does not make the Audiobookshelf password a Cantinarr password. Review the invitation and request assignments in the results. See [accounts and invitations](/admin/users/#import-people-from-a-media-server).
+
 ## Review library access
 
 Use the library controls shown for the instance and user. Audiobookshelf's actual library, tag, and content restrictions remain relevant. A Cantinarr account link alone does not prove a listener can access every item.

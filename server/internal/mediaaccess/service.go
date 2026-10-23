@@ -1015,6 +1015,8 @@ func (s *Service) RemoteUsers(ctx context.Context, instanceID string) ([]mediase
 // grants them the instance if they lack it, and optionally adopts access
 // management. Linking alone never writes to the remote account. Libraries stay
 // exactly as the admin configured them on the server.
+// Repeating the same mapping finishes any missing grant without changing the
+// existing management choice. A different mapping remains a conflict.
 func (s *Service) LinkAccount(ctx context.Context, userID int64, instanceID, remoteUserID string, manage ...bool) (Account, error) {
 	unlock := s.lock(userID, instanceID)
 	defer unlock()
@@ -1058,31 +1060,36 @@ func (s *Service) LinkAccount(ctx context.Context, userID int64, instanceID, rem
 	}
 
 	managed := len(manage) > 0 && manage[0] && !remote.IsAdministrator
-	_, err = s.insertAccount(accountRow{
-		UserID: userID, InstanceID: instanceID,
-		RemoteUserID: remoteID, RemoteUsername: name, CreatedByCantinarr: false, ManageAccess: managed, AccessSyncPending: managed,
-	}, false)
-	switch {
-	case errors.Is(err, errAccountConflict):
-		return Account{}, ErrAccountExists
-	case errors.Is(err, errRemoteConflict):
-		return Account{}, ErrRemoteAlreadyLinked
-	case errors.Is(err, errRowReference):
-		return Account{}, ErrInstanceNotFound
-	case err != nil:
-		return Account{}, err
-	}
-
-	grants, err := s.store.ListUserGrants(userID)
+	existing, err := s.getAccount(userID, instanceID)
 	if err != nil {
 		return Account{}, err
 	}
-	if !contains(grants[inst.ServiceType], instanceID) {
-		if err := s.store.SetUserGrants(userID, map[string][]string{
-			inst.ServiceType: append(grants[inst.ServiceType], instanceID),
-		}); err != nil {
+	if existing != nil {
+		if existing.RemoteUserID != remoteID {
+			return Account{}, ErrAccountExists
+		}
+		managed = existing.ManageAccess
+	} else {
+		_, err = s.insertAccount(accountRow{
+			UserID: userID, InstanceID: instanceID,
+			RemoteUserID: remoteID, RemoteUsername: name, CreatedByCantinarr: false, ManageAccess: managed, AccessSyncPending: managed,
+		}, false)
+		switch {
+		case errors.Is(err, errAccountConflict):
+			return Account{}, ErrAccountExists
+		case errors.Is(err, errRemoteConflict):
+			return Account{}, ErrRemoteAlreadyLinked
+		case errors.Is(err, errRowReference):
+			return Account{}, ErrInstanceNotFound
+		case err != nil:
 			return Account{}, err
 		}
+	}
+
+	// Different server links can run concurrently for the same user. Add only
+	// this pair so a stale read cannot replace another link's grant.
+	if err := s.store.AddUserGrant(userID, instanceID); err != nil {
+		return Account{}, err
 	}
 	s.reconcileAccountLocked(ctx, userID, instanceID)
 

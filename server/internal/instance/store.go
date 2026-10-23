@@ -965,6 +965,26 @@ func (s *Store) ListUserGrants(userID int64) (map[string][]string, error) {
 	return out, rows.Err()
 }
 
+// AddUserGrant atomically grants one instance without replacing any sibling
+// grants or routing preferences. Retries are silent unless the row is new.
+func (s *Store) AddUserGrant(userID int64, instanceID string) error {
+	result, err := s.db.Exec(
+		`INSERT INTO user_instance_grants (user_id, instance_id) VALUES (?, ?)
+		 ON CONFLICT(user_id, instance_id) DO NOTHING`, userID, instanceID,
+	)
+	if err != nil {
+		return fmt.Errorf("add user instance grant: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read added user instance grant: %w", err)
+	}
+	if n > 0 {
+		s.notifyAddedGrants([]grant{{userID, instanceID}})
+	}
+	return nil
+}
+
 // SetUserGrants replaces a user's grant rows per service type. Only the
 // service types present as keys are touched; an empty (or nil) list clears
 // that type's grants. Every instance id must exist and match its keyed

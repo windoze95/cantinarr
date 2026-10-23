@@ -828,6 +828,14 @@ func (s *Service) RevokeDevice(deviceID string) error {
 	return nil
 }
 
+// HasNonAdminUsers reports whether the optional Add people setup step has been
+// completed, without loading account details or granting access.
+func (s *Service) HasNonAdminUsers() (bool, error) {
+	var exists bool
+	err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE role != 'admin')").Scan(&exists)
+	return exists, err
+}
+
 // ListUsers returns every account enriched with device counts, password state,
 // and whether an unredeemed connect-link invite is still outstanding.
 func (s *Service) ListUsers() ([]UserSummary, error) {

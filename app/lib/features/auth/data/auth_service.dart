@@ -25,15 +25,23 @@ class AuthService {
           method: method, accessToken: accessToken, data: data);
 
   Future<Map<String, dynamic>> oidcRequest(String server, String path,
-      {String method = 'GET', String? accessToken, Map<String, dynamic>? data}) async {
+      {String method = 'GET',
+      String? accessToken,
+      Map<String, dynamic>? data}) async {
     final dio = _createDio(server);
     try {
-      final response = await dio.request(path, data: data, options: Options(
-        method: method,
-        headers: {if (accessToken != null) 'Authorization': 'Bearer $accessToken'},
-      ));
+      final response = await dio.request(path,
+          data: data,
+          options: Options(
+            method: method,
+            headers: {
+              if (accessToken != null) 'Authorization': 'Bearer $accessToken'
+            },
+          ));
       return response.data as Map<String, dynamic>;
-    } finally { dio.close(); }
+    } finally {
+      dio.close();
+    }
   }
 
   Dio _createDio(String serverUrl) {
@@ -590,6 +598,7 @@ class ServerConfig {
 
   /// Supports linking accounts independently from managing their access.
   final bool mediaAccountManagement;
+  final bool mediaUserImportExplicitLinking;
 
   /// Server supports paired Apple TV handoffs.
   final bool appleTvRemote;
@@ -622,6 +631,7 @@ class ServerConfig {
     this.plexAccessRequestable = false,
     this.adminCatalogBrowsing = false,
     this.mediaAccountManagement = false,
+    this.mediaUserImportExplicitLinking = false,
     this.appleTvRemote = false,
     this.tvMatchCorrections = false,
     this.tvLibraryNavigation = false,
@@ -654,6 +664,8 @@ class ServerConfig {
       adminCatalogBrowsing: json['admin_catalog_browsing'] as bool? ?? false,
       mediaAccountManagement:
           json['media_account_management'] as bool? ?? false,
+      mediaUserImportExplicitLinking:
+          json['media_user_import_explicit_linking'] as bool? ?? false,
       appleTvRemote: json['apple_tv_remote'] as bool? ?? false,
       tvMatchCorrections: json['tv_match_corrections'] as bool? ?? false,
       tvLibraryNavigation: json['tv_library_navigation'] as bool? ?? false,

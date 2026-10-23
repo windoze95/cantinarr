@@ -249,6 +249,13 @@ Future<void> _pumpEdit(
     routes: [
       GoRoute(path: '/', builder: (_, __) => const Scaffold(body: SizedBox())),
       GoRoute(path: '/edit', builder: (_, __) => screen),
+      GoRoute(
+          path: '/settings/users/import',
+          builder: (_, state) => Scaffold(
+                appBar: AppBar(title: const Text('Shared import workflow')),
+                body: Text(
+                    'Import source ${state.uri.queryParameters['instanceId']}'),
+              )),
     ],
   );
   await tester.pumpWidget(
@@ -315,34 +322,107 @@ Iterable<({String method, String path, dynamic body})> _libraryProbes(
         r.path == '/api/instances/media-server/libraries');
 
 void main() {
-  testWidgets('Tdarr accepts optional authentication without media configuration', (tester) async {
+  for (final type in ['plex', 'jellyfin', 'emby', 'audiobookshelf']) {
+    testWidgets('$type saved instance opens import with that server selected',
+        (tester) async {
+      final adapter = _FakeAdapter(instances: [
+        {..._homeJellyfin, 'service_type': type}
+      ]);
+      await _pumpEdit(tester,
+          adapter: adapter,
+          screen:
+              InstanceEditScreen(instanceId: 'jf-a', initialServiceType: type));
+      await tester.tap(find.text('Import users'));
+      await tester.pumpAndSettle();
+      expect(find.text('Import source jf-a'), findsOneWidget);
+      expect(
+          adapter.requests
+              .where((r) => r.method == 'POST' && r.path == '/api/instances'),
+          isEmpty);
+    });
+  }
+
+  testWidgets(
+      'new media server offers import after creation and cannot be created twice',
+      (tester) async {
     final adapter = _FakeAdapter();
-    await _pumpEdit(tester, adapter: adapter,
+    await _pumpNewJellyfin(tester, adapter: adapter);
+    await _fillForm(tester);
+    await _tapSave(tester, 'Add Instance');
+    expect(find.text('Media server connected'), findsOneWidget);
+    expect(
+        adapter.requests
+            .where((r) => r.method == 'POST' && r.path == '/api/instances'),
+        hasLength(1));
+    await tester.tap(find.text('Import users'));
+    await tester.pumpAndSettle();
+    expect(find.text('Import source jellyfin-new'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('Add Instance'), findsNothing);
+    expect(
+        adapter.requests
+            .where((r) => r.method == 'POST' && r.path == '/api/instances'),
+        hasLength(1));
+  });
+
+  testWidgets('new media-server import is optional', (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpNewJellyfin(tester, adapter: adapter);
+    await _fillForm(tester);
+    await _tapSave(tester, 'Add Instance');
+    await tester.tap(find.text('Not now'));
+    await tester.pumpAndSettle();
+    expect(find.text('Media server connected'), findsNothing);
+    expect(find.text('Add Instance'), findsNothing);
+    expect(
+        adapter.requests
+            .where((r) => r.method == 'POST' && r.path == '/api/instances'),
+        hasLength(1));
+  });
+
+  testWidgets(
+      'Tdarr accepts optional authentication without media configuration',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester,
+        adapter: adapter,
         screen: const InstanceEditScreen(initialServiceType: 'tdarr'));
     await tester.enterText(find.widgetWithText(TextField, 'Name'), 'Progress');
-    await tester.enterText(find.widgetWithText(TextField, 'URL'), 'http://tdarr:8266');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'URL'), 'http://tdarr:8266');
     expect(find.textContaining('normally port 8266'), findsOneWidget);
     expect(find.text('Address users open'), findsNothing);
     await _testConnection(tester);
     await _tapSave(tester, 'Add Instance');
-    final create = adapter.requests.singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
+    final create = adapter.requests
+        .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
     expect(create.body['service_type'], 'tdarr');
     expect(create.body['api_key'], '');
     expect(_libraryProbes(adapter), isEmpty);
     expect(adapter.requests.where((r) => r.path.endsWith('/webhook')), isEmpty);
   });
 
-  testWidgets('Tdarr explicitly removes the saved key in both test and save', (tester) async {
-    final adapter = _FakeAdapter(instances: [{
-      'id': 'tdarr', 'service_type': 'tdarr', 'name': 'Progress',
-      'url': 'http://tdarr:8266', 'has_api_key': true,
-    }]);
-    await _pumpEdit(tester, adapter: adapter,
+  testWidgets('Tdarr explicitly removes the saved key in both test and save',
+      (tester) async {
+    final adapter = _FakeAdapter(instances: [
+      {
+        'id': 'tdarr',
+        'service_type': 'tdarr',
+        'name': 'Progress',
+        'url': 'http://tdarr:8266',
+        'has_api_key': true,
+      }
+    ]);
+    await _pumpEdit(tester,
+        adapter: adapter,
         screen: const InstanceEditScreen(instanceId: 'tdarr'));
     await _testConnection(tester);
-    var tested = adapter.requests.lastWhere((r) => r.path == '/api/instances/test');
+    var tested =
+        adapter.requests.lastWhere((r) => r.path == '/api/instances/test');
     expect(tested.body['clear_api_key'], isNull);
-    final remove = find.widgetWithText(CheckboxListTile, 'Remove saved API key');
+    final remove =
+        find.widgetWithText(CheckboxListTile, 'Remove saved API key');
     await tester.ensureVisible(remove);
     await tester.tap(remove);
     await tester.pumpAndSettle();
@@ -351,25 +431,38 @@ void main() {
     expect(tested.body['clear_api_key'], true);
     expect(tested.body['api_key'], '');
     await _tapSave(tester, 'Save Changes');
-    final saved = adapter.requests.singleWhere((r) => r.method == 'PUT' && r.path == '/api/instances/tdarr');
+    final saved = adapter.requests.singleWhere(
+        (r) => r.method == 'PUT' && r.path == '/api/instances/tdarr');
     expect(saved.body['clear_api_key'], true);
     expect(saved.body['api_key'], '');
   });
 
   for (final type in ['plex', 'jellyfin', 'emby']) {
     for (final editLibraries in [false, true]) {
-      testWidgets('$type app-only and combined library edits persist (libraries=$editLibraries)', (tester) async {
-        final adapter = _FakeAdapter(instances: [{
-          ..._homeJellyfin, 'id': 'video-a', 'service_type': type,
-          'media_server_config': {
-            'public_address': type == 'plex' ? 'https://app.plex.tv' : 'https://watch.example.com',
-            'library_ids': ['lib-movies'],
-            if (type == 'plex') 'machine_identifier': 'machine-1',
-            'video_apps': {'ios': 'infuse'},
-          },
-        }], grants: [{'id': 1, 'username': 'reader'}]);
-        await _pumpEdit(tester, adapter: adapter, users: [_user(1, 'reader')],
-          screen: const InstanceEditScreen(instanceId: 'video-a'));
+      testWidgets(
+          '$type app-only and combined library edits persist (libraries=$editLibraries)',
+          (tester) async {
+        final adapter = _FakeAdapter(instances: [
+          {
+            ..._homeJellyfin,
+            'id': 'video-a',
+            'service_type': type,
+            'media_server_config': {
+              'public_address': type == 'plex'
+                  ? 'https://app.plex.tv'
+                  : 'https://watch.example.com',
+              'library_ids': ['lib-movies'],
+              if (type == 'plex') 'machine_identifier': 'machine-1',
+              'video_apps': {'ios': 'infuse'},
+            },
+          }
+        ], grants: [
+          {'id': 1, 'username': 'reader'}
+        ]);
+        await _pumpEdit(tester,
+            adapter: adapter,
+            users: [_user(1, 'reader')],
+            screen: const InstanceEditScreen(instanceId: 'video-a'));
         expect(find.text('Infuse'), findsOneWidget);
         if (editLibraries) {
           final series = find.widgetWithText(CheckboxListTile, 'Series');
@@ -377,18 +470,26 @@ void main() {
           await tester.tap(series);
           await tester.pumpAndSettle();
         }
-        final apps = find.widgetWithText(DropdownButtonFormField<String>, 'iPhone and iPad');
+        final apps = find.widgetWithText(
+            DropdownButtonFormField<String>, 'iPhone and iPad');
         await tester.ensureVisible(apps);
         await tester.tap(apps);
         await tester.pumpAndSettle();
         await tester.tap(find.text('Browser').last);
         await tester.pumpAndSettle();
         await _tapSave(tester, 'Save Changes');
-        final save = adapter.requests.singleWhere((r) => r.method == 'PUT' && r.path == '/api/instances/video-a');
-        expect(save.body['media_server_config']['video_apps'], {'ios': 'browser'});
-        expect(save.body['media_server_config']['library_ids'], ['lib-movies', if (editLibraries) 'lib-shows']);
-        expect(save.body['media_server_config'].containsKey('listening_apps'), isFalse);
-        expect(adapter.requests.where((r) => r.method == 'PUT' && r.path.endsWith('/grant-users')), isEmpty);
+        final save = adapter.requests.singleWhere(
+            (r) => r.method == 'PUT' && r.path == '/api/instances/video-a');
+        expect(
+            save.body['media_server_config']['video_apps'], {'ios': 'browser'});
+        expect(save.body['media_server_config']['library_ids'],
+            ['lib-movies', if (editLibraries) 'lib-shows']);
+        expect(save.body['media_server_config'].containsKey('listening_apps'),
+            isFalse);
+        expect(
+            adapter.requests.where(
+                (r) => r.method == 'PUT' && r.path.endsWith('/grant-users')),
+            isEmpty);
         expect(adapter.grants.single['id'], 1);
       });
     }

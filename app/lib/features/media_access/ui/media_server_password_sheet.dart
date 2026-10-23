@@ -116,7 +116,7 @@ class _MediaServerPasswordSheetState
     }
     if (e.code == 'name_taken') {
       return 'The name ${widget.username} is already taken on $name. If that '
-          "account is yours, go back and tap 'I already have an account' to "
+          "account is yours, go back and tap 'Link my ${mediaServerTypeLabel(widget.server.serviceType)} account' to "
           'sign in with its password. Otherwise ask your admin.';
     }
     switch (e.status) {
