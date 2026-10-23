@@ -73,8 +73,11 @@ RUN go run ./cmd/compress-web
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags "-X github.com/windoze95/cantinarr-server/internal/version.Version=${VERSION}" -o cantinarr ./cmd/server
 
+# Build and run the copied Python environment on the same Alpine/Python ABI.
+FROM alpine:3.24 AS runtime-base
+
 # Companion runs in a private stdio worker, with a pinned Python dependency set.
-FROM alpine:3.19 AS appletv-builder
+FROM runtime-base AS appletv-builder
 RUN apk add --no-cache python3 py3-pip libstdc++ build-base python3-dev libffi-dev
 RUN python3 -m venv /opt/cantinarr-appletv
 COPY server/tools/apple_tv/requirements.lock /tmp/apple-tv-requirements.lock
@@ -85,7 +88,7 @@ COPY server/tools/apple_tv/collect_notices.py /tmp/collect_notices.py
 RUN /opt/cantinarr-appletv/bin/python /tmp/collect_notices.py /apple-tv-notices
 
 # Final image
-FROM alpine:3.19
+FROM runtime-base
 # su-exec is what the entrypoint drops privileges with when PUID/PGID are set.
 RUN apk add --no-cache ca-certificates su-exec python3 libstdc++
 COPY --from=go-builder /build/cantinarr /usr/local/bin/

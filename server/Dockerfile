@@ -36,8 +36,11 @@ RUN set -eux; \
     install -m 0644 /tmp/CODEX-LICENSE /codex-license/LICENSE; \
     install -m 0644 /tmp/CODEX-NOTICE /codex-license/NOTICE
 
+# Build and run the copied Python environment on the same Alpine/Python ABI.
+FROM alpine:3.24 AS runtime-base
+
 # Companion runs in a private stdio worker, with a pinned Python dependency set.
-FROM alpine:3.19 AS appletv-builder
+FROM runtime-base AS appletv-builder
 RUN apk add --no-cache python3 py3-pip libstdc++ build-base python3-dev libffi-dev
 RUN python3 -m venv /opt/cantinarr-appletv
 COPY tools/apple_tv/requirements.lock /tmp/apple-tv-requirements.lock
@@ -47,7 +50,7 @@ RUN /opt/cantinarr-appletv/bin/pip install --no-cache-dir --require-hashes -r /t
 COPY tools/apple_tv/collect_notices.py /tmp/collect_notices.py
 RUN /opt/cantinarr-appletv/bin/python /tmp/collect_notices.py /apple-tv-notices
 
-FROM alpine:3.19
+FROM runtime-base
 # su-exec is what the entrypoint drops privileges with when PUID/PGID are set.
 RUN apk add --no-cache ca-certificates su-exec python3 libstdc++
 COPY --from=builder /build/cantinarr /usr/local/bin/
