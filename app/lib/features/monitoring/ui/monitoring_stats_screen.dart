@@ -292,7 +292,7 @@ class _StatTile extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Text(
-            '${entry.plays} play${entry.plays == 1 ? '' : 's'}',
+            context.l10n.polishPlays(entry.plays),
             style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
           ),
         ],

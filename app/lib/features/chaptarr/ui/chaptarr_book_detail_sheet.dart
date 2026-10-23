@@ -153,8 +153,8 @@ class _ChaptarrBookDetailSheetState
     }
     final labels = [BookFormat.ebook, BookFormat.audiobook]
         .where(failed.contains)
-        .map(chaptarrFormatLabel)
-        .join(' and ');
+        .map((format) => chaptarrFormatLabel(format, strings: context.l10n))
+        .join(context.l10n.polishAndSeparator);
     return context.l10n.adminCouldNotLoadHistory2((labels).toString());
   }
 

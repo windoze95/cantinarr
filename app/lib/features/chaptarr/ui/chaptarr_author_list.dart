@@ -115,7 +115,8 @@ class _AuthorTile extends StatelessWidget {
                 ),
               if (stats != null) ...[
                 Text(
-                  author.bookCountLabel,
+                  context.l10n.polishBookFileCounts(
+                      stats.bookFileCount, stats.bookCount),
                   style: const TextStyle(
                       color: AppTheme.textSecondary, fontSize: 11),
                 ),

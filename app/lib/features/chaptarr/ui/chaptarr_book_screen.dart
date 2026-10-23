@@ -286,7 +286,7 @@ class _FormatSection extends ConsumerWidget {
     final file = files.isNotEmpty ? files.first : null;
     final hasFile = file != null;
     final line = hasFile
-        ? '${file.qualityName ?? 'Downloaded'} — ${file.sizeFormatted}'
+        ? '${file.qualityName ?? context.l10n.adminDownloaded} — ${file.sizeFormatted}'
         : (loading ? context.l10n.adminChecking : status.text);
     final connection = ref.watch(authProvider).valueOrNull?.connection;
     final downloadsEnabled =

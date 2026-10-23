@@ -702,18 +702,27 @@ class _SelectionBar extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          TextButton(
-              onPressed: onSelectAll,
-              style: buttonStyle,
-              child: Text(context.l10n.adminAll)),
-          TextButton(
-              onPressed: onSelectUndownloaded,
-              style: buttonStyle,
-              child: Text(context.l10n.adminUndownloaded)),
-          TextButton(
-              onPressed: onSelectNone,
-              style: buttonStyle,
-              child: Text(context.l10n.adminNone)),
+          Expanded(
+            flex: 3,
+            child: Wrap(
+              alignment: WrapAlignment.end,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                TextButton(
+                    onPressed: onSelectAll,
+                    style: buttonStyle,
+                    child: Text(context.l10n.adminAll)),
+                TextButton(
+                    onPressed: onSelectUndownloaded,
+                    style: buttonStyle,
+                    child: Text(context.l10n.adminUndownloaded)),
+                TextButton(
+                    onPressed: onSelectNone,
+                    style: buttonStyle,
+                    child: Text(context.l10n.adminNone)),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -760,29 +769,33 @@ class _ActionBar extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: selecting ? _buildSearchSelected() : _buildSplitAutomatic(),
+            child: selecting
+                ? _buildSearchSelected(context)
+                : _buildSplitAutomatic(context),
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: selecting ? _buildDeleteSelected() : _buildInteractive(),
+            child: selecting
+                ? _buildDeleteSelected(context)
+                : _buildInteractive(context),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildInteractive() {
+  Widget _buildInteractive(BuildContext context) {
     return OutlinedButton.icon(
       onPressed: onInteractive,
       icon:
           const Icon(Icons.person_outline, size: 18, color: AppTheme.available),
-      label: const Text('Interactive',
+      label: Text(context.l10n.adminInteractive,
           style: TextStyle(color: AppTheme.textPrimary)),
       style: _buttonStyle(),
     );
   }
 
-  Widget _buildSearchSelected() {
+  Widget _buildSearchSelected(BuildContext context) {
     final enabled = selectedCount > 0;
     return OutlinedButton.icon(
       onPressed: enabled ? onSearchSelected : null,
@@ -791,8 +804,8 @@ class _ActionBar extends StatelessWidget {
           color: enabled ? AppTheme.available : AppTheme.textSecondary),
       label: Text(
         selectedCount == 1
-            ? 'Search 1 episode'
-            : 'Search $selectedCount episodes',
+            ? context.l10n.adminSearch1Episode
+            : context.l10n.adminSearchEpisodes(selectedCount.toString()),
         style: TextStyle(
             color: enabled ? AppTheme.textPrimary : AppTheme.textSecondary),
       ),
@@ -802,7 +815,7 @@ class _ActionBar extends StatelessWidget {
 
   /// Deletes the downloaded files among the selected episodes; enabled only
   /// when the selection contains at least one file.
-  Widget _buildDeleteSelected() {
+  Widget _buildDeleteSelected(BuildContext context) {
     final enabled = selectedFileCount > 0;
     return OutlinedButton.icon(
       onPressed: enabled ? onDeleteSelected : null,
@@ -810,8 +823,8 @@ class _ActionBar extends StatelessWidget {
           size: 18, color: enabled ? AppTheme.error : AppTheme.textSecondary),
       label: Text(
         selectedFileCount == 1
-            ? 'Delete 1 file'
-            : 'Delete $selectedFileCount files',
+            ? context.l10n.adminDelete1File
+            : context.l10n.adminDeleteFiles2(selectedFileCount.toString()),
         style:
             TextStyle(color: enabled ? AppTheme.error : AppTheme.textSecondary),
       ),
@@ -822,7 +835,7 @@ class _ActionBar extends StatelessWidget {
   /// Split button: the main segment runs the season-wide automatic search, the
   /// arrow reveals "Individual episodes" (selection mode, undownloaded
   /// preselected).
-  Widget _buildSplitAutomatic() {
+  Widget _buildSplitAutomatic(BuildContext context) {
     return IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -832,7 +845,7 @@ class _ActionBar extends StatelessWidget {
               onPressed: onAutomatic,
               icon:
                   const Icon(Icons.search, size: 18, color: AppTheme.available),
-              label: const Text('Automatic',
+              label: Text(context.l10n.adminAutomatic,
                   style: TextStyle(color: AppTheme.textPrimary)),
               style: _buttonStyle(
                   radius:
@@ -851,7 +864,7 @@ class _ActionBar extends StatelessWidget {
                   leadingIcon: const Icon(Icons.checklist,
                       size: 18, color: AppTheme.textSecondary),
                   onPressed: onAutomaticEpisodes,
-                  child: const Text('Individual episodes',
+                  child: Text(context.l10n.adminIndividualEpisodes,
                       style:
                           TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
                 ),

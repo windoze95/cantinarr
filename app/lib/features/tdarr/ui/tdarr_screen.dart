@@ -250,8 +250,7 @@ class _TdarrScreenState extends ConsumerState<TdarrScreen>
       ];
     }
     return [
-      Text(
-          '${activity.activeWorkers} active ${activity.activeWorkers == 1 ? 'worker' : 'workers'}',
+      Text(context.l10n.polishActiveWorkers(activity.activeWorkers),
           style: Theme.of(context).textTheme.titleLarge),
       const SizedBox(height: 4),
       Text(context.l10n.adminProgressAndETADescribeTheCurrentProcessing,
@@ -416,7 +415,8 @@ class _Counts extends StatelessWidget {
             Padding(
                 padding: const EdgeInsets.symmetric(vertical: 7),
                 child: Row(children: [
-                  Expanded(child: Text(count.label)),
+                  Expanded(
+                      child: Text(_localizedCountLabel(context, count.label))),
                   const SizedBox(width: 12),
                   Text(count.value == null
                       ? context.l10n.adminUnavailable
@@ -446,3 +446,13 @@ class _EmptyState extends StatelessWidget {
         ]),
       );
 }
+
+String _localizedCountLabel(BuildContext context, String label) =>
+    switch (label) {
+      'Queued' => context.l10n.adminQueued,
+      'Success / not required' => context.l10n.polishSuccessNotRequired,
+      'Errors / cancelled' => context.l10n.polishErrorsCancelled,
+      'Held' => context.l10n.polishHeld,
+      'Success' => context.l10n.polishSuccess,
+      _ => label,
+    };

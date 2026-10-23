@@ -511,8 +511,8 @@ class _BookCard extends StatelessWidget {
             Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                _formatControl(BookFormat.ebook),
-                _formatControl(BookFormat.audiobook),
+                _formatControl(context, BookFormat.ebook),
+                _formatControl(context, BookFormat.audiobook),
               ],
             ),
           ],
@@ -521,16 +521,17 @@ class _BookCard extends StatelessWidget {
     );
   }
 
-  Widget _formatControl(BookFormat format) {
+  Widget _formatControl(BuildContext context, BookFormat format) {
     final formatRecords =
         records.where((record) => record.format == format).toList();
     final blockedByUnknown = formatRecords.isEmpty &&
         records.any((record) => record.format == BookFormat.unknown);
     final foreignBookId = records.first.foreignBookId?.trim() ?? '';
     final blockedReason = blockedByUnknown
-        ? 'Fix unknown book format in Chaptarr first'
+        ? context.l10n.adminFixUnknownBookFormatInChaptarrFirst
         : formatRecords.isEmpty && foreignBookId.isEmpty
-            ? 'This book has no metadata ID. Fix it in Chaptarr before adding ${chaptarrFormatLabel(format)}'
+            ? context.l10n.adminThisBookHasNoMetadataIDFix(
+                chaptarrFormatLabel(format, strings: context.l10n))
             : null;
     final busy =
         formatRecords.any((record) => togglingIds.contains(record.id)) ||

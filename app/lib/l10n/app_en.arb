@@ -2111,6 +2111,87 @@
       }
     }
   },
+  "polishActiveWorkers": "{count, plural, =1{1 active worker} other{{count} active workers}}",
+  "@polishActiveWorkers": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "polishActiveStreams": "{count, plural, =1{1 stream} other{{count} streams}} • {bandwidth}",
+  "@polishActiveStreams": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "bandwidth": {
+        "type": "String"
+      }
+    }
+  },
+  "polishPlays": "{count, plural, =1{1 play} other{{count} plays}}",
+  "@polishPlays": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "polishQueueItems": "{speed} • {count, plural, =1{1 item} other{{count} items}}",
+  "@polishQueueItems": {
+    "placeholders": {
+      "speed": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "polishDownloadBytes": "{downloaded} of {total}",
+  "@polishDownloadBytes": {
+    "placeholders": {
+      "downloaded": {
+        "type": "String"
+      },
+      "total": {
+        "type": "String"
+      }
+    }
+  },
+  "polishBookFileCounts": "{files} / {total} books",
+  "@polishBookFileCounts": {
+    "placeholders": {
+      "files": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "polishTrackFileCounts": "{files} / {total} tracks",
+  "@polishTrackFileCounts": {
+    "placeholders": {
+      "files": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "polishActionFailed": "Action failed",
+  "polishAndSeparator": " and ",
+  "polishTranscode": "Transcode",
+  "polishDirectStream": "Direct Stream",
+  "polishDirectPlay": "Direct Play",
+  "polishPhoto": "Photo",
+  "polishSuccessNotRequired": "Success / not required",
+  "polishErrorsCancelled": "Errors / cancelled",
+  "polishHeld": "Held",
+  "polishSuccess": "Success",
   "mediaPlexSignInWasNotLinkedValue0": " Plex sign-in was not linked: {value0}",
   "@mediaPlexSignInWasNotLinkedValue0": {
     "placeholders": {

@@ -116,7 +116,8 @@ class _ArtistTile extends StatelessWidget {
                 ),
               if (stats != null) ...[
                 Text(
-                  artist.albumCountLabel,
+                  context.l10n
+                      .browseAlbumsCount(artist.statistics?.albumCount ?? 0),
                   style: const TextStyle(
                       color: AppTheme.textSecondary, fontSize: 11),
                 ),

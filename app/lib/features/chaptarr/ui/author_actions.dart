@@ -55,7 +55,7 @@ Future<void> showAuthorActions(
             actions: [
               for (final record in records)
                 SheetAction(record.id, Icons.menu_book,
-                    "${record.title} · ${record.format == BookFormat.audiobook ? 'Audiobook' : 'eBook'}"),
+                    "${record.title} · ${record.format == BookFormat.audiobook ? context.l10n.adminAudiobook : context.l10n.adminEBook}"),
             ]);
         if (id == null || !context.mounted) return;
         final selected = records.firstWhere((r) => r.id == id);

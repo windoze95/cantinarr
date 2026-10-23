@@ -137,8 +137,9 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
       await _loadQueue(silent: true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${failureLabel ?? 'Action failed'}: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text('${failureLabel ?? context.l10n.polishActionFailed}: $e')));
     }
   }
 
@@ -387,7 +388,7 @@ class _GlobalQueueHeader extends StatelessWidget {
                   ? (multiClient
                       ? context.l10n.adminAllQueuesPaused
                       : context.l10n.adminQueuePaused)
-                  : '$speedFormatted • $itemCount item${itemCount == 1 ? '' : 's'}',
+                  : context.l10n.polishQueueItems(speedFormatted, itemCount),
               style: const TextStyle(
                   color: AppTheme.textPrimary,
                   fontSize: 13,

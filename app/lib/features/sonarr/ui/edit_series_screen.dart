@@ -323,7 +323,7 @@ class _EditSeriesScreenState extends ConsumerState<EditSeriesScreen> {
               _SettingCard(
                 child: _PickerTile(
                   title: context.l10n.adminSeriesPath,
-                  value: _path.isEmpty ? 'Not Set' : _path,
+                  value: _path.isEmpty ? context.l10n.adminNotSet : _path,
                   onTap: _editPath,
                 ),
               ),

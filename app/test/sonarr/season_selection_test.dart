@@ -1,3 +1,4 @@
+import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -41,7 +42,9 @@ class _FakeAdapter implements HttpClientAdapter {
     if (path.endsWith('/queue')) response = {'records': <dynamic>[]};
     if (path.endsWith('/series/7')) {
       response = {
-        'id': 7, 'title': 'Example', 'monitored': seriesMonitored,
+        'id': 7,
+        'title': 'Example',
+        'monitored': seriesMonitored,
         'seasons': [
           // Individually monitored episodes must work inside an off season.
           {'seasonNumber': 1, 'monitored': false},
@@ -91,24 +94,28 @@ SonarrEpisode _episode({
   bool aired = true,
   bool tba = false,
 }) =>
-    SonarrEpisode.fromJson(_episodeJson(
-        id: id, episodeNumber: id, hasFile: hasFile, aired: aired)
-      ..remove(tba ? 'airDateUtc' : ''));
+    SonarrEpisode.fromJson(
+        _episodeJson(id: id, episodeNumber: id, hasFile: hasFile, aired: aired)
+          ..remove(tba ? 'airDateUtc' : ''));
 
 Future<_FakeAdapter> _pumpSeasonScreen(
   WidgetTester tester, {
   required List<Map<String, dynamic>> episodes,
   int? seasonNumber = 1,
   bool seriesMonitored = true,
+  Locale? locale,
 }) async {
-  final adapter = _FakeAdapter(
-      episodes: episodes, seriesMonitored: seriesMonitored);
+  final adapter =
+      _FakeAdapter(episodes: episodes, seriesMonitored: seriesMonitored);
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
     ..httpClientAdapter = adapter;
   await tester.pumpWidget(
     ProviderScope(
       overrides: [backendClientProvider.overrideWithValue(dio)],
       child: MaterialApp(
+        locale: locale,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: SonarrSeasonScreen(
           instanceId: 'inst1',
           series: const SonarrSeries(id: 7, title: 'Example'),
@@ -157,6 +164,32 @@ void main() {
     List<({String method, String path, dynamic body})> commands(
             _FakeAdapter adapter) =>
         adapter.requests.where((r) => r.path.endsWith('/command')).toList();
+
+    testWidgets('French action bar retains selection and request behavior',
+        (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final adapter = await _pumpSeasonScreen(tester,
+          episodes: episodes, locale: const Locale('fr'));
+      expect(find.text('Automatique'), findsOneWidget);
+      expect(find.text('Manuelle'), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.arrow_drop_up));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Épisodes individuels'));
+      await tester.pumpAndSettle();
+      expect(_button('Rechercher 1 épisode'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      final deleteNone =
+          tester.widget<OutlinedButton>(_button('Supprimer 0 fichiers'));
+      expect(deleteNone.onPressed, isNull);
+      await tester.tap(_button('Rechercher 1 épisode'));
+      await tester.pumpAndSettle();
+      expect(commands(adapter).single.body, {
+        'name': 'EpisodeSearch',
+        'episodeIds': [102]
+      });
+    });
 
     testWidgets('episode magnifier runs an automatic EpisodeSearch',
         (tester) async {
@@ -355,28 +388,48 @@ void main() {
     });
 
     for (final seasonNumber in <int?>[1, null]) {
-      testWidgets('unmonitored series disables episode monitoring '
+      testWidgets(
+          'unmonitored series disables episode monitoring '
           'in ${seasonNumber == null ? "all seasons" : "one season"}',
           (tester) async {
-        final adapter = await _pumpSeasonScreen(tester,
+        final adapter = await _pumpSeasonScreen(
+          tester,
           seasonNumber: seasonNumber,
           seriesMonitored: false,
-          episodes: [_episodeJson(id: 101, episodeNumber: 1,
-            hasFile: false, aired: true, monitored: true)],
+          episodes: [
+            _episodeJson(
+                id: 101,
+                episodeNumber: 1,
+                hasFile: false,
+                aired: true,
+                monitored: true)
+          ],
         );
         // The navigation seed is monitored; the live parent must override it.
-        final row = find.ancestor(of: find.text('Episode 1'),
-            matching: find.byType(InkWell)).first;
-        expect(tester.widgetList<Opacity>(find.descendant(
-          of: row, matching: find.byType(Opacity),
-        )).map((o) => o.opacity), everyElement(0.5));
+        final row = find
+            .ancestor(
+                of: find.text('Episode 1'), matching: find.byType(InkWell))
+            .first;
+        expect(
+            tester
+                .widgetList<Opacity>(find.descendant(
+                  of: row,
+                  matching: find.byType(Opacity),
+                ))
+                .map((o) => o.opacity),
+            everyElement(0.5));
         await tester.longPress(find.text('Episode 1'));
         await tester.pumpAndSettle();
         final action = find.widgetWithText(ListTile, 'Unmonitor Episode');
         expect(tester.widget<ListTile>(action).enabled, isFalse);
-        expect(tester.widget<Icon>(find.descendant(
-          of: action, matching: find.byType(Icon),
-        )).color, AppTheme.textSecondary);
+        expect(
+            tester
+                .widget<Icon>(find.descendant(
+                  of: action,
+                  matching: find.byType(Icon),
+                ))
+                .color,
+            AppTheme.textSecondary);
         await tester.tap(find.text('Unmonitor Episode'));
         await tester.pump();
         expect(ofMethod(adapter, 'PUT'), isEmpty);
@@ -384,11 +437,18 @@ void main() {
         Navigator.of(tester.element(action)).pop();
         await tester.pumpAndSettle();
         adapter.seriesMonitored = true;
-        tester.state<RefreshIndicatorState>(find.byType(RefreshIndicator)).show();
+        tester
+            .state<RefreshIndicatorState>(find.byType(RefreshIndicator))
+            .show();
         await tester.pumpAndSettle();
-        expect(tester.widgetList<Opacity>(find.descendant(
-          of: row, matching: find.byType(Opacity),
-        )).map((o) => o.opacity), everyElement(1.0));
+        expect(
+            tester
+                .widgetList<Opacity>(find.descendant(
+                  of: row,
+                  matching: find.byType(Opacity),
+                ))
+                .map((o) => o.opacity),
+            everyElement(1.0));
         await tester.longPress(find.text('Episode 1'));
         await tester.pumpAndSettle();
         expect(tester.widget<ListTile>(action).enabled, isTrue);
@@ -422,12 +482,13 @@ void main() {
         (tester) async {
       final allEpisodes = [
         _episodeJson(
-            id: 201, episodeNumber: 1, hasFile: true, aired: true,
+            id: 201,
+            episodeNumber: 1,
+            hasFile: true,
+            aired: true,
             seasonNumber: 2),
-        _episodeJson(
-            id: 101, episodeNumber: 1, hasFile: true, aired: true),
-        _episodeJson(
-            id: 102, episodeNumber: 2, hasFile: false, aired: true),
+        _episodeJson(id: 101, episodeNumber: 1, hasFile: true, aired: true),
+        _episodeJson(id: 102, episodeNumber: 2, hasFile: false, aired: true),
       ];
       final adapter = await _pumpSeasonScreen(tester,
           episodes: allEpisodes, seasonNumber: null);

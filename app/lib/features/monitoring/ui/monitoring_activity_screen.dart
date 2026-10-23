@@ -192,7 +192,8 @@ class _ActivityHeader extends StatelessWidget {
           Expanded(
             child: Text(
               streamCount > 0
-                  ? '$streamCount stream${streamCount == 1 ? '' : 's'} • $bandwidthFormatted'
+                  ? context.l10n
+                      .polishActiveStreams(streamCount, bandwidthFormatted)
                   : context.l10n.adminNoActiveStreams,
               style: const TextStyle(
                   color: AppTheme.textPrimary,
@@ -312,7 +313,11 @@ class _StreamCard extends StatelessWidget {
                   children: [
                     _StreamBadge(text: state.label, color: state.color),
                     _StreamBadge(
-                      text: stream.streamTypeLabel,
+                      text: switch (stream.streamTypeLabel) {
+                        'Transcode' => context.l10n.polishTranscode,
+                        'Direct Stream' => context.l10n.polishDirectStream,
+                        _ => context.l10n.polishDirectPlay,
+                      },
                       color: stream.isTranscode
                           ? AppTheme.requested
                           : AppTheme.available,
@@ -326,7 +331,13 @@ class _StreamCard extends StatelessWidget {
                           color: AppTheme.textSecondary),
                     if (stream.mediaTypeLabel.isNotEmpty)
                       _StreamBadge(
-                          text: stream.mediaTypeLabel,
+                          text: switch (stream.mediaType) {
+                            'track' => context.l10n.commonLabelMusic,
+                            'live' => context.l10n.settingsLiveTv,
+                            'photo' => context.l10n.polishPhoto,
+                            'trailer' => context.l10n.browseTrailer,
+                            _ => stream.mediaTypeLabel,
+                          },
                           color: AppTheme.textSecondary),
                   ],
                 ),

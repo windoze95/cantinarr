@@ -279,9 +279,10 @@ class _ArtistSummaryCard extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   [
-                    '$albumCount album${albumCount == 1 ? '' : 's'}',
+                    context.l10n.browseAlbumsCount(albumCount),
                     if (stats != null && stats.trackCount > 0)
-                      artist.trackCountLabel,
+                      context.l10n.polishTrackFileCounts(
+                          stats.trackFileCount, stats.trackCount),
                     if (stats != null && stats.sizeOnDisk > 0)
                       stats.sizeFormatted,
                   ].join(' • '),

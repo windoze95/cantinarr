@@ -212,7 +212,7 @@ class _ContentRow extends StatelessWidget {
             .adminDownloads((jobs.length).toString(), (progress).toString())
         : jobs.isEmpty
             ? progress
-            : '${statusLabel(jobs.single, strings: context.l10n)} · $progress${knownProgress ? ' · ${formatBytes(jobs.single.sizeBytes - jobs.single.sizeLeftBytes)} of ${formatBytes(jobs.single.sizeBytes)}' : ''}';
+            : '${statusLabel(jobs.single, strings: context.l10n)} · $progress${knownProgress ? ' · ${context.l10n.polishDownloadBytes(formatBytes(jobs.single.sizeBytes - jobs.single.sizeLeftBytes), formatBytes(jobs.single.sizeBytes))}' : ''}';
     final title =
         '${group.title}${group.mediaType == 'movie' && group.year > 0 ? ' (${group.year})' : ''}';
     final subtitle = [
