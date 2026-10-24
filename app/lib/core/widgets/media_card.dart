@@ -212,8 +212,13 @@ class _InteractiveMediaCardState extends State<_InteractiveMediaCard> {
                     ),
                     boxShadow: [
                       BoxShadow(
+                        // Black on the near-black canvas is invisible at rest
+                        // (no pixel moves more than 5/255), but the web
+                        // renderer blurs it for every poster on every frame.
+                        // A transparent shadow is skipped when drawn, and
+                        // hover still fades the lift in from this geometry.
                         color: Colors.black.withValues(
-                          alpha: emphasized ? 0.48 : 0.28,
+                          alpha: emphasized ? 0.48 : 0,
                         ),
                         blurRadius: emphasized ? 22 : 12,
                         offset: const Offset(0, 8),
