@@ -41,7 +41,18 @@ ImageProvider cachedImageProvider(ImageSource source, {bool isWeb = kIsWeb, Stri
 /// Authenticated images share a decoded frame across token rotation, but
 /// never across account, grant or content-policy changes. No credential is
 /// part of this scope. Public CDN images can keep their ordinary URL key.
+///
+/// Every poster build asks for this, so it is computed once per [AuthState];
+/// a changed session is always a new instance.
 String imageCacheScope(AuthState? auth) {
+  if (auth == null) return _signedOutScope;
+  return _scopes[auth] ??= _computeScope(auth);
+}
+
+final _scopes = Expando<String>('imageCacheScope');
+final _signedOutScope = _computeScope(null);
+
+String _computeScope(AuthState? auth) {
   final permissions = [...?auth?.user?.permissions]..sort();
   final instances = [for (final i in auth?.connection?.instances ?? [])
     '${i.serviceType}:${i.id}:${i.isDefault}']..sort();

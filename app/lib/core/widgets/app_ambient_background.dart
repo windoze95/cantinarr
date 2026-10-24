@@ -16,38 +16,94 @@ import '../theme/app_theme.dart';
 /// the one corner every such box shares with the screen — and clipped to the
 /// box. Anchoring by alignment alone would re-center the glows per box and
 /// leave a brightness seam at the chrome boundary.
-class AppAmbientBackground extends StatelessWidget {
+///
+/// A routed copy paints only while its route is moving. Once an opaque route
+/// settles the navigator stops painting the page beneath it, and an ancestor
+/// copy already paints these exact pixels, so a second copy would only repeat
+/// four full-screen fills that the web renderer redraws on every frame. The
+/// outermost copy has no ancestor and always paints.
+class AppAmbientBackground extends StatefulWidget {
   const AppAmbientBackground({super.key, required this.child});
 
   final Widget child;
 
   @override
+  State<AppAmbientBackground> createState() => _AppAmbientBackgroundState();
+}
+
+class _AppAmbientBackgroundState extends State<AppAmbientBackground> {
+  /// The enclosing route's transition when an ancestor copy already paints
+  /// beneath this one. Null means this copy always paints.
+  Animation<double>? _routeAnimation;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    final ancestorPaints =
+        context.dependOnInheritedWidgetOfExactType<_AmbientCanvasScope>() !=
+            null;
+    final animation = ancestorPaints && route != null && route.opaque
+        ? route.animation
+        : null;
+    if (animation == _routeAnimation) return;
+    _routeAnimation?.removeStatusListener(_routeStatusChanged);
+    _routeAnimation = animation?..addStatusListener(_routeStatusChanged);
+  }
+
+  void _routeStatusChanged(AnimationStatus status) => setState(() {});
+
+  @override
+  void dispose() {
+    _routeAnimation?.removeStatusListener(_routeStatusChanged);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    // Mirrors the navigator: a route that is not completed lets the page
+    // beneath it paint, so its copy is needed exactly then.
+    final paint = !(_routeAnimation?.isCompleted ?? false);
     final screen = MediaQuery.sizeOf(context);
-    return ColoredBox(
-      color: AppTheme.background,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          ExcludeSemantics(
-            child: IgnorePointer(
-              child: ClipRect(
-                child: OverflowBox(
-                  alignment: Alignment.bottomRight,
-                  minWidth: screen.width,
-                  maxWidth: screen.width,
-                  minHeight: screen.height,
-                  maxHeight: screen.height,
-                  child: const _AmbientGradients(),
-                ),
+    return _AmbientCanvasScope(
+      // A transparent box still hit-tests as opaque, so a settled page keeps
+      // absorbing taps on its bare areas.
+      child: ColoredBox(
+        color: paint ? AppTheme.background : Colors.transparent,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            ExcludeSemantics(
+              child: IgnorePointer(
+                child: paint
+                    ? ClipRect(
+                        child: OverflowBox(
+                          alignment: Alignment.bottomRight,
+                          minWidth: screen.width,
+                          maxWidth: screen.width,
+                          minHeight: screen.height,
+                          maxHeight: screen.height,
+                          child: const _AmbientGradients(),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
               ),
             ),
-          ),
-          child,
-        ],
+            widget.child,
+          ],
+        ),
       ),
     );
   }
+}
+
+/// Marks that an ancestor copy paints beneath its descendants. The outermost
+/// copy finds none, so it always paints.
+class _AmbientCanvasScope extends InheritedWidget {
+  const _AmbientCanvasScope({required super.child});
+
+  @override
+  bool updateShouldNotify(_AmbientCanvasScope oldWidget) => false;
 }
 
 class _AmbientGradients extends StatelessWidget {

@@ -3,7 +3,9 @@ import 'dart:ui' as ui;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cached_network_image_platform_interface/cached_network_image_platform_interface.dart'
     show ImageRenderMethodForWeb;
+import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/widgets/cached_image.dart';
+import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -30,6 +32,18 @@ void main() {
     expect(oldKey.hashCode, newKey.hashCode);
     expect(rotated.networkImage.headers, {'Authorization': 'Bearer new'});
     expect(newKey, isNot(await provider('new', 'account-two').obtainKey(ImageConfiguration.empty)));
+  });
+
+  test('the cache scope is computed once per session and follows its changes', () {
+    const auth = AuthState(user: UserProfile(id: 1, username: 'requester',
+        role: 'user', permissions: ['requests:create', 'library:view']));
+    // Every poster build asks; one session state answers with one string.
+    expect(identical(imageCacheScope(auth), imageCacheScope(auth)), isTrue);
+    expect(imageCacheScope(auth), imageCacheScope(auth.copyWith()));
+    final regranted = auth.copyWith(user: const UserProfile(id: 1,
+        username: 'requester', role: 'user', permissions: ['library:view']));
+    expect(imageCacheScope(regranted), isNot(imageCacheScope(auth)));
+    expect(imageCacheScope(null), isNot(imageCacheScope(auth)));
   });
 
   testWidgets('token rotation reuses a decoded image and retries a failed old-token read', (tester) async {

@@ -1,5 +1,6 @@
 import 'package:cantinarr/core/widgets/media_card.dart';
 import 'package:cantinarr/core/widgets/cached_image.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -54,6 +55,31 @@ void main() {
 
     expect(activationCount, 1);
     semantics.dispose();
+  });
+
+  testWidgets('only a hovered card casts a shadow', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Center(child: MediaCard(id: 1, title: 'Movie', onTap: () {})),
+      ),
+    ));
+    List<BoxShadow> shadows() => (tester
+            .widget<AnimatedContainer>(find.descendant(
+                of: find.byType(MediaCard),
+                matching: find.byType(AnimatedContainer)))
+            .decoration! as BoxDecoration)
+        .boxShadow!;
+
+    // Web redraws every visible poster each frame; a resting shadow the dark
+    // canvas hides must not cost a blur per poster.
+    expect(shadows().every((shadow) => shadow.color.a == 0), isTrue);
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(tester.getCenter(find.byType(MediaCard)));
+    await tester.pumpAndSettle();
+    expect(shadows().any((shadow) => shadow.color.a > 0), isTrue);
   });
 
   testWidgets('4K tag keeps clear of the status badge and rating, and is read',
