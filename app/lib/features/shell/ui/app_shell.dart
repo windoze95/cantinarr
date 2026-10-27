@@ -1380,44 +1380,18 @@ class _AppShellState extends ConsumerState<AppShell>
             padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
             child: Row(
               children: [
-                Container(
-                  width: 50,
-                  height: 50,
-                  padding: const EdgeInsets.all(3),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [AppTheme.accent, AppTheme.signal],
-                    ),
-                    borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppTheme.accent.withValues(alpha: 0.16),
-                        blurRadius: 18,
-                      ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(13),
-                    child: Image.asset(
-                      'assets/logo.png',
-                      fit: BoxFit.cover,
-                    ),
-                  ),
-                ),
+                Image.asset('assets/logo.png', width: 50, height: 50),
                 const SizedBox(width: 13),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'CANTINARR',
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                              color: AppTheme.textPrimary,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 1.25,
-                            ),
+                      Image.asset(
+                        'assets/wordmark.png',
+                        height: 30,
+                        fit: BoxFit.contain,
+                        alignment: Alignment.centerLeft,
+                        semanticLabel: 'Cantinarr',
                       ),
                       const SizedBox(height: 3),
                       Text(

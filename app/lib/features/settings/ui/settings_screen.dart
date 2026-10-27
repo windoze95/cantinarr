@@ -30,6 +30,8 @@ import '../logic/setup_status_provider.dart';
 import '../logic/update_status_provider.dart';
 import '../settings_anchors.dart';
 import 'about_sheet.dart';
+import 'app_icon_sheet.dart';
+import '../data/app_icon_service.dart';
 
 /// Simplified settings screen for backend-connected architecture.
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -101,6 +103,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       lidarrEnabled: connection?.services.lidarr ?? false,
       donateVisible: _donateVisible,
       phoneAppsVisible: phoneAppsVisible,
+      appIconsVisible: appIconsVisible,
       mediaServersVisible: mediaServersVisible,
       audiobookshelfVisible: audiobookshelfVisible,
       videoServersVisible: videoServersVisible,
@@ -207,6 +210,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               subtitle: context.l10n.settingsLinkedSignInDescription,
               onTap: () => context.push('/settings/sso-account'),
             ),
+            if (appIconsVisible)
+              _SettingsTile(
+                icon: Icons.app_registration_outlined,
+                title: context.l10n.settingsAppIcon,
+                subtitle: context.l10n.settingsAppIconSubtitle,
+                onTap: () => showAppSheet(context, builder: (_) => const AppIconSheet()),
+              ),
             if (user?.canUsePassword == true)
               _SettingsTile(
                 icon: Icons.lock_outline,
@@ -638,6 +648,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     // Action tiles on the root screen run their own handler; results with an
     // anchor dismiss search and reveal their row in place.
     switch (entry.id) {
+      case 'root.app-icon':
+        showAppSheet(context, builder: (_) => const AppIconSheet());
+        return;
       case 'root.language':
         _showLanguageDialog(context);
         return;

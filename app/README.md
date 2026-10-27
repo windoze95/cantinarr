@@ -409,3 +409,7 @@ Selecting a person opens `/settings/users/:userId/access`. **Cantinarr sign-in**
 ## License
 
 See the root repository for license information.
+
+### App icon
+
+iOS and Android users can open Settings > Account > App icon to choose Play Sun (default), Play Sign, Play Dome, or Original. The operating system saves this choice on the device; changing servers or signing out does not reset it. The in-app logo and web branding remain Play Sun. Browsers and desktop apps use the default icon.

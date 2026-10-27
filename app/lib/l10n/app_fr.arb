@@ -3756,5 +3756,12 @@
   "notificationGoogleRejected": " (Google a refusé l’envoi : jeton ou contenu invalide)",
   "notificationProviderNotEnabled": " (le fournisseur de cette plateforme n’est pas activé sur la passerelle push)",
   "notificationAppleTokenInvalid": " (Apple a refusé le jeton : généralement un jeton de développement envoyé aux APNs de production ou un jeton périmé)",
-  "notificationAppleTokenExpired": " (Apple indique que le jeton n’est plus valide : l’application a été supprimée ou réinstallée ; elle s’enregistrera au prochain lancement)"
+  "notificationAppleTokenExpired": " (Apple indique que le jeton n’est plus valide : l’application a été supprimée ou réinstallée ; elle s’enregistrera au prochain lancement)",
+  "settingsAppIcon": "Icône de l’application",
+  "settingsAppIconSubtitle": "Choisir l’icône sur cet appareil",
+  "settingsAppIconHelp": "Choisissez l’icône de votre écran d’accueil. Ce choix reste sur cet appareil. Le lanceur peut prendre un moment à se mettre à jour.",
+  "settingsAppIconOriginal": "Originale",
+  "settingsAppIconDefault": "Par défaut",
+  "settingsAppIconUnsupported": "Cet appareil ne prend pas en charge les icônes alternatives.",
+  "settingsAppIconError": "Impossible de modifier l’icône de l’application. Réessayez."
 }

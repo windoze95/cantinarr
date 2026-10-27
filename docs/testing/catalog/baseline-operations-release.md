@@ -40,6 +40,10 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `REL-019` · P0 · LIVE — Dispatch a reviewed PR phone preview. Verify its exact merge SHA matches CI and the server preview, tester notes identify the PR, and only the owner's internal audiences receive it. In App Store Connect verify Internal Only and no external/production eligibility; in Play verify only internal changes, all other tester lists are unselected there, and public tracks retain their prior builds. Install on both phones, test the changed feature, then verify return to a main/candidate build.
 - [ ] `REL-020` · P0 · LIVE — Submit the selected candidate iOS run with a newer preview present; verify App Store Connect selects the recorded version/build, stays at manual release after review, and uses candidate listing metadata. Promote the selected Android run and verify its exact version code reaches production, including any Play review/managed-publishing step. Confirm actual store install/update availability before a server release that raises the app compatibility floor; archive the combined record with the release.
 
+## Alternate app icons
+
+- [ ] `REL-021` · P1 · UI — On physical iPhone/iPad and Android, select Play Sign, Play Dome, Original, then Play Sun in Settings > Account > App icon. Check the actual launcher after each choice, dark/tinted/themed icons, one launcher entry, relaunch, sign-out, and application upgrade. Upgrade an existing install with its original home-screen shortcut and verify it still launches. With each alternate selected, verify a push notification tap and Cantinarr connect/OIDC/passkey links still open the app. Confirm the picker reflects the OS selection after a failed or interrupted change.
+
 ## Exploratory and compatibility pass
 
 - [ ] `EXP-001` · P2 · UI — Run a 60-minute unscripted requester session across discover/search/request/status/guide/AI with network changes; record confusion, stale state, and crashes.

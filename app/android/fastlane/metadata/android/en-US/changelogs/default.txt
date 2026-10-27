@@ -1,7 +1,5 @@
+New Play Sun logo and app icon. Choose Play Sign, Play Dome, or the original icon in Settings > Account > App icon. Your choice stays on this device.
+
+French interface: follow your device language or choose English or Français in Settings.
+
 Browse and request movies, TV, books, and music. Follow downloads and receive notifications when requests are ready.
-
-French interface: follow your device language or choose English or Français in Settings > Account > Language. Your choice stays on this device.
-
-Import Plex, Jellyfin, Emby and Audiobookshelf users with explicit account linking. Review sign-in, request permissions and library access.
-
-Optional AI fallback identifies the replacement provider in chat.

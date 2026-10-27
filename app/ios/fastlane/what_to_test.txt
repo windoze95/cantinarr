@@ -11,3 +11,5 @@ Optional fallback uses provider-managed defaults or rolling aliases for OpenAI O
 User onboarding now has labeled Import users and Invite user actions, explicit account linking for Plex/Jellyfin/Emby/Audiobookshelf, and separate sign-in, request, and media-access status. Test importing, existing-account mapping, interrupted retries, and recipient account setup.
 
 French interface support: check automatic French selection on a French device, switch between System default, English and Français in Settings > Account > Language, and confirm the choice survives restarting and signing out. Check browsing, requests, settings and administrator controls in French.
+
+New Play Sun branding. In Settings > Account > App icon, try Play Sign, Play Dome, Original, then Play Sun. Check the home screen, dark/tinted appearance, restart and upgrade persistence, push taps, and connect/passkey/OIDC links with an alternate icon selected.

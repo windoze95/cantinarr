@@ -41,6 +41,7 @@ class SettingsSearchGates {
   /// Platform gate for the phone-app tile (the store binaries are the apps it
   /// advertises, so they hide it).
   final bool phoneAppsVisible;
+  final bool appIconsVisible;
 
   /// `connection.mediaServerInstances.isNotEmpty` — a media server (Jellyfin, Emby)
   /// is shared with this account, so the access guide has something to show.
@@ -56,6 +57,7 @@ class SettingsSearchGates {
     this.lidarrEnabled = false,
     this.donateVisible = false,
     this.phoneAppsVisible = false,
+    this.appIconsVisible = false,
     this.mediaServersVisible = false,
     this.audiobookshelfVisible = false,
     this.videoServersVisible = false,
@@ -80,6 +82,7 @@ bool gatePassword(SettingsSearchGates g) => g.user?.canUsePassword == true;
 bool gateChaptarr(SettingsSearchGates g) => g.chaptarrEnabled;
 bool gateLidarr(SettingsSearchGates g) => g.lidarrEnabled;
 bool gateDonate(SettingsSearchGates g) => g.donateVisible;
+bool gateAppIcons(SettingsSearchGates g) => g.appIconsVisible;
 bool gatePhoneApps(SettingsSearchGates g) => g.phoneAppsVisible;
 bool gateMediaServers(SettingsSearchGates g) => g.mediaServersVisible;
 bool gateAppleTVs(SettingsSearchGates g) => gateAdmin(g) && g.appleTvRemote;
@@ -149,6 +152,15 @@ class SettingsSearchEntry {
 // Screen-level entries (the root tiles that open other screens), then the
 // root's own rows and action tiles, in the root ListView's visual order.
 const List<SettingsSearchEntry> _rootEntries = [
+  SettingsSearchEntry(
+    id: 'root.app-icon',
+    title: 'App icon',
+    icon: Icons.app_registration_outlined,
+    route: '/settings',
+    screenTitle: 'Settings',
+    keywords: ['icon', 'logo', 'appearance', 'play sun', 'play sign', 'play dome', 'original'],
+    gate: gateAppIcons,
+  ),
   SettingsSearchEntry(
     id: 'root.language',
     title: 'Language',
@@ -1703,6 +1715,7 @@ List<SettingsSearchEntry> searchSettingsIndex(
 
 String _settingsSearchLabel(AppLocalizations l10n, String label) =>
     switch (label) {
+      'App icon' => l10n.settingsAppIcon,
       'Language' => l10n.settingsLanguage,
       'Settings' => l10n.settingsTitle,
       'Setup Checklist' => l10n.settingsSetupChecklist,

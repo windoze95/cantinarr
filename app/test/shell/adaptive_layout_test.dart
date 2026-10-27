@@ -132,14 +132,14 @@ void main() {
 
     expect(find.byTooltip('Open navigation'), findsOneWidget);
     expect(find.byType(BottomNavigationBar), findsOneWidget);
-    expect(find.text('CANTINARR'), findsNothing);
+    expect(find.image(const AssetImage('assets/wordmark.png')), findsNothing);
 
     tester.view.physicalSize = const Size(900, 800);
     await tester.pumpAndSettle();
 
     expect(find.byTooltip('Open navigation'), findsNothing);
     expect(find.byType(BottomNavigationBar), findsNothing);
-    expect(find.text('CANTINARR'), findsOneWidget);
+    expect(find.image(const AssetImage('assets/wordmark.png')), findsOneWidget);
   });
 }
 

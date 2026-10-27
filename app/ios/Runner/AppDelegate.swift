@@ -7,6 +7,8 @@ import UserNotifications
   /// Method channel shared with the Dart `PushService`. Created once the
   /// implicit Flutter engine is initialized.
   private var pushChannel: FlutterMethodChannel?
+  private var appIconChannel: FlutterMethodChannel?
+  private var changingAppIcon = false
 
   /// The most recently obtained APNs device token, hex-encoded. Cached so a
   /// late Dart `getApnsToken` call can retrieve it even if the channel wasn't
@@ -47,9 +49,54 @@ import UserNotifications
     }
     pushChannel = channel
 
+    let icons = FlutterMethodChannel(name: "codes.julian.cantinarr/app_icon", binaryMessenger: messenger)
+    icons.setMethodCallHandler { [weak self] call, result in
+      self?.handleAppIcon(call, result: result)
+    }
+    appIconChannel = icons
+
     // If a token arrived before the channel existed, deliver it now.
     if let token = apnsToken {
       channel.invokeMethod("onApnsToken", arguments: token)
+    }
+  }
+
+  private func handleAppIcon(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    let names = ["play-sign": "PlaySign", "play-dome": "PlayDome", "original": "Original"]
+    let application = UIApplication.shared
+    switch call.method {
+    case "isSupported":
+      result(application.supportsAlternateIcons)
+    case "getIcon":
+      result(names.first { $0.value == application.alternateIconName }?.key ?? "play-sun")
+    case "setIcon":
+      guard let args = call.arguments as? [String: Any], let id = args["icon"] as? String,
+            id == "play-sun" || names[id] != nil else {
+        result(FlutterError(code: "invalid_icon", message: "Unknown app icon", details: nil))
+        return
+      }
+      guard application.supportsAlternateIcons, !changingAppIcon else {
+        result(FlutterError(code: "icon_unavailable", message: "App icon cannot be changed now", details: nil))
+        return
+      }
+      let name = names[id]
+      if application.alternateIconName == name {
+        result(nil)
+        return
+      }
+      changingAppIcon = true
+      application.setAlternateIconName(name) { [weak self] error in
+        DispatchQueue.main.async {
+          self?.changingAppIcon = false
+          if error != nil {
+            result(FlutterError(code: "icon_change_failed", message: "Could not update the app icon", details: nil))
+          } else {
+            result(nil)
+          }
+        }
+      }
+    default:
+      result(FlutterMethodNotImplemented)
     }
   }
 
