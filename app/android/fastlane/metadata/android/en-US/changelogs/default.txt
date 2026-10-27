@@ -1,5 +1,3 @@
-Cantinarr 1.1.0
-
 New Play Sun branding, with Play Sign, Play Dome, and Original icons in Settings.
 French interface support with a saved language choice.
 Clearer media-user imports, invitations, and explicit account linking.
