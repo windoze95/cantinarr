@@ -86,6 +86,12 @@ func (s *Service) reviewTVApproval(id int64, r *resolvedRequest, override *Decis
 	if override.SeasonScope == "" && len(override.Seasons) == 0 {
 		return &tvApproval{target, target}, nil
 	}
+	// A follower's accepted episode exclusions are immutable. A different
+	// season scope must be a separately reviewed request, not a rewrite of
+	// already accepted per-episode delivery work.
+	if target.RequestMode == RequestModeMissing && target.MediaCoverageRequired {
+		return nil, errors.New("Stop this follow and submit a new request to change its selected seasons")
+	}
 	next, err := s.prepareTVTarget(r)
 	if err != nil {
 		return nil, err
@@ -247,7 +253,7 @@ func (s *Service) TVRepairPreviews(adminID int64, tmdbID int) ([]TVRepairPreview
 // A completed delivery does not need repeating merely because an admin has
 // reviewed the same target. Queued work still needs its revision reviewed.
 func sameTVDeliveryScope(a, b *TVRequestTarget) bool {
-	if a.Match.TVDBID != b.Match.TVDBID || a.Pilot != b.Pilot {
+	if a.Match.TVDBID != b.Match.TVDBID || a.Pilot != b.Pilot || savedRequestMode(a.RequestMode) != savedRequestMode(b.RequestMode) || a.MediaCoverageRequired != b.MediaCoverageRequired || a.MediaScope != b.MediaScope || a.EpisodeIntent != b.EpisodeIntent {
 		return false
 	}
 	left, right := slices.Clone(a.TargetSeasons), slices.Clone(b.TargetSeasons)

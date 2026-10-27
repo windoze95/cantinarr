@@ -1,5 +1,7 @@
-New Play Sun branding, with Play Sign, Play Dome, and Original icons in Settings.
+Play Sun branding, with Play Sign, Play Dome, and Original icons in Settings.
 French interface support with a saved language choice.
 Clearer media-user imports, invitations, and explicit account linking.
 Updated AI model choices and optional recommended-model fallback.
 Smoother web scrolling and more reliable media artwork loading.
+Plex, Jellyfin, and Emby availability scans and household library associations.
+Request missing episodes, follow selected seasons, or choose another library copy.

@@ -93,6 +93,7 @@ class BackendConnection {
 
   /// Imports create new users; existing identities require explicit linking.
   final bool mediaUserImportExplicitLinking;
+  final bool mediaLibraryAvailability;
 
   /// Server supports paired Apple TV handoffs.
   final bool appleTvRemote;
@@ -133,6 +134,7 @@ class BackendConnection {
     this.adminCatalogBrowsing = false,
     this.mediaAccountManagement = false,
     this.mediaUserImportExplicitLinking = false,
+    this.mediaLibraryAvailability = false,
     this.appleTvRemote = false,
     this.tvMatchCorrections = false,
     this.tvLibraryNavigation = false,
@@ -162,6 +164,7 @@ class BackendConnection {
     bool? adminCatalogBrowsing,
     bool? mediaAccountManagement,
     bool? mediaUserImportExplicitLinking,
+    bool? mediaLibraryAvailability,
     bool? appleTvRemote,
     bool? tvMatchCorrections,
     bool? tvLibraryNavigation,
@@ -196,6 +199,7 @@ class BackendConnection {
         cover4KBadges: cover4KBadges ?? this.cover4KBadges,
         mediaAccountManagement:
             mediaAccountManagement ?? this.mediaAccountManagement,
+        mediaLibraryAvailability: mediaLibraryAvailability ?? this.mediaLibraryAvailability,
         mediaUserImportExplicitLinking: mediaUserImportExplicitLinking ??
             this.mediaUserImportExplicitLinking,
         hiddenDiscoverTabs: clearHiddenDiscoverTabs

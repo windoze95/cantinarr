@@ -23,6 +23,8 @@ On an available movie, show, or audiobook, choose the relevant open, watch, or l
 
 Library availability alone does not grant playback access. Your administrator needs to check both the Cantinarr grant and the live media-server account.
 
+An administrator may instead associate your account with a household library shared on a TV. This lets Cantinarr show **Available** without requiring your own media-server account. It does not sign you into the playback service or grant personal Watch or TV-control actions. Existing files can be available even when Radarr or Sonarr does not manage them.
+
 ## Choose a playback app
 
 On iPhone and iPad, **Settings > Account > Video apps** lets you choose the service's official app, Infuse, Browser, or the administrator's default for each supported video service.

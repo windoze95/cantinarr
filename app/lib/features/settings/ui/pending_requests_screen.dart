@@ -1,3 +1,5 @@
+import '../../media_availability/ui/request_scope_summary.dart';
+import '../../media_availability/ui/request_intent_summary.dart';
 import '../../discover/ui/browse_labels.dart';
 import 'settings_labels.dart';
 import 'package:cantinarr/l10n/l10n.dart';
@@ -219,6 +221,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
         return StatefulBuilder(
           builder: (dialogContext, setDialogState) {
             return AlertDialog(
+              scrollable: true,
               backgroundColor: AppTheme.surface,
               title: Text(
                 context.l10n
@@ -236,8 +239,10 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                       fontSize: 13,
                     ),
                   ),
+                  RequestIntentSummary(requestMode: item.requestMode, sourceSeasons: item.sourceSeasons),
+                  if (item.requestScope case final scope?) RequestScopeSummary(scope: scope),
                   const SizedBox(height: 16),
-                  if (item.isTv) ...[
+                  if (item.isTv && item.requestScope == null) ...[
                     Text(
                       context.l10n.settingsSeasonScope,
                       style: TextStyle(
@@ -245,6 +250,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                     ),
                     const SizedBox(height: 4),
                     DropdownButtonFormField<String>(
+                      isExpanded: true,
                       initialValue: chosenScope,
                       dropdownColor: AppTheme.surfaceVariant,
                       style: const TextStyle(color: AppTheme.textPrimary),
@@ -311,6 +317,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                     ),
                     const SizedBox(height: 4),
                     DropdownButtonFormField<int?>(
+                      isExpanded: true,
                       initialValue: chosenProfile,
                       dropdownColor: AppTheme.surfaceVariant,
                       style: const TextStyle(color: AppTheme.textPrimary),
@@ -362,7 +369,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
         item.id,
         // The "keep requested" sentinel sends no override, so the server keeps
         // the explicit season list the user picked.
-        seasonScope: item.isTv
+        seasonScope: item.isTv && item.requestScope == null
             ? (chosenScope == _keepRequestedScope ? null : chosenScope)
             : null,
         qualityProfileId: item.isBook || item.isMusic ? null : chosenProfile,
@@ -848,6 +855,7 @@ class _PendingTile extends StatelessWidget {
             settingsPendingRequestedBy(context, item),
             style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
+          RequestIntentSummary(requestMode: item.requestMode, sourceSeasons: item.sourceSeasons),
           // Most rows are a plain yes/no and say nothing here. A row whose add
           // already failed is not one, and without this it looked identical —
           // so Approve got pressed, failed, and left no idea what to do next.

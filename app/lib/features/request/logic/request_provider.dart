@@ -7,6 +7,11 @@ import '../data/tv_match_service.dart';
 /// State for a single media item's request status.
 class RequestState {
   final bool libraryUnavailable;
+  final MediaAvailability? availability;
+  final List<MediaFollowing> following;
+
+  RequestStatus get displayStatus => availability?.hasFiles == true ? availability!.status : status;
+  List<RequestSeasonStatus> get displaySeasons => availability?.seasons.isNotEmpty == true ? availability!.seasons : seasons;
   final TVMatch? match;
   final List<String> deliveryMessages;
   final Set<String> unknownInstanceIds;
@@ -41,6 +46,8 @@ class RequestState {
 
   const RequestState({
     this.libraryUnavailable = false,
+    this.availability,
+    this.following = const [],
     this.match,
     this.deliveryMessages = const [],
     this.unknownInstanceIds = const {},
@@ -71,6 +78,9 @@ class RequestState {
 
   RequestState copyWith({
     bool? libraryUnavailable,
+    MediaAvailability? availability,
+    bool clearAvailability = false,
+    List<MediaFollowing>? following,
     TVMatch? match,
     List<String>? deliveryMessages,
     Set<String>? unknownInstanceIds,
@@ -86,6 +96,8 @@ class RequestState {
   }) =>
       RequestState(
         libraryUnavailable: libraryUnavailable ?? this.libraryUnavailable,
+        availability: clearAvailability ? null : availability ?? this.availability,
+        following: following ?? this.following,
         match: match ?? this.match,
         deliveryMessages: deliveryMessages ?? this.deliveryMessages,
         unknownInstanceIds: unknownInstanceIds ?? this.unknownInstanceIds,
@@ -157,6 +169,9 @@ class RequestNotifier extends ChangeNotifier {
       state = state.copyWith(
         libraryUnavailable: false,
         status: detail.status,
+        availability: detail.availability,
+        clearAvailability: detail.availability == null,
+        following: detail.following,
         seasons: detail.seasons,
         releases: detail.releases,
         instanceStatuses: detail.instanceStatuses,
@@ -175,6 +190,8 @@ class RequestNotifier extends ChangeNotifier {
         libraryUnavailable: instanceId != null && e is DioException &&
             (e.response?.statusCode == 400 || e.response?.statusCode == 403),
         isCheckingStatus: false,
+        clearAvailability: true,
+        following: const [],
         error: 'Could not check status',
       );
     }
@@ -196,6 +213,7 @@ class RequestNotifier extends ChangeNotifier {
     String? seasonScope,
     List<int>? seasons,
     int? qualityProfileId,
+    String? requestMode,
   }) async {
     if (state.isRequesting) return false;
     if (_mediaType == MediaType.tv && !state.hasStatus) return false;
@@ -217,6 +235,7 @@ class RequestNotifier extends ChangeNotifier {
       seasons: seasons,
       qualityProfileId: qualityProfileId,
       instanceId: instanceId,
+      requestMode: requestMode,
     );
 
     if (_disposed || libraryVersion != _libraryVersion) return status != null;
@@ -235,10 +254,15 @@ class RequestNotifier extends ChangeNotifier {
       return false;
     }
     state = state.copyWith(status: status, isCheckingStatus: false);
-    if (_mediaType == MediaType.tv) await checkStatus();
+    if (_mediaType == MediaType.tv || state.availability != null || requestMode != null) await checkStatus();
     if (_disposed || libraryVersion != _libraryVersion) return true;
     state = state.copyWith(isRequesting: false, error: state.error);
     return true;
+  }
+
+  Future<void> stopFollowing(int requestId) async {
+    await _service.stopFollowing(requestId);
+    if (!_disposed) await checkStatus();
   }
 
   @override

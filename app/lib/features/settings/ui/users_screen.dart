@@ -1,3 +1,4 @@
+import '../../media_availability/ui/library_access_only_dialog.dart';
 import '../../notifications/ui/notification_labels.dart';
 import '../../media_access/ui/media_access_labels.dart';
 import 'package:cantinarr/l10n/l10n.dart';
@@ -931,14 +932,25 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   Widget _mediaAccountActions(UserSummary user, ServiceInstance server,
       MediaServerAccountRow? account) {
     if (account == null) {
-      return OutlinedButton.icon(
-        onPressed: _mediaActionBusy
-            ? null
-            : () => _runMediaAction(() => _linkMediaAccount(user, server)),
-        icon: const Icon(Icons.link),
-        label: Text(context.l10n.settingsMessageLinkValue1Account(
-            (mediaServerTypeLabel(server.serviceType)).toString())),
-      );
+      return Wrap(spacing: 8, runSpacing: 8, children: [
+        OutlinedButton.icon(
+          onPressed: _mediaActionBusy ? null
+              : () => _runMediaAction(() => _linkMediaAccount(user, server)),
+          icon: const Icon(Icons.link),
+          label: Text(context.l10n.settingsMessageLinkValue1Account(
+              (mediaServerTypeLabel(server.serviceType)).toString())),
+        ),
+        if (server.serviceType != 'audiobookshelf' &&
+            ref.read(authProvider).valueOrNull?.connection?.mediaLibraryAvailability == true)
+          OutlinedButton.icon(
+            onPressed: _mediaActionBusy ? null : () => _runMediaAction(() async {
+              final saved = await showDialog<bool>(context: context,
+                builder: (_) => LibraryAccessOnlyDialog(userId: user.id, initialProvider: server.serviceType));
+              if (saved == true && mounted) await _loadUsers();
+            }),
+            icon: const Icon(Icons.video_library_outlined),
+            label: Text(context.l10n.availabilityLibraryAccessOnly)),
+      ]);
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(

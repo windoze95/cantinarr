@@ -17,12 +17,18 @@ import (
 // TVRequestTarget is persisted before the first Sonarr mutation. SourceSeasons
 // are the user's selection; TargetSeasons are a snapshot, never retranslated.
 type TVRequestTarget struct {
-	freeSeasons   map[int]bool
-	noOpStatus    string
-	Match         TVMatch `json:"match"`
-	SourceSeasons []int   `json:"source_seasons"`
-	TargetSeasons []int   `json:"target_seasons"`
-	Pilot         bool    `json:"pilot"`
+	EpisodeIntent         string             `json:"episode_intent,omitempty"`
+	MediaCoverageRequired bool               `json:"requires_media_coverage,omitempty"`
+	MediaScope            string             `json:"media_scope,omitempty"`
+	RequestMode           string             `json:"request_mode,omitempty"`
+	Episodes              []CanonicalEpisode `json:"episodes,omitempty"`
+	ExcludedEpisodes      []string           `json:"excluded_episodes,omitempty"`
+	freeSeasons           map[int]bool
+	noOpStatus            string
+	Match                 TVMatch `json:"match"`
+	SourceSeasons         []int   `json:"source_seasons"`
+	TargetSeasons         []int   `json:"target_seasons"`
+	Pilot                 bool    `json:"pilot"`
 }
 
 func (s *Service) prepareTVTarget(r *resolvedRequest) (*TVRequestTarget, error) {
@@ -61,7 +67,7 @@ func (s *Service) prepareTVTarget(r *resolvedRequest) (*TVRequestTarget, error) 
 			selected = all[len(all)-1:]
 		}
 	}
-	out := &TVRequestTarget{Match: *m, SourceSeasons: append([]int(nil), selected...), Pilot: pilot}
+	out := &TVRequestTarget{RequestMode: r.requestMode, Match: *m, SourceSeasons: append([]int(nil), selected...), Pilot: pilot}
 	if r.tvLibraryScope != nil {
 		out.Pilot = r.tvLibraryScope.pilot
 	}
@@ -117,6 +123,11 @@ func (s *Service) prepareTVTarget(r *resolvedRequest) (*TVRequestTarget, error) 
 		}
 		out.freeSeasons, out.noOpStatus, err = tvNoOpSeasons(client, existing, out)
 		if err != nil {
+			return nil, err
+		}
+	}
+	if r.requestMode == RequestModeMissing && s.mediaAvailability != nil {
+		if err := s.prepareMissingTV(r, out, existing); err != nil {
 			return nil, err
 		}
 	}
@@ -229,7 +240,7 @@ func (s *Service) saveTVDelivery(r *resolvedRequest, target *TVRequestTarget, ap
 	if repairOf > 0 {
 		err = tx.QueryRow(`SELECT request_id FROM request_tv_targets WHERE repair_of=?`, repairOf).Scan(&id)
 	} else {
-		err = tx.QueryRow(`SELECT r.id FROM request_log r JOIN request_tv_targets t ON t.request_id=r.id WHERE r.user_id=? AND r.tmdb_id=? AND r.media_type='tv' AND r.instance_id=? AND r.status='pending' AND json_extract(t.snapshot,'$.source_seasons')=? AND json_extract(t.snapshot,'$.target_seasons')=? AND json_extract(t.snapshot,'$.pilot')=? AND json_extract(t.snapshot,'$.match.revision')=? AND json_extract(t.snapshot,'$.match.tvdb_id')=? ORDER BY r.id DESC LIMIT 1`, r.userID, r.tmdbID, r.instanceID, encodeSeasonNumbers(target.SourceSeasons), encodeSeasonNumbers(target.TargetSeasons), target.Pilot, target.Match.Revision, target.Match.TVDBID).Scan(&id)
+		err = tx.QueryRow(`SELECT r.id FROM request_log r JOIN request_tv_targets t ON t.request_id=r.id WHERE r.user_id=? AND r.tmdb_id=? AND r.media_type='tv' AND r.instance_id=? AND ((r.status='pending' AND NOT EXISTS(SELECT 1 FROM request_tv_follows f WHERE f.request_id=r.id AND f.state='paused')) OR EXISTS(SELECT 1 FROM request_tv_follows f WHERE f.request_id=r.id AND f.state='active')) AND json_extract(t.snapshot,'$.source_seasons')=? AND json_extract(t.snapshot,'$.target_seasons')=? AND json_extract(t.snapshot,'$.pilot')=? AND json_extract(t.snapshot,'$.match.revision')=? AND json_extract(t.snapshot,'$.match.tvdb_id')=? AND COALESCE(json_extract(t.snapshot,'$.request_mode'),'')=? AND COALESCE(json_extract(t.snapshot,'$.episode_intent'),'')=? AND COALESCE(json_extract(t.snapshot,'$.media_scope'),'')=? ORDER BY r.id DESC LIMIT 1`, r.userID, r.tmdbID, r.instanceID, encodeSeasonNumbers(target.SourceSeasons), encodeSeasonNumbers(target.TargetSeasons), target.Pilot, target.Match.Revision, target.Match.TVDBID, target.RequestMode, target.EpisodeIntent, target.MediaScope).Scan(&id)
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, false, err
@@ -286,6 +297,11 @@ func (s *Service) saveTVDelivery(r *resolvedRequest, target *TVRequestTarget, ap
 	if _, err = tx.Exec(`INSERT INTO request_tv_targets(request_id,snapshot,repair_of,repaired_by) VALUES (?,?,?,?)`, id, string(raw), repair, actor); err != nil {
 		return 0, false, err
 	}
+	if target.RequestMode == RequestModeMissing && target.MediaCoverageRequired && !allFree {
+		if err = saveTVFollow(tx, id, target); err != nil {
+			return 0, false, err
+		}
+	}
 	if _, err = tx.Exec(`INSERT INTO request_dispatch(request_id,format,state) VALUES (?,'',?)`, id, state); err != nil {
 		return 0, false, err
 	}
@@ -324,6 +340,13 @@ func (s *Service) tvDeliveryResponse(userID, id int64) (*CreateResponse, error) 
 	if target, _, seriesID, e := s.loadTVTarget(id); e == nil {
 		out.Match = &target.Match
 		out.Match.SeriesID = seriesID
+	}
+	out.Following, _ = s.tvFollowing(userID, r.tmdbID, r.instanceID)
+	projection := &StatusResponse{Status: out.Status, StatusKnown: out.StatusKnown, Match: out.Match}
+	if e := s.attachMediaAvailability(context.Background(), userID, r.tmdbID, "tv", r.instanceID, projection); e == nil {
+		out.Availability = projection.Availability
+	} else if errors.Is(e, ErrContentPolicyUnavailable) || errors.Is(e, ErrTitleNotAvailable) {
+		return nil, e
 	}
 	return out, nil
 }
@@ -390,6 +413,10 @@ func (s *Service) dispatchTV(ctx context.Context, id int64, token string, r *res
 	})
 	if err = guard(); err != nil {
 		fail(err)
+		return
+	}
+	if target.RequestMode == RequestModeMissing && target.MediaCoverageRequired {
+		s.dispatchMissingTV(ctx, id, token, r, target, client, guard, fail)
 		return
 	}
 	series, err := client.GetSeriesByTVDB(target.Match.TVDBID)

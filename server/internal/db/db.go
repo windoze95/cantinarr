@@ -1038,7 +1038,7 @@ CREATE INDEX IF NOT EXISTS idx_profile_change_proposals_status
     ON profile_change_proposals(status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_profile_change_proposals_one_pending
     ON profile_change_proposals(service_type, instance_id, profile_id) WHERE status = 'pending';
-`
+` + mediaAvailabilitySQL + mediaFollowSQL
 
 type schemaMigration struct {
 	alter    string

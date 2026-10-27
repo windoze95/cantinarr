@@ -1,6 +1,7 @@
 package request
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -102,6 +103,8 @@ func (s *Service) deliveryResponse(userID int64, ids []int64, title, instanceID 
 	for _, id := range ids {
 		if out.RequestID == 0 {
 			out.RequestID = id
+			out.RequestMode, out.SourceSeasons = savedMediaIntent(s.db, id)
+			out.RequestScope = savedTVScope(s.db, id)
 		}
 		states, err := s.deliveryStates(id)
 		if err != nil {
@@ -305,6 +308,13 @@ func (s *Service) DeliveryByID(userID, id int64, includeLive ...bool) (*CreateRe
 	}
 	if err = s.authorizeDeliveryRead(userID, id, r); err != nil {
 		return nil, err
+	}
+	if r.mediaType == "movie" {
+		projection := &StatusResponse{Status: out.Status, StatusKnown: out.StatusKnown}
+		if err = s.attachMediaAvailability(context.Background(), userID, r.tmdbID, "movie", r.instanceID, projection); err != nil {
+			return nil, err
+		}
+		out.Availability = projection.Availability
 	}
 	return out, nil
 }

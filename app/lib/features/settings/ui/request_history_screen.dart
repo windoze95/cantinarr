@@ -1,3 +1,5 @@
+import '../../media_availability/ui/request_scope_summary.dart';
+import '../../media_availability/ui/request_intent_summary.dart';
 import '../../discover/ui/browse_labels.dart';
 import 'settings_labels.dart';
 import 'package:cantinarr/l10n/l10n.dart';
@@ -452,6 +454,7 @@ class _HistoryTile extends StatelessWidget {
                           style: const TextStyle(
                               color: AppTheme.textMuted, fontSize: 12)),
                   ]),
+                  RequestIntentSummary(requestMode: item.requestMode, sourceSeasons: item.sourceSeasons),
                   const SizedBox(height: 6),
                   Text(
                       context.l10n.settingsMessageRequestedByValue1(
@@ -550,6 +553,8 @@ class _HistoryDetailState extends ConsumerState<_HistoryDetail> {
             style: TextStyle(
                 color: _decisionColor(item.decision),
                 fontWeight: FontWeight.w600)),
+        RequestIntentSummary(requestMode: item.requestMode, sourceSeasons: item.sourceSeasons),
+        if (item.requestScope case final scope?) RequestScopeSummary(scope: scope),
         const SizedBox(height: 20),
         _field(context, context.l10n.settingsRequested,
             _date(context, item.requestedAt)),

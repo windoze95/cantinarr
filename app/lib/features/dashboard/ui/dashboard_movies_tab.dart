@@ -109,6 +109,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
                   items: discover.featured.skip(1).toList(growable: false),
                   isLoading: discover.isLoadingFeatured,
                   isTvRow: false,
+                  resolveTVStatus: true,
                   libraryStatus: libraryStatus,
                   // The grid continues whichever source answered; until one has,
                   // there is nothing to continue.
@@ -127,6 +128,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
                     items: discover.nowPlaying,
                     isLoading: discover.isLoadingNowPlaying,
                     isTvRow: false,
+                  resolveTVStatus: true,
                     libraryStatus: libraryStatus,
                     onLoadMore: (_) => discoverNotifier.loadMoreNowPlaying(),
                     onSeeAll: () =>
@@ -140,6 +142,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
                     items: discover.topRated,
                     isLoading: discover.isLoadingTopRated,
                     isTvRow: false,
+                  resolveTVStatus: true,
                     libraryStatus: libraryStatus,
                     onLoadMore: (_) => discoverNotifier.loadMoreTopRated(),
                     onSeeAll: () => _seeAll(BrowseFeed.topRated, 'Top Rated'),
@@ -152,6 +155,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
                     items: discover.upcoming,
                     isLoading: discover.isLoadingUpcoming,
                     isTvRow: false,
+                  resolveTVStatus: true,
                     libraryStatus: libraryStatus,
                     onLoadMore: (_) => discoverNotifier.loadMoreUpcoming(),
                     onSeeAll: () => _seeAll(BrowseFeed.upcoming, 'Coming Soon'),
@@ -164,6 +168,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
                     items: discover.anticipated,
                     isLoading: discover.isLoadingAnticipated,
                     isTvRow: false,
+                  resolveTVStatus: true,
                     libraryStatus: libraryStatus,
                     onLoadMore: (_) => discoverNotifier.loadMoreAnticipated(),
                     onSeeAll: () =>

@@ -214,6 +214,8 @@ type Notifier interface {
 }
 
 type Service struct {
+	mediaAvailability       MediaAvailabilitySource
+	tvFollowMu              sync.Mutex
 	Quotas                  *requestquota.Service
 	tvMatchMu               sync.Mutex
 	MusicCatalog            musicdiscovery.Catalog
@@ -561,6 +563,7 @@ func (s *Service) resolveSonarr(userID int64, instanceID string) (*sonarr.Client
 }
 
 type CreateRequest struct {
+	RequestMode string `json:"request_mode,omitempty"`
 	// Only the library-series intake can set this proof. Public catalog
 	// requests cannot bypass season-choice policy or supply native IDs.
 	tvLibraryScope *tvLibraryScope
@@ -624,6 +627,11 @@ type BookFormatWait struct {
 }
 
 type CreateResponse struct {
+	RequestScope        *TVEpisodeScope       `json:"request_scope,omitempty"`
+	RequestMode         string                `json:"request_mode,omitempty"`
+	SourceSeasons       []int                 `json:"source_seasons,omitempty"`
+	Availability        *Availability         `json:"availability,omitempty"`
+	Following           []TVFollowStatus      `json:"following,omitempty"`
 	QuotaPreview        *requestquota.Preview `json:"quota_preview,omitempty"`
 	Match               *TVMatch              `json:"match,omitempty"`
 	StatusUnknownReason string                `json:"status_unknown_reason,omitempty"`
@@ -653,14 +661,16 @@ type CreateResponse struct {
 }
 
 type StatusResponse struct {
-	Match               *TVMatch        `json:"match,omitempty"`
-	StatusUnknownReason string          `json:"status_unknown_reason,omitempty"`
-	RequestID           int64           `json:"request_id,omitempty"`
-	CatalogRef          *CatalogRef     `json:"catalog_ref,omitempty"`
-	Delivery            []DeliveryState `json:"delivery,omitempty"`
-	Status              string          `json:"status"`
-	Progress            float64         `json:"progress"`
-	StatusKnown         *bool           `json:"status_known,omitempty"`
+	Availability        *Availability    `json:"availability,omitempty"`
+	Following           []TVFollowStatus `json:"following,omitempty"`
+	Match               *TVMatch         `json:"match,omitempty"`
+	StatusUnknownReason string           `json:"status_unknown_reason,omitempty"`
+	RequestID           int64            `json:"request_id,omitempty"`
+	CatalogRef          *CatalogRef      `json:"catalog_ref,omitempty"`
+	Delivery            []DeliveryState  `json:"delivery,omitempty"`
+	Status              string           `json:"status"`
+	Progress            float64          `json:"progress"`
+	StatusKnown         *bool            `json:"status_known,omitempty"`
 	// Seasons carries per-season availability for TV titles (omitted for
 	// movies and for series not yet in the library). Season 0 / Specials are
 	// excluded, matching the rest of the app's season handling.
@@ -759,20 +769,25 @@ type SeasonStatus struct {
 }
 
 type RequestLog struct {
-	Match       *TVMatch        `json:"match,omitempty"`
-	RequestID   int64           `json:"request_id,omitempty"`
-	CatalogRef  *CatalogRef     `json:"catalog_ref,omitempty"`
-	Delivery    []DeliveryState `json:"delivery,omitempty"`
-	TmdbID      int             `json:"tmdb_id"`
-	ForeignID   string          `json:"foreign_id,omitempty"`
-	BookFormat  string          `json:"book_format,omitempty"`
-	InstanceID  string          `json:"instance_id,omitempty"`
-	MediaType   string          `json:"media_type"`
-	Title       string          `json:"title"`
-	Status      string          `json:"status"`
-	StatusKnown bool            `json:"status_known"`
-	DenyReason  string          `json:"deny_reason,omitempty"`
-	RequestedAt time.Time       `json:"requested_at"`
+	RequestScope  *TVEpisodeScope  `json:"request_scope,omitempty"`
+	RequestMode   string           `json:"request_mode,omitempty"`
+	SourceSeasons []int            `json:"source_seasons,omitempty"`
+	Availability  *Availability    `json:"availability,omitempty"`
+	Following     []TVFollowStatus `json:"following,omitempty"`
+	Match         *TVMatch         `json:"match,omitempty"`
+	RequestID     int64            `json:"request_id,omitempty"`
+	CatalogRef    *CatalogRef      `json:"catalog_ref,omitempty"`
+	Delivery      []DeliveryState  `json:"delivery,omitempty"`
+	TmdbID        int              `json:"tmdb_id"`
+	ForeignID     string           `json:"foreign_id,omitempty"`
+	BookFormat    string           `json:"book_format,omitempty"`
+	InstanceID    string           `json:"instance_id,omitempty"`
+	MediaType     string           `json:"media_type"`
+	Title         string           `json:"title"`
+	Status        string           `json:"status"`
+	StatusKnown   bool             `json:"status_known"`
+	DenyReason    string           `json:"deny_reason,omitempty"`
+	RequestedAt   time.Time        `json:"requested_at"`
 	// BookFormatWait explains a history row reading "requested" only because the
 	// server owns it and is retrying it. History rows are already one format
 	// each, so this is a single wait rather than the per-format map the detail
@@ -782,13 +797,16 @@ type RequestLog struct {
 
 // PendingRequest is one row of the admin approval queue.
 type PendingRequest struct {
-	CatalogRef *CatalogRef     `json:"catalog_ref,omitempty"`
-	Delivery   []DeliveryState `json:"delivery,omitempty"`
-	ID         int64           `json:"id"`
-	UserID     int64           `json:"user_id"`
-	Username   string          `json:"username"`
-	TmdbID     int             `json:"tmdb_id"`
-	TvdbID     int             `json:"tvdb_id"`
+	RequestScope  *TVEpisodeScope `json:"request_scope,omitempty"`
+	RequestMode   string          `json:"request_mode,omitempty"`
+	SourceSeasons []int           `json:"source_seasons,omitempty"`
+	CatalogRef    *CatalogRef     `json:"catalog_ref,omitempty"`
+	Delivery      []DeliveryState `json:"delivery,omitempty"`
+	ID            int64           `json:"id"`
+	UserID        int64           `json:"user_id"`
+	Username      string          `json:"username"`
+	TmdbID        int             `json:"tmdb_id"`
+	TvdbID        int             `json:"tvdb_id"`
 	// ForeignID is the Chaptarr identity a book row is addressed by; movie and
 	// TV rows are addressed by TmdbID and leave it empty.
 	ForeignID string `json:"foreign_id,omitempty"`
@@ -893,24 +911,27 @@ type effective struct {
 
 // resolvedRequest is a request whose options have all been resolved server-side.
 type resolvedRequest struct {
-	tvLibraryScope       *tvLibraryScope
-	quotaPreview         *requestquota.Preview
-	previewOnly          bool
-	authority            string
-	beforeMutation       func() error
-	newSubmission        bool // public intake only; approval replays never emit creation
-	newWork              bool // a new arr record or genuinely revived monitoring
-	userID               int64
-	actorID              int64 // optional execution authority; history remains userID-owned
-	tmdbID               int
-	tvdbID               int
-	foreignID            string // Chaptarr foreignBookId (book requests)
-	bookFormat           string
-	requestedBookFormats string
-	searchTerm           string // the requester's own search text (book requests)
-	parkReason           string // why a pending row is server-owned (see bookParkReasonAuthorImport)
-	addFailure           string // the add that already ran and failed (see bookAddFailureMetadataUnresolved)
-	instanceID           string
+	requestMode           string
+	mediaCoverageRequired bool
+	mediaScope            string
+	tvLibraryScope        *tvLibraryScope
+	quotaPreview          *requestquota.Preview
+	previewOnly           bool
+	authority             string
+	beforeMutation        func() error
+	newSubmission         bool // public intake only; approval replays never emit creation
+	newWork               bool // a new arr record or genuinely revived monitoring
+	userID                int64
+	actorID               int64 // optional execution authority; history remains userID-owned
+	tmdbID                int
+	tvdbID                int
+	foreignID             string // Chaptarr foreignBookId (book requests)
+	bookFormat            string
+	requestedBookFormats  string
+	searchTerm            string // the requester's own search text (book requests)
+	parkReason            string // why a pending row is server-owned (see bookParkReasonAuthorImport)
+	addFailure            string // the add that already ran and failed (see bookAddFailureMetadataUnresolved)
+	instanceID            string
 	// instanceIsUserDefault marks a movie/TV request whose resolved instance is
 	// the requester's effective default, which is the only target allowed to
 	// absorb legacy pending rows written before instances were stamped.
@@ -1125,6 +1146,12 @@ func (s *Service) effectiveSettings(userID int64, isAdmin bool) (effective, erro
 }
 
 func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateResponse, error) {
+	if req.RequestMode != "" && req.RequestMode != RequestModeMissing && req.RequestMode != RequestModeLibraryCopy {
+		return nil, errors.New("request_mode must be missing or library_copy")
+	}
+	if req.RequestMode != "" && req.MediaType != "movie" && req.MediaType != "tv" {
+		return nil, errors.New("request_mode applies only to movies and TV")
+	}
 	req.quotaFree, req.quotaKey, req.quotaPreview = nil, "", nil
 	var authErr error
 	req.authority, authErr = requestAuthority(s.db, userID)
@@ -1171,6 +1198,7 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 	}
 
 	resolved := &resolvedRequest{
+		requestMode:    normalizedRequestMode(req.RequestMode),
 		tvLibraryScope: req.tvLibraryScope,
 		previewOnly:    req.previewOnly,
 		authority:      req.authority,
@@ -2581,12 +2609,39 @@ func (s *Service) getUserStatus(userID int64, tmdbID int, mediaType, instanceID 
 		return nil, err
 	}
 
+	resolveCurrent := func() (string, error) {
+		if mediaType == "movie" {
+			_, id, e := s.resolveRadarr(userID, instanceID)
+			return id, e
+		}
+		if mediaType == "tv" {
+			_, id, e := s.resolveSonarr(userID, instanceID)
+			return id, e
+		}
+		return "", nil
+	}
+	initialInstance, err := resolveCurrent()
+	if err != nil {
+		return nil, err
+	}
 	resp, err := s.userStatusForInstance(userID, tmdbID, mediaType, instanceID)
 	if err != nil {
 		return nil, err
 	}
+	if initialInstance != "" {
+		if err := s.attachMediaAvailability(context.Background(), userID, tmdbID, mediaType, instanceID, resp); err != nil {
+			return nil, err
+		}
+	}
 	if includeInstanceStatuses {
 		resp.InstanceStatuses = s.instanceStatuses(userID, tmdbID, mediaType)
+	}
+	current, e := resolveCurrent()
+	if e != nil {
+		return nil, e
+	}
+	if current != initialInstance {
+		return nil, ErrArrInstanceForbidden
 	}
 	return resp, nil
 }
@@ -3483,6 +3538,8 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 			history[i].log.BookFormatWait = &wait
 		}
 		requests[i] = history[i].log
+		requests[i].RequestMode, requests[i].SourceSeasons = savedMediaIntent(s.db, requests[i].RequestID)
+		requests[i].RequestScope = savedTVScope(s.db, requests[i].RequestID)
 		if s.hasDispatch(requests[i].RequestID) {
 			p := PendingRequest{ID: requests[i].RequestID}
 			s.attachPendingDelivery(&p)
@@ -3493,7 +3550,36 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 			}
 		}
 	}
-	return s.hideBlockedRequests(userID, s.userIsAdmin(userID), requests)
+	visible, err := s.hideBlockedRequests(userID, s.userIsAdmin(userID), requests)
+	if err != nil {
+		return nil, err
+	}
+	if s.mediaAvailability != nil {
+		for i := range visible {
+			row := &visible[i]
+			if row.MediaType != "movie" && row.MediaType != "tv" {
+				continue
+			}
+			// Saved decisions retain their original meaning. Playback and
+			// following are separate projections, filtered after title policy.
+			if _, e := s.deliveryInstance(userID, row.MediaType, row.InstanceID); e != nil {
+				continue
+			}
+			projection := &StatusResponse{Status: row.Status, Match: row.Match}
+			if e := s.attachMediaAvailability(context.Background(), userID, row.TmdbID, row.MediaType, row.InstanceID, projection); e == nil {
+				row.Availability = projection.Availability
+				row.Following = projection.Following
+			} else if errors.Is(e, ErrContentPolicyUnavailable) {
+				return nil, e
+			}
+			if _, e := s.deliveryInstance(userID, row.MediaType, row.InstanceID); e != nil {
+				row.Availability = nil
+				row.StatusKnown = false
+				row.Status = StatusUnavailable
+			}
+		}
+	}
+	return s.hideBlockedRequests(userID, s.userIsAdmin(userID), visible)
 }
 
 // overlayLiveStatuses recomputes each history row's status from the live arr
@@ -3866,7 +3952,16 @@ func (s *Service) scanPending(parked bool) ([]PendingRequest, error) {
 		}
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].RequestMode, out[i].SourceSeasons = savedMediaIntent(s.db, out[i].ID)
+		out[i].RequestScope = savedTVScope(s.db, out[i].ID)
+	}
+	return out, nil
 }
 
 // loadRequest reads a request_log row into a resolvedRequest plus its status.
@@ -3892,6 +3987,16 @@ func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error)
 	// An explicit season list was stored as JSON in season_scope; decode it so
 	// approval replays the explicit season selection the requester chose.
 	r.seasonNumbers = decodeSeasonNumbers(r.seasonScope)
+	// Missing pre-feature rows deliberately retain the original arr-copy
+	// delivery semantics; scanning never converts accepted intent.
+	r.requestMode = RequestModeLibraryCopy
+	_ = s.db.QueryRow(`SELECT mode,requires_media_coverage,source_scope FROM request_media_modes WHERE request_id=?`, requestID).Scan(&r.requestMode, &r.mediaCoverageRequired, &r.mediaScope)
+	if r.mediaType == "tv" {
+		if target, _, _, e := s.loadTVTarget(requestID); e == nil && target.RequestMode == RequestModeMissing {
+			r.requestMode = RequestModeMissing
+			r.mediaCoverageRequired, r.mediaScope = target.MediaCoverageRequired, target.MediaScope
+		}
+	}
 	return &r, status, nil
 }
 

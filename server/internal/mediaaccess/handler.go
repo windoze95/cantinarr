@@ -50,6 +50,12 @@ func (h *Handler) SetExternalURLSource(fn func() string) {
 
 func (h *Handler) SetConfigChangedObserver(fn func()) { h.configChanged = fn }
 
+func (h *Handler) notifyConfigChanged() {
+	if h.configChanged != nil {
+		h.configChanged()
+	}
+}
+
 // NewHandler creates the handler.
 func NewHandler(svc *Service, logger *slog.Logger) *Handler {
 	if logger == nil {
@@ -170,6 +176,7 @@ func (h *Handler) CreateAccount(w http.ResponseWriter, r *http.Request) {
 	created, err := h.svc.CreateAccount(r.Context(), claims.UserID, instanceID, body.Password)
 	switch {
 	case err == nil:
+		h.notifyConfigChanged()
 		writeJSON(w, http.StatusCreated, created)
 	case errors.Is(err, ErrNameTaken):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "that name is already taken on this server; ask your admin to link it to you", "code": "name_taken"})
@@ -191,6 +198,7 @@ func (h *Handler) requestInvite(w http.ResponseWriter, r *http.Request, userID i
 	created, err := h.svc.RequestInvite(r.Context(), userID, instanceID, email)
 	switch {
 	case err == nil:
+		h.notifyConfigChanged()
 		writeJSON(w, http.StatusCreated, created)
 	case errors.Is(err, ErrInvalidEmail):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "enter a valid email address", "code": "invalid_email"})
@@ -240,6 +248,7 @@ func (h *Handler) LinkOwnAccount(w http.ResponseWriter, r *http.Request) {
 	linked, err := h.svc.LinkOwnAccount(r.Context(), claims.UserID, instanceID, body.Username, body.Password)
 	switch {
 	case err == nil:
+		h.notifyConfigChanged()
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusCreated, linked)
 	case errors.Is(err, ErrBadCredentials):
@@ -296,6 +305,9 @@ func (h *Handler) PlexSignInCheck(w http.ResponseWriter, r *http.Request) {
 	result, err := h.svc.PlexSignInCheck(r.Context(), claims.UserID, body.PinID, claims.Username)
 	switch {
 	case err == nil:
+		if result.Linked {
+			h.notifyConfigChanged()
+		}
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, result)
 	case errors.Is(err, ErrPinNotFound):
@@ -409,6 +421,7 @@ func (h *Handler) LinkAccount(w http.ResponseWriter, r *http.Request) {
 	account, err := h.svc.LinkAccount(r.Context(), userID, instanceID, body.RemoteUserID, body.ManageAccess)
 	switch {
 	case err == nil:
+		h.notifyConfigChanged()
 		writeJSON(w, http.StatusOK, account)
 	case errors.Is(err, ErrUserNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
@@ -472,6 +485,7 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 	results, err := h.svc.ImportAccounts(r.Context(), claims.UserID, instanceID, serverURL, body.RemoteUserIDs, body.ManageAccess)
 	switch {
 	case err == nil:
+		h.notifyConfigChanged()
 		if results == nil {
 			results = []ImportResult{}
 		}
@@ -511,6 +525,7 @@ func (h *Handler) SetManagement(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	switch {
 	case err == nil:
+		h.notifyConfigChanged()
 		writeJSON(w, http.StatusOK, account)
 	case errors.Is(err, ErrNoAccount), errors.Is(err, ErrInstanceNotFound), errors.Is(err, ErrRemoteUserNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "linked account not found"})
@@ -534,6 +549,7 @@ func (h *Handler) UnlinkAccount(w http.ResponseWriter, r *http.Request) {
 	err := h.svc.UnlinkAccount(userID, instanceID)
 	switch {
 	case err == nil:
+		h.notifyConfigChanged()
 		w.WriteHeader(http.StatusNoContent)
 	case errors.Is(err, ErrNoAccount):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no linked account"})

@@ -174,11 +174,12 @@ type AddSeriesRequest struct {
 }
 
 type QueueItem struct {
-	SeriesID int     `json:"seriesId"`
-	Title    string  `json:"title"`
-	Status   string  `json:"status"`
-	Sizeleft float64 `json:"sizeleft"`
-	Size     float64 `json:"size"`
+	SeriesID  int     `json:"seriesId"`
+	EpisodeID int     `json:"episodeId"`
+	Title     string  `json:"title"`
+	Status    string  `json:"status"`
+	Sizeleft  float64 `json:"sizeleft"`
+	Size      float64 `json:"size"`
 }
 
 // do executes a request with an optional JSON body, fails on non-2xx status,
@@ -1055,6 +1056,7 @@ func (c *Client) GetHealth() ([]HealthCheck, error) {
 
 type Episode struct {
 	ID            int        `json:"id"`
+	TVDBID        int        `json:"tvdbId"`
 	SeriesID      int        `json:"seriesId"`
 	SeasonNumber  int        `json:"seasonNumber"`
 	EpisodeNumber int        `json:"episodeNumber"`

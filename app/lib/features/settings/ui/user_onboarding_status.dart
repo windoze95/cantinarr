@@ -1,3 +1,4 @@
+import '../../media_availability/ui/library_access_summary.dart';
 import '../../media_access/ui/media_access_labels.dart';
 import 'package:cantinarr/l10n/l10n.dart';
 import 'package:dio/dio.dart';
@@ -309,6 +310,8 @@ class _UserOnboardingStatusState extends ConsumerState<UserOnboardingStatus> {
           ],
           _message(context
               .l10n.settingsLinkedAccountsAndActiveServerAccessAreSeparate),
+          if (connection?.mediaLibraryAvailability == true)
+            LibraryAccessSummary(userId: widget.userId),
         ]),
       TextButton.icon(
           onPressed: _load,
