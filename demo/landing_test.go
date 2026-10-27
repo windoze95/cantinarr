@@ -18,8 +18,8 @@ func TestLandingPageConnectsToConfiguredDemo(t *testing.T) {
 
 	for _, want := range []string{
 		`<html lang="en">`,
-		`<link rel="icon" href="/static/favicon.png?v=2" type="image/png">`,
-		`<img src="/static/logo.png" alt="" width="30" height="30" />`,
+		`<link rel="icon" href="/static/favicon.png?v=4" type="image/png">`,
+		`<img src="/static/lockup.svg" alt="Cantinarr" width="147" height="40" style="border-radius:0" />`,
 		`<h1 id="demo-title">Try Cantinarr.</h1>`,
 		`<code>` + serverURL + `</code>`,
 		`href="cantinarr://connect?token=` + demoConnectTokenStr + `&amp;server=` + url.QueryEscape(serverURL) + `"`,
@@ -46,6 +46,7 @@ func TestLandingPageServesBrandAssets(t *testing.T) {
 		contentType string
 		want        []byte
 	}{
+		{path: "/static/lockup.svg", contentType: "image/svg+xml", want: demoLockup},
 		{path: "/static/logo.png", contentType: "image/png", want: demoLogo},
 		{path: "/static/favicon.png", contentType: "image/png", want: demoFavicon},
 		{path: "/static/fonts/schibsted-var.woff2", contentType: "font/woff2", want: demoFont},
