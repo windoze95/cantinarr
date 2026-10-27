@@ -1,5 +1,7 @@
-New Play Sun logo and app icon. Choose Play Sign, Play Dome, or the original icon in Settings > Account > App icon. Your choice stays on this device.
+Cantinarr 1.1.0
 
-French interface: follow your device language or choose English or Français in Settings.
-
-Browse and request movies, TV, books, and music. Follow downloads and receive notifications when requests are ready.
+New Play Sun branding, with Play Sign, Play Dome, and Original icons in Settings.
+French interface support with a saved language choice.
+Clearer media-user imports, invitations, and explicit account linking.
+Updated AI model choices and optional recommended-model fallback.
+Smoother web scrolling and more reliable media artwork loading.
