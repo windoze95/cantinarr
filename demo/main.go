@@ -44,6 +44,9 @@ var demoLandingTemplate string
 //go:embed assets/logo.png
 var demoLogo []byte
 
+//go:embed assets/lockup.svg
+var demoLockup []byte
+
 //go:embed assets/favicon.png
 var demoFavicon []byte
 
@@ -112,6 +115,11 @@ func buildRouter() chi.Router {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write(demoLogo)
+	})
+	r.Get("/static/lockup.svg", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		_, _ = w.Write(demoLockup)
 	})
 	r.Get("/static/favicon.png", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Cache-Control", "public, max-age=86400")

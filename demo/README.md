@@ -390,3 +390,7 @@ doctl compute droplet delete cantinarr-demo --force
 ```
 
 Update the Cloudflare DNS A record when you create a new droplet with a different IP.
+
+## Branding
+
+The landing page and bundled browser app use round 4 Play Sun artwork by Julian Poidevin. The outlined title-case lockup has a sun-yellow i-dot. Assets are embedded locally; the logo repository is not needed at runtime. Keep these exports aligned with the main application’s `branding/` sources when updating the demo.
