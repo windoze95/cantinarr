@@ -1,3 +1,7 @@
-Cantinarr 1.0
+Cantinarr 1.1.0
 
-Browse and request movies, TV, books, and music from your self-hosted Cantinarr server. Follow downloads and receive notifications when requests are ready. Administrators can manage libraries, approvals, accounts, and connected services. Optional AI tools use the provider you or your administrator configure.
+- New Play Sun branding. Choose Play Sign, Play Dome, or the original app icon in Settings > Account > App icon.
+- French interface support. Follow your device language or save a choice of English or Français in Settings.
+- Clearer media-user imports and invitations, explicit account linking, and separate sign-in, request, and media-access status.
+- Updated AI provider and model choices, with optional fallback to a provider-managed recommended model when a saved model is unavailable.
+- Smoother web scrolling and more reliable media artwork loading.
