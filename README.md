@@ -1,8 +1,10 @@
 <p align="center">
-  <img src="docs-site/public/icon.png" alt="Cantinarr logo" width="120">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="branding/play-sun-lockup-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="branding/play-sun-lockup-light.svg">
+    <img src="branding/play-sun-lockup-light.svg" alt="Cantinarr" width="520">
+  </picture>
 </p>
-
-<h1 align="center">Cantinarr</h1>
 
 <p align="center">Self-hosted media requests and server management.</p>
 
