@@ -23,6 +23,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
 
     private var pendingPermissionResult: MethodChannel.Result? = null
+    private var appIconChannel: MethodChannel? = null
     private var mediaAppsChannel: MethodChannel? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -39,6 +40,12 @@ class MainActivity : FlutterActivity() {
         )
         channel.setMethodCallHandler { call, result -> handleMethodCall(call, result) }
         PushBridge.channel = channel
+
+        val appIcons = AppIconManager(this)
+        appIconChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "codes.julian.cantinarr/app_icon",
+        ).also { it.setMethodCallHandler(appIcons::handle) }
 
         val mediaApps = MediaAppLauncher(this)
         mediaAppsChannel = MethodChannel(
@@ -63,6 +70,8 @@ class MainActivity : FlutterActivity() {
         // arrives now must cold-start rather than post to a dead channel.
         PushBridge.channel = null
         PushBridge.dartTapReady = false
+        appIconChannel?.setMethodCallHandler(null)
+        appIconChannel = null
         mediaAppsChannel?.setMethodCallHandler(null)
         mediaAppsChannel = null
         super.cleanUpFlutterEngine(flutterEngine)

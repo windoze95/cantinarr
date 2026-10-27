@@ -52,3 +52,9 @@ The allowance page shows the rolling limits that apply to your account. An allow
 Settings pages with a Save action preserve your draft when a save fails. Leaving an edited page offers **Keep editing** or **Discard changes**. Controls that save immediately do not require a second Save.
 
 Settings search can find controls across the app. Its results respect your role and permissions, so you will not see every administrator setting on an ordinary account.
+
+## App icon
+
+On iPhone, iPad, or Android, open **Settings > Account > App icon**. Choose **Play Sun** (the default), **Play Sign**, **Play Dome**, or **Original**. Your choice stays on this device across restarts and sign-outs. The home screen may take a moment to refresh.
+
+The navigation logo stays Play Sun. The browser and desktop apps use the default icon and do not show this setting. If a change fails, reopen **App icon** to check the current choice and try again.

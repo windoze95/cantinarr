@@ -24,14 +24,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// tolerant comparator threshold (see flutter_test_config.dart). Regenerate
 /// with `flutter test --update-goldens` from `app/`.
 ///
-/// Both frames were re-baselined in Phase 4 (SEARCH-03). The only intended
-/// pixel change is the search bar's prefix badge glyph, which now carries
-/// the active discovery tab's `ModulePage.activeIcon` — `Icons.movie`, since
-/// both frames capture `/dashboard/movies` — instead of the previous generic
-/// search glyph. The badge's tint is unchanged, because `aiEnabled` still
-/// drives the colour and `_userState` configures no services. The change is
-/// visible whenever the bar is not in AI mode, including with an empty,
-/// unfocused field, which is why frames that type nothing still differ.
+/// The desktop header uses the round 4 Play Sun mark and the outlined
+/// title-case wordmark with its yellow i-dot. The phone frame keeps the
+/// closed drawer, so changing its hidden branding does not affect that frame.
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
@@ -98,6 +93,15 @@ void main() {
     );
 
     tester.view.physicalSize = const Size(900, 800);
+    await tester.pumpAndSettle();
+    // Asset decoding runs outside the fake test clock. Wait for the real
+    // bitmaps so this baseline proves the logo instead of an empty header.
+    await tester.runAsync(() async {
+      final context = tester.element(find.byType(MaterialApp));
+      await precacheImage(const AssetImage('assets/logo.png'), context);
+      if (!context.mounted) return;
+      await precacheImage(const AssetImage('assets/wordmark.png'), context);
+    });
     await tester.pumpAndSettle();
 
     await expectLater(

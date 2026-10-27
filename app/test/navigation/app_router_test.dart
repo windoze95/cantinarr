@@ -228,7 +228,7 @@ void main() {
 
     expect(find.byType(SetPasswordScreen), findsOneWidget);
     expect(find.byType(AppShell), findsOneWidget);
-    expect(find.text('CANTINARR'), findsOneWidget);
+    expect(find.image(const AssetImage('assets/wordmark.png')), findsOneWidget);
     expect(find.byType(CantinarrSearchBar), findsNothing);
   });
 

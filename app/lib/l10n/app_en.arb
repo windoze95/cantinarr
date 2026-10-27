@@ -8191,5 +8191,12 @@
   "notificationGoogleRejected": " (Google rejected the send — a malformed token or payload)",
   "notificationProviderNotEnabled": " (the push gateway does not have this platform’s provider enabled)",
   "notificationAppleTokenInvalid": " (Apple rejected the token — usually a dev build’s sandbox token sent to production APNs, or a stale token)",
-  "notificationAppleTokenExpired": " (Apple says the token is no longer valid — the app was removed or reinstalled; it re-registers on next launch)"
+  "notificationAppleTokenExpired": " (Apple says the token is no longer valid — the app was removed or reinstalled; it re-registers on next launch)",
+  "settingsAppIcon": "App icon",
+  "settingsAppIconSubtitle": "Choose the icon on this device",
+  "settingsAppIconHelp": "Choose your home screen icon. Your selection stays on this device. The launcher may take a moment to update.",
+  "settingsAppIconOriginal": "Original",
+  "settingsAppIconDefault": "Default",
+  "settingsAppIconUnsupported": "This device does not support alternate app icons.",
+  "settingsAppIconError": "Could not update the app icon. Try again."
 }
