@@ -24,7 +24,7 @@ such as **AUTO** are informational hints, not machine-enforced claims.
 
 | Area | Case prefixes | Cases |
 |---|---|---:|
-| [Build, operations, usability, and release](catalog/baseline-operations-release.md) | OPS, UX, PERF, REL, EXP | 32 |
+| [Build, operations, usability, and release](catalog/baseline-operations-release.md) | OPS, UX, PERF, REL, EXP | 33 |
 | [Authentication, navigation, and security](catalog/auth-users-security.md) | AUTH, NAV, SEC | 14 |
 | [Instances, realtime behavior, and push](catalog/instances-realtime-push.md) | INST, TDARR, RT, PUSH, DISCORD, SEERR | 22 |
 | [Plex linking, libraries, invitations, watching, and sign-in](catalog/plex.md) | PLEX | 31 |
@@ -32,7 +32,7 @@ such as **AUTO** are informational hints, not machine-enforced claims.
 | [Discovery and requests](catalog/discovery-requests.md) | DISC, REQ | 31 |
 | [Media services and download clients](catalog/media-services.md) | RAD, SON, BOOK, MUS, FILE, DOWN, TAUT, TRR | 22 |
 | [Issues, AI, and MCP](catalog/issues-ai-mcp.md) | ISS, AI, MCP | 16 |
-| **Total** | | **198** |
+| **Total** | | **199** |
 
 Case IDs are stable and never renumbered, so deleted cases leave gaps in the
 sequences; a gap means the behavior moved into the automated suites, not that
