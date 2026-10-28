@@ -145,7 +145,7 @@ class ShellSearchState {
 
 /// Manages TMDB multi-search from the shell search bar.
 class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
-  final DiscoverApiService _api;
+  DiscoverApiService _api;
   final bool aiAvailable;
   final PagedLoader _searchLoader = PagedLoader();
   Timer? _searchDebounce;
@@ -159,6 +159,22 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
 
   ShellSearchNotifier(this._api, {this.aiAvailable = false})
       : super(const ShellSearchState());
+
+  /// Keep what the user typed, but discard pages in the previous language.
+  void updateApi(DiscoverApiService api) {
+    if (identical(api, _api)) return;
+    _api = api;
+    _searchDebounce?.cancel();
+    final generation = ++_searchGeneration;
+    _searchLoader.reset();
+    final query = state.searchQuery;
+    state = state
+        .copyWith(searchResults: [], isLoadingSearch: query.trim().isNotEmpty);
+    if (query.trim().isNotEmpty) {
+      _executeSearch(
+          query: query, generation: generation, mode: state.searchMode);
+    }
+  }
 
   void updateSearch(String query) {
     final trimmed = query.trim();
@@ -348,9 +364,12 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
 final shellSearchProvider =
     StateNotifierProvider<ShellSearchNotifier, ShellSearchState>(
   (ref) {
-    final api = ref.watch(discoverServiceProvider);
+    // Locale changes update the service without throwing away the query.
+    final api = ref.read(discoverServiceProvider);
     final auth = ref.watch(authProvider).valueOrNull;
     final hasAi = auth?.connection?.services.ai ?? false;
-    return ShellSearchNotifier(api, aiAvailable: hasAi);
+    final notifier = ShellSearchNotifier(api, aiAvailable: hasAi);
+    ref.listen(discoverServiceProvider, (_, next) => notifier.updateApi(next));
+    return notifier;
   },
 );

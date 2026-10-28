@@ -40,6 +40,8 @@ class MediaDetailState {
   });
 
   String get title => movieDetail?.title ?? tvDetail?.name ?? '';
+  String get sourceTitle =>
+      movieDetail?.matchingTitle ?? tvDetail?.matchingTitle ?? '';
 
   String get tagline => movieDetail?.tagline ?? tvDetail?.tagline ?? '';
 
@@ -115,10 +117,12 @@ class MediaDetailState {
 
 /// Loads full detail + recommendations for a movie or TV show.
 class MediaDetailNotifier extends ChangeNotifier {
-  final DiscoverApiService _api;
+  DiscoverApiService _api;
   final int _id;
   final MediaType _mediaType;
   final Future<TVDetail> Function()? libraryLoader;
+  int _generation = 0;
+  bool _disposed = false;
 
   MediaDetailState _state = const MediaDetailState();
   MediaDetailState get state => _state;
@@ -137,16 +141,21 @@ class MediaDetailNotifier extends ChangeNotifier {
         _mediaType = mediaType;
 
   Future<void> load() async {
+    final generation = ++_generation;
+    final api = _api;
     state = state.copyWith(isLoading: true);
     try {
       if (libraryLoader != null) {
-        state = MediaDetailState(tvDetail: await libraryLoader!());
+        final detail = await libraryLoader!();
+        if (_disposed || generation != _generation) return;
+        state = MediaDetailState(tvDetail: detail);
         return;
       }
       if (_mediaType == MediaType.movie) {
-        final detail = await _api.movieDetail(_id);
-        final recs = await _api.movieRecommendations(_id);
-        final sim = await _api.similarMovies(_id);
+        final detail = await api.movieDetail(_id);
+        final recs = await api.movieRecommendations(_id);
+        final sim = await api.similarMovies(_id);
+        if (_disposed || generation != _generation) return;
         state = state.copyWith(
           isLoading: false,
           movieDetail: detail,
@@ -154,9 +163,10 @@ class MediaDetailNotifier extends ChangeNotifier {
           similar: sim.results,
         );
       } else {
-        final detail = await _api.tvDetail(_id);
-        final recs = await _api.tvRecommendations(_id);
-        final sim = await _api.similarTV(_id);
+        final detail = await api.tvDetail(_id);
+        final recs = await api.tvRecommendations(_id);
+        final sim = await api.similarTV(_id);
+        if (_disposed || generation != _generation) return;
         state = state.copyWith(
           isLoading: false,
           tvDetail: detail,
@@ -165,6 +175,7 @@ class MediaDetailNotifier extends ChangeNotifier {
         );
       }
     } catch (e) {
+      if (_disposed || generation != _generation) return;
       if (e is DioException && e.response?.statusCode == 404) {
         state = state.copyWith(isLoading: false, titleUnavailable: true);
         return;
@@ -174,5 +185,18 @@ class MediaDetailNotifier extends ChangeNotifier {
         error: 'Failed to load details: $e',
       );
     }
+  }
+
+  Future<void> updateApi(DiscoverApiService api) {
+    _api = api;
+    _state = const MediaDetailState();
+    return load();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _generation++;
+    super.dispose();
   }
 }

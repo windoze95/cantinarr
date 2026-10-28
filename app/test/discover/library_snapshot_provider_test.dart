@@ -23,6 +23,8 @@ void main() {
     final h = await _harness();
     h.notifier.seed(movies: [_movie(1)]);
     expect(h.container.read(librarySnapshotProvider).movies, hasLength(1));
+    expect(
+        h.container.read(librarySnapshotProvider).radarrInstanceId, 'movies');
 
     await h.notifier.refresh(type: MediaType.movie);
     expect(h.adapter.requested, isEmpty);
@@ -31,10 +33,16 @@ void main() {
   test('an empty snapshot fetches both libraries once, then rests', () async {
     final h = await _harness();
     await h.notifier.refresh();
-    expect(h.adapter.requested, [_moviesPath, _seriesPath, '/api/instances/movies/api/v3/queue',
-      '/api/instances/shows/api/v3/history', '/api/instances/shows/api/v3/calendar']);
+    expect(h.adapter.requested, [
+      _moviesPath,
+      _seriesPath,
+      '/api/instances/movies/api/v3/queue',
+      '/api/instances/shows/api/v3/history',
+      '/api/instances/shows/api/v3/calendar'
+    ]);
     final snapshot = h.container.read(librarySnapshotProvider);
     expect(snapshot.movies.single.tmdbId, 603);
+    expect(snapshot.radarrInstanceId, 'movies');
     expect(snapshot.series.single.title, 'Severance');
 
     await h.notifier.refresh();
@@ -80,8 +88,13 @@ void main() {
     final snapshot = h.container.read(librarySnapshotProvider);
     expect(snapshot.serverUrl, 'http://elsewhere');
     expect(snapshot.movies.single.tmdbId, 603);
-    expect(h.adapter.requested, [_moviesPath, _seriesPath, '/api/instances/movies/api/v3/queue',
-      '/api/instances/shows/api/v3/history', '/api/instances/shows/api/v3/calendar']);
+    expect(h.adapter.requested, [
+      _moviesPath,
+      _seriesPath,
+      '/api/instances/movies/api/v3/queue',
+      '/api/instances/shows/api/v3/history',
+      '/api/instances/shows/api/v3/calendar'
+    ]);
   });
   test('seeding Movies does not mark an unread TV library fresh', () async {
     final h = await _harness();
@@ -95,31 +108,48 @@ void main() {
     final h = await _harness();
     h.notifier.seed(movies: [_movie(1)]);
     final cache = h.container.read(browseSessionProvider);
-    h.auth.switchTo(_state.copyWith(connection:
-        _state.connection!.copyWith(accessToken: 'rotated')));
+    h.auth.switchTo(_state.copyWith(
+        connection: _state.connection!.copyWith(accessToken: 'rotated')));
     await h.container.pump();
     expect(h.container.read(librarySnapshotProvider).movies.single.tmdbId, 1);
     expect(h.container.read(browseSessionProvider), same(cache));
   });
 
-  test('account, permissions, content limits, grants and defaults clear session data', () async {
+  test(
+      'account, permissions, content limits, grants and defaults clear session data',
+      () async {
     final changes = [
-      _state.copyWith(user: const UserProfile(id: 2, username: 'second', role: 'user')),
-      _state.copyWith(user: const UserProfile(id: 1, username: 'tester', role: 'user',
-          permissions: ['media:discover'])),
-      _state.copyWith(user: const UserProfile(id: 1, username: 'tester', role: 'user',
-          child: true, contentLimits: ContentLimits(maxMovieRating: 'PG',
-              maxTvRating: 'TV-G', ratingRegion: 'US'))),
+      _state.copyWith(
+          user: const UserProfile(id: 2, username: 'second', role: 'user')),
+      _state.copyWith(
+          user: const UserProfile(
+              id: 1,
+              username: 'tester',
+              role: 'user',
+              permissions: ['media:discover'])),
+      _state.copyWith(
+          user: const UserProfile(
+              id: 1,
+              username: 'tester',
+              role: 'user',
+              child: true,
+              contentLimits: ContentLimits(
+                  maxMovieRating: 'PG',
+                  maxTvRating: 'TV-G',
+                  ratingRegion: 'US'))),
       _state.copyWith(connection: _state.connection!.copyWith(instances: [])),
-      _state.copyWith(connection: _state.connection!.copyWith(instances: [
-        const ServiceInstance(id: 'other', serviceType: 'radarr', name: 'Other'),
+      _state.copyWith(
+          connection: _state.connection!.copyWith(instances: [
+        const ServiceInstance(
+            id: 'other', serviceType: 'radarr', name: 'Other'),
       ])),
     ];
     for (final changed in changes) {
       final h = await _harness();
       h.notifier.seed(movies: [_movie(1)]);
       final cache = h.container.read(browseSessionProvider);
-      cache.acquire(const BrowseQuery(type: MediaType.movie, feed: BrowseFeed.popular));
+      cache.acquire(
+          const BrowseQuery(type: MediaType.movie, feed: BrowseFeed.popular));
       h.auth.switchTo(changed);
       await h.container.pump();
       expect(h.container.read(librarySnapshotProvider).movies, isEmpty);
@@ -133,15 +163,16 @@ void main() {
     h.adapter.waitForMovies = pending;
     final read = h.notifier.refresh(type: MediaType.movie);
     await Future<void>.delayed(Duration.zero);
-    h.auth.switchTo(_state.copyWith(user: const UserProfile(
-        id: 2, username: 'second', role: 'user')));
+    h.auth.switchTo(_state.copyWith(
+        user: const UserProfile(id: 2, username: 'second', role: 'user')));
     await h.container.pump();
     pending.complete();
     await read;
     expect(h.container.read(librarySnapshotProvider).movies, isEmpty);
   });
 
-  test('denied reads clear cached titles instead of presenting stale access', () async {
+  test('denied reads clear cached titles instead of presenting stale access',
+      () async {
     final h = await _harness();
     h.notifier.seed(movies: [_movie(1)]);
     h.adapter.movieStatus = 403;
@@ -149,7 +180,6 @@ void main() {
     expect(h.container.read(librarySnapshotProvider).movies, isEmpty);
     expect(h.container.read(librarySnapshotProvider).moviesFailed, isTrue);
   });
-
 }
 
 RadarrMovie _movie(int tmdbId) => RadarrMovie.fromJson({
@@ -271,7 +301,8 @@ class _Adapter implements HttpClientAdapter {
           },
         ],
       '/api/instances/movies/api/v3/queue' ||
-      '/api/instances/shows/api/v3/history' => {'records': <Object>[]},
+      '/api/instances/shows/api/v3/history' =>
+        {'records': <Object>[]},
       _ => <Object>[],
     };
     return ResponseBody.fromString(jsonEncode(body), 200, headers: {

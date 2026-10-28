@@ -1,6 +1,9 @@
 package downloads
 
-import "time"
+import (
+	"github.com/windoze95/cantinarr-server/internal/mediametadata"
+	"time"
+)
 
 // Activity is a per-user projection. Count is null whenever the exact number
 // cannot be established; a partial snapshot must never masquerade as zero.
@@ -46,27 +49,30 @@ type JobControl struct {
 }
 
 type ContentGroup struct {
-	ID           string         `json:"id"`
-	InstanceID   string         `json:"instance_id,omitempty"`
-	InstanceName string         `json:"instance_name,omitempty"`
-	MediaType    string         `json:"media_type"`
-	Title        string         `json:"title"`
-	Year         int            `json:"year,omitempty"`
-	Creator      string         `json:"creator,omitempty"`
-	Format       string         `json:"format,omitempty"`
-	Artwork      string         `json:"artwork,omitempty"`
-	JobIDs       []string       `json:"job_ids"`
-	Children     []ContentChild `json:"children"`
-	DetailsKnown bool           `json:"details_known"`
-	Progress     float64        `json:"progress"`
+	recordID     int
+	Presentation *mediametadata.Presentation `json:"presentation,omitempty"`
+	ID           string                      `json:"id"`
+	InstanceID   string                      `json:"instance_id,omitempty"`
+	InstanceName string                      `json:"instance_name,omitempty"`
+	MediaType    string                      `json:"media_type"`
+	Title        string                      `json:"title"`
+	Year         int                         `json:"year,omitempty"`
+	Creator      string                      `json:"creator,omitempty"`
+	Format       string                      `json:"format,omitempty"`
+	Artwork      string                      `json:"artwork,omitempty"`
+	JobIDs       []string                    `json:"job_ids"`
+	Children     []ContentChild              `json:"children"`
+	DetailsKnown bool                        `json:"details_known"`
+	Progress     float64                     `json:"progress"`
 }
 
 type ContentChild struct {
-	ID      string   `json:"id"`
-	Title   string   `json:"title"`
-	Season  *int     `json:"season,omitempty"`
-	Episode int      `json:"episode,omitempty"`
-	Disc    int      `json:"disc,omitempty"`
-	Track   string   `json:"track,omitempty"`
-	JobIDs  []string `json:"job_ids"`
+	Presentation *mediametadata.Presentation `json:"presentation,omitempty"`
+	ID           string                      `json:"id"`
+	Title        string                      `json:"title"`
+	Season       *int                        `json:"season,omitempty"`
+	Episode      int                         `json:"episode,omitempty"`
+	Disc         int                         `json:"disc,omitempty"`
+	Track        string                      `json:"track,omitempty"`
+	JobIDs       []string                    `json:"job_ids"`
 }

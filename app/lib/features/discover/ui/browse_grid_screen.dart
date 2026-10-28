@@ -44,7 +44,7 @@ class BrowseGridScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) => _BrowseGridBody(
-        key: ValueKey(ref.watch(discoverSessionProvider)),
+        key: ValueKey(ref.watch(metadataSessionProvider)),
         query: query,
         session: ref.watch(browseSessionProvider),
       );

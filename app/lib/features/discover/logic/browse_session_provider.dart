@@ -6,9 +6,9 @@ import 'browse_query.dart';
 import 'discover_session.dart';
 
 final browseSessionProvider = Provider<BrowseSession>((ref) {
-  final scope = ref.watch(discoverSessionProvider);
+  final scope = ref.watch(metadataSessionProvider);
   final cache = BrowseSession(ref.watch(discoverServiceProvider),
-      isCurrent: () => ref.read(discoverSessionProvider) == scope);
+      isCurrent: () => ref.read(metadataSessionProvider) == scope);
   ref.onDispose(cache.dispose);
   return cache;
 });
@@ -28,7 +28,8 @@ class BrowseSession {
 
   BrowseGridNotifier acquire(BrowseQuery query) {
     final key = query.toLocation();
-    final entry = _entries.remove(key) ?? BrowseGridNotifier(api, query, isCurrent: isCurrent);
+    final entry = _entries.remove(key) ??
+        BrowseGridNotifier(api, query, isCurrent: isCurrent);
     _leases[entry] = (_leases[entry] ?? 0) + 1;
     touch(entry);
     return entry;
@@ -39,7 +40,9 @@ class BrowseSession {
     if (_disposed) return;
     final key = entry.query.toLocation();
     final replaced = _entries.remove(key);
-    if (replaced != null && replaced != entry && !_leases.containsKey(replaced)) {
+    if (replaced != null &&
+        replaced != entry &&
+        !_leases.containsKey(replaced)) {
       replaced.dispose();
     }
     _entries[key] = entry;

@@ -14,7 +14,8 @@ The [complete searchable-settings catalog](/reference/generated/settings/) is bu
 | You want to | Look for | Read |
 | --- | --- | --- |
 | Change the home screen icon on iOS or Android | Account > App icon | [App icon](/use/account/#app-icon) |
-| Change the interface language | Account > Language | [Interface language](/use/account/#interface-language) |
+| Change the interface language | Account > App language | [App language](/use/account/#app-and-metadata-languages) |
+| Choose movie and TV metadata language | Account > Metadata language | [Metadata language](/use/account/#app-and-metadata-languages) |
 | Change sign-in methods | Account, Password, Passkeys, Linked sign-in | [Account settings](/use/account/) |
 | Choose a personal AI provider | AI Access | [The assistant](/use/assistant/) |
 | See remaining requests | Request allowance | [Requests](/use/requests/) |

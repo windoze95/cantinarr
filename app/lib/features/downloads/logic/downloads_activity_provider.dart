@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/realtime_provider.dart';
+import '../../../core/storage/metadata_preferences.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/downloads_activity.dart';
 
@@ -22,22 +23,25 @@ class DownloadsPreferences {
   const DownloadsPreferences({this.content = false, this.scope = 'all'});
 }
 
-class DownloadsPreferencesNotifier extends AutoDisposeAsyncNotifier<DownloadsPreferences> {
+class DownloadsPreferencesNotifier
+    extends AutoDisposeAsyncNotifier<DownloadsPreferences> {
   @override
   Future<DownloadsPreferences> build() async {
     final account = ref.watch(downloadsAccountProvider);
     final prefs = await SharedPreferences.getInstance();
     return DownloadsPreferences(
       content: prefs.getBool('downloads:$account:content') ?? false,
-      scope: prefs.getString('downloads:$account:scope') == 'mine' ? 'mine' : 'all',
+      scope: prefs.getString('downloads:$account:scope') == 'mine'
+          ? 'mine'
+          : 'all',
     );
   }
 
   Future<void> select({bool? content, String? scope}) async {
     final account = ref.read(downloadsAccountProvider);
     final current = state.valueOrNull ?? const DownloadsPreferences();
-    final next = DownloadsPreferences(content: content ?? current.content,
-        scope: scope ?? current.scope);
+    final next = DownloadsPreferences(
+        content: content ?? current.content, scope: scope ?? current.scope);
     state = AsyncData(next);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('downloads:$account:content', next.content);
@@ -46,7 +50,8 @@ class DownloadsPreferencesNotifier extends AutoDisposeAsyncNotifier<DownloadsPre
 }
 
 final downloadsPreferencesProvider = AsyncNotifierProvider.autoDispose<
-    DownloadsPreferencesNotifier, DownloadsPreferences>(DownloadsPreferencesNotifier.new);
+    DownloadsPreferencesNotifier,
+    DownloadsPreferences>(DownloadsPreferencesNotifier.new);
 
 final downloadsScopeProvider = Provider<String>((ref) {
   final auth = ref.watch(authProvider).valueOrNull;
@@ -85,11 +90,12 @@ class DownloadsRefreshState {
   const DownloadsRefreshState({this.revision = 0, this.clearEpoch = 0});
 }
 
-class DownloadsRefreshNotifier extends AutoDisposeNotifier<DownloadsRefreshState> {
+class DownloadsRefreshNotifier
+    extends AutoDisposeNotifier<DownloadsRefreshState> {
   @override
   DownloadsRefreshState build() {
-    final supported = ref.watch(authProvider.select(
-        (s) => s.valueOrNull?.connection?.downloadsActivity == true));
+    final supported = ref.watch(authProvider
+        .select((s) => s.valueOrNull?.connection?.downloadsActivity == true));
     if (!supported) return const DownloadsRefreshState();
     var foreground = WidgetsBinding.instance.lifecycleState == null ||
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
@@ -107,14 +113,21 @@ class DownloadsRefreshNotifier extends AutoDisposeNotifier<DownloadsRefreshState
       if (event.type == 'config_changed') {
         // Clear user results immediately, before the config refresh completes.
         refresh(clearCached: true);
-      } else if (const {'downloads_queue', 'arr_queue_changed',
-          'request_status_changed', 'request_updated', 'request_decision'}.contains(event.type)) {
+      } else if (const {
+        'downloads_queue',
+        'arr_queue_changed',
+        'request_status_changed',
+        'request_updated',
+        'request_decision'
+      }.contains(event.type)) {
         debounce?.cancel();
         debounce = Timer(const Duration(milliseconds: 250), refresh);
       }
     });
     ref.onDispose(() {
-      timer.cancel(); debounce?.cancel(); events.cancel();
+      timer.cancel();
+      debounce?.cancel();
+      events.cancel();
       WidgetsBinding.instance.removeObserver(lifecycle);
     });
     return const DownloadsRefreshState();
@@ -125,7 +138,8 @@ class DownloadsRefreshNotifier extends AutoDisposeNotifier<DownloadsRefreshState
       clearEpoch: state.clearEpoch + (clearCached ? 1 : 0));
 }
 
-final downloadsRefreshProvider = NotifierProvider.autoDispose<DownloadsRefreshNotifier,
+final downloadsRefreshProvider = NotifierProvider.autoDispose<
+    DownloadsRefreshNotifier,
     DownloadsRefreshState>(DownloadsRefreshNotifier.new);
 
 class _DownloadsLifecycle extends WidgetsBindingObserver {
@@ -136,19 +150,43 @@ class _DownloadsLifecycle extends WidgetsBindingObserver {
       changed(state == AppLifecycleState.resumed);
 }
 
-typedef _DownloadsRequestContext = ({String accessKey, String scope, int clearEpoch});
+typedef _DownloadsRequestContext = ({
+  String accessKey,
+  String scope,
+  int clearEpoch
+});
 
-final _downloadsRequestContextProvider = Provider.autoDispose<_DownloadsRequestContext>((ref) => (
-  accessKey: ref.watch(downloadsAccessKeyProvider),
-  scope: ref.watch(downloadsScopeProvider),
-  clearEpoch: ref.watch(downloadsRefreshProvider.select((state) => state.clearEpoch)),
-));
+final _downloadsRequestContextProvider =
+    Provider.autoDispose<_DownloadsRequestContext>((ref) => (
+          accessKey: ref.watch(downloadsAccessKeyProvider),
+          scope: ref.watch(downloadsScopeProvider),
+          clearEpoch: ref.watch(
+              downloadsRefreshProvider.select((state) => state.clearEpoch)),
+        ));
+
+typedef _DownloadsActivityContext = ({
+  String accessKey,
+  String scope,
+  int clearEpoch,
+  String? metadataLanguage
+});
+
+final _downloadsActivityContextProvider =
+    Provider.autoDispose<_DownloadsActivityContext>((ref) {
+  final base = ref.watch(_downloadsRequestContextProvider);
+  return (
+    accessKey: base.accessKey,
+    scope: base.scope,
+    clearEpoch: base.clearEpoch,
+    metadataLanguage: ref.watch(effectiveMetadataLanguageProvider)
+  );
+});
 
 // Keeping requests in a family lets Riverpod retain confirmed data while the
 // same account and scope poll again. Authorization and config changes move to
 // a new family member, which has no previous value to expose.
-final _downloadsSummaryRequestProvider = FutureProvider.autoDispose.family<
-    DownloadsActivity?, _DownloadsRequestContext>((ref, context) async {
+final _downloadsSummaryRequestProvider = FutureProvider.autoDispose
+    .family<DownloadsActivity?, _DownloadsRequestContext>((ref, context) async {
   final auth = ref.watch(authProvider).valueOrNull;
   if (auth?.connection?.downloadsActivity != true) return null;
   ref.watch(downloadsRefreshProvider.select((state) => state.revision));
@@ -161,31 +199,41 @@ final _downloadsSummaryRequestProvider = FutureProvider.autoDispose.family<
   return DownloadsActivity.fromJson(response.data as Map<String, dynamic>);
 });
 
-final downloadsSummaryProvider = Provider.autoDispose<AsyncValue<DownloadsActivity?>>((ref) {
+final downloadsSummaryProvider =
+    Provider.autoDispose<AsyncValue<DownloadsActivity?>>((ref) {
   return ref.watch(_downloadsSummaryRequestProvider(
       ref.watch(_downloadsRequestContextProvider)));
 });
 
-final _downloadsActivityRequestProvider = FutureProvider.autoDispose.family<
-    DownloadsActivity, _DownloadsRequestContext>((ref, context) async {
+final _downloadsActivityRequestProvider = FutureProvider.autoDispose
+    .family<DownloadsActivity, _DownloadsActivityContext>((ref, context) async {
   final auth = ref.watch(authProvider).valueOrNull;
   ref.watch(downloadsRefreshProvider.select((state) => state.revision));
-  if (auth?.connection?.downloadsActivity != true) throw StateError('Downloads unavailable');
+  if (auth?.connection?.downloadsActivity != true)
+    throw StateError('Downloads unavailable');
   final dio = ref.watch(backendClientProvider);
   final cancel = CancelToken();
   ref.onDispose(cancel.cancel);
   await ref.watch(downloadsPreferencesProvider.future);
   final response = await dio.get('/api/downloads/activity',
-      queryParameters: {'scope': context.scope}, cancelToken: cancel);
+      queryParameters: {
+        'scope': context.scope,
+        if (context.metadataLanguage != null)
+          'metadata_language': context.metadataLanguage
+      },
+      cancelToken: cancel);
   return DownloadsActivity.fromJson(response.data as Map<String, dynamic>);
 });
 
-final downloadsActivityProvider = Provider.autoDispose<AsyncValue<DownloadsActivity>>((ref) {
+final downloadsActivityProvider =
+    Provider.autoDispose<AsyncValue<DownloadsActivity>>((ref) {
   return ref.watch(_downloadsActivityRequestProvider(
-      ref.watch(_downloadsRequestContextProvider)));
+      ref.watch(_downloadsActivityContextProvider)));
 });
 
-final downloadsActivityFutureProvider = Provider.autoDispose<Future<DownloadsActivity>>((ref) {
+final downloadsActivityFutureProvider =
+    Provider.autoDispose<Future<DownloadsActivity>>((ref) {
   return ref.watch(_downloadsActivityRequestProvider(
-      ref.watch(_downloadsRequestContextProvider)).future);
+          ref.watch(_downloadsActivityContextProvider))
+      .future);
 });

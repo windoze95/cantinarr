@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/metadata/metadata_presentation.dart';
 import '../../../core/widgets/featured_media_hero.dart';
 import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
@@ -61,7 +62,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
   @override
   Widget build(BuildContext context) {
     final library = ref.watch(librarySnapshotProvider);
-    final scope = ref.watch(discoverSessionProvider);
+    final scope = ref.watch(metadataSessionProvider);
     final discover = ref.watch(tvDiscoverProvider);
     final discoverNotifier = ref.watch(tvDiscoverProvider.notifier);
     // Unlike the Movies tab, searchResults is load-bearing here: the TV
@@ -256,16 +257,20 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
               instanceId: instanceId,
               seriesId: series.id,
               tmdbId: series.tmdbId,
-              builder: (onTap) => MediaCard(
-                id: series.id,
-                title: series.title,
-                posterPath: series.posterUrl,
-                statusLabel: statusLabel,
-                statusColor: statusColor,
-                subtitle: _availabilityLine(series),
-                width: cardWidth,
-                onTap: onTap,
-              ),
+              builder: (onTap) => MetadataPresentationBuilder(
+                  reference:
+                      MetadataReference.native('tv', instanceId, series.id),
+                  builder: (presentation) => MediaCard(
+                        id: series.id,
+                        title: presentation?.title ?? series.title,
+                        posterPath:
+                            presentation?.posterPath ?? series.posterUrl,
+                        statusLabel: statusLabel,
+                        statusColor: statusColor,
+                        subtitle: _availabilityLine(series),
+                        width: cardWidth,
+                        onTap: onTap,
+                      )),
             ),
           ),
         ],

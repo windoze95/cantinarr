@@ -1,5 +1,5 @@
 Play Sun branding, with Play Sign, Play Dome, and Original icons in Settings.
-French interface support with a saved language choice.
+French interface and movie/TV metadata, with separate saved language choices.
 Clearer media-user imports, invitations, and explicit account linking.
 Updated AI model choices and optional recommended-model fallback.
 Smoother web scrolling and more reliable media artwork loading.

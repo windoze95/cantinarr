@@ -1,5 +1,6 @@
 import 'settings_labels.dart';
 import 'package:cantinarr/core/storage/locale_preferences.dart';
+import 'package:cantinarr/core/storage/metadata_preferences.dart';
 import 'package:cantinarr/l10n/l10n.dart';
 import '../../request/logic/request_quota_provider.dart';
 import 'package:flutter/foundation.dart';
@@ -187,13 +188,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               highlightId: _activeHighlight,
               child: _SettingsTile(
                 icon: Icons.language,
-                title: context.l10n.settingsLanguage,
+                title: context.l10n.settingsAppLanguage,
                 subtitle: switch (ref.watch(appLocaleProvider)?.languageCode) {
                   'en' => 'English',
                   'fr' => 'Français',
                   _ => context.l10n.settingsSystemLanguage,
                 },
                 onTap: () => _showLanguageDialog(context),
+              ),
+            ),
+            SettingsHighlight(
+              anchorId: 'root.metadata-language',
+              highlightId: _activeHighlight,
+              child: _SettingsTile(
+                icon: Icons.translate,
+                title: context.l10n.settingsMetadataLanguage,
+                subtitle: connection?.metadataLanguages.isNotEmpty == true
+                    ? switch (ref.watch(metadataLanguageProvider)) {
+                        'en-US' => 'English',
+                        'fr-FR' => 'Français',
+                        _ => context.l10n.settingsMetadataFollowApp,
+                      }
+                    : context.l10n.settingsMetadataServerUpdate,
+                onTap: () => _showMetadataLanguageDialog(context),
               ),
             ),
 
@@ -215,7 +232,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 icon: Icons.app_registration_outlined,
                 title: context.l10n.settingsAppIcon,
                 subtitle: context.l10n.settingsAppIconSubtitle,
-                onTap: () => showAppSheet(context, builder: (_) => const AppIconSheet()),
+                onTap: () =>
+                    showAppSheet(context, builder: (_) => const AppIconSheet()),
               ),
             if (user?.canUsePassword == true)
               _SettingsTile(
@@ -654,6 +672,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       case 'root.language':
         _showLanguageDialog(context);
         return;
+      case 'root.metadata-language':
+        _showMetadataLanguageDialog(context);
+        return;
       case 'root.sign-out':
         _confirmSignOut(context);
         return;
@@ -698,12 +719,53 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     });
   }
 
+  Future<void> _showMetadataLanguageDialog(BuildContext context) async {
+    final selected = ref.read(metadataLanguageProvider) ?? 'app';
+    final supported =
+        ref.read(authProvider).valueOrNull?.connection?.metadataLanguages ??
+            const <String>[];
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: Text(dialogContext.l10n.settingsMetadataLanguage),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+            child: Text(supported.isEmpty
+                ? dialogContext.l10n.settingsMetadataServerUpdate
+                : dialogContext.l10n.settingsMetadataLanguageHelp),
+          ),
+          for (final option in [
+            ('app', dialogContext.l10n.settingsMetadataFollowApp),
+            ('en-US', 'English'),
+            ('fr-FR', 'Français'),
+          ])
+            SimpleDialogOption(
+              onPressed: supported.isEmpty ||
+                      (option.$1 != 'app' && !supported.contains(option.$1))
+                  ? null
+                  : () => Navigator.pop(dialogContext, option.$1),
+              child: Row(children: [
+                Expanded(child: Text(option.$2)),
+                if (selected == option.$1)
+                  const Icon(Icons.check, color: AppTheme.accent),
+              ]),
+            ),
+        ],
+      ),
+    );
+    if (choice == null || !mounted) return;
+    await ref
+        .read(metadataLanguageProvider.notifier)
+        .setLanguage(choice == 'app' ? null : choice);
+  }
+
   Future<void> _showLanguageDialog(BuildContext context) async {
     final selected = ref.read(appLocaleProvider)?.languageCode ?? 'system';
     final choice = await showDialog<String>(
       context: context,
       builder: (dialogContext) => SimpleDialog(
-        title: Text(dialogContext.l10n.settingsLanguage),
+        title: Text(dialogContext.l10n.settingsAppLanguage),
         children: [
           for (final option in [
             ('system', dialogContext.l10n.settingsSystemLanguage),

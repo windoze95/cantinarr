@@ -145,8 +145,8 @@ class MovieDiscoverNotifier extends StateNotifier<MovieDiscoverState> {
       for (final row in _Row.values) _restart(row),
     ]);
     if (_current) {
-      state = state.copyWith(hasLoaded: true,
-          refreshRevision: state.refreshRevision + 1);
+      state = state.copyWith(
+          hasLoaded: true, refreshRevision: state.refreshRevision + 1);
     }
   }
 
@@ -217,7 +217,9 @@ class MovieDiscoverNotifier extends StateNotifier<MovieDiscoverState> {
       row,
       items: discoverAccessDenied(feed.lastError)
           ? const []
-          : feed.lastError == null ? fresh : state.itemsOf(row),
+          : feed.lastError == null
+              ? fresh
+              : state.itemsOf(row),
       isLoading: false,
     );
   }
@@ -225,7 +227,9 @@ class MovieDiscoverNotifier extends StateNotifier<MovieDiscoverState> {
   Future<void> _loadMore(_Row row) async {
     if (!_current) return;
     final feed = _feeds[row]!;
-    if (_refresh != null || feed.isLoading || !feed.hasMore ||
+    if (_refresh != null ||
+        feed.isLoading ||
+        !feed.hasMore ||
         state.failedRows.contains(row.name)) {
       return;
     }
@@ -236,7 +240,8 @@ class MovieDiscoverNotifier extends StateNotifier<MovieDiscoverState> {
     state = state.withRow(
       row,
       items: discoverAccessDenied(feed.lastError)
-          ? const [] : [...state.itemsOf(row), ...fresh],
+          ? const []
+          : [...state.itemsOf(row), ...fresh],
       isLoading: false,
     );
   }
@@ -258,9 +263,9 @@ class MovieDiscoverNotifier extends StateNotifier<MovieDiscoverState> {
 final movieDiscoverProvider =
     StateNotifierProvider<MovieDiscoverNotifier, MovieDiscoverState>(
   (ref) {
-    final scope = ref.watch(discoverSessionProvider);
+    final scope = ref.watch(metadataSessionProvider);
     final api = ref.watch(discoverServiceProvider);
     return MovieDiscoverNotifier(api,
-        isCurrent: () => ref.read(discoverSessionProvider) == scope);
+        isCurrent: () => ref.read(metadataSessionProvider) == scope);
   },
 );

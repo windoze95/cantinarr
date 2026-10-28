@@ -24,9 +24,9 @@ type discoverSpec struct {
 	mediaType string
 	path      string
 	keyPrefix string
-	// keys is the allowlist. `language` is never on it: the TMDB client welds
-	// language=en-US onto every request, so a second value would arrive as a
-	// duplicate key with undefined precedence.
+	// keys is the filter allowlist. Display language is resolved separately
+	// from metadata_language; callers cannot forward TMDB language directly
+	// or confuse it with the original-language catalog filter.
 	keys       []string
 	sortFields []string
 	dateKeys   []string

@@ -33,6 +33,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mediaaccess"
 	"github.com/windoze95/cantinarr-server/internal/mediaavailability"
 	"github.com/windoze95/cantinarr-server/internal/mediafiles"
+	"github.com/windoze95/cantinarr-server/internal/mediametadata"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
@@ -130,6 +131,7 @@ func main() {
 	// Shared TTL cache for discovery payloads and the kids-account rating
 	// lookups; both key it themselves.
 	apiCache := cache.New()
+	metadataService := mediametadata.New(creds, apiCache)
 	defer apiCache.Close()
 
 	// Kids accounts: the per-user content policy every title surface
@@ -284,6 +286,8 @@ func main() {
 	mediaAccessService.SetNotifier(notifier)
 	authHandler.SetAccessRequestHook(mediaAccessService.OnPlexEmailShared)
 	requestService := request.NewService(database, registry, bridge, notifier)
+	requestService.SetMetadataService(metadataService)
+	downloadsHandler.SetPresentationResolver(requestService.NativePresentation, request.PresentationContext)
 	requestService.SetMediaAvailability(mediaAvailability)
 	wsHub.SetTVImportResolver(requestService)
 	requestService.SetCreationObserver(request.CreationObservers{discordNotifications, pushNotifier})
@@ -399,6 +403,7 @@ func main() {
 
 	// Discover handler (always created — checks credentials at request time)
 	discoverHandler := discover.NewHandler(creds, apiCache, serverSettings)
+	discoverHandler.SetMetadataService(metadataService)
 	// Kids accounts: every title surface applies the caller's policy after
 	// its own cache read; each of these is a chokepoint (AGENTS.md).
 	discoverHandler.SetContentPolicy(contentPolicy)

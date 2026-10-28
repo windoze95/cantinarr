@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/backend_client.dart';
+import '../../../core/storage/metadata_preferences.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../data/tv_library_service.dart';
@@ -23,9 +24,11 @@ class TVLibraryDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _TVLibraryDetailScreenState extends ConsumerState<TVLibraryDetailScreen> {
-  late final TVLibraryService _service;
+  late TVLibraryService _service;
   late Future<TVLibraryDetail> _load;
   late final (int?, String?) _session;
+  CancelToken? _cancel;
+  String? _metadataLanguage;
 
   (int?, String?) _identity(AuthState? auth) =>
       (auth?.user?.id, auth?.connection?.serverUrl);
@@ -34,15 +37,32 @@ class _TVLibraryDetailScreenState extends ConsumerState<TVLibraryDetailScreen> {
   void initState() {
     super.initState();
     _session = _identity(ref.read(authProvider).valueOrNull);
+    _reloadService();
+  }
+
+  void _reloadService() {
+    _cancel?.cancel();
+    _cancel = CancelToken();
+    _metadataLanguage = ref.read(effectiveMetadataLanguageProvider);
     _service = TVLibraryService(
         dio: ref.read(backendClientProvider),
         libraryId: widget.instanceId,
-        seriesId: widget.seriesId);
-    _load = _service.load();
+        seriesId: widget.seriesId,
+        metadataLanguage: _metadataLanguage);
+    _load = _service.load(cancelToken: _cancel);
+  }
+
+  @override
+  void dispose() {
+    _cancel?.cancel();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(effectiveMetadataLanguageProvider, (previous, next) {
+      if (previous != next) setState(_reloadService);
+    });
     if (_identity(ref.watch(authProvider).valueOrNull) != _session) {
       return Scaffold(
           appBar: AppBar(),
@@ -53,9 +73,13 @@ class _TVLibraryDetailScreenState extends ConsumerState<TVLibraryDetailScreen> {
     return FutureBuilder<TVLibraryDetail>(
       future: _load,
       builder: (context, snapshot) {
-        final detail = snapshot.data;
+        final detail = snapshot.connectionState == ConnectionState.done
+            ? snapshot.data
+            : null;
         if (detail != null) {
           return MediaDetailScreen(
+              key: ValueKey(
+                  (widget.instanceId, widget.seriesId, _metadataLanguage)),
               id: detail.catalogId,
               mediaType: MediaType.tv,
               instanceId: widget.instanceId,
@@ -89,7 +113,7 @@ class _TVLibraryDetailScreenState extends ConsumerState<TVLibraryDetailScreen> {
                       if (!unavailable && code != 404)
                         TextButton(
                             onPressed: () => setState(() {
-                                  _load = _service.load();
+                                  _reloadService();
                                 }),
                             child: Text(context.l10n.browseRetry)),
                     ],

@@ -29,6 +29,8 @@ The region matters for release and streaming information. A title available from
 
 An administrator can choose the source of headline rows and restrict discovery recommendations to English-language originals. That language preference does not restrict ordinary title search. Kids policies still apply across search and discovery.
 
+**Settings > Account > Metadata language** controls the language of movie and TV titles and descriptions independently of these filters. It follows your app language by default and offers English and French. A French title still identifies the same movie or show, with the same library availability and request destination. See [app and metadata languages](/use/account/#app-and-metadata-languages) for fallback behavior.
+
 ## Explore books
 
 Book search uses the selected Chaptarr instance's native records. Check the author, title, edition information, and ebook or audiobook availability. Different records can have the same title; Cantinarr keeps those records separate.

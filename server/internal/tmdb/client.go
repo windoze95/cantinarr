@@ -110,11 +110,27 @@ func genreIDs(genres []Genre) []int {
 // DoGetRaw fetches a TMDB API path and returns the raw JSON bytes.
 // Used by the discover handler for passthrough caching.
 func (c *Client) DoGetRaw(path string, params url.Values) ([]byte, error) {
-	u := fmt.Sprintf("%s%s?language=en-US", c.baseURL, path)
-	if params != nil {
-		u += "&" + params.Encode()
+	return c.DoGetRawContext(context.Background(), path, params, "en-US")
+}
+
+// DoGetRawContext selects presentation language for this call only. The
+// registry shares clients across viewers, so language must never be client state.
+func (c *Client) DoGetRawContext(ctx context.Context, path string, params url.Values, language string) ([]byte, error) {
+	query := url.Values{}
+	for key, values := range params {
+		query[key] = append([]string(nil), values...)
 	}
-	resp, err := c.doGet(u)
+	if language == "" {
+		language = "en-US"
+	}
+	query.Set("language", language)
+	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+path+"?"+query.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.accessToken)
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("tmdb raw request: %w", err)
 	}

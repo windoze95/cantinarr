@@ -23,6 +23,7 @@ class SeasonTable extends StatefulWidget {
   final List<Season> seasons;
   final RequestNotifier notifier;
   final String? title;
+  final String? sourceTitle;
   final int? tvdbId;
 
   /// Whether the current user may pick specific seasons (the server's
@@ -50,6 +51,7 @@ class SeasonTable extends StatefulWidget {
     required this.notifier,
     this.usePlaybackAvailability = true,
     this.title,
+    this.sourceTitle,
     this.tvdbId,
     this.canRequest = true,
     this.onRequested,
@@ -114,7 +116,10 @@ class _SeasonTableState extends State<SeasonTable> {
 
   /// Live per-season status keyed by season number, from the backend.
   Map<int, RequestSeasonStatus> get _statusBySeason => {
-        for (final s in widget.usePlaybackAvailability ? widget.notifier.state.displaySeasons : widget.notifier.state.seasons) s.seasonNumber: s,
+        for (final s in widget.usePlaybackAvailability
+            ? widget.notifier.state.displaySeasons
+            : widget.notifier.state.seasons)
+          s.seasonNumber: s,
       };
 
   RequestSeasonStatus _statusFor(int seasonNumber) {
@@ -125,7 +130,8 @@ class _SeasonTableState extends State<SeasonTable> {
     if (season?.hasRequestIssue ?? false) return season!;
     if (season?.isAvailable == true) return season!;
     // Pending approval covers the title; the API may omit its season rows.
-    if (state.status == RequestStatus.pending && season?.status != RequestStatus.partial) {
+    if (state.status == RequestStatus.pending &&
+        season?.status != RequestStatus.partial) {
       return RequestSeasonStatus(
           seasonNumber: seasonNumber, status: RequestStatus.pending);
     }
@@ -142,17 +148,27 @@ class _SeasonTableState extends State<SeasonTable> {
 
   RequestStatus? _targetStatusFor(int seasonNumber) {
     final state = widget.notifier.state;
-    if (!widget.usePlaybackAvailability || state.availability?.seasons.isNotEmpty != true) return null;
-    final target = state.seasons.where((s) => s.seasonNumber == seasonNumber).firstOrNull?.status;
-    final status = target ?? (state.status == RequestStatus.pending ? state.status : null);
+    if (!widget.usePlaybackAvailability ||
+        state.availability?.seasons.isNotEmpty != true) return null;
+    final target = state.seasons
+        .where((s) => s.seasonNumber == seasonNumber)
+        .firstOrNull
+        ?.status;
+    final status =
+        target ?? (state.status == RequestStatus.pending ? state.status : null);
     return switch (status) {
-      RequestStatus.pending || RequestStatus.requested || RequestStatus.downloading => status,
+      RequestStatus.pending ||
+      RequestStatus.requested ||
+      RequestStatus.downloading =>
+        status,
       _ => null,
     };
   }
 
   bool _canRequestSeason(int seasonNumber) =>
-      widget.canRequest && _statusFor(seasonNumber).isRequestable && _targetStatusFor(seasonNumber) == null;
+      widget.canRequest &&
+      _statusFor(seasonNumber).isRequestable &&
+      _targetStatusFor(seasonNumber) == null;
 
   void _toggle(int seasonNumber, bool? value) {
     if (_busy || !_canRequestSeason(seasonNumber)) return;
@@ -216,7 +232,7 @@ class _SeasonTableState extends State<SeasonTable> {
       if (seasons.isEmpty || !notifier.state.hasStatus) return;
       final instanceId = notifier.instanceId;
       final accepted = await notifier.request(
-        title: widget.title,
+        title: widget.sourceTitle ?? widget.title,
         tvdbId: widget.tvdbId,
         seasons: seasons,
       );
@@ -429,8 +445,11 @@ class _SeasonRow extends StatelessWidget {
                               color: AppTheme.textSecondary, fontSize: 12)),
                     ),
                   if (targetStatus != null && targetStatus != status.status)
-                    Text(context.l10n.availabilityLibraryRequest(browseLabel(context, targetStatus!.label)),
-                      style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+                    Text(
+                        context.l10n.availabilityLibraryRequest(
+                            browseLabel(context, targetStatus!.label)),
+                        style: const TextStyle(
+                            color: AppTheme.textSecondary, fontSize: 12)),
                 ],
               ),
             ),

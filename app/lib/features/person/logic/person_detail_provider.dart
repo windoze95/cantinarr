@@ -88,8 +88,10 @@ class PersonDetailState {
 }
 
 class PersonDetailNotifier extends ChangeNotifier {
-  final DiscoverApiService _api;
+  DiscoverApiService _api;
   final int _id;
+  int _generation = 0;
+  bool _disposed = false;
 
   PersonDetailState _state = const PersonDetailState();
   PersonDetailState get state => _state;
@@ -105,23 +107,43 @@ class PersonDetailNotifier extends ChangeNotifier {
         _id = id;
 
   Future<void> load() async {
+    final generation = ++_generation;
+    final api = _api;
     state = state.copyWith(isLoading: true);
     try {
       final results = await Future.wait([
-        _api.personDetail(_id),
-        _api.personCredits(_id),
+        api.personDetail(_id),
+        api.personCredits(_id),
       ]);
+      if (_disposed || generation != _generation) return;
       state = state.copyWith(
         isLoading: false,
         person: results[0] as PersonDetail,
         allCredits: results[1] as List<PersonCredit>,
       );
     } catch (e) {
+      if (_disposed || generation != _generation) return;
       state = state.copyWith(
         isLoading: false,
         error: 'Failed to load person: $e',
       );
     }
+  }
+
+  Future<void> updateApi(DiscoverApiService api) {
+    _api = api;
+    _state = PersonDetailState(
+        filter: state.filter,
+        sort: state.sort,
+        sortAscending: state.sortAscending);
+    return load();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _generation++;
+    super.dispose();
   }
 
   void setFilter(PersonCreditFilter filter) {

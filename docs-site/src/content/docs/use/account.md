@@ -7,13 +7,19 @@ sidebar:
 
 Open **Settings > Account** for choices tied to your Cantinarr user. The account tile identifies the signed-in user and role. A kids account also shows its movie and TV limits there.
 
-## Interface language
+<span id="interface-language"></span>
 
-Choose **Settings > Account > Language** to follow your device language or select **English** or **Français**. French devices use French automatically; other unsupported languages use English. The choice takes effect immediately and stays on this device when you sign out.
+## App and metadata languages
 
-This controls interface text. It does not change the Discover language filter, original media titles, or the country used for streaming services and release dates. Media descriptions, connected-service messages, and assistant replies can still use their source language.
+Choose **Settings > Account > App language** to follow your device language or select **English** or **Français**. French devices use French automatically; other unsupported languages use English. The choice takes effect immediately and stays on this device when you sign out.
 
-If the language is unexpected, select it explicitly in Settings. Choose **System default** to follow the device again.
+Choose **Metadata language** to control movie and TV titles and descriptions. **Follow app language** is the default; choose **English** or **Français** to use another metadata language while keeping the interface as it is. This choice also stays on this device.
+
+Available translations appear in discovery, search, details, library rows, Releases, Downloads Content, and My reports title labels. Posters, genres, and biographies also use provider translations when available. Missing translations fall back to English or the original source text. A combined TV library entry can keep its source title because it contains several catalog series; individual verified story or episode labels can still be translated.
+
+These choices do not change the Discover original-language filter, audio or subtitle tracks, or the country used for streaming services and release dates. Book and music editions, administrator service records, notifications, connected-service messages, assistant replies, and text you wrote retain their source language.
+
+If the language is unexpected, check both settings. Choose **System default** under App language to follow the device again. If Metadata language says the server needs an update, ask your administrator to update Cantinarr; your saved choice will apply when the server supports it. A title remaining in its source language can mean the provider has no translation or Cantinarr cannot safely match that library record.
 
 ## Passwords and passkeys
 

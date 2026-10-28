@@ -74,6 +74,7 @@ class _PersonDetailSheetState extends ConsumerState<_PersonDetailSheet> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(discoverServiceProvider, (_, next) => _notifier.updateApi(next));
     final state = _notifier.state;
 
     return DraggableScrollableSheet(

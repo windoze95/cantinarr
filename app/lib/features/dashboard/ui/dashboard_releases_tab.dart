@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../core/metadata/metadata_presentation.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/day_sections.dart';
@@ -97,7 +98,8 @@ class _DashboardReleasesTabState extends ConsumerState<DashboardReleasesTab> {
             RadarrApiService(backendDio: dio, instanceId: radarr.id);
         final raw = await service.getCalendar(start: start, end: end);
         for (final entry in raw) {
-          final event = releaseEventFromRadarr(entry, now: now);
+          final event =
+              releaseEventFromRadarr(entry, now: now, instanceId: radarr.id);
           if (event != null) events.add(event);
         }
       } catch (_) {
@@ -404,7 +406,19 @@ class _ReleaseTile extends StatelessWidget {
   const _ReleaseTile({required this.event});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => MetadataPresentationBuilder(
+        reference: event.mediaType == ReleaseMediaType.movie
+            ? MetadataReference.native(
+                'movie', event.instanceId, event.nativeRecordId)
+            : event.mediaType == ReleaseMediaType.tv
+                ? MetadataReference.native(
+                    'tv', event.instanceId, event.seriesId,
+                    episodeId: event.episodeId)
+                : null,
+        builder: (presentation) => _build(context, presentation),
+      );
+
+  Widget _build(BuildContext context, MetadataPresentation? presentation) {
     final isTv = event.mediaType == ReleaseMediaType.tv;
     final isMusic = event.mediaType == ReleaseMediaType.music;
     final tmdbId = event.tmdbId;
@@ -435,7 +449,7 @@ class _ReleaseTile extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                _poster(isTv, isMusic),
+                _poster(isTv, isMusic, presentation?.posterUrl),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -443,7 +457,7 @@ class _ReleaseTile extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        event.title,
+                        presentation?.title ?? event.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -465,7 +479,8 @@ class _ReleaseTile extends StatelessWidget {
                           const SizedBox(width: 5),
                           Expanded(
                             child: Text(
-                              event.subtitle ??
+                              event.episodeSubtitle(
+                                      presentation?.episodeTitle) ??
                                   (isMusic
                                       ? context.l10n.browseAlbum
                                       : (isTv
@@ -502,14 +517,14 @@ class _ReleaseTile extends StatelessWidget {
     return tile(onTap);
   }
 
-  Widget _poster(bool isTv, bool isMusic) {
+  Widget _poster(bool isTv, bool isMusic, String? localizedPoster) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(6),
       child: SizedBox(
         width: 44,
         height: 66,
         child: CachedImage(
-          url: event.posterUrl,
+          url: localizedPoster ?? event.posterUrl,
           icon: isMusic
               ? Icons.album_outlined
               : (isTv ? Icons.tv : Icons.movie_outlined),
