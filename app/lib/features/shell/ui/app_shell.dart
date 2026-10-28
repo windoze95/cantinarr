@@ -855,10 +855,11 @@ class _AppShellState extends ConsumerState<AppShell>
 
     final scaffold = Scaffold(
       key: _scaffoldKey,
-      // Reserve an Android back swipe for the pushed page instead of also
+      // Reserve native mobile back swipes for the pushed page instead of
       // opening the shell drawer. The hamburger and root drawer swipe remain.
       drawerEnableOpenDragGesture: kIsWeb ||
-          Theme.of(context).platform != TargetPlatform.android ||
+          (Theme.of(context).platform != TargetPlatform.android &&
+              Theme.of(context).platform != TargetPlatform.iOS) ||
           (!_hasRouteHistory() && !_childHandlesBack),
       // A closed drawer collapses its attention group again, so reopening it
       // always lands on the same short menu rather than on however far the

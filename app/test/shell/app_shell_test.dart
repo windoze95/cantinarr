@@ -330,14 +330,116 @@ void main() {
         reason: 'switching root modules must retain drawer edge access');
   });
 
-  testWidgets('iOS keeps drawer edge access on a pushed page', (tester) async {
+  testWidgets('iOS edge swipes go back through pages without opening the drawer',
+      (tester) async {
     final router = await _pumpScrollShell(tester);
+    final shell = find.byWidgetPredicate(
+        (widget) => widget is Scaffold && widget.drawer != null);
+    ScaffoldState shellState() => tester.state<ScaffoldState>(shell);
+
+    Future<void> edgeSwipe() async {
+      await tester.dragFrom(const Offset(1, 400), const Offset(320, 0));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> closeDrawer() async {
+      await tester.tapAt(const Offset(370, 400));
+      await tester.pumpAndSettle();
+    }
+
+    await edgeSwipe();
+    expect(shellState().isDrawerOpen, isTrue,
+        reason: 'the root retains its drawer swipe');
+    await closeDrawer();
+
+    router.push('/browse/movie/popular');
+    await tester.pumpAndSettle();
+    final category = find.byKey(const ValueKey('category-scroll'));
+    await tester.drag(category, const Offset(0, -300));
+    await tester.pumpAndSettle();
+    ScrollPosition categoryPosition() => tester
+        .state<ScrollableState>(find.descendant(
+            of: category, matching: find.byType(Scrollable)))
+        .position;
+    final offset = categoryPosition().pixels;
+    expect(offset, greaterThan(0));
+
     router.push('/movie/1');
     await tester.pumpAndSettle();
+    final detail = find.byKey(const ValueKey('detail-scroll'));
+    final detailLeft = tester.getTopLeft(detail).dx;
+    final canceled = await tester.startGesture(const Offset(1, 400));
+    await canceled.moveBy(const Offset(40, 0));
+    await tester.pump();
+    await canceled.moveBy(const Offset(120, 0));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(tester.getTopLeft(detail).dx, greaterThan(detailLeft),
+        reason: 'the partial swipe must move the page, not be ignored');
+    await canceled.moveBy(const Offset(-150, 0));
+    await tester.pump(const Duration(milliseconds: 100));
+    await canceled.up();
+    await tester.pumpAndSettle();
+    expect(router.state.uri.path, '/movie/1',
+        reason: 'reversing the edge swipe keeps the detail page open');
+    expect(tester.getTopLeft(detail).dx, detailLeft);
+    expect(shellState().isDrawerOpen, isFalse);
+
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+    expect(shellState().isDrawerOpen, isTrue,
+        reason: 'the hamburger still opens the drawer over a pushed page');
+    await closeDrawer();
+
+    await edgeSwipe();
+    expect(router.state.uri.path, '/browse/movie/popular',
+        reason: 'the Cupertino gesture must pop only the detail page');
+    expect(shellState().isDrawerOpen, isFalse);
+    expect(categoryPosition().pixels, offset,
+        reason: 'returning to the category retains its scroll position');
+
+    await edgeSwipe();
+    expect(router.state.uri.path, '/dashboard/movies');
+    expect(shellState().isDrawerOpen, isFalse,
+        reason: 'returning to discovery must not also open the drawer');
+
+    await edgeSwipe();
+    expect(shellState().isDrawerOpen, isTrue,
+        reason: 'a fresh root gesture can open the drawer again');
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
+  testWidgets('iOS protects the first pushed frame before swipe back is ready',
+      (tester) async {
+    final router = await _pumpScrollShell(tester);
+    router.push('/movie/1');
+    await tester.pump();
+    // Cupertino disables Back during the incoming animation. The drawer must
+    // not claim that same edge just because Back is not ready yet.
     await tester.dragFrom(const Offset(1, 400), const Offset(250, 0));
     await tester.pumpAndSettle();
     final shell = find.byWidgetPredicate(
         (widget) => widget is Scaffold && widget.drawer != null);
+    expect(router.state.uri.path, '/movie/1');
+    expect(tester.state<ScaffoldState>(shell).isDrawerOpen, isFalse);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
+  testWidgets('iOS edge swipe respects a page that blocks Back', (tester) async {
+    final router = await _pumpScrollShell(tester);
+    router.push('/guarded');
+    await tester.pumpAndSettle();
+    await tester.dragFrom(const Offset(1, 400), const Offset(320, 0));
+    await tester.pumpAndSettle();
+    final shell = find.byWidgetPredicate(
+        (widget) => widget is Scaffold && widget.drawer != null);
+    expect(router.state.uri.path, '/guarded');
+    expect(tester.state<ScaffoldState>(shell).isDrawerOpen, isFalse);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(router.state.uri.path, '/guarded',
+        reason: 'the gesture change must not bypass a PopScope guard');
+
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
     expect(tester.state<ScaffoldState>(shell).isDrawerOpen, isTrue);
   }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 
@@ -2175,6 +2277,11 @@ Future<GoRouter> _pumpScrollShell(
             builder: (_, __) => page('radarr-scroll'),
           ),
           GoRoute(path: '/movie/1', builder: (_, __) => page('detail-scroll')),
+          GoRoute(
+            path: '/guarded',
+            builder: (_, __) => PopScope(
+                canPop: false, child: page('guarded-scroll')),
+          ),
           GoRoute(
               path: '/browse/movie/popular',
               builder: (_, __) => page('category-scroll')),
