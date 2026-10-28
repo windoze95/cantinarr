@@ -3,6 +3,42 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('NotificationPrefs', () {
+    test('requester-only support follows the server and is omitted when absent',
+        () {
+      final legacy = NotificationPrefs.fromJson(const {'new_movie': true});
+      expect(legacy.requesterOnly, isFalse);
+      expect(legacy.supportsRequesterOnly, isFalse);
+      expect(legacy.toJson(), isNot(contains('requester_only')));
+      expect(legacy.copyWith(newMovie: false).toJson(),
+          isNot(contains('requester_only')));
+      expect(legacy.withCategory('new_episode', true).supportsRequesterOnly,
+          isFalse);
+    });
+
+    test('requester-only survives category changes and master switches', () {
+      final prefs = NotificationPrefs.fromJson(const {
+        'requester_only': true,
+        'push_enabled': true,
+        'new_movie': true,
+        'new_episode': false,
+        'content_upgraded': false,
+      });
+      expect(prefs.supportsRequesterOnly, isTrue);
+      expect(prefs.toJson()['requester_only'], isTrue);
+      expect(prefs.copyWith(pushEnabled: false).requesterOnly, isTrue);
+      final changed = prefs.withCategory('new_episode', true);
+      expect(changed.requesterOnly, isTrue);
+      expect(changed.newMovie, isTrue);
+      expect(changed.newEpisode, isTrue);
+      expect(changed.contentUpgraded, isFalse);
+      expect(prefs.copyWith(requesterOnly: false).toJson()['requester_only'],
+          isFalse);
+      expect(
+          NotificationPrefs.fromJson(const {'requester_only': false})
+              .supportsRequesterOnly,
+          isTrue);
+    });
+
     test('media server access preserves legacy opt-outs and saves both keys',
         () {
       final prefs =

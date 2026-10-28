@@ -5496,6 +5496,8 @@
   "notificationServerSettings": "Server settings",
   "notificationServerSettingsHelp": "Choose which push notifications this server may send.",
   "notificationMyNotifications": "My notifications",
+  "notificationOnlyMyRequests": "Only my requests",
+  "notificationOnlyMyRequestsHelp": "Limit movie, TV episode, book, and music availability alerts on my devices to my requests. Discord notifications keep their own settings.",
   "notificationAdminAlerts": "Administrator alerts",
   "notificationSendTest": "Send test notification",
   "notificationStatus": "Status",

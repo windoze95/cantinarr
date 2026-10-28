@@ -21,6 +21,7 @@ The [complete searchable-settings catalog](/reference/generated/settings/) is bu
 | See remaining requests | Request allowance | [Requests](/use/requests/) |
 | Choose playback apps | Video apps, Listening apps | [Playback](/use/playback/) |
 | Mute a category | Push Notifications | [Notifications](/integrations/push/) |
+| Limit phone availability alerts to requested content | Push Notifications > Only my requests | [Request alerts](/integrations/push/#receive-availability-alerts-for-your-requests) |
 | Switch servers | Sign out | [Apps](/use/apps/) |
 
 ## Server and household

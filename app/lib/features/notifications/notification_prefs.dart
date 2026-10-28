@@ -21,6 +21,8 @@ class PushNotificationPolicy {
 class NotificationPrefs {
   final bool pushEnabled;
   final bool requestAutoApproved;
+  final bool requesterOnly;
+  final bool supportsRequesterOnly;
   final PushNotificationPolicy? serverPolicy;
   bool get supportsControls => serverPolicy != null;
   bool get serverEnabled => serverPolicy?.enabled ?? true;
@@ -44,6 +46,8 @@ class NotificationPrefs {
   const NotificationPrefs({
     this.pushEnabled = true,
     this.requestAutoApproved = false,
+    this.requesterOnly = false,
+    this.supportsRequesterOnly = false,
     this.serverPolicy,
     required this.requestDecision,
     required this.requestPending,
@@ -64,6 +68,8 @@ class NotificationPrefs {
       NotificationPrefs(
         pushEnabled: json['push_enabled'] as bool? ?? true,
         requestAutoApproved: json['request_auto_approved'] as bool? ?? false,
+        requesterOnly: json['requester_only'] as bool? ?? false,
+        supportsRequesterOnly: json.containsKey('requester_only'),
         serverPolicy: json['server_policy'] is Map
             ? PushNotificationPolicy.fromJson(
                 Map<String, dynamic>.from(json['server_policy'] as Map))
@@ -94,6 +100,7 @@ class NotificationPrefs {
   Map<String, dynamic> toJson() => {
         'push_enabled': pushEnabled,
         'request_auto_approved': requestAutoApproved,
+        if (supportsRequesterOnly) 'requester_only': requesterOnly,
         'request_decision': requestDecision,
         'request_pending': requestPending,
         'new_movie': newMovie,
@@ -121,6 +128,7 @@ class NotificationPrefs {
   NotificationPrefs copyWith({
     bool? pushEnabled,
     bool? requestAutoApproved,
+    bool? requesterOnly,
     bool? requestDecision,
     bool? requestPending,
     bool? newMovie,
@@ -138,6 +146,8 @@ class NotificationPrefs {
       NotificationPrefs(
         pushEnabled: pushEnabled ?? this.pushEnabled,
         requestAutoApproved: requestAutoApproved ?? this.requestAutoApproved,
+        requesterOnly: requesterOnly ?? this.requesterOnly,
+        supportsRequesterOnly: supportsRequesterOnly,
         serverPolicy: serverPolicy,
         requestDecision: requestDecision ?? this.requestDecision,
         requestPending: requestPending ?? this.requestPending,

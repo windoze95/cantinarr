@@ -287,6 +287,7 @@ func main() {
 	authHandler.SetAccessRequestHook(mediaAccessService.OnPlexEmailShared)
 	requestService := request.NewService(database, registry, bridge, notifier)
 	requestService.SetMetadataService(metadataService)
+	pushNotifier.SetRequestMatcher(requestService)
 	downloadsHandler.SetPresentationResolver(requestService.NativePresentation, request.PresentationContext)
 	requestService.SetMediaAvailability(mediaAvailability)
 	wsHub.SetTVImportResolver(requestService)

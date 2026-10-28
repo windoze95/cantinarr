@@ -9,6 +9,7 @@ import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/notifications/notification_categories.dart';
 import 'package:cantinarr/features/notifications/ui/push_notifications_screen.dart';
 import 'package:cantinarr/features/notifications/ui/server_push_notifications_screen.dart';
+import 'package:cantinarr/l10n/app_localizations.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -33,12 +34,15 @@ class _Auth extends AuthNotifier {
 class _Adapter implements HttpClientAdapter {
   bool serverEnabled = true;
   bool legacy = false;
+  bool requesterOnlySupported = true;
   bool failSave = false;
+  Map<String, dynamic>? lastPersonalSave;
   Completer<void>? holdSave;
   int saves = 0;
   final allowed = {for (final c in pushCategories) c.key: true};
   final prefs = <String, dynamic>{
     'push_enabled': true,
+    'requester_only': false,
     for (final c in pushCategories)
       c.key: !{'request_auto_approved', 'request_decision', 'content_upgraded'}
           .contains(c.key),
@@ -62,6 +66,7 @@ class _Adapter implements HttpClientAdapter {
         serverEnabled = body['enabled'] == true;
         allowed.addAll(Map<String, bool>.from(body['categories'] as Map));
       } else {
+        lastPersonalSave = Map<String, dynamic>.from(body);
         prefs.addAll(body);
       }
     }
@@ -75,6 +80,9 @@ class _Adapter implements HttpClientAdapter {
       result.remove('push_enabled');
       result.remove('request_auto_approved');
     }
+    if (!server && (legacy || !requesterOnlySupported)) {
+      result.remove('requester_only');
+    }
     return ResponseBody.fromString(jsonEncode(result), 200, headers: {
       Headers.contentTypeHeader: [Headers.jsonContentType],
     });
@@ -85,7 +93,7 @@ class _Adapter implements HttpClientAdapter {
 }
 
 Future<void> _pump(WidgetTester tester, _Adapter adapter,
-    {bool admin = true}) async {
+    {bool admin = true, Locale locale = const Locale('en')}) async {
   final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.test'))
     ..httpClientAdapter = adapter;
   final router =
@@ -106,7 +114,13 @@ Future<void> _pump(WidgetTester tester, _Adapter adapter,
   addTearDown(container.dispose);
   await container.read(authProvider.future);
   await tester.pumpWidget(UncontrolledProviderScope(
-      container: container, child: MaterialApp.router(routerConfig: router)));
+      container: container,
+      child: MaterialApp.router(
+        routerConfig: router,
+        locale: locale,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+      )));
   await tester.pumpAndSettle();
 }
 
@@ -139,6 +153,63 @@ Future<void> _tap(WidgetTester tester, String title) async {
 }
 
 void main() {
+  testWidgets(
+      'requester-only saves every preference and survives other changes',
+      (tester) async {
+    final adapter = _Adapter();
+    final before = Map<String, dynamic>.from(adapter.prefs);
+    await _pump(tester, adapter, admin: false);
+    expect((await _switch(tester, 'Only my requests')).value, isFalse);
+    await _tap(tester, 'Only my requests');
+    expect(adapter.lastPersonalSave, {
+      ...before,
+      'requester_only': true,
+      'plex_invite_sent': before['media_server_access'],
+    });
+    await _tap(tester, 'New movie available');
+    expect(adapter.lastPersonalSave!['requester_only'], isTrue);
+    await _tap(tester, 'Receive push notifications');
+    final muted = await _switch(tester, 'Only my requests');
+    expect(muted.value, isTrue);
+    expect(muted.onChanged, isNull);
+    await _tap(tester, 'Receive push notifications');
+    expect((await _switch(tester, 'Only my requests')).value, isTrue);
+  });
+
+  testWidgets('requester-only hides on servers without the preference',
+      (tester) async {
+    final adapter = _Adapter()..requesterOnlySupported = false;
+    await _pump(tester, adapter);
+    expect(find.text('Only my requests'), findsNothing);
+    await _tap(tester, 'New movie available');
+    expect(adapter.lastPersonalSave, isNot(contains('requester_only')));
+  });
+
+  testWidgets('requester-only failure restores the previous choice',
+      (tester) async {
+    final adapter = _Adapter()..failSave = true;
+    await _pump(tester, adapter, admin: false);
+    await _tap(tester, 'Only my requests');
+    expect((await _switch(tester, 'Only my requests')).value, isFalse);
+    expect(adapter.prefs['requester_only'], isFalse);
+  });
+
+  testWidgets(
+      'French requester-only control fits a narrow phone with large text',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final adapter = _Adapter();
+    await _pump(tester, adapter, admin: false, locale: const Locale('fr'));
+    await _tap(tester, 'Uniquement mes demandes');
+    expect(adapter.prefs['requester_only'], isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
       'users choose success alerts while repair review stays admin-only',
       (tester) async {

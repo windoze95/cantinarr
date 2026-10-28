@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/windoze95/cantinarr-server/internal/contentnotify"
 )
 
 const (
@@ -43,34 +45,10 @@ func validDiscordID(id string) bool {
 	return err == nil
 }
 
-// Unit identifies available content, not the current file: replacing a file
-// with an upgrade must never create a second availability notification.
-type Unit struct {
-	Key    string `json:"key"`
-	Label  string `json:"label"`
-	Format string `json:"format,omitempty"`
-}
-
-type Subject struct {
-	RequestID  int64  `json:"request_id,omitempty"`
-	IssueID    int64  `json:"issue_id,omitempty"`
-	Title      string `json:"title"`
-	MediaType  string `json:"media_type"`
-	TmdbID     int    `json:"tmdb_id,omitempty"`
-	ForeignID  string `json:"foreign_id,omitempty"`
-	InstanceID string `json:"instance_id,omitempty"`
-	Library    string `json:"library,omitempty"`
-	PosterURL  string `json:"poster_url,omitempty"`
-}
-
-// Availability is read from the owning request service, under its canonical
-// identity and scope rules. Persisted Discord receipts are never library truth.
-// Baseline makes the first observation silent: a repair re-files existing work.
-type Availability struct {
-	Subject  Subject
-	Units    []Unit
-	Baseline bool
-}
+// Channel-neutral request identities are shared with native content alerts.
+type Unit = contentnotify.Unit
+type Subject = contentnotify.Subject
+type Availability = contentnotify.Availability
 
 // ErrUnverifiable marks a request whose saved selection can never be proven.
 // The scan skips it without a warning or a receipt; queued parts are dropped.

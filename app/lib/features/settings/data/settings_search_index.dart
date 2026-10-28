@@ -1113,6 +1113,16 @@ const List<SettingsSearchEntry> _notificationEntries = [
     anchorId: SettingsAnchors.notificationsRequestDecision,
   ),
   SettingsSearchEntry(
+    id: SettingsAnchors.notificationsRequesterOnly,
+    title: 'Only my requests',
+    icon: Icons.notifications_outlined,
+    route: '/settings/push-notifications',
+    screenTitle: 'Push Notifications',
+    keywords: ['push', 'requested', 'availability', 'episodes', 'personal'],
+    gate: gateEveryone,
+    anchorId: SettingsAnchors.notificationsRequesterOnly,
+  ),
+  SettingsSearchEntry(
     id: SettingsAnchors.notificationsNewMovie,
     title: 'New movie available',
     icon: Icons.notifications_outlined,
@@ -1838,6 +1848,7 @@ String _settingsSearchLabel(AppLocalizations l10n, String label) =>
       'Failed auto investigations before pausing' =>
         l10n.settingsFailedAutoInvestigationsBeforePausing,
       'Receive push notifications' => l10n.notificationReceivePush,
+      'Only my requests' => l10n.notificationOnlyMyRequests,
       'Request approved or denied' => l10n.notificationRequestDecision,
       'New movie available' => l10n.notificationNewMovie,
       'New episodes available' => l10n.notificationNewEpisodes,
