@@ -113,8 +113,8 @@ func drainBroadcasts(t *testing.T, h *Hub) []Event {
 
 // TestPollLidarrWitnessesImportedDepartures pins the music completion witness:
 // a queue whose composition changes broadcasts the arr_queue_changed
-// invalidation ping, a departed album with files on disk announces new_music
-// from the live record, a departed album without files stays silent, and an
+// invalidation ping, a fresh import with files on disk announces new_music
+// from the live record, an imported album without files stays silent, and an
 // unmapped queue row is never looked up.
 func TestPollLidarrWitnessesImportedDepartures(t *testing.T) {
 	backend := newAlbumBackend()
@@ -146,6 +146,7 @@ func TestPollLidarrWitnessesImportedDepartures(t *testing.T) {
 	// Second poll: everything left the queue. Only the record with files may
 	// alert, and the unmapped id must not be fetched at all.
 	backend.setQueue(`[]`)
+	backend.setHistory(freshImportRecords("albumId", "trackFileImported", 9, 10, 0))
 	hub.pollLidarrInstance("music-a", client)
 
 	events := drainBroadcasts(t, hub)

@@ -188,3 +188,22 @@ type gatedTVContent struct {
 }
 
 func (g *gatedTVContent) ContentReady() bool { return g.ready }
+
+func TestSonarrImportRequiresMatchingLiveSeries(t *testing.T) {
+	for _, body := range []string{`{"message":"not found"}`, `{"id":99,"tmdbId":83867,"title":"Different series"}`} {
+		t.Run(body, func(t *testing.T) {
+			b := &videoBackend{apiPrefix: "/api/v3", series: map[int]string{6: body}}
+			srv := httptest.NewServer(b.handler())
+			t.Cleanup(srv.Close)
+			client := sonarr.NewClient(srv.URL, "fixture")
+			content := &recordingContent{}
+			h := NewHub(nil, nil, nil, nil, content, nil)
+			h.pollSonarrInstance("tv-a", client)
+			b.set(&b.history, freshImportRecords("seriesId", "downloadFolderImported", 6))
+			h.pollSonarrInstance("tv-a", client)
+			if calls := content.episodeCalls(); len(calls) != 0 {
+				t.Fatalf("unverified series announced: %v", calls)
+			}
+		})
+	}
+}

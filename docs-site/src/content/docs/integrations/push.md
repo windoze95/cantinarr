@@ -46,7 +46,7 @@ A category can be disabled by server or account policy. Read the explanation bes
 
 Use the available self-test or administrator test, then confirm the notification appears on the actual device. A server-side accepted response only proves the send was accepted at that stage.
 
-For content notifications, also confirm [instant updates](/integrations/instant-updates/) so a fast import is not missed between polls.
+For prompt content notifications, also confirm [instant updates](/integrations/instant-updates/). The polling fallback checks fresh import history, including downloads that finish between polls. A temporarily empty queue after a service restart does not mean a download completed. If import history is unavailable, Cantinarr waits and retries instead of announcing existing files.
 
 ## Multiple devices and sign-out
 

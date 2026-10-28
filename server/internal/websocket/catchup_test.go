@@ -103,6 +103,17 @@ func historyDate(ago time.Duration) string {
 	return time.Now().Add(-ago).UTC().Format(time.RFC3339)
 }
 
+// freshImportRecords records imports between two polls with enough timestamp
+// precision to distinguish them from the first poll's observation cursor.
+func freshImportRecords(field, event string, ids ...int) string {
+	when := time.Now().UTC().Format(time.RFC3339Nano)
+	records := make([]string, 0, len(ids))
+	for _, id := range ids {
+		records = append(records, fmt.Sprintf(`{"id":%d,%q:%d,"eventType":%q,"date":%q}`, 900+id, field, id, event, when))
+	}
+	return "[" + strings.Join(records, ",") + "]"
+}
+
 // TestResumedPollCatchesImportsMissedEntirely is the regression test for the
 // full-downtime hole: content added to the arr outside Cantinarr, grabbed AND
 // imported entirely while the process was down, appears in no queue snapshot —
@@ -339,16 +350,17 @@ func TestPollGapPastStalenessStaysSilent(t *testing.T) {
 	backend.set(&backend.queue, `[{"id":2,"movieId":77,"status":"downloading","size":100,"sizeleft":10}]`)
 	hub.pollRadarrInstance("movies-a", client)
 	backend.set(&backend.queue, `[]`)
+	backend.set(&backend.history, freshImportRecords("movieId", "downloadFolderImported", 77))
 	hub.pollRadarrInstance("movies-a", client)
 	if got := content.movieCalls(); len(got) != 1 || got[0] != "Heat|949" {
 		t.Errorf("post-reseed completion = %v, want exactly Heat|949", got)
 	}
 }
 
-// TestSteadyStatePollNeverReadsHistory pins the zero-cost invariant: ordinary
-// ticks — including ones that witness a departure — perform no history reads.
-// Catch-up is a resumption-only cost.
-func TestSteadyStatePollNeverReadsHistory(t *testing.T) {
+// TestSteadyStatePollRequiresHistory proves that an ordinary departure is not
+// completion evidence. The first poll seeds only; later polls read import
+// receipts, including while the queue remains empty.
+func TestSteadyStatePollRequiresHistory(t *testing.T) {
 	backend := &videoBackend{apiPrefix: "/api/v3", movies: map[int]string{
 		42: `{"id":42,"title":"The Matrix","tmdbId":603,"hasFile":true,"monitored":true}`,
 	}}
@@ -360,21 +372,29 @@ func TestSteadyStatePollNeverReadsHistory(t *testing.T) {
 	hub := NewHub(nil, nil, nil, nil, content, nil)
 	backend.set(&backend.queue, `[{"id":1,"movieId":42,"status":"downloading","size":100,"sizeleft":50}]`)
 	hub.pollRadarrInstance("movies-a", client)
+	if history, _ := backend.counts(); history != 0 {
+		t.Fatalf("seed poll read history %d time(s), want 0", history)
+	}
 	backend.set(&backend.queue, `[]`)
+	hub.pollRadarrInstance("movies-a", client)
+	if got := content.movieCalls(); len(got) != 0 {
+		t.Fatalf("departure without import evidence = %v, want no alert", got)
+	}
+	backend.set(&backend.history, freshImportRecords("movieId", "downloadFolderImported", 42))
 	hub.pollRadarrInstance("movies-a", client)
 
 	if got := content.movieCalls(); len(got) != 1 {
-		t.Fatalf("steady-state departure = %v, want exactly one alert", got)
+		t.Fatalf("steady-state import = %v, want exactly one alert", got)
 	}
-	if history, _ := backend.counts(); history != 0 {
-		t.Errorf("steady-state ticks read history %d time(s), want 0", history)
+	if history, _ := backend.counts(); history != 3 {
+		t.Errorf("steady-state ticks read history %d time(s), want 2 import reads and 1 upgrade-proof read", history)
 	}
 }
 
-// TestCatchUpErrorDegradesToWitnessedDepartures pins that history may only
-// ever add alerts: when the history read fails, the departures the witness
-// actually saw still announce rather than being silenced behind the failure.
-func TestCatchUpErrorDegradesToWitnessedDepartures(t *testing.T) {
+// TestCatchUpErrorRetainsWitnessForRetry keeps history blindness distinct from
+// a proven completion. Failed reads preserve the queue and cursor so recovery
+// can announce a genuine import without a later queue reappearance.
+func TestCatchUpErrorRetainsWitnessForRetry(t *testing.T) {
 	database := witnessDB(t)
 	var failHistory bool
 	var mu sync.Mutex
@@ -413,10 +433,29 @@ func TestCatchUpErrorDegradesToWitnessedDepartures(t *testing.T) {
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	before := hubB.lastPollAt["movies-a"]
 	hubB.pollRadarrInstance("movies-a", client)
 
+	if got := after.movieCalls(); len(got) != 0 {
+		t.Fatalf("failed history announced %v, want silence", got)
+	}
+	if !hubB.lastPollAt["movies-a"].Equal(before) {
+		t.Fatal("failed history advanced the import cursor")
+	}
+	if _, ids, ok := witnessRowFor(t, database, "movies-a"); !ok || ids != "[42]" {
+		t.Fatalf("failed history replaced witness: ids=%q ok=%v", ids, ok)
+	}
+	inner.set(&inner.history, fmt.Sprintf(`[{"id":900,"movieId":42,"eventType":"downloadFolderImported","date":%q}]`, before.Add(time.Minute).UTC().Format(time.RFC3339Nano)))
+	mu.Lock()
+	failHistory = false
+	mu.Unlock()
+	hubB.pollRadarrInstance("movies-a", client)
 	if got := after.movieCalls(); len(got) != 1 || got[0] != "The Matrix|603" {
-		t.Fatalf("degraded resume = %v, want the witnessed departure announced", got)
+		t.Fatalf("recovered history = %v, want exactly the proven import", got)
+	}
+	hubB.pollRadarrInstance("movies-a", client)
+	if got := after.movieCalls(); len(got) != 1 {
+		t.Fatalf("recovered history replayed: %v", got)
 	}
 }
 

@@ -184,10 +184,9 @@ func (b *chaptarrBackend) asked() []int {
 }
 
 // TestPollChaptarrWitnessesImportedDepartures proves the queue-departure
-// witness: a record that leaves the queue with a file on disk pushes exactly
-// one new_book alert carrying its identity; a departure without a file (failed
-// or removed download) says nothing; unmapped queue rows (bookId 0) are never
-// looked up.
+// witness: a record with a fresh import receipt and a file on disk pushes
+// exactly one new_book alert carrying its identity; an imported record without
+// a live file says nothing; unmapped queue rows (bookId 0) are never looked up.
 func TestPollChaptarrWitnessesImportedDepartures(t *testing.T) {
 	backend := &chaptarrBackend{
 		books: map[int]string{
@@ -218,6 +217,7 @@ func TestPollChaptarrWitnessesImportedDepartures(t *testing.T) {
 	// Second poll: everything left the queue. Only the record with a file may
 	// alert, and the unmapped id must not be fetched at all.
 	backend.setQueue(`[]`)
+	backend.setHistory(freshImportRecords("bookId", "bookFileImported", 7, 8, 0))
 	hub.pollChaptarrInstance("books-a", client)
 
 	calls := content.calls()
