@@ -13,6 +13,8 @@ Open **Settings > Account** for choices tied to your Cantinarr user. The account
 
 Choose **Settings > Account > App language** to follow your device language or select **English** or **Français**. French devices use French automatically; other unsupported languages use English. The choice takes effect immediately and stays on this device when you sign out.
 
+Each bundled translation appears by its native language name. Regional variants retain their full locale when selected. To correct wording or contribute another language, see [Translate Cantinarr](/contributing/translations/).
+
 Choose **Metadata language** to control movie and TV titles and descriptions. **Follow app language** is the default; choose **English** or **Français** to use another metadata language while keeping the interface as it is. This choice also stays on this device.
 
 Available translations appear in discovery, search, details, library rows, Releases, Downloads Content, and My reports title labels. Posters, genres, and biographies also use provider translations when available. Missing translations fall back to English or the original source text. A combined TV library entry can keep its source title because it contains several catalog series; individual verified story or episode labels can still be translated.

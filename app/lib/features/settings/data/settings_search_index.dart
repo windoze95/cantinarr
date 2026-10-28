@@ -1,4 +1,5 @@
 import 'package:cantinarr/l10n/app_localizations.dart';
+import 'package:cantinarr/l10n/app_languages.dart';
 
 import 'package:flutter/material.dart';
 
@@ -1724,8 +1725,16 @@ List<SettingsSearchEntry> searchSettingsIndex(
     final localized =
         localizations == null ? entry : entry.localized(localizations);
     final title = localized.title.toLowerCase();
+    final languages = entry.id == 'root.language' ||
+            entry.id == 'root.metadata-language'
+        ? appLanguages
+            .map((language) =>
+                '${language.nativeName} ${language.tag} ${language.metadataTag}')
+            .join(' ')
+            .toLowerCase()
+        : '';
     final primary =
-        '$title ${entry.title.toLowerCase()} ${entry.keywords.join(' ').toLowerCase()}';
+        '$title ${entry.title.toLowerCase()} ${entry.keywords.join(' ').toLowerCase()} $languages';
     final haystack =
         '$primary ${localized.screenTitle.toLowerCase()} ${localized.section.toLowerCase()} ${entry.screenTitle.toLowerCase()} ${entry.section.toLowerCase()}';
     if (!terms.every(haystack.contains)) continue;

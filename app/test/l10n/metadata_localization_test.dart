@@ -31,9 +31,9 @@ void main() {
   testWidgets(
       'System follows device changes; metadata override remains independent',
       (tester) async {
-    tester.platformDispatcher.localesTestValue = const [Locale('fr', 'CA')];
+    tester.platformDispatcher.localesTestValue = const [Locale('fr')];
     addTearDown(tester.platformDispatcher.clearLocalesTestValue);
-    final container = await _container();
+    final container = await _container(languageTags: true);
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
       child: Consumer(builder: (context, ref, _) {
@@ -50,7 +50,7 @@ void main() {
     expect(container.read(effectiveAppLocaleProvider), const Locale('fr'));
     expect(container.read(effectiveMetadataLanguageProvider), 'en-US');
     await container.read(metadataLanguageProvider.notifier).setLanguage(null);
-    tester.platformDispatcher.localesTestValue = const [Locale('de', 'DE')];
+    tester.platformDispatcher.localesTestValue = const [Locale('zz', 'ZZ')];
     await tester.pump();
     expect(container.read(effectiveAppLocaleProvider), const Locale('en'));
     expect(container.read(effectiveMetadataLanguageProvider), 'en-US');
@@ -83,11 +83,27 @@ void main() {
     expect(() => notifier.setLanguage('xx'), throwsArgumentError);
     final config = ServerConfig.fromJson({
       'server_name': 'Test',
-      'metadata_languages': ['en-US', 'fr-FR']
+      'metadata_languages': ['en-US', 'fr-FR'],
+      'metadata_language_tags': true
     });
     expect(config.metadataLanguages, ['en-US', 'fr-FR']);
+    expect(config.metadataLanguageTags, isTrue);
+    expect(ServerConfig.fromJson({'server_name': 'Old'}).metadataLanguageTags,
+        isFalse);
     expect(ServerConfig.fromJson({'server_name': 'Old'}).metadataLanguages,
         isEmpty);
+  });
+
+  test(
+      'provider tag capability works without a legacy list and older servers use English fallback',
+      () async {
+    final modern = await _container(languages: const [], languageTags: true);
+    await modern.read(appLocaleProvider.notifier).setLocale(const Locale('fr'));
+    expect(modern.read(effectiveMetadataLanguageProvider), 'fr-FR');
+    final old = await _container(languages: const ['en-US']);
+    await old.read(metadataLanguageProvider.notifier).setLanguage('fr-FR');
+    expect(old.read(metadataLanguageProvider), 'fr-FR');
+    expect(old.read(effectiveMetadataLanguageProvider), 'en-US');
   });
 
   test(
@@ -261,9 +277,11 @@ void main() {
 }
 
 Future<ProviderContainer> _container(
-    {List<String> languages = const ['en-US', 'fr-FR']}) async {
+    {List<String> languages = const ['en-US', 'fr-FR'],
+    bool languageTags = false}) async {
   final container = ProviderContainer(overrides: [
-    authProvider.overrideWith(() => _Auth(languages)),
+    authProvider
+        .overrideWith(() => _Auth(languages, languageTags: languageTags)),
   ]);
   addTearDown(container.dispose);
   await container.read(authProvider.future);
@@ -271,7 +289,8 @@ Future<ProviderContainer> _container(
 }
 
 class _Auth extends AuthNotifier {
-  _Auth(this.languages);
+  _Auth(this.languages, {this.languageTags = false});
+  final bool languageTags;
   final List<String> languages;
   @override
   Future<AuthState> build() async => AuthState(
@@ -279,7 +298,8 @@ class _Auth extends AuthNotifier {
             serverUrl: 'http://localhost',
             accessToken: 'test',
             refreshToken: 'test',
-            metadataLanguages: languages),
+            metadataLanguages: languages,
+            metadataLanguageTags: languageTags),
         user: const UserProfile(id: 1, username: 'tester', role: 'user'),
       );
 }

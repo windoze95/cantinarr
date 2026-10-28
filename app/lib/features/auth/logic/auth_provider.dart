@@ -225,6 +225,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable:
             meta['plex_access_requestable'] as bool? ?? false,
         adminCatalogBrowsing: meta['admin_catalog_browsing'] as bool? ?? false,
+        metadataLanguageTags: meta['metadata_language_tags'] == true,
         metadataLanguages: (meta['metadata_languages'] as List?)
                 ?.whereType<String>()
                 .toList() ??
@@ -324,6 +325,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
           plexAccessRequestable: config.plexAccessRequestable,
           adminCatalogBrowsing: config.adminCatalogBrowsing,
           metadataLanguages: config.metadataLanguages,
+          metadataLanguageTags: config.metadataLanguageTags,
           mediaAccountManagement: config.mediaAccountManagement,
           mediaUserImportExplicitLinking: config.mediaUserImportExplicitLinking,
           mediaLibraryAvailability: config.mediaLibraryAvailability,
@@ -422,6 +424,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
         metadataLanguages: config.metadataLanguages,
+        metadataLanguageTags: config.metadataLanguageTags,
         mediaAccountManagement: config.mediaAccountManagement,
         mediaUserImportExplicitLinking: config.mediaUserImportExplicitLinking,
         mediaLibraryAvailability: config.mediaLibraryAvailability,
@@ -576,6 +579,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
         metadataLanguages: config.metadataLanguages,
+        metadataLanguageTags: config.metadataLanguageTags,
         mediaAccountManagement: config.mediaAccountManagement,
         mediaUserImportExplicitLinking: config.mediaUserImportExplicitLinking,
         mediaLibraryAvailability: config.mediaLibraryAvailability,
@@ -782,6 +786,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
         metadataLanguages: config.metadataLanguages,
+        metadataLanguageTags: config.metadataLanguageTags,
         mediaAccountManagement: config.mediaAccountManagement,
         mediaUserImportExplicitLinking: config.mediaUserImportExplicitLinking,
         mediaLibraryAvailability: config.mediaLibraryAvailability,
@@ -938,6 +943,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       plexAccessRequestable: config.plexAccessRequestable,
       adminCatalogBrowsing: config.adminCatalogBrowsing,
       metadataLanguages: config.metadataLanguages,
+      metadataLanguageTags: config.metadataLanguageTags,
       mediaAccountManagement: config.mediaAccountManagement,
       mediaUserImportExplicitLinking: config.mediaUserImportExplicitLinking,
       mediaLibraryAvailability: config.mediaLibraryAvailability,
@@ -1033,6 +1039,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
         metadataLanguages: config.metadataLanguages,
+        metadataLanguageTags: config.metadataLanguageTags,
         mediaAccountManagement: config.mediaAccountManagement,
         mediaUserImportExplicitLinking: config.mediaUserImportExplicitLinking,
         mediaLibraryAvailability: config.mediaLibraryAvailability,
@@ -1274,6 +1281,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
         metadataLanguages: config.metadataLanguages,
+        metadataLanguageTags: config.metadataLanguageTags,
         mediaAccountManagement: config.mediaAccountManagement,
         mediaUserImportExplicitLinking: config.mediaUserImportExplicitLinking,
         mediaLibraryAvailability: config.mediaLibraryAvailability,
@@ -1460,6 +1468,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         'allow_reporting': conn.allowReporting,
         'admin_catalog_browsing': conn.adminCatalogBrowsing,
         'metadata_languages': conn.metadataLanguages,
+        'metadata_language_tags': conn.metadataLanguageTags,
         'media_account_management': conn.mediaAccountManagement,
         'media_user_import_explicit_linking':
             conn.mediaUserImportExplicitLinking,

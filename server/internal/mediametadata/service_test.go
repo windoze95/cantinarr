@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -141,10 +142,80 @@ func TestLanguageIsExplicitAndNormalizesUnsupported(t *testing.T) {
 	if Language(r) != "" {
 		t.Fatal("old browser changed language")
 	}
-	for raw, want := range map[string]string{"": "", "fr-FR": "fr-FR", "en-US": "en-US", "zz": "en-US"} {
+	for raw, want := range map[string]string{
+		"": "", "fr": "fr-FR", "fr-FR": "fr-FR", "en": "en-US", "en-US": "en-US",
+		"de": "de", "DE-de": "de-DE", "es": "es", " es-es ": "es-ES",
+		"pt-BR": "pt-BR", "pt-PT": "pt-PT", "fr-CA": "fr-CA", "en-gb": "en-GB",
+		"tl": "tl", "tl-PH": "tl-PH", "iw": "he", "IW-il": "he-IL",
+		"no": "no", "nb": "nb", "\ten-us\n": "en-US",
+	} {
 		if got := NormalizeLanguage(raw); got != want {
 			t.Errorf("%q => %q", raw, got)
 		}
+	}
+	for _, raw := range []string{
+		"zz", "zz-US", "en-ZZ", "en-AA", "en-XK", "en-EU", "de-419",
+		"zh-Hant", "zh-Hant-TW", "en-US-x-private", "i-klingon", "pt_BR",
+		"fil-PH", "qaa", "en-XX", "e1", "1a", "éé", "en-USx", "en--US",
+		"en-US\nsuffix", strings.Repeat("a", 4096),
+	} {
+		if got := NormalizeLanguage(raw); got != "en-US" {
+			t.Errorf("unsupported %q => %q", raw, got)
+		}
+	}
+}
+
+func TestNewLanguageTagsPreserveRegionalMetadataAndCanonicalCacheKeys(t *testing.T) {
+	titles := map[string]string{
+		"en-US": "Original", "es-ES": "Español", "de": "Deutsch",
+		"pt-BR": "Brasileiro", "pt-PT": "Português", "tl-PH": "Tagalog", "he-IL": "עברית",
+	}
+	var mu sync.Mutex
+	hits := map[string]int{}
+	s := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		language := r.URL.Query().Get("language")
+		mu.Lock()
+		hits[language]++
+		mu.Unlock()
+		title, ok := titles[language]
+		if !ok {
+			t.Errorf("unvalidated metadata language reached provider: %q", language)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 7, "title": title})
+	})
+	for _, query := range []struct{ raw, canonical string }{
+		{"en-US", "en-US"}, {"es-es", "es-ES"}, {"ES-ES", "es-ES"},
+		{"DE", "de"}, {"de", "de"}, {"pt-BR", "pt-BR"}, {"pt-PT", "pt-PT"},
+		{"tl-PH", "tl-PH"}, {"iw-IL", "he-IL"}, {"he-IL", "he-IL"},
+	} {
+		p, err := s.Presentation(context.Background(), "movie", 7, query.raw)
+		if err != nil || p == nil || p.Title != titles[query.canonical] {
+			t.Fatalf("%q presentation: %+v, %v", query.raw, p, err)
+		}
+		if query.canonical != "en-US" && p.SourceTitle != "Original" {
+			t.Fatalf("%q lost canonical source title: %+v", query.raw, p)
+		}
+	}
+	mu.Lock()
+	for language := range titles {
+		if language != "en-US" && hits[language] != 1 {
+			t.Errorf("%s provider reads = %d, want one canonical cache entry", language, hits[language])
+		}
+	}
+	englishReads := hits["en-US"]
+	mu.Unlock()
+	for _, raw := range []string{"zz-ZZ", "en-US-x-unique", "zh-Hant", "qaa"} {
+		p, err := s.Presentation(context.Background(), "movie", 7, raw)
+		if err != nil || p == nil || p.Title != "Original" {
+			t.Fatalf("invalid %q fallback: %+v, %v", raw, p, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if hits["en-US"] != englishReads || len(hits) != len(titles) {
+		t.Fatalf("invalid tags created provider/cache partitions: %+v", hits)
 	}
 }
 

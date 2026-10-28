@@ -16,22 +16,60 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/text/language"
+
 	"github.com/windoze95/cantinarr-server/internal/cache"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 )
 
+// SupportedLanguages is the legacy capability for older apps that only know
+// these choices. New apps use metadata_language_tags and their own ARB locales.
 var SupportedLanguages = []string{"en-US", "fr-FR"}
 
 // NormalizeLanguage preserves omission for old clients and limits cache keys
-// to supported presentation languages. Unknown explicit choices use English.
+// to registered two-letter languages and optional country codes. Arbitrary
+// BCP-47 extensions, scripts, private-use tags, and unknown codes use English.
 func NormalizeLanguage(value string) string {
-	switch strings.TrimSpace(value) {
-	case "":
+	value = strings.TrimSpace(value)
+	if value == "" {
 		return ""
-	case "fr", "fr-FR":
+	}
+	if len(value) != 2 && (len(value) != 5 || value[2] != '-') {
+		return "en-US"
+	}
+	for i, char := range []byte(value) {
+		if i == 2 {
+			continue
+		}
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') {
+			return "en-US"
+		}
+	}
+	// Only collapse deprecated identifiers. CLDR's broader legacy mapping
+	// would turn valid ISO-639-1 tl into the three-letter fil, which TMDB does
+	// not use for this parameter.
+	tag, err := language.Deprecated.Parse(value)
+	if err != nil {
+		return "en-US"
+	}
+	base, _, region := tag.Raw()
+	code := base.String()
+	if len(code) != 2 || base.IsPrivateUse() {
+		return "en-US"
+	}
+	if len(value) == 5 || region.String() != "ZZ" {
+		if !region.IsCountry() || region.IsPrivateUse() || len(region.String()) != 2 {
+			return "en-US"
+		}
+		return code + "-" + region.String()
+	}
+	switch code {
+	case "en":
+		return "en-US"
+	case "fr":
 		return "fr-FR"
 	default:
-		return "en-US"
+		return code
 	}
 }
 func Language(r *http.Request) string {

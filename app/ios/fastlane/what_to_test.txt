@@ -14,4 +14,6 @@ User onboarding now has labeled Import users and Invite user actions, explicit a
 
 French support: check automatic French selection on a French device and Settings > Account > App language. Under Metadata language, test Follow app language, English and Français independently of the interface. Compare known French titles, summaries, posters, Trakt rows, library rows, Releases, Downloads Content and My reports with the providers. Switch languages with a search or title open, restart, and sign out. Verify missing translations retain useful text, combined series retain the correct parent, and requests target the same title/library. An older server should explain that metadata localization requires an update while preserving the saved preference.
 
+Language menus and iOS language declarations now come from the translation files. Confirm English and French still appear in both the app and iOS language settings, and that upgrading retains your saved choices. Regional variants in contributed builds should remain selected after restart.
+
 New Play Sun branding. In Settings > Account > App icon, try Play Sign, Play Dome, Original, then Play Sun. Check the home screen, dark/tinted appearance, restart and upgrade persistence, push taps, and connect/passkey/OIDC links with an alternate icon selected.

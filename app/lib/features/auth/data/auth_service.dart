@@ -596,6 +596,7 @@ class ServerConfig {
   final bool plexAccessRequestable;
   final bool adminCatalogBrowsing;
   final List<String> metadataLanguages;
+  final bool metadataLanguageTags;
 
   /// Supports linking accounts independently from managing their access.
   final bool mediaAccountManagement;
@@ -633,6 +634,7 @@ class ServerConfig {
     this.plexAccessRequestable = false,
     this.adminCatalogBrowsing = false,
     this.metadataLanguages = const [],
+    this.metadataLanguageTags = false,
     this.mediaAccountManagement = false,
     this.mediaUserImportExplicitLinking = false,
     this.mediaLibraryAvailability = false,
@@ -666,6 +668,7 @@ class ServerConfig {
       allowReporting: json['allow_reporting'] as bool? ?? false,
       plexAccessRequestable: json['plex_access_requestable'] as bool? ?? false,
       adminCatalogBrowsing: json['admin_catalog_browsing'] as bool? ?? false,
+      metadataLanguageTags: json['metadata_language_tags'] == true,
       metadataLanguages:
           (json['metadata_languages'] as List?)?.whereType<String>().toList() ??
               const [],
