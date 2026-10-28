@@ -115,6 +115,11 @@ func (s *Service) resolveTVImports(client *sonarr.Client, series *sonarr.Series,
 				}
 				for _, episode := range imports {
 					title.Upgrade = title.Upgrade && episode.Upgrade
+					if episode.EpisodeID > 0 && !episode.Upgrade {
+						title.EpisodeIDs = append(title.EpisodeIDs, episode.EpisodeID)
+					} else if episode.EpisodeID > 0 {
+						title.UpgradeEpisodeIDs = append(title.UpgradeEpisodeIDs, episode.EpisodeID)
+					}
 				}
 				titles[id] = title
 			}

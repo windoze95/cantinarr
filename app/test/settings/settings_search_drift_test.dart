@@ -309,6 +309,7 @@ void main() {
       const PushNotificationsScreen(),
       dio: _dioFor(const {
         '/api/notifications/preferences': <String, dynamic>{
+          'requester_only': false,
           'server_policy': {'enabled': true, 'categories': <String, bool>{}}
         },
       }),

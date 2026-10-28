@@ -186,6 +186,8 @@ func (h *Hub) resolveSonarrAnnouncements(instanceID string, client *sonarr.Clien
 		for _, title := range resolved {
 			if previous, ok := byTitle[title.TmdbID]; ok {
 				title.Upgrade = title.Upgrade && previous.Upgrade
+				title.EpisodeIDs = append(title.EpisodeIDs, previous.EpisodeIDs...)
+				title.UpgradeEpisodeIDs = append(title.UpgradeEpisodeIDs, previous.UpgradeEpisodeIDs...)
 			}
 			byTitle[title.TmdbID] = title
 		}

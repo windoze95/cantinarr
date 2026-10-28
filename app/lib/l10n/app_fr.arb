@@ -2525,6 +2525,8 @@
   "notificationServerSettings": "Paramètres du serveur",
   "notificationServerSettingsHelp": "Choisissez les notifications push que ce serveur peut envoyer.",
   "notificationMyNotifications": "Mes notifications",
+  "notificationOnlyMyRequests": "Uniquement mes demandes",
+  "notificationOnlyMyRequestsHelp": "Limiter les alertes de disponibilité de films, épisodes, livres et musique sur mes appareils à mes demandes. Les notifications Discord conservent leurs propres réglages.",
   "notificationAdminAlerts": "Alertes administrateur",
   "notificationSendTest": "Envoyer une notification de test",
   "notificationStatus": "État",

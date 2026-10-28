@@ -1714,9 +1714,9 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 	if h.content != nil {
 		for _, title := range announce {
 			if title.Upgrade {
-				h.content.NotifyUpgradedEpisode(title.Title, title.TmdbID, instanceID)
+				sonarr.NotifyImportedUpgrade(h.content, title, instanceID)
 			} else {
-				h.content.NotifyNewEpisode(title.Title, title.TmdbID, instanceID)
+				sonarr.NotifyImportedEpisodes(h.content, title, instanceID)
 			}
 		}
 	}

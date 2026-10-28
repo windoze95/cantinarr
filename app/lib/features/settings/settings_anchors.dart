@@ -11,6 +11,7 @@ abstract final class SettingsAnchors {
   // /settings (root)
   static const rootNotifications = 'root.notifications';
   static const notificationsEnabled = 'notifications.enabled';
+  static const notificationsRequesterOnly = 'notifications.requester-only';
   static const notificationsAutoApproved = 'notifications.auto-approved';
   static const rootAttentionApprovals = 'root.attention-approvals';
   static const rootAttentionIssues = 'root.attention-issues';

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/contentnotify"
 )
 
 // Notifier turns request and content events into push notifications via the
@@ -36,6 +38,7 @@ type Notifier struct {
 	// title outside their limits. nil (push unconfigured in tests, or a
 	// server that never wired it) keeps every recipient.
 	recipientPolicy RecipientPolicy
+	requestMatcher  contentnotify.RequestMatcher
 }
 
 // RecipientPolicy decides which recipients may hear about a title.
@@ -586,20 +589,6 @@ func (n *Notifier) NotifyNewBook(title, foreignID, instanceID, format string) {
 	if client == nil || title == "" {
 		return
 	}
-	// The claim id carries the library: the audience is per-instance, so the
-	// same foreignBookId importing on two Chaptarr instances inside the
-	// window must alert both instances' readers.
-	if !n.claimContentAlert(CategoryNewBook, "book", contentClaimID(instanceID, foreignID+"|"+format), title) {
-		return
-	}
-	recipients, err := n.prefs.usersOptedIntoNewBook(instanceID)
-	if err != nil {
-		n.logger.Error("push: resolve new-content recipients", "err", err, "category", CategoryNewBook)
-		return
-	}
-	if len(recipients) == 0 {
-		return
-	}
 	// Books have no TMDB id: the payload carries the same deep-link identity a
 	// book request decision does (foreign_id, pinned instance, title hint), so
 	// the app's existing book tap routing applies unchanged.
@@ -613,7 +602,7 @@ func (n *Notifier) NotifyNewBook(title, foreignID, instanceID, format string) {
 	if format != "" {
 		data["book_format"] = format
 	}
-	n.sendWithOptions(client, recipients, "New book available", bookReadyBody(title, format), data, SendOptions{
+	n.deliverContent(client, contentnotify.Import{MediaType: "book", InstanceID: instanceID, ForeignID: foreignID, Format: format}, CategoryNewBook, "chaptarr", foreignID+"|"+format, title, "New book available", bookReadyBody(title, format), data, SendOptions{
 		CollapseID: fmt.Sprintf("%s:%s:%s", CategoryNewBook, foreignID, format),
 	})
 }
@@ -644,20 +633,6 @@ func (n *Notifier) NotifyNewMusic(title, artist, foreignID, instanceID string) {
 	if client == nil || title == "" {
 		return
 	}
-	// The claim id carries the library: the audience is per-instance, so the
-	// same album importing on two Lidarr instances inside the window must
-	// alert both instances' listeners.
-	if !n.claimContentAlert(CategoryNewMusic, "music", contentClaimID(instanceID, foreignID), title) {
-		return
-	}
-	recipients, err := n.prefs.usersOptedIntoNewMusic(instanceID)
-	if err != nil {
-		n.logger.Error("push: resolve new-content recipients", "err", err, "category", CategoryNewMusic)
-		return
-	}
-	if len(recipients) == 0 {
-		return
-	}
 	// Music has no TMDB id: the payload carries the same deep-link identity a
 	// music request decision does (foreign_id, pinned instance, title hint),
 	// so the app's existing album tap routing applies unchanged.
@@ -668,7 +643,7 @@ func (n *Notifier) NotifyNewMusic(title, artist, foreignID, instanceID string) {
 		"instance_id": instanceID,
 		"title":       title,
 	}
-	n.sendWithOptions(client, recipients, "New music available", musicReadyBody(title, artist), data, SendOptions{
+	n.deliverContent(client, contentnotify.Import{MediaType: "music", InstanceID: instanceID, ForeignID: foreignID}, CategoryNewMusic, "lidarr", foreignID, title, "New music available", musicReadyBody(title, artist), data, SendOptions{
 		CollapseID: fmt.Sprintf("%s:%s", CategoryNewMusic, foreignID),
 	})
 }
@@ -810,14 +785,14 @@ func musicUpgradedBody(title, artist string) string {
 // the household with a false "New movie available" — the ledger claim is what
 // keeps it quiet. Only then does the admin content_upgraded alert claim its
 // own key and send under its own storm budget.
-func (n *Notifier) notifyUpgradedContent(broadcastCategory, mediaType, title, body, mediaTitle string, tmdbID int, instanceID string) {
+func (n *Notifier) notifyUpgradedContent(broadcastCategory, mediaType, title, body, mediaTitle string, tmdbID int, instanceID string, exactEpisodes ...bool) {
 	if mediaTitle == "" {
 		return
 	}
 	// Byte-identical to the id notifyNewContent claims for the same import on
 	// the same library — that identity is what keeps the poller's re-witness
 	// quiet.
-	n.claimContentAlertSilently(broadcastCategory, mediaType, contentClaimID(instanceID, strconv.Itoa(tmdbID)), mediaTitle)
+	n.claimContentAlertSilently(broadcastCategory, mediaType, contentClaimID(instanceID, strconv.Itoa(tmdbID)), mediaTitle, exactEpisodes...)
 	client := n.client()
 	if client == nil {
 		return
@@ -853,30 +828,9 @@ func (n *Notifier) notifyUpgradedContent(broadcastCategory, mediaType, title, bo
 // libraries inside the window alerts BOTH libraries' audiences — with
 // per-library audiences, one shared claim would silently drop the second
 // library's alert on the floor.
-func (n *Notifier) notifyNewContent(category, mediaType, serviceType, title, body, mediaTitle string, tmdbID int, instanceID string) {
+func (n *Notifier) notifyNewContent(category, mediaType, serviceType, title, body, mediaTitle string, tmdbID int, instanceID string, episodes ...int) {
 	client := n.client()
 	if client == nil || mediaTitle == "" {
-		return
-	}
-	if !n.claimContentAlert(category, mediaType, contentClaimID(instanceID, strconv.Itoa(tmdbID)), mediaTitle) {
-		return
-	}
-	recipients, err := n.prefs.usersOptedIntoNewVideo(category, serviceType, instanceID)
-	if err != nil {
-		n.logger.Error("push: resolve new-content recipients", "err", err, "category", category)
-		return
-	}
-	if n.recipientPolicy != nil {
-		// A kids account hears about a title only inside its limits. A
-		// title that cannot be identified or rated drops every child and
-		// says so in the log; the adults still hear about it.
-		kept, err := n.recipientPolicy.AllowedRecipients(context.Background(), recipients, mediaType, tmdbID)
-		if err != nil {
-			n.logger.Warn("push: kids accounts left out of a new-content alert", "err", err, "category", category, "tmdb_id", tmdbID)
-		}
-		recipients = kept
-	}
-	if len(recipients) == 0 {
 		return
 	}
 	data := map[string]any{
@@ -887,7 +841,7 @@ func (n *Notifier) notifyNewContent(category, mediaType, serviceType, title, bod
 	if instanceID != "" {
 		data["instance_id"] = instanceID
 	}
-	n.sendWithOptions(client, recipients, title, body, data, SendOptions{
+	n.deliverContent(client, contentnotify.Import{MediaType: mediaType, InstanceID: instanceID, TmdbID: tmdbID, EpisodeIDs: episodes}, category, serviceType, strconv.Itoa(tmdbID), mediaTitle, title, body, data, SendOptions{
 		CollapseID: fmt.Sprintf("%s:%s", category, contentClaimID(instanceID, strconv.Itoa(tmdbID))),
 	})
 }
@@ -958,7 +912,10 @@ func (n *Notifier) claimContentAlert(category, mediaType, id, title string) bool
 // recorded regardless, or a boot-resumption hold could later broadcast an
 // upgrade the webhook already proved. A database error here is only logged:
 // losing the silent claim errs toward alerting, never toward silence.
-func (n *Notifier) claimContentAlertSilently(category, mediaType, id, title string) {
+func (n *Notifier) claimContentAlertSilently(category, mediaType, id, title string, exactEpisodes ...bool) {
+	if len(exactEpisodes) == 0 || !exactEpisodes[0] {
+		n.recordUpgradeSuppression(category, mediaType, id, title)
+	}
 	n.claimContentAlertScoped(category, mediaType, id, title, stormScopeNone)
 }
 
@@ -1037,7 +994,7 @@ func (n *Notifier) send(client *Client, userIDs []int64, title, body string, dat
 // sendWithOptions is send with explicit gateway options (e.g. a collapse id).
 // After the gateway replies it prunes any local token the gateway reported
 // dead, so push_tokens self-cleans without a separate sweep.
-func (n *Notifier) sendWithOptions(client *Client, userIDs []int64, title, body string, data map[string]any, opts SendOptions) {
+func (n *Notifier) sendWithOptions(client *Client, userIDs []int64, title, body string, data map[string]any, opts SendOptions, guards ...func(context.Context, []int64) []int64) {
 	category := str(data["type"])
 	userIDs = n.allowedDelivery(userIDs, category)
 	if len(userIDs) == 0 {
@@ -1051,6 +1008,9 @@ func (n *Notifier) sendWithOptions(client *Client, userIDs []int64, title, body 
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		for _, guard := range guards {
+			userIDs = guard(ctx, userIDs)
+		}
 		userIDs = n.allowedDelivery(userIDs, category)
 		if len(userIDs) == 0 {
 			return

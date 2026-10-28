@@ -42,6 +42,14 @@ On the phone, allow Cantinarr notifications in the operating system. Inside Cant
 
 A category can be disabled by server or account policy. Read the explanation beside the control before troubleshooting the relay.
 
+## Receive availability alerts for your requests
+
+In **Settings > Notifications > Push Notifications**, turn on **Only my requests** to limit phone availability alerts to movies, TV episodes, books, and music you requested in the importing library. The setting starts off, so existing accounts continue receiving enabled availability alerts from libraries they can access. If the switch is missing, update the server to a version that supports it.
+
+Book alerts follow the requested formats, including a shared request you joined. TV alerts follow your selected seasons or requested episodes; episode following includes newly requested episodes, while stopping following leaves work already requested eligible. Several matching requests for the same import produce one alert for you.
+
+Keep each desired availability category enabled. Server policy, your master switch, current library access, and content restrictions still apply. This choice does not change request decisions, administrator alerts, or [Discord notification settings](/integrations/discord/).
+
 ## Test delivery
 
 Use the available self-test or administrator test, then confirm the notification appears on the actual device. A server-side accepted response only proves the send was accepted at that stage.
