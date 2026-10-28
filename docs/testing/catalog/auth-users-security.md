@@ -19,7 +19,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 
 ## Navigation smoke and app lifecycle
 
-- [ ] `NAV-001` · P0 · UI — On compact and wide layouts, open every drawer/sidebar destination and every bottom-tab branch; verify selected state, back behavior, and preserved per-module tab stacks.
+- [ ] `NAV-001` · P0 · UI/LIVE — On compact and wide layouts, open every drawer/sidebar destination and every bottom-tab branch; verify selected state, back behavior, and preserved per-module tab stacks. On a physical Pixel with Android gesture navigation enabled, record the device model, Android version, candidate app version/build and source SHA. From Movies and TV Shows, open a title normally, then repeat through See all and a title. Complete the system back gesture and verify each gesture returns exactly one page without leaving the app; cancel a gesture and verify the current page stays open. Repeat after switching tabs and after backgrounding/resuming the app, and verify the retained list position. Exiting may occur at a module root with no previous page. Record notification/deep-link entry separately from these ordinary navigation paths. Toolbar Back taps and widget tests do not complete the physical gesture check.
 - [ ] `NAV-003` · P0 · UI — As a requester, verify admin destinations are absent; as admin, verify destinations appear only when their service/attention conditions apply.
 - [ ] `NAV-018` · P1 · UI — Background/foreground the native app on each major screen; verify data refreshes where required and unsaved destructive dialogs never execute themselves.
 

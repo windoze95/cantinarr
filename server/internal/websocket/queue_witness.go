@@ -8,9 +8,8 @@ import (
 	"time"
 )
 
-// witnessRow is one instance's restored queue membership: the arr record ids
-// that were in its download queue at the last successful poll, plus when that
-// poll happened.
+// witnessRow holds one instance's restored queue membership and import-history
+// cursor: the start time of its last successfully resolved poll.
 type witnessRow struct {
 	serviceType string
 	ids         []int
@@ -26,18 +25,11 @@ type sonarrWitnessEnvelope struct {
 	IDs     []int `json:"media_ids"`
 }
 
-// queueWitness persists the poller's queue-departure memory.
-//
-// The poller detects a completion by diffing the arr download queue against the
-// previous poll's membership. That membership used to live only in RAM, so a
-// restart re-seeded from empty and every completion that landed while the
-// process was down was silently never witnessed — permanently, since the arrs
-// fire their webhooks once, and books only have one on instances where the
-// admin configured instant updates.
-//
-// Only set membership is ever read back. Nothing here is treated as truth about
-// the arr: a departure is re-verified live against the arr before anything is
-// announced.
+// queueWitness persists queue membership and the import-history cursor so a
+// restart can recover imports that occurred while Cantinarr was unavailable.
+// Membership supports queue transitions but never proves a completion. Each
+// alert requires a fresh import receipt from the arr; existing files and a
+// successful empty queue cannot substitute for that evidence.
 type queueWitness struct {
 	db *sql.DB
 }
