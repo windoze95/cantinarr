@@ -46,6 +46,11 @@ class TmdbPage<T> {
 class MediaItem {
   final int id;
   final String title;
+
+  /// An empty source explicitly disables legacy title matching when localized
+  /// metadata has no canonical or original title. Do not fall back to display.
+  final String? sourceTitle;
+  String get matchingTitle => sourceTitle ?? title;
   final String? posterPath;
   final String? backdropPath;
   final MediaType mediaType;
@@ -56,6 +61,7 @@ class MediaItem {
   const MediaItem({
     required this.id,
     required this.title,
+    this.sourceTitle,
     this.posterPath,
     this.backdropPath,
     required this.mediaType,
@@ -70,12 +76,12 @@ class MediaItem {
     return MediaItem(
       id: json['id'] as int,
       title: (json['title'] ?? json['name'] ?? 'Untitled') as String,
+      sourceTitle: (json['source_title'] ?? json['source_name']) as String?,
       posterPath: json['poster_path'] as String?,
       backdropPath: json['backdrop_path'] as String?,
       mediaType: mediaType,
       voteAverage: (json['vote_average'] as num?)?.toDouble(),
-      releaseDate:
-          (json['release_date'] ?? json['first_air_date']) as String?,
+      releaseDate: (json['release_date'] ?? json['first_air_date']) as String?,
       overview: json['overview'] as String?,
     );
   }
@@ -83,6 +89,7 @@ class MediaItem {
   factory MediaItem.fromMovieJson(Map<String, dynamic> json) => MediaItem(
         id: json['id'] as int,
         title: (json['title'] ?? 'Untitled') as String,
+        sourceTitle: (json['source_title'] ?? json['source_name']) as String?,
         posterPath: json['poster_path'] as String?,
         backdropPath: json['backdrop_path'] as String?,
         mediaType: MediaType.movie,
@@ -94,6 +101,7 @@ class MediaItem {
   factory MediaItem.fromTVJson(Map<String, dynamic> json) => MediaItem(
         id: json['id'] as int,
         title: (json['name'] ?? 'Untitled') as String,
+        sourceTitle: (json['source_title'] ?? json['source_name']) as String?,
         posterPath: json['poster_path'] as String?,
         backdropPath: json['backdrop_path'] as String?,
         mediaType: MediaType.tv,
@@ -108,6 +116,7 @@ class MediaItem {
       return MediaItem(
         id: json['id'] as int,
         title: (json['name'] ?? 'Unknown') as String,
+        sourceTitle: (json['source_title'] ?? json['source_name']) as String?,
         posterPath: json['profile_path'] as String?,
         mediaType: MediaType.person,
       );
@@ -325,6 +334,8 @@ String? _blankToNull(String? value) =>
 class MovieDetail {
   final int id;
   final String title;
+  final String? sourceTitle;
+  String get matchingTitle => sourceTitle ?? title;
   final String? tagline;
   final String? overview;
   final String? posterPath;
@@ -353,6 +364,7 @@ class MovieDetail {
   const MovieDetail({
     required this.id,
     required this.title,
+    this.sourceTitle,
     this.tagline,
     this.overview,
     this.posterPath,
@@ -375,6 +387,7 @@ class MovieDetail {
   factory MovieDetail.fromJson(Map<String, dynamic> json) => MovieDetail(
         id: json['id'] as int,
         title: (json['title'] ?? 'Untitled') as String,
+        sourceTitle: json['source_title'] as String?,
         tagline: json['tagline'] as String?,
         overview: json['overview'] as String?,
         posterPath: json['poster_path'] as String?,
@@ -411,6 +424,8 @@ class MovieDetail {
 class TVDetail {
   final int id;
   final String name;
+  final String? sourceName;
+  String get matchingTitle => sourceName ?? name;
   final String? tagline;
   final String? overview;
   final String? posterPath;
@@ -444,6 +459,7 @@ class TVDetail {
   const TVDetail({
     required this.id,
     required this.name,
+    this.sourceName,
     this.tagline,
     this.overview,
     this.posterPath,
@@ -469,6 +485,7 @@ class TVDetail {
   factory TVDetail.fromJson(Map<String, dynamic> json) => TVDetail(
         id: json['id'] as int,
         name: (json['name'] ?? 'Untitled') as String,
+        sourceName: json['source_name'] as String?,
         tagline: json['tagline'] as String?,
         overview: json['overview'] as String?,
         posterPath: json['poster_path'] as String?,
@@ -529,7 +546,8 @@ class TmdbEpisode {
   static TmdbEpisode? tryParse(Object? value) {
     if (value is! Map<String, dynamic>) return null;
     final airDate = value['air_date'] is String
-        ? _blankToNull(value['air_date'] as String) : null;
+        ? _blankToNull(value['air_date'] as String)
+        : null;
     final season = value['season_number'];
     final episode = value['episode_number'];
     final seasonNumber = season is int && season >= 0 ? season : null;
@@ -537,7 +555,9 @@ class TmdbEpisode {
     final id = value['id'];
     // An ID alone still explicitly names an episode with an unknown date.
     // An empty/unknown-shaped object does not establish another episode.
-    if (airDate == null && seasonNumber == null && episodeNumber == null &&
+    if (airDate == null &&
+        seasonNumber == null &&
+        episodeNumber == null &&
         !(id is int && id > 0)) {
       return null;
     }

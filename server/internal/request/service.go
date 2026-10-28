@@ -214,6 +214,7 @@ type Notifier interface {
 }
 
 type Service struct {
+	metadata                PresentationSource
 	mediaAvailability       MediaAvailabilitySource
 	tvFollowMu              sync.Mutex
 	Quotas                  *requestquota.Service

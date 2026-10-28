@@ -8306,5 +8306,10 @@
         "type": "String"
       }
     }
-  }
+  },
+  "settingsAppLanguage": "App language",
+  "settingsMetadataLanguage": "Metadata language",
+  "settingsMetadataFollowApp": "Follow app language",
+  "settingsMetadataLanguageHelp": "Use translated movie and TV titles, descriptions, and artwork when available. Original language filters, release dates, and audio are unchanged.",
+  "settingsMetadataServerUpdate": "Update your Cantinarr server to choose metadata language. Titles currently use their source language."
 }

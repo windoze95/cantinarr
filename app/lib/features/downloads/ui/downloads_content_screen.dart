@@ -214,7 +214,7 @@ class _ContentRow extends StatelessWidget {
             ? progress
             : '${statusLabel(jobs.single, strings: context.l10n)} · $progress${knownProgress ? ' · ${context.l10n.polishDownloadBytes(formatBytes(jobs.single.sizeBytes - jobs.single.sizeLeftBytes), formatBytes(jobs.single.sizeBytes))}' : ''}';
     final title =
-        '${group.title}${group.mediaType == 'movie' && group.year > 0 ? ' (${group.year})' : ''}';
+        '${group.displayTitle}${group.mediaType == 'movie' && group.year > 0 ? ' (${group.year})' : ''}';
     final subtitle = [
       group.creator,
       if (group.format.isNotEmpty)
@@ -263,9 +263,9 @@ class _ContentRow extends StatelessWidget {
             child: SizedBox(
                 width: 42,
                 height: 62,
-                child: group.artwork.isEmpty
+                child: group.displayArtwork.isEmpty
                     ? placeholder
-                    : Image.network(group.artwork,
+                    : Image.network(group.displayArtwork,
                         fit: BoxFit.cover,
                         errorBuilder: (context, error, stack) => placeholder))),
         title: Text(title,

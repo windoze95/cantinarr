@@ -355,7 +355,7 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
     final router = ref.watch(appRouterProvider);
     return MaterialApp.router(
       title: 'Cantinarr',
-      locale: ref.watch(appLocaleProvider),
+      locale: ref.watch(effectiveAppLocaleProvider),
       supportedLocales: AppLocalizations.supportedLocales,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       theme: AppTheme.dark,

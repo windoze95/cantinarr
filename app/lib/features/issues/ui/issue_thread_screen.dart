@@ -11,6 +11,7 @@ import 'package:dio/dio.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/layout/adaptive.dart';
+import '../../../core/metadata/metadata_presentation.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -424,9 +425,16 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
     final isAdmin = ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
     return Scaffold(
       appBar: AppBar(
-        title: Text(thread?.issue.title.isNotEmpty == true
-            ? thread!.issue.title
-            : context.l10n.opsIssue),
+        title: MetadataPresentationBuilder(
+          reference: thread == null || isAdmin
+              ? null
+              : MetadataReference.catalog(
+                  thread.issue.mediaType, thread.issue.tmdbId),
+          builder: (presentation) => Text(presentation?.title ??
+              (thread?.issue.title.isNotEmpty == true
+                  ? thread!.issue.title
+                  : context.l10n.opsIssue)),
+        ),
         actions: [
           if (isAdmin && thread != null && !thread.issue.status.isTerminal)
             IconButton(

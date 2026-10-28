@@ -50,7 +50,8 @@ func TestDiscoverForwardsBrowseFiltersVerbatim(t *testing.T) {
 			t.Errorf("upstream carried %s=%q, want it dropped", k, hit.query.Get(k))
 		}
 	}
-	// The locale is the client's fixed en-US, never a caller's.
+	// With no metadata_language opt-in, legacy requests retain en-US; a
+	// raw language filter parameter cannot override presentation language.
 	if got := hit.query["language"]; len(got) != 1 || got[0] != "en-US" {
 		t.Errorf("upstream language = %v, want exactly [en-US]", got)
 	}

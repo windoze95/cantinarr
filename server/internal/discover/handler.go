@@ -12,6 +12,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/cache"
 	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/mediametadata"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
 )
 
@@ -39,12 +40,17 @@ type Handler struct {
 	// policies filters every payload for kids accounts after the cache
 	// read; nil until wired (see SetContentPolicy).
 	policies *contentpolicy.Service
+	metadata *mediametadata.Service
 }
 
 // NewHandler creates a new discover handler.
 func NewHandler(creds *credentials.Registry, c *cache.Cache, prefs DiscoveryPrefs) *Handler {
-	return &Handler{creds: creds, cache: c, prefs: prefs}
+	return &Handler{creds: creds, cache: c, prefs: prefs, metadata: mediametadata.New(creds, c)}
 }
+
+// SetMetadataService shares presentation caching and provider concurrency with
+// requester library and activity projections.
+func (h *Handler) SetMetadataService(service *mediametadata.Service) { h.metadata = service }
 
 // discoveryPrefs reads the current preferences, falling back to the defaults
 // when no settings service is wired in.
@@ -105,6 +111,8 @@ func (h *Handler) cachedTMDBFeed(w http.ResponseWriter, r *http.Request, cacheKe
 // (English-filtered and cached, server-wide), then the caller's own content
 // policy on the way out, which is per user and therefore never cached.
 func (h *Handler) serveTMDB(w http.ResponseWriter, r *http.Request, cacheKey string, ttl time.Duration, path string, params url.Values, englishOnly bool, shape payloadShape) {
+	language := mediametadata.Language(r)
+	cacheKey = metadataCacheKey(cacheKey, language)
 	tmdbClient := h.creds.TMDB()
 	if tmdbClient == nil {
 		http.Error(w, `{"error":"TMDB is not configured"}`, http.StatusServiceUnavailable)
@@ -113,7 +121,11 @@ func (h *Handler) serveTMDB(w http.ResponseWriter, r *http.Request, cacheKey str
 	data, ok := h.cache.Get(cacheKey)
 	if !ok {
 		var err error
-		data, err = tmdbClient.DoGetRaw(path, params)
+		if language == "" {
+			data, err = tmdbClient.DoGetRawContext(r.Context(), path, params, "en-US")
+		} else {
+			data, err = h.metadata.Raw(r.Context(), path, params, language)
+		}
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
 			return
@@ -129,6 +141,8 @@ func (h *Handler) serveTMDB(w http.ResponseWriter, r *http.Request, cacheKey str
 // cachedTrakt checks credentials, then cache, then calls Trakt on miss; the
 // caller's content policy applies on the way out like serveTMDB.
 func (h *Handler) cachedTrakt(w http.ResponseWriter, r *http.Request, cacheKey string, ttl time.Duration, path string, params url.Values, shape traktShape) {
+	language := mediametadata.Language(r)
+	cacheKey = metadataCacheKey(cacheKey, language)
 	traktClient := h.creds.Trakt()
 	if traktClient == nil {
 		http.Error(w, `{"error":"trakt not configured"}`, http.StatusServiceUnavailable)
@@ -141,6 +155,9 @@ func (h *Handler) cachedTrakt(w http.ResponseWriter, r *http.Request, cacheKey s
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
 			return
+		}
+		if language != "" && !shape.opaque {
+			data = h.localizeTrakt(r.Context(), data, language, shape.mediaType)
 		}
 		h.cache.Set(cacheKey, data, ttl)
 	}

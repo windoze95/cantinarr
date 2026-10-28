@@ -3871,5 +3871,10 @@
         "type": "String"
       }
     }
-  }
+  },
+  "settingsAppLanguage": "Langue de l’application",
+  "settingsMetadataLanguage": "Langue des métadonnées",
+  "settingsMetadataFollowApp": "Suivre la langue de l’application",
+  "settingsMetadataLanguageHelp": "Utiliser les titres, descriptions et illustrations de films et séries traduits lorsqu’ils sont disponibles. Les filtres de langue originale, les dates de sortie et la langue audio restent inchangés.",
+  "settingsMetadataServerUpdate": "Mettez à jour votre serveur Cantinarr pour choisir la langue des métadonnées. Les titres utilisent actuellement leur langue source."
 }

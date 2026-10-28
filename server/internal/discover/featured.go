@@ -1,6 +1,7 @@
 package discover
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/windoze95/cantinarr-server/internal/mediametadata"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
 )
 
@@ -75,6 +77,7 @@ func (h *Handler) FeaturedMovies(w http.ResponseWriter, r *http.Request) {
 // kids account sees its own cut of it.
 func (h *Handler) featured(w http.ResponseWriter, r *http.Request, mediaType string, page int) {
 	source, englishOnly := h.discoveryPrefs()
+	language := mediametadata.Language(r)
 
 	// Trakt is optional. Falling back keeps the landing screen populated
 	// rather than blanking a headline row because a credential went missing,
@@ -84,6 +87,7 @@ func (h *Handler) featured(w http.ResponseWriter, r *http.Request, mediaType str
 	}
 
 	key := fmt.Sprintf("featured:%s:%s:%t:%d", mediaType, source, englishOnly, page)
+	key = metadataCacheKey(key, language)
 	if data, ok := h.cache.Get(key); ok {
 		h.writeForCaller(w, r, listShape(mediaType), data)
 		return
@@ -110,12 +114,12 @@ func (h *Handler) featured(w http.ResponseWriter, r *http.Request, mediaType str
 			// and recovery is picked up on the next miss.
 			log.Printf("discover: trakt featured %s failed, serving TMDB weekly trending instead: %v", mediaType, err)
 			source = serversettings.DiscoverySourceTMDBTrending
-			result, err = h.tmdbFeatured(fmt.Sprintf("/trending/%s/week", mediaType), page, englishOnly)
+			result, err = h.tmdbFeatured(r.Context(), fmt.Sprintf("/trending/%s/week", mediaType), page, englishOnly, language)
 		}
 	case serversettings.DiscoverySourceTMDBPopular:
-		result, err = h.tmdbFeatured(fmt.Sprintf("/%s/popular", mediaType), page, englishOnly)
+		result, err = h.tmdbFeatured(r.Context(), fmt.Sprintf("/%s/popular", mediaType), page, englishOnly, language)
 	default:
-		result, err = h.tmdbFeatured(fmt.Sprintf("/trending/%s/week", mediaType), page, englishOnly)
+		result, err = h.tmdbFeatured(r.Context(), fmt.Sprintf("/trending/%s/week", mediaType), page, englishOnly, language)
 	}
 	if err != nil {
 		if errors.Is(err, errTMDBNotConfigured) || errors.Is(err, errTraktNotConfigured) {
@@ -124,6 +128,9 @@ func (h *Handler) featured(w http.ResponseWriter, r *http.Request, mediaType str
 		}
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
 		return
+	}
+	if source == serversettings.DiscoverySourceTraktTrending && language != "" {
+		result.results = h.localizeFeatured(r.Context(), result.results, mediaType, language)
 	}
 
 	payload, err := json.Marshal(featuredPage{
@@ -146,15 +153,19 @@ func (h *Handler) featured(w http.ResponseWriter, r *http.Request, mediaType str
 // upstream page, filtered but never refilled. Refilling a later page would
 // borrow entries from the page after it, which the next request then serves
 // again, and the client dedupes by id anyway. Entries pass through verbatim.
-func (h *Handler) tmdbFeatured(path string, page int, englishOnly bool) (listPage, error) {
+func (h *Handler) tmdbFeatured(ctx context.Context, path string, page int, englishOnly bool, language string) (listPage, error) {
 	client := h.creds.TMDB()
 	if client == nil {
 		return listPage{}, errTMDBNotConfigured
 	}
-	if page > 1 {
-		return tmdbPlainPage(client, path, page, englishOnly)
+	var getter rawGetter = client
+	if language != "" {
+		getter = metadataGetter{ctx: ctx, service: h.metadata, language: language}
 	}
-	return tmdbRow(client, path, englishOnly)
+	if page > 1 {
+		return tmdbPlainPage(getter, path, page, englishOnly)
+	}
+	return tmdbRow(getter, path, englishOnly)
 }
 
 // tmdbRow collects up to featuredLimit entries from the first page of a feed,

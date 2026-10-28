@@ -7,6 +7,7 @@ void main() {
     test('picks the soonest upcoming release and labels it', () {
       final event = releaseEventFromRadarr(
         {
+          'id': 7,
           'title': 'Dune',
           'tmdbId': 438631,
           'hasFile': false,
@@ -17,6 +18,7 @@ void main() {
           ],
         },
         now: DateTime(2099, 1, 1),
+        instanceId: 'movies-other',
       );
 
       expect(event, isNotNull);
@@ -24,6 +26,8 @@ void main() {
       expect(event.subtitle, 'Digital');
       expect(event.mediaType, ReleaseMediaType.movie);
       expect(event.tmdbId, 438631);
+      expect(event.nativeRecordId, 7);
+      expect(event.instanceId, 'movies-other');
       expect(event.day, DateTime(2099, 1, 15));
       expect(event.posterUrl, 'http://x/p.jpg');
       expect(event.hasFile, isFalse);

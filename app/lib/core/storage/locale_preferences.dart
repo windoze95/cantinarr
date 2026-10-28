@@ -2,6 +2,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../l10n/app_localizations.dart';
+
 const _localeKey = 'app_language';
 
 /// A device-local UI language. Null follows the device, with English as the
@@ -47,3 +49,28 @@ class AppLocaleNotifier extends StateNotifier<Locale?> {
 final appLocaleProvider = StateNotifierProvider<AppLocaleNotifier, Locale?>(
   (_) => AppLocaleNotifier(),
 );
+
+/// The same supported locale is used by widgets and metadata preferences.
+/// Observe the full platform list so System follows changes while open.
+final platformLocalesProvider = Provider<List<Locale>>((ref) {
+  final binding = WidgetsBinding.instance;
+  final observer = _LocaleObserver(ref.invalidateSelf);
+  binding.addObserver(observer);
+  ref.onDispose(() => binding.removeObserver(observer));
+  return List.unmodifiable(binding.platformDispatcher.locales);
+});
+
+final effectiveAppLocaleProvider = Provider<Locale>((ref) {
+  final selected = ref.watch(appLocaleProvider);
+  return basicLocaleListResolution(
+    selected == null ? ref.watch(platformLocalesProvider) : [selected],
+    AppLocalizations.supportedLocales,
+  );
+});
+
+class _LocaleObserver extends WidgetsBindingObserver {
+  _LocaleObserver(this.changed);
+  final VoidCallback changed;
+  @override
+  void didChangeLocales(List<Locale>? locales) => changed();
+}

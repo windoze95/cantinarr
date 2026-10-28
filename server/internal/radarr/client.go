@@ -247,7 +247,12 @@ func (c *Client) LookupByTMDB(tmdbID int) (*LookupResult, error) {
 }
 
 func (c *Client) GetMovie(id int) (*Movie, error) {
-	resp, err := c.doRequest("GET", fmt.Sprintf("/api/v3/movie/%d", id))
+	return c.GetMovieContext(context.Background(), id)
+}
+
+// GetMovieContext bounds optional presentation reads to the caller's lifetime.
+func (c *Client) GetMovieContext(ctx context.Context, id int) (*Movie, error) {
+	resp, err := c.doRequestContext(ctx, "GET", fmt.Sprintf("/api/v3/movie/%d", id))
 	if err != nil {
 		return nil, fmt.Errorf("radarr get movie: %w", err)
 	}

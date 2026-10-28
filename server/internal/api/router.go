@@ -24,6 +24,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mediaaccess"
 	"github.com/windoze95/cantinarr-server/internal/mediaavailability"
 	"github.com/windoze95/cantinarr-server/internal/mediafiles"
+	"github.com/windoze95/cantinarr-server/internal/mediametadata"
 	"github.com/windoze95/cantinarr-server/internal/musicdiscovery"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
@@ -570,6 +571,7 @@ func NewRouter(
 			r.Use(auth.RequirePermission(auth.PermissionMediaDiscover))
 
 			// Discover
+			r.Post("/metadata/presentation", requestHandler.GetPresentations)
 			books := bookdiscovery.NewHandler()
 			r.Get("/discover/books/search", books.Search)
 			// The one live book feed: Hardcover's trending list, read with
@@ -1035,6 +1037,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			// grant can still ask for access from the guide.
 			"plex_access_requestable":            plexRequestable,
 			"admin_catalog_browsing":             true,
+			"metadata_languages":                 mediametadata.SupportedLanguages,
 			"request_quotas":                     true,
 			"requester_tagging":                  true,
 			"instance_assignments":               true,
