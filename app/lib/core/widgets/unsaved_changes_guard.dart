@@ -1,6 +1,7 @@
 import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -128,7 +129,24 @@ class _UnsavedChangesGuardState extends ConsumerState<UnsavedChangesGuard> {
         child: widget.child,
       ),
     );
-    if (!widget.isDialog) return child;
+    if (!widget.isDialog) {
+      if (kIsWeb ||
+          Theme.of(context).platform != TargetPlatform.iOS ||
+          ModalRoute.of(context)?.isFirst != false) {
+        return child;
+      }
+      // GoRouter's asynchronous onExit can reject a Cupertino swipe after it
+      // has moved the page. Keep these editors on button Back so a rejected
+      // exit leaves them in place. Drafts can change without a guard rebuild,
+      // so a build-time hasChanges check cannot safely enable the gesture.
+      return PopScope<Object?>(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, result) {
+          if (!didPop && !widget.isSaving) context.pop(result);
+        },
+        child: child,
+      );
+    }
     return PopScope<Object?>(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {

@@ -73,6 +73,102 @@ void main() {
     expect(find.text('Destination'), findsOneWidget);
   });
 
+  testWidgets('iOS unsaved editors stay in place and confirm button Back',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final router = await pumpEditor(tester, initialLocation: '/away');
+    final result = router.push<int>('/edit/1');
+    await tester.pumpAndSettle();
+    // This editor intentionally does not rebuild its guard when text changes.
+    await tester.enterText(find.byType(TextField), 'draft');
+    FocusManager.instance.primaryFocus?.unfocus();
+    await tester.pumpAndSettle();
+    final originalLeft = tester.getTopLeft(find.byType(TextField)).dx;
+
+    await tester.dragFrom(const Offset(1, 400), const Offset(320, 0));
+    await tester.pumpAndSettle();
+    expect(router.state.uri.path, '/edit/1');
+    expect(find.text('draft'), findsOneWidget);
+    expect(find.text('Discard unsaved changes?'), findsNothing);
+    expect(tester.getTopLeft(find.byType(TextField)).dx, originalLeft);
+
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+    expect(find.text('Discard unsaved changes?'), findsOneWidget);
+    await tester.tap(find.text('Keep editing'));
+    await tester.pumpAndSettle();
+    expect(router.state.uri.path, '/edit/1');
+    expect(find.text('draft'), findsOneWidget);
+    expect(tester.getTopLeft(find.byType(TextField)).dx, originalLeft,
+        reason: 'declining the exit must leave the editor in the viewport');
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Keep editing'));
+    await tester.pumpAndSettle();
+    expect(router.state.uri.path, '/edit/1');
+    expect(tester.getTopLeft(find.byType(TextField)).dx, originalLeft);
+
+    final navigator = Navigator.of(tester.element(find.byType(TextField)));
+    await navigator.maybePop<int>(7);
+    await tester.pumpAndSettle();
+    expect(find.text('Discard unsaved changes?'), findsOneWidget);
+    await tester.tap(find.text('Discard changes'));
+    await tester.pumpAndSettle();
+    expect(await result, 7);
+    expect(find.text('Destination'), findsOneWidget);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
+  for (final state in ['clean', 'reverted', 'saved']) {
+    testWidgets('iOS $state editors leave with button Back without prompting',
+        (tester) async {
+      final router = await pumpEditor(tester, initialLocation: '/away');
+      router.push('/edit/1');
+      await tester.pumpAndSettle();
+      if (state != 'clean') {
+        await tester.enterText(find.byType(TextField), 'draft');
+        if (state == 'reverted') {
+          await tester.enterText(find.byType(TextField), 'saved');
+        } else {
+          await tester.tap(find.text('Save'));
+        }
+      }
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+      final originalLeft = tester.getTopLeft(find.byType(TextField)).dx;
+      await tester.dragFrom(const Offset(1, 400), const Offset(640, 0));
+      await tester.pumpAndSettle();
+      expect(router.state.uri.path, '/edit/1');
+      expect(tester.getTopLeft(find.byType(TextField)).dx, originalLeft);
+      expect(find.text('Discard unsaved changes?'), findsNothing);
+
+      await tester.tap(find.byType(BackButton));
+      await tester.pumpAndSettle();
+      expect(find.text('Discard unsaved changes?'), findsNothing);
+      expect(find.text('Destination'), findsOneWidget);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+  }
+
+  testWidgets('iOS root editors retain the native Back confirmation',
+      (tester) async {
+    final router = await pumpEditor(tester);
+    await tester.enterText(find.byType(TextField), 'draft');
+    final back = tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Discard unsaved changes?'), findsOneWidget);
+    await tester.tap(find.text('Keep editing'));
+    await tester.pumpAndSettle();
+    await back;
+    expect(router.state.uri.path, '/edit/1');
+    expect(find.text('draft'), findsOneWidget);
+    expect(tester.getTopLeft(find.byType(TextField)).dx, 0);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
   testWidgets(
       'pushing a child preserves the draft and warns when it is later removed',
       (tester) async {
@@ -121,7 +217,9 @@ void main() {
     await tester.tap(find.text('Discard changes'));
     await tester.pumpAndSettle();
     expect(find.text('Dialog editor'), findsNothing);
-  });
+  },
+      variant:
+          TargetPlatformVariant({TargetPlatform.android, TargetPlatform.iOS}));
 }
 
 Future<GoRouter> pumpEditor(WidgetTester tester,
