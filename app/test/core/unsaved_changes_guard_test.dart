@@ -218,8 +218,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Dialog editor'), findsNothing);
   },
-      variant:
-          TargetPlatformVariant({TargetPlatform.android, TargetPlatform.iOS}));
+      variant: const TargetPlatformVariant(
+          {TargetPlatform.android, TargetPlatform.iOS}));
 }
 
 Future<GoRouter> pumpEditor(WidgetTester tester,
