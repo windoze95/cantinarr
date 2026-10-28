@@ -2,6 +2,7 @@ import 'package:cantinarr/l10n/shell_labels.dart';
 import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -114,6 +115,18 @@ class _AppShellState extends ConsumerState<AppShell>
   /// preserves this state; closing the mobile drawer resets it so reopening
   /// the drawer starts with the module list.
   bool _attentionExpanded = false;
+
+  // The child Navigator reports after updating its history. Reading canPop
+  // while building this outer shell can still see the previous page stack.
+  bool _childHandlesBack = false;
+
+  bool _handleNavigationNotification(NavigationNotification notification) {
+    if (_childHandlesBack != notification.canHandlePop) {
+      setState(() => _childHandlesBack = notification.canHandlePop);
+    }
+    // Android also needs this notification to choose its native back handler.
+    return false;
+  }
 
   @override
   void initState() {
@@ -828,6 +841,11 @@ class _AppShellState extends ConsumerState<AppShell>
 
     final scaffold = Scaffold(
       key: _scaffoldKey,
+      // Reserve an Android back swipe for the pushed page instead of also
+      // opening the shell drawer. The hamburger and root drawer swipe remain.
+      drawerEnableOpenDragGesture: kIsWeb ||
+          Theme.of(context).platform != TargetPlatform.android ||
+          !_childHandlesBack,
       // A closed drawer collapses its attention group again, so reopening it
       // always lands on the same short menu rather than on however far the
       // last visit had unfolded it.
@@ -891,7 +909,10 @@ class _AppShellState extends ConsumerState<AppShell>
                             mobile && !searchOverlayActive && !isAiReady
                                 ? _handleScrollNotification
                                 : null,
-                        child: widget.child,
+                        child: NotificationListener<NavigationNotification>(
+                          onNotification: _handleNavigationNotification,
+                          child: widget.child,
+                        ),
                       ),
                       if (isAiReady)
                         Positioned.fill(
