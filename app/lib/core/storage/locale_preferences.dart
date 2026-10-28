@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../../l10n/app_languages.dart';
 
 const _localeKey = 'app_language';
 
@@ -22,16 +23,17 @@ class AppLocaleNotifier extends StateNotifier<Locale?> {
     final preferences = await SharedPreferences.getInstance();
     if (!mounted || revision != _revision) return;
     final language = preferences.getString(_localeKey);
-    if (language == 'en' || language == 'fr') state = Locale(language!);
+    if (language != null) state = appLanguageForTag(language)?.locale;
   }
 
   Future<void> setLocale(Locale? locale) {
-    final language = locale?.languageCode;
-    if (language != null && language != 'en' && language != 'fr') {
+    final selected = locale == null ? null : appLanguageForLocale(locale);
+    if (locale != null && selected == null) {
       throw ArgumentError.value(locale, 'locale', 'Unsupported app language');
     }
+    final language = selected?.tag;
     _revision++;
-    state = language == null ? null : Locale(language);
+    state = selected?.locale;
     // Serialize rapid selections so disk always ends with the latest choice.
     final write = _pendingWrite.then((_) async {
       final preferences = await SharedPreferences.getInstance();

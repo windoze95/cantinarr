@@ -30,6 +30,8 @@ The server uses `/config` for its database and generated encryption key. Use a d
 
 ## Flutter app
 
+For wording corrections or a new interface language, see [Translate Cantinarr](/contributing/translations/). Language contributions use ARB files without changes to application code.
+
 Use the exact Flutter SDK version in `app/.flutter-version` and its bundled Dart SDK. From `app/`:
 
 ```sh

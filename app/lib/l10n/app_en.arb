@@ -1,5 +1,9 @@
 {
   "@@locale": "en",
+  "languageNativeName": "English",
+  "@languageNativeName": {"description": "Name of this language in its own language, including region or script when needed to distinguish variants. Used in language selectors."},
+  "metadataLanguageTag": "en-US",
+  "@metadataLanguageTag": {"description": "TMDB metadata language: a two-letter ISO 639-1 code with optional ISO 3166-1 country, such as es or pt-BR. Use an empty string when unsupported. This is a protocol identifier, not translated prose."},
   "authSignInServer": "Sign in to your server",
   "authServerUrl": "Server URL",
   "authUsername": "Username",

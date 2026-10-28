@@ -1038,6 +1038,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"plex_access_requestable":            plexRequestable,
 			"admin_catalog_browsing":             true,
 			"metadata_languages":                 mediametadata.SupportedLanguages,
+			"metadata_language_tags":             true,
 			"request_quotas":                     true,
 			"requester_tagging":                  true,
 			"instance_assignments":               true,

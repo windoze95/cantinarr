@@ -1,6 +1,8 @@
 import 'package:cantinarr/core/storage/locale_preferences.dart';
 import 'package:cantinarr/core/storage/metadata_preferences.dart';
 import 'package:cantinarr/l10n/app_localizations.dart';
+import 'package:cantinarr/l10n/app_languages.dart';
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
@@ -14,6 +16,7 @@ import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/media_access/logic/media_access_guide_provider.dart';
 import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
 import 'package:cantinarr/features/settings/ui/settings_screen.dart';
+import 'package:cantinarr/features/settings/data/settings_search_index.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -40,6 +43,80 @@ void main() {
       buildSignature: '',
     );
   });
+
+  const addedLocale = String.fromEnvironment('CANTINARR_TEST_ADDED_LOCALE');
+  const addedName =
+      String.fromEnvironment('CANTINARR_TEST_ADDED_LANGUAGE_NAME');
+  const addedMetadata = String.fromEnvironment('CANTINARR_TEST_METADATA_TAG');
+  if (addedLocale.isNotEmpty) {
+    testWidgets(
+        'one added ARB supplies UI and metadata choices with full locale persistence',
+        (tester) async {
+      final tag = addedLocale.replaceAll('_', '-');
+      final entry = appLanguages.firstWhere((entry) => entry.tag == tag);
+      expect(entry.nativeName, addedName);
+      expect(entry.metadataTag, addedMetadata);
+      expect(
+          searchSettingsIndex(addedName, const SettingsSearchGates(user: null))
+              .map((entry) => entry.id),
+          containsAll(['root.language', 'root.metadata-language']));
+      tester.platformDispatcher.localesTestValue = const [Locale('zz', 'ZZ')];
+      addTearDown(tester.platformDispatcher.clearLocalesTestValue);
+      final container = await _pumpSettings(
+          tester, _settings(source: AiAccessSource.none),
+          localized: true, metadataLanguageTags: true);
+      expect(container.read(effectiveAppLocaleProvider), const Locale('en'));
+      await _dragSettingsUntilFound(tester, find.text('App language'));
+      await tester.tap(find.text('App language'));
+      await tester.pumpAndSettle();
+      expect(
+          find.widgetWithText(SimpleDialogOption, addedName), findsOneWidget);
+      await tester.tap(find.widgetWithText(SimpleDialogOption, addedName));
+      await tester.pumpAndSettle();
+      expect(container.read(appLocaleProvider), entry.locale);
+      expect((await SharedPreferences.getInstance()).getString('app_language'),
+          tag);
+      final restored = AppLocaleNotifier();
+      final loaded = Completer<void>();
+      final stop = restored.addListener((value) {
+        if (value != null && !loaded.isCompleted) loaded.complete();
+      });
+      await loaded.future;
+      expect(restored.state, entry.locale);
+      stop();
+      restored.dispose();
+
+      await container
+          .read(appLocaleProvider.notifier)
+          .setLocale(const Locale('en'));
+      await tester.pumpAndSettle();
+      await _dragSettingsUntilFound(tester, find.text('Metadata language'));
+      await tester.tap(find.text('Metadata language'));
+      await tester.pumpAndSettle();
+      expect(
+          find.widgetWithText(SimpleDialogOption, addedName), findsOneWidget);
+      await tester.tap(find.widgetWithText(SimpleDialogOption, addedName));
+      await tester.pumpAndSettle();
+      expect(container.read(effectiveMetadataLanguageProvider), addedMetadata);
+      expect(
+          (await SharedPreferences.getInstance())
+              .getString('metadata_language'),
+          addedMetadata);
+      expect(container.read(appLocaleProvider), const Locale('en'));
+      await tester.tap(find.text('Metadata language'));
+      await tester.pumpAndSettle();
+      await tester
+          .tap(find.widgetWithText(SimpleDialogOption, 'Follow app language'));
+      await tester.pumpAndSettle();
+      expect(container.read(effectiveMetadataLanguageProvider), 'en-US');
+      tester.platformDispatcher.localesTestValue = [entry.locale];
+      await container.read(appLocaleProvider.notifier).setLocale(null);
+      await tester.pumpAndSettle();
+      expect(container.read(effectiveAppLocaleProvider), entry.locale);
+      expect(container.read(effectiveMetadataLanguageProvider), addedMetadata);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets(
       'language choice persists and returns to system on a narrow screen',
@@ -648,6 +725,7 @@ Future<ProviderContainer> _pumpSettings(
   UserProfile? user,
   bool localized = false,
   List<String> metadataLanguages = const [],
+  bool metadataLanguageTags = false,
 }) async {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   dio.httpClientAdapter = _SettingsAdapter(setupStatus: setupStatus);
@@ -657,7 +735,8 @@ Future<ProviderContainer> _pumpSettings(
           isAdmin: isAdmin,
           instances: instances,
           user: user,
-          metadataLanguages: metadataLanguages)),
+          metadataLanguages: metadataLanguages,
+          metadataLanguageTags: metadataLanguageTags)),
       aiSettingsProvider.overrideWith((_) async => settings),
       backendClientProvider.overrideWithValue(dio),
     ],
@@ -698,11 +777,13 @@ class _FakeAuthNotifier extends AuthNotifier {
       {required this.isAdmin,
       this.instances = const [],
       this.user,
-      this.metadataLanguages = const []});
+      this.metadataLanguages = const [],
+      this.metadataLanguageTags = false});
 
   final bool isAdmin;
   final List<ServiceInstance> instances;
   final List<String> metadataLanguages;
+  final bool metadataLanguageTags;
 
   /// A profile to seed instead of the role-derived one; refreshUser is a
   /// no-op here, so this is the only way a kids account reaches the tile.
@@ -716,6 +797,7 @@ class _FakeAuthNotifier extends AuthNotifier {
           refreshToken: 'refresh',
           instances: instances,
           metadataLanguages: metadataLanguages,
+          metadataLanguageTags: metadataLanguageTags,
         ),
         user: user ??
             UserProfile(

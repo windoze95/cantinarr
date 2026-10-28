@@ -90,6 +90,7 @@ class BackendConnection {
 
   /// Localized metadata languages advertised by this server; empty on older servers.
   final List<String> metadataLanguages;
+  final bool metadataLanguageTags;
 
   /// Supports linking accounts independently from managing their access.
   final bool mediaAccountManagement;
@@ -136,6 +137,7 @@ class BackendConnection {
     this.plexAccessRequestable = false,
     this.adminCatalogBrowsing = false,
     this.metadataLanguages = const [],
+    this.metadataLanguageTags = false,
     this.mediaAccountManagement = false,
     this.mediaUserImportExplicitLinking = false,
     this.mediaLibraryAvailability = false,
@@ -167,6 +169,7 @@ class BackendConnection {
     bool? plexAccessRequestable,
     bool? adminCatalogBrowsing,
     List<String>? metadataLanguages,
+    bool? metadataLanguageTags,
     bool? mediaAccountManagement,
     bool? mediaUserImportExplicitLinking,
     bool? mediaLibraryAvailability,
@@ -193,6 +196,7 @@ class BackendConnection {
         minAppVersion: minAppVersion ?? this.minAppVersion,
         adminCatalogBrowsing: adminCatalogBrowsing ?? this.adminCatalogBrowsing,
         metadataLanguages: metadataLanguages ?? this.metadataLanguages,
+        metadataLanguageTags: metadataLanguageTags ?? this.metadataLanguageTags,
         appleTvRemote: appleTvRemote ?? this.appleTvRemote,
         tvMatchCorrections: tvMatchCorrections ?? this.tvMatchCorrections,
         tvLibraryNavigation: tvLibraryNavigation ?? this.tvLibraryNavigation,
