@@ -13,12 +13,40 @@ func (s *Service) createMovieRequest(r *resolvedRequest, approval bool) (*Create
 	if r.tmdbID <= 0 {
 		return nil, errors.New("tmdb_id is required for movie requests")
 	}
-	client, _, err := s.resolveRadarr(r.userID, r.instanceID)
+	client, initialInstance, err := s.resolveRadarr(r.userID, r.instanceID)
 	if err != nil {
 		return nil, err
 	}
 	if client == nil && !approval {
 		return nil, errors.New("radarr is not configured")
+	}
+	if r.requestMode == RequestModeMissing && s.mediaAvailability != nil && client != nil {
+		media, e := s.mediaLookup(context.Background(), r.userID, r.tmdbID, "movie", true)
+		if e != nil {
+			return nil, e
+		}
+		if media.Enabled && media.Movie {
+			current, id, e := s.resolveRadarr(r.userID, r.instanceID)
+			if e != nil {
+				return nil, e
+			}
+			if current == nil || id != initialInstance {
+				return nil, ErrArrInstanceForbidden
+			}
+			known := true
+			out := &CreateResponse{Success: true, Status: StatusAvailable, Title: r.title, InstanceID: r.instanceID, StatusKnown: &known,
+				Availability: &Availability{Status: StatusAvailable, StatusKnown: true, Progress: 1, Is4K: media.Is4K, Sources: media.Sources}, Message: "Already available on your media server."}
+			if r.previewOnly {
+				p, _, e := s.Quotas.Price(s.db, r.userID, []requestquota.Unit{movieUnit(r, 0, true)})
+				out.QuotaPreview = p
+				return out, e
+			}
+			return out, nil
+		}
+		if media.Enabled && !media.Known {
+			return nil, ErrMediaAvailabilityUnknown
+		}
+		r.mediaCoverageRequired, r.mediaScope = media.Enabled, media.ScopeRevision
 	}
 	free, liveStatus := false, StatusRequested
 	// An unavailable read can reserve a unit, but can never waive its charge.
@@ -42,7 +70,7 @@ func (s *Service) createMovieRequest(r *resolvedRequest, approval bool) (*Create
 	if r.instanceIsUserDefault || r.instanceID == "" {
 		dupGuard = "(instance_id=? OR instance_id IS NULL)"
 	}
-	err = tx.QueryRow(`SELECT id FROM request_log WHERE user_id=? AND media_type='movie' AND tmdb_id=? AND (status='pending' OR (? AND status!='denied')) AND `+dupGuard+` ORDER BY id DESC LIMIT 1`, r.userID, r.tmdbID, free, r.instanceID).Scan(&id)
+	err = tx.QueryRow(`SELECT id FROM request_log WHERE user_id=? AND media_type='movie' AND tmdb_id=? AND (status='pending' OR (? AND status!='denied')) AND `+dupGuard+` AND (COALESCE((SELECT mode FROM request_media_modes m WHERE m.request_id=request_log.id),'library_copy')=? OR (? AND NOT EXISTS(SELECT 1 FROM request_media_modes m WHERE m.request_id=request_log.id))) ORDER BY id DESC LIMIT 1`, r.userID, r.tmdbID, free, r.instanceID, normalizedRequestMode(r.requestMode), !r.mediaCoverageRequired).Scan(&id)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
@@ -82,6 +110,9 @@ func (s *Service) createMovieRequest(r *resolvedRequest, approval bool) (*Create
 		}
 		id, err = res.LastInsertId()
 		if err != nil {
+			return nil, err
+		}
+		if _, err = tx.Exec(`INSERT INTO request_media_modes(request_id,mode,requires_media_coverage,source_scope) VALUES (?,?,?,?)`, id, normalizedRequestMode(r.requestMode), r.mediaCoverageRequired, r.mediaScope); err != nil {
 			return nil, err
 		}
 		code := ""
@@ -126,11 +157,33 @@ func (s *Service) createMovieRequest(r *resolvedRequest, approval bool) (*Create
 }
 
 func (s *Service) dispatchMovie(ctx context.Context, id int64, token string, r *resolvedRequest) {
+	checkMedia := func() error {
+		if r.requestMode != RequestModeMissing || !r.mediaCoverageRequired {
+			return nil
+		}
+		media, err := s.mediaLookup(ctx, r.userID, r.tmdbID, "movie", true)
+		if err != nil {
+			return err
+		}
+		if r.mediaScope != "" && media.ScopeRevision != r.mediaScope {
+			return ErrMediaAvailabilityUnknown
+		}
+		if media.Enabled && media.Movie {
+			return errMovieCovered
+		}
+		if !media.Enabled || !media.Known {
+			return ErrMediaAvailabilityUnknown
+		}
+		return nil
+	}
 	r.beforeMutation = func() error {
 		if _, _, err := s.resolveRadarr(r.userID, r.instanceID); err != nil {
 			return err
 		}
 		if err := s.checkContentPolicy(r.userID, s.userIsAdmin(r.userID), "movie", r.tmdbID); err != nil {
+			return err
+		}
+		if err := checkMedia(); err != nil {
 			return err
 		}
 		return s.startDelivery(ctx, id, "", token)
@@ -139,8 +192,20 @@ func (s *Service) dispatchMovie(ctx context.Context, id int64, token string, r *
 		s.finishDelivery(id, "", token, "attention", "access_unavailable", nil)
 		return
 	}
+	if err := checkMedia(); err != nil {
+		if errors.Is(err, errMovieCovered) {
+			s.finishDelivery(id, "", token, "complete", StatusAvailable, nil)
+		} else {
+			s.finishDelivery(id, "", token, "retry", "media_library_unavailable", err)
+		}
+		return
+	}
 	status, title, err := s.addMovie(r)
 	if err != nil {
+		if errors.Is(err, errMovieCovered) {
+			s.finishDelivery(id, "", token, "complete", StatusAvailable, nil)
+			return
+		}
 		s.finishDelivery(id, "", token, "retry", "library_unavailable", err)
 		return
 	}
@@ -149,6 +214,8 @@ func (s *Service) dispatchMovie(ctx context.Context, id int64, token string, r *
 	}
 	s.finishDelivery(id, "", token, "complete", status, nil)
 }
+
+var errMovieCovered = errors.New("movie became available before delivery")
 
 func (s *Service) migrateMovieApproval(id int64, r *resolvedRequest) error {
 	_, instanceID, err := s.resolveRadarr(r.userID, r.instanceID)

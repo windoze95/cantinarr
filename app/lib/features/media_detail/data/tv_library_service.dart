@@ -87,7 +87,7 @@ class TVLibraryService extends RequestService {
   Future<RequestStatus?> request({required int tmdbId,
       required MediaType mediaType, String? title, int? tvdbId,
       String? seasonScope, List<int>? seasons, int? qualityProfileId,
-      String? instanceId}) async {
+      String? instanceId, String? requestMode}) async {
     lastRequestError = null;
     lastRequestQuotaExceeded = false;
     if (instanceId != libraryId || current == null) return null;

@@ -145,6 +145,9 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if include4K && mediaType == "tv" {
 		h.service.markTV4K(claims.UserID, instanceID, resp)
+		if resp.Is4K && resp.Availability != nil {
+			resp.Availability.Is4K = true
+		}
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -450,7 +453,7 @@ func requestErrorStatus(err error) int {
 		// title, so the app keeps one "not available" branch. A 403 here
 		// means "library not granted", a different thing.
 		return http.StatusNotFound
-	case errors.Is(err, ErrContentPolicyUnavailable):
+	case errors.Is(err, ErrContentPolicyUnavailable), errors.Is(err, ErrMediaAvailabilityUnknown):
 		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError

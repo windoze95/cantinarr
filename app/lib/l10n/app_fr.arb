@@ -3763,5 +3763,113 @@
   "settingsAppIconOriginal": "Originale",
   "settingsAppIconDefault": "Par défaut",
   "settingsAppIconUnsupported": "Cet appareil ne prend pas en charge les icônes alternatives.",
-  "settingsAppIconError": "Impossible de modifier l’icône de l’application. Réessayez."
+  "settingsAppIconError": "Impossible de modifier l’icône de l’application. Réessayez.",
+  "availabilityScanTitle": "Analyser la disponibilité des bibliothèques",
+  "availabilityScanExplanation": "Reconnaître les films et épisodes déjà présents sur ce serveur, même sans entrée dans Radarr ou Sonarr. Le partage des comptes reste inchangé.",
+  "availabilityScanLibraries": "Bibliothèques à analyser",
+  "availabilityChooseLibraries": "Choisissez au moins une bibliothèque.",
+  "availabilityUnknownLibrary": "Bibliothèque indisponible ({id})",
+  "@availabilityUnknownLibrary": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
+  },
+  "availabilityScanning": "Analyse des bibliothèques…",
+  "availabilityLastScan": "Dernière analyse réussie : {date} · {count} éléments",
+  "@availabilityLastScan": {
+    "placeholders": {
+      "date": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "availabilityNotScanned": "Aucune analyse réussie pour le moment.",
+  "availabilityScanFailed": "Impossible de vérifier ces bibliothèques. L’analyse précédente ne signifie pas que la bibliothèque est vide. Réessayez.",
+  "availabilitySaveBeforeScan": "Enregistrez ces paramètres avant de lancer une analyse.",
+  "availabilityScanNow": "Analyser maintenant",
+  "availabilityRefresh": "Actualiser",
+  "availabilityLibraryAccessOnly": "Accès aux bibliothèques uniquement",
+  "availabilityHouseholdExplanation": "Utiliser ces bibliothèques pour vérifier ce que cette personne peut déjà regarder dans votre foyer. Cela ne lie aucun compte multimédia, ne crée aucun identifiant et n’active ni la lecture ni les commandes TV. Un compte lié est prioritaire.",
+  "availabilityProvider": "Type de serveur multimédia",
+  "availabilityNoEligibleServers": "Aucune bibliothèque analysée pour ce type de serveur. Activez d’abord l’analyse dans les paramètres du serveur.",
+  "availabilityLinkedAccountWins": "L’accès du compte lié est utilisé.",
+  "availabilityServerUnconfirmed": "Impossible de vérifier ce serveur. Réessayez avant d’ajouter un accès.",
+  "availabilityLibraryNotScanned": "Cette bibliothèque n’est plus sélectionnée pour l’analyse.",
+  "availabilityAccessReadFailed": "Impossible de charger les accès aux bibliothèques. Réessayez avant de modifier.",
+  "availabilityAccessSaveFailed": "Impossible d’enregistrer les accès aux bibliothèques. Rechargez et réessayez.",
+  "availabilityOnServers": "Disponible sur {servers}",
+  "@availabilityOnServers": {
+    "placeholders": {
+      "servers": {
+        "type": "String"
+      }
+    }
+  },
+  "availabilityStatusUnknown": "La disponibilité de certaines bibliothèques n’a pas pu être vérifiée. Réessayez avant de demander le contenu manquant.",
+  "availabilityLibraryRequest": "Demande dans cette bibliothèque : {status}",
+  "@availabilityLibraryRequest": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
+  "availabilityRequestLibraryCopy": "Demander dans une bibliothèque",
+  "availabilityFollowing": "Suivi des nouveaux épisodes",
+  "availabilityFollowingPaused": "Suivi des épisodes en pause",
+  "availabilityFollowingStopped": "Suivi des épisodes arrêté",
+  "availabilityFollowingAttention": "Le suivi des épisodes nécessite votre attention",
+  "availabilityFollowingSeasons": "Saisons sélectionnées : {seasons}",
+  "@availabilityFollowingSeasons": {
+    "placeholders": {
+      "seasons": {
+        "type": "String"
+      }
+    }
+  },
+  "availabilityStopFollowing": "Arrêter le suivi",
+  "availabilityStopFailed": "Impossible d’arrêter le suivi. Réessayez.",
+  "availabilityFollowSeasons": "Suivre les saisons sélectionnées",
+  "availabilityFollowExplanation": "Choisissez les saisons dont les épisodes manquants seront recherchés. Les saisons ajoutées ensuite ne sont pas incluses. Vos autorisations et règles d’approbation habituelles s’appliquent.",
+  "availabilityRequestMissingIntent": "Demander les éléments manquants",
+  "availabilitySelectedSeasons": "Saisons sélectionnées : {seasons}",
+  "@availabilitySelectedSeasons": {
+    "placeholders": {
+      "seasons": {
+        "type": "String"
+      }
+    }
+  },
+  "availabilityMissingEpisodeScope": "Manquants lors de la demande : {count, plural, =1{1 épisode} other{{count} épisodes}}",
+  "availabilitySatisfiedEpisodeScope": "Déjà disponibles et exclus : {count, plural, =1{1 épisode} other{{count} épisodes}}",
+  "availabilityEpisodeScopeSeason": "Saison {season} : épisodes {episodes}",
+  "@availabilityMissingEpisodeScope": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "@availabilitySatisfiedEpisodeScope": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "@availabilityEpisodeScopeSeason": {
+    "placeholders": {
+      "season": {
+        "type": "int"
+      },
+      "episodes": {
+        "type": "String"
+      }
+    }
+  }
 }

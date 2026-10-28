@@ -31,6 +31,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/mediaaccess"
+	"github.com/windoze95/cantinarr-server/internal/mediaavailability"
 	"github.com/windoze95/cantinarr-server/internal/mediafiles"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
@@ -194,6 +195,8 @@ func main() {
 		log.Fatalf("Failed to migrate the Plex integration: %v", err)
 	}
 	mediaAccessService := mediaaccess.NewService(database, instanceStore, instance.NewMediaServerProvider, logger)
+	mediaAvailability := mediaavailability.NewService(database, instanceStore, instance.NewMediaServerProvider, logger)
+	mediaAvailabilityHandler := mediaavailability.NewHandler(mediaAvailability, logger)
 	// An import creates the Cantinarr users it names through the auth
 	// service, the same find-or-create the connect-link route uses.
 	mediaAccessService.SetUserCreator(authService)
@@ -258,6 +261,9 @@ func main() {
 	// depends on the notifier composite, which depends on this hub). The hub's
 	// poll loop is therefore started LATER, once SetIssueOpener has run.
 	wsHub := ws.NewHub(authService, registry, instanceStore, database, contentNotifier, nil)
+	mediaAvailability.SetChangedObserver(func() {
+		wsHub.Broadcast(ws.Event{Type: "media_availability_changed"})
+	})
 
 	// Notifier composite. Request decisions and issue events fan out to both the
 	// WebSocket hub (live clients) and the push gateway (offline devices). The
@@ -278,6 +284,7 @@ func main() {
 	mediaAccessService.SetNotifier(notifier)
 	authHandler.SetAccessRequestHook(mediaAccessService.OnPlexEmailShared)
 	requestService := request.NewService(database, registry, bridge, notifier)
+	requestService.SetMediaAvailability(mediaAvailability)
 	wsHub.SetTVImportResolver(requestService)
 	requestService.SetCreationObserver(request.CreationObservers{discordNotifications, pushNotifier})
 	discordNotifications.SetSource(requestService)
@@ -397,6 +404,10 @@ func main() {
 	discoverHandler.SetContentPolicy(contentPolicy)
 	toolServer.SetContentPolicy(contentPolicy)
 	requestService.SetContentPolicy(contentPolicy)
+	// Inventory scans only read playback servers. Only explicitly accepted TV
+	// requests create the separate missing-episode follow-up work.
+	mediaAvailability.Start(ctx)
+	requestService.StartTVFollowMaintenance(ctx)
 	discordNotifications.Start(ctx)
 	aiHandler.SetContentPolicy(contentPolicy)
 	pushNotifier.SetContentPolicy(contentPolicy)
@@ -427,7 +438,7 @@ func main() {
 	// Maintainerr, Dashbrr, Homepage and other tools built against Seerr.
 	seerrHandler := seerrcompat.NewHandler(database, requestService, serverSettings, creds.TMDB)
 
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, watchHistoryHandler, tdarrHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, mediaAccessHandler, updateChecker, serverSettings, contentPolicyHandler, discordNotifications, seerrHandler)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, watchHistoryHandler, tdarrHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, mediaAccessHandler, updateChecker, serverSettings, contentPolicyHandler, discordNotifications, seerrHandler, mediaAvailabilityHandler)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)

@@ -59,6 +59,7 @@ void main() {
     MediaType mediaType = MediaType.movie,
     int watchStatus = 200,
     MediaAppLauncher? launcher,
+    Map<String, dynamic>? availability,
   }) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
@@ -83,6 +84,7 @@ void main() {
     );
     final adapter = _JsonAdapter(
       status: status,
+      availability: availability,
       links: links,
       watchStatus: watchStatus,
     );
@@ -95,7 +97,7 @@ void main() {
           if (launcher != null)
             mediaAppLauncherProvider.overrideWithValue(launcher),
           authProvider.overrideWith(
-            () => _FakeAuthNotifier(_state(mediaServers, mediaType)),
+            () => _FakeAuthNotifier(_state(mediaServers, mediaType, availabilitySupport: availability != null)),
           ),
           backendClientProvider.overrideWithValue(dio),
           realtimeEventsProvider
@@ -106,6 +108,37 @@ void main() {
     );
     await tester.pumpAndSettle();
     return adapter;
+  }
+
+  testWidgets('playback availability preserves the pending acquisition target', (tester) async {
+    await pumpDetail(tester, status: 'pending', links: [], availability: {
+      'status': 'available', 'status_known': true,
+      'sources': [{'instance_id': 'jf-a', 'name': 'Home Jellyfin', 'service_type': 'jellyfin', 'state': 'available', 'access_mode': 'linked'}],
+    });
+    expect(find.text('Available'), findsOneWidget);
+    expect(find.text('Request in this library: Pending Approval'), findsOneWidget);
+    expect(find.text('Available on Home Jellyfin'), findsOneWidget);
+    expect(find.text('Request in library'), findsOneWidget);
+  });
+
+  testWidgets('household availability does not grant a Watch lookup', (tester) async {
+    final adapter = await pumpDetail(tester, status: 'unavailable', links: [], mediaServers: [], availability: {
+      'status': 'available', 'status_known': true,
+      'sources': [{'instance_id': 'jf-a', 'name': 'Household library', 'service_type': 'jellyfin', 'state': 'available', 'access_mode': 'household'}],
+    });
+    expect(find.text('Available'), findsOneWidget);
+    expect(adapter.watchRequests, isEmpty);
+    expect(find.textContaining('Watch on'), findsNothing);
+  });
+
+  for (final server in [_plex, _jellyfin, _emby]) {
+    testWidgets('${server.serviceType} copy outside arr enables live Watch lookup', (tester) async {
+      final adapter = await pumpDetail(tester, status: 'unavailable', mediaServers: [server],
+        links: [_link(server, 'found', url: 'https://watch.example.com/title')],
+        availability: {'status': 'available', 'status_known': true, 'sources': []});
+      expect(adapter.watchRequests, isNotEmpty);
+      expect(find.textContaining('Watch on'), findsOneWidget);
+    });
   }
 
   for (final server in [_plex, _jellyfin, _emby]) {
@@ -477,9 +510,10 @@ void main() {
   });
 }
 
-AuthState _state(List<ServiceInstance> mediaServers, MediaType mediaType) =>
+AuthState _state(List<ServiceInstance> mediaServers, MediaType mediaType, {bool availabilitySupport = false}) =>
     AuthState(
       connection: BackendConnection(
+        mediaLibraryAvailability: availabilitySupport,
         serverUrl: 'http://localhost',
         accessToken: 'access',
         refreshToken: 'refresh',
@@ -520,12 +554,14 @@ class _FakeAuthNotifier extends AuthNotifier {
 /// lookup, which is recorded so a test can see what was asked.
 class _JsonAdapter implements HttpClientAdapter {
   final String status;
+  final Map<String, dynamic>? availability;
   final List<Map<String, dynamic>> links;
   final int watchStatus;
   final List<Uri> watchRequests = [];
 
   _JsonAdapter({
     required this.status,
+    this.availability,
     required this.links,
     required this.watchStatus,
   });
@@ -545,7 +581,7 @@ class _JsonAdapter implements HttpClientAdapter {
       code = watchStatus;
       if (code != 200) body = {'error': 'temporarily unavailable'};
     } else if (path.endsWith('/status')) {
-      body = {'status': status, 'seasons': <dynamic>[]};
+      body = {'status': status, 'seasons': <dynamic>[], if (availability != null) 'availability': availability};
     } else if (path.endsWith('/recommendations') || path.endsWith('/similar')) {
       body = {'results': <dynamic>[]};
     } else if (path.contains('/api/media/tv/')) {

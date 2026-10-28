@@ -44,6 +44,42 @@ void main() {
     expect(find.text('History destination'), findsOneWidget);
   });
 
+  testWidgets('approval reviews the saved missing episode scope without broadening seasons', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final adapter = _ApprovalsAdapter(pending: [
+      {'id': 7, 'username': 'reader', 'media_type': 'tv', 'title': 'Saved series',
+        'season_scope': '[1]', 'request_mode': 'missing', 'source_seasons': [1],
+        'request_scope': {
+          'missing_episodes': [for (final n in [2, 4, 5]) {'tmdb_id': n, 'season_number': 1, 'episode_number': n}],
+          'initially_satisfied_episodes': [{'tmdb_id': 1, 'season_number': 1, 'episode_number': 1}],
+        },
+        'availability': {'status': 'available'},
+      },
+    ]);
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))..httpClientAdapter = adapter;
+    await tester.pumpWidget(ProviderScope(overrides: [
+      authProvider.overrideWith(_FakeAuthNotifier.new),
+      backendClientProvider.overrideWithValue(dio),
+      realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
+    ], child: const MaterialApp(home: PendingRequestsScreen())));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.check_circle_outline));
+    await tester.pumpAndSettle();
+    expect(find.text('Missing when requested: 3 episodes'), findsOneWidget);
+    expect(find.text('Season 1: episodes 2, 4-5'), findsOneWidget);
+    expect(find.text('Already available and excluded: 1 episode'), findsOneWidget);
+    expect(find.text('Season 1: episodes 1'), findsOneWidget);
+    expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+    expect(find.byType(DropdownButtonFormField<int?>), findsOneWidget);
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+    expect(adapter.approvalBodies.single, isNot(contains('season_scope')));
+    expect(tester.takeException(), isNull);
+  });
+
   test('blank requester names use safe, trimmed approval copy', () {
     PendingRequestItem item(String username, int requesterCount) =>
         PendingRequestItem.fromJson({
@@ -111,6 +147,8 @@ void main() {
         'title': 'House of the Dragon',
         'poster_path': '/hotd.jpg',
         'season_scope': 'latest',
+        'request_mode': 'library_copy',
+        'source_seasons': [2, 3],
       },
     ]);
     final container = ProviderContainer(
@@ -148,6 +186,16 @@ void main() {
     // The server sends a bare TMDB path; the row composes a thumbnail-width URL.
     final image = tester.widget<CachedImage>(find.byType(CachedImage));
     expect(image.url, 'https://image.tmdb.org/t/p/w185/hotd.jpg');
+
+    expect(find.text('Request in library'), findsOneWidget);
+    expect(find.text('Selected seasons: 2, 3'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.check_circle_outline));
+    await tester.pumpAndSettle();
+    final dialog = find.byType(AlertDialog);
+    expect(find.descendant(of: dialog, matching: find.text('Request in library')), findsOneWidget);
+    expect(find.descendant(of: dialog, matching: find.text('Selected seasons: 2, 3')), findsOneWidget);
+    Navigator.of(tester.element(dialog)).pop();
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('House of the Dragon'));
     await tester.pumpAndSettle();

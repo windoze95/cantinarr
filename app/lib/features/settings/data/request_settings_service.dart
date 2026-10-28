@@ -1,3 +1,4 @@
+import '../../media_availability/data/request_episode_scope.dart';
 import 'package:dio/dio.dart';
 
 import '../../request/data/request_service.dart';
@@ -163,6 +164,9 @@ class PendingRequestItem {
   final String instanceName;
   final int requesterCount;
   final String seasonScope;
+  final String requestMode;
+  final List<int> sourceSeasons;
+  final RequestEpisodeScope? requestScope;
   final int qualityProfileId;
   final DateTime? requestedAt;
 
@@ -203,6 +207,9 @@ class PendingRequestItem {
     this.waitReason = '',
     this.lastAttemptAt,
     this.addFailureReason = '',
+    this.requestMode = '',
+    this.requestScope,
+    this.sourceSeasons = const [],
   });
 
   /// What the server is waiting on, in admin vocabulary. Null for an actionable
@@ -307,6 +314,10 @@ class PendingRequestItem {
   factory PendingRequestItem.fromJson(Map<String, dynamic> json) =>
       PendingRequestItem(
         id: json['id'] as int? ?? 0,
+        requestMode: json['request_mode'] as String? ?? '',
+        requestScope: json['request_scope'] is Map
+            ? RequestEpisodeScope.fromJson(Map<String, dynamic>.from(json['request_scope'] as Map)) : null,
+        sourceSeasons: [for (final n in (json['source_seasons'] as List?) ?? const []) (n as num).toInt()],
         userId: json['user_id'] as int? ?? 0,
         catalogProvider:
             (json['catalog_ref'] as Map?)?['provider'] as String? ?? '',

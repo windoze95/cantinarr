@@ -35,6 +35,21 @@ void main() {
         home: Scaffold(body: SingleChildScrollView(child: table)),
       ));
 
+  testWidgets('playable season counts preserve accepted target work', (tester) async {
+    final n = notifier(state: const RequestState(hasStatus: true, status: RequestStatus.requested,
+      seasons: [RequestSeasonStatus(seasonNumber: 1, status: RequestStatus.requested)],
+      availability: MediaAvailability(status: RequestStatus.partial, seasons: [
+        RequestSeasonStatus(seasonNumber: 1, status: RequestStatus.partial, episodeFileCount: 3, episodeCount: 10),
+      ])));
+    addTearDown(n.dispose);
+    await tester.pumpWidget(host(SeasonTable(seasons: seasons, notifier: n)));
+    expect(find.text('Partial'), findsOneWidget);
+    expect(find.text('Request in this library: Requested'), findsOneWidget);
+    final first = tester.widget<Checkbox>(find.byType(Checkbox).first);
+    expect(first.value, isTrue);
+    expect(first.onChanged, isNull);
+  });
+
   testWidgets('season choice allowed: checkboxes, chips and submit render',
       (tester) async {
     await tester.pumpWidget(host(SeasonTable(

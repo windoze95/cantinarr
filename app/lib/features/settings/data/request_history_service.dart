@@ -1,3 +1,4 @@
+import '../../media_availability/data/request_episode_scope.dart';
 import 'package:dio/dio.dart';
 
 import '../../request/data/request_service.dart';
@@ -70,6 +71,9 @@ class RequestHistoryItem {
   final String instanceId;
   final String instanceName;
   final String seasonScope;
+  final String requestMode;
+  final List<int> sourceSeasons;
+  final RequestEpisodeScope? requestScope;
   final String bookFormat;
   final String decision;
   final String decidedBy;
@@ -90,6 +94,10 @@ class RequestHistoryItem {
         instanceId = json['instance_id'] as String? ?? '',
         instanceName = json['instance_name'] as String? ?? '',
         seasonScope = json['season_scope'] as String? ?? '',
+        requestMode = json['request_mode'] as String? ?? '',
+        requestScope = json['request_scope'] is Map
+            ? RequestEpisodeScope.fromJson(Map<String, dynamic>.from(json['request_scope'] as Map)) : null,
+        sourceSeasons = [for (final n in (json['source_seasons'] as List?) ?? const []) (n as num).toInt()],
         bookFormat = json['book_format'] as String? ?? '',
         decision = json['decision'] as String? ?? 'unknown',
         decidedBy = (json['decided_by'] as String? ?? '').trim(),
@@ -114,6 +122,9 @@ class RequestHistoryItem {
         instanceId = item.instanceId,
         instanceName = item.instanceName,
         seasonScope = item.seasonScope,
+        requestMode = item.requestMode,
+        requestScope = item.requestScope,
+        sourceSeasons = item.sourceSeasons,
         bookFormat = item.bookFormat,
         decision = item.decision,
         decidedBy = item.decidedBy,

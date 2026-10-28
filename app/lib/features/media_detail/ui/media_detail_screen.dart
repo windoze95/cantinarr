@@ -1,3 +1,5 @@
+import '../../media_availability/ui/follow_seasons_dialog.dart';
+import '../../media_availability/ui/media_availability_panel.dart';
 import 'package:intl/intl.dart';
 import 'package:cantinarr/features/discover/ui/browse_labels.dart';
 import 'package:cantinarr/l10n/l10n.dart';
@@ -263,7 +265,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     if (library?.detail != null && !_requestNotifier.state.isCheckingStatus) {
       _detailNotifier.state = MediaDetailState(tvDetail: library!.detail);
     }
-    if (_requestNotifier.state.status != _watchedStatus) _resolveWatchLinks();
+    if (_requestNotifier.state.displayStatus != _watchedStatus) _resolveWatchLinks();
     if (widget.mediaType == MediaType.tv) {
       final state = _requestNotifier.state;
       final key =
@@ -370,6 +372,12 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       if (next == null && _needsSetup)
         _requestNotifier.state = const RequestState();
     });
+    ref.listen(libraryChangedEventsProvider, (_, next) {
+      if (next.valueOrNull?.type == 'media_availability_changed') {
+        _checkStatus();
+        _resolveWatchLinks();
+      }
+    });
     // Live-update the request button when an approval decision for THIS title
     // arrives over the socket (complements the global toast).
     ref.listen(requestDecisionEventsProvider, (_, next) {
@@ -399,7 +407,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     // landing after the initial detail load (e.g. an optimistic reconnect).
     ref.listen(videoAppRevisionProvider, (_, __) => _resolveWatchLinks());
     ref.listen(authProvider, (previous, next) {
-      if (_selectedLibraryId != null) _loadRequestState();
+      if (_selectedLibraryId != null || next.valueOrNull?.connection?.mediaLibraryAvailability == true) _loadRequestState();
       _resolveArrLink();
       if (previous?.valueOrNull?.connection != null) {
         if (previous?.valueOrNull?.user?.id != next.valueOrNull?.user?.id ||
@@ -574,19 +582,30 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                           children: [
                                             RequestButton(
                                               status:
-                                                  _requestNotifier.state.status,
+                                                  _requestNotifier.state.displayStatus,
                                               isRequesting: _requestNotifier
                                                   .state.isRequesting,
                                               error:
                                                   _requestNotifier.state.error,
-                                              onRequest: widget.mediaType ==
-                                                          MediaType.tv &&
+                                              onRequest: _requestNotifier.state.availability?.isKnown == false ||
+                                                  widget.mediaType == MediaType.tv &&
                                                       (!_requestNotifier.state
                                                               .hasStatus ||
                                                           !_canRequestLibrarySeasons)
                                                   ? null
                                                   : () => _onRequest(),
                                             ),
+                                            if (_librarySeries == null &&
+                                                ref.read(authProvider).valueOrNull?.connection?.mediaLibraryAvailability == true)
+                                              MediaAvailabilityPanel(
+                                                notifier: _requestNotifier,
+                                                onFollow: widget.mediaType == MediaType.tv && _canChooseSeasons &&
+                                                    _requestNotifier.state.hasStatus && _requestNotifier.state.availability?.hasFiles == true && _requestNotifier.state.availability?.isKnown == true &&
+                                                    state.seasons.any((s) => s.seasonNumber > 0)
+                                                    ? _followSeasons : null,
+                                                onLibraryCopy: _requestNotifier.state.hasStatus && _requestLibraryChoices.isNotEmpty
+                                                    ? () => _onRequest(libraryCopy: true) : null,
+                                              ),
                                             if (_librarySeasonsNeedAttention)
                                               Padding(
                                                   padding:
@@ -642,7 +661,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                               _PendingReleaseLine(
                                                 schedule: movieSchedule,
                                                 status: _requestNotifier
-                                                    .state.status,
+                                                    .state.displayStatus,
                                                 now: now,
                                               ),
                                             // One chip per granted library when the
@@ -672,7 +691,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                               runSpacing: 4,
                                               children: [
                                                 if (_requestNotifier
-                                                        .state.status !=
+                                                        .state.displayStatus !=
                                                     RequestStatus.available)
                                                   TextButton.icon(
                                                     onPressed: () =>
@@ -680,7 +699,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                                       context,
                                                       state.title,
                                                       _requestNotifier
-                                                          .state.status,
+                                                          .state.displayStatus,
                                                     ),
                                                     icon: const Icon(
                                                       Icons
@@ -691,7 +710,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                                                       browseLabel(
                                                           context,
                                                           _requestNotifier.state
-                                                              .status.label),
+                                                              .displayStatus.label),
                                                     ),
                                                   ),
                                                 if (_myOpenReportId != null &&
@@ -1007,7 +1026,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                               notifier: _requestNotifier,
                               title: state.title,
                               tvdbId: state.tvDetail?.externalIds?.tvdbId,
-                              canRequest: _canChooseSeasons,
+                              usePlaybackAvailability: _librarySeries == null,
+                              canRequest: _canChooseSeasons && _requestNotifier.state.availability?.isKnown != false,
                               onRequested: _onRequestSucceeded,
                               confirmDestination: _confirmSeasonDestination,
                               downloadInstanceId: _downloadInstanceId,
@@ -1073,7 +1093,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// Handle a request tap: if the user may choose options (season scope /
   /// quality), present the picker first; otherwise submit immediately to keep
   /// the one-tap experience.
-  Future<void> _onRequest() async {
+  Future<void> _onRequest({bool libraryCopy = false}) async {
     if (_needsSetup) return;
     if (widget.mediaType == MediaType.tv &&
         (!_requestNotifier.state.hasStatus || !_canRequestLibrarySeasons)) {
@@ -1102,8 +1122,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
     // they can choose exactly which missing seasons to add. Users who may not
     // choose seasons fall through to the coarse flow instead (the server
     // applies their default season scope to the missing seasons).
-    if (widget.mediaType == MediaType.tv &&
-        (_requestNotifier.state.status == RequestStatus.partial ||
+    if (!libraryCopy && widget.mediaType == MediaType.tv &&
+        (_requestNotifier.state.displayStatus == RequestStatus.partial ||
             _librarySeries != null) &&
         s.seasons.isNotEmpty &&
         _canChooseSeasons) {
@@ -1116,7 +1136,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
 
     // A multi-library user gets the sheet even with season/quality choice
     // off: the library IS a choice.
-    final hasChoices = (options != null && options.hasChoices) ||
+    final hasChoices = libraryCopy || (options != null && options.hasChoices) ||
         libraries.length > 1 ||
         _confirmBoundLibrary;
 
@@ -1140,7 +1160,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
               ),
           libraries: libraries,
           selectedLibraryId: preferredLibrary,
-          showLibrary: _confirmBoundLibrary,
+          showLibrary: libraryCopy || _confirmBoundLibrary,
           libraryNote: _boundLibraryNote,
           onLibraryOptions: (libraryId) async {
             final selected =
@@ -1189,6 +1209,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
       tvdbId: tvdbId,
       seasonScope: seasonScope,
       qualityProfileId: qualityProfileId,
+      requestMode: libraryCopy ? 'library_copy' :
+          ref.read(authProvider).valueOrNull?.connection?.mediaLibraryAvailability == true ? 'missing' : null,
     );
     if (!mounted) return;
     final quotaMessage = _requestNotifier.state.quotaMessage;
@@ -1199,6 +1221,20 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
         SnackBar(content: Text(browseLabel(context, quotaMessage))),
       );
     }
+  }
+
+  Future<void> _followSeasons() async {
+    if (!await _confirmSeasonDestination() || !mounted) return;
+    final seasons = await showDialog<List<int>>(context: context,
+      builder: (_) => FollowSeasonsDialog(seasons: _detailNotifier.state.seasons));
+    if (seasons == null || seasons.isEmpty || !mounted) return;
+    final accepted = await _requestNotifier.request(title: _detailNotifier.state.title,
+      tvdbId: _detailNotifier.state.tvDetail?.externalIds?.tvdbId,
+      seasons: seasons, requestMode: 'missing');
+    if (!mounted) return;
+    if (accepted) _onRequestSucceeded();
+    final message = _requestNotifier.state.quotaMessage;
+    if (message != null) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(browseLabel(context, message))));
   }
 
   Future<bool> _confirmSeasonDestination() async {
@@ -1437,7 +1473,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
   /// Nothing is asked when the user has no media server at all.
   Future<void> _resolveWatchLinks() async {
     final generation = ++_watchGeneration;
-    final status = _requestNotifier.state.status;
+    final status = _requestNotifier.state.displayStatus;
     _watchedStatus = status;
     final connection = ref.read(authProvider).valueOrNull?.connection;
     final watchable =

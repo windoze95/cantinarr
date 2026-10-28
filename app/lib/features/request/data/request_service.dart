@@ -593,6 +593,53 @@ class RequestSeasonStatus {
   String get episodesLabel => '$episodeFileCount/$episodeCount';
 }
 
+/// Readable files across the authorized playback services and selected library.
+/// Acquisition status stays separate so an accessible copy never hides a
+/// pending request for a copy in another library.
+class MediaAvailability {
+  final RequestStatus status;
+  final bool isKnown;
+  final bool is4K;
+  final List<RequestSeasonStatus> seasons;
+  final List<MediaAvailabilitySource> sources;
+  final String? unknownReason;
+  const MediaAvailability({required this.status, this.isKnown = true,
+    this.is4K = false, this.seasons = const [], this.sources = const [], this.unknownReason});
+  bool get hasFiles => status == RequestStatus.available || status == RequestStatus.partial;
+  factory MediaAvailability.fromJson(Map<String, dynamic> json) => MediaAvailability(
+    status: RequestStatus.values.firstWhere((s) => s.name == json['status'], orElse: () => RequestStatus.unavailable),
+    isKnown: json['status_known'] != false, is4K: json['is_4k'] == true,
+    seasons: [for (final row in (json['seasons'] as List?) ?? const []) RequestSeasonStatus.fromJson(Map<String, dynamic>.from(row as Map))],
+    sources: [for (final row in (json['sources'] as List?) ?? const []) MediaAvailabilitySource.fromJson(Map<String, dynamic>.from(row as Map))],
+    unknownReason: json['status_unknown_reason'] as String?,
+  );
+}
+
+class MediaAvailabilitySource {
+  final String instanceId, name, serviceType, state, accessMode;
+  final bool is4K;
+  const MediaAvailabilitySource({required this.instanceId, required this.name,
+    required this.serviceType, required this.state, required this.accessMode, this.is4K = false});
+  factory MediaAvailabilitySource.fromJson(Map<String, dynamic> json) => MediaAvailabilitySource(
+    instanceId: json['instance_id'] as String? ?? '', name: json['name'] as String? ?? '',
+    serviceType: json['service_type'] as String? ?? '', state: json['state'] as String? ?? '',
+    accessMode: json['access_mode'] as String? ?? '', is4K: json['is_4k'] == true);
+}
+
+class MediaFollowing {
+  final int requestId;
+  final String state, message;
+  final List<int> seasons;
+  final bool canStop;
+  const MediaFollowing({required this.requestId, required this.state,
+    this.message = '', this.seasons = const [], this.canStop = false});
+  factory MediaFollowing.fromJson(Map<String, dynamic> json) => MediaFollowing(
+    requestId: (json['request_id'] as num?)?.toInt() ?? 0,
+    state: json['state'] as String? ?? '', message: json['message'] as String? ?? '',
+    seasons: [for (final n in (json['source_seasons'] as List?) ?? const []) (n as num).toInt()],
+    canStop: json['can_stop'] == true);
+}
+
 /// A movie's theatrical and digital release dates, mirroring the backend
 /// `StatusResponse.releases` payload. Only movies already in the library carry
 /// them; everything else is [none].
@@ -638,6 +685,8 @@ DateTime? _parseCalendarDate(String? value) {
 /// granted library's own status so the screen can show one chip per library.
 class RequestStatusDetail {
   final bool isKnown;
+  final MediaAvailability? availability;
+  final List<MediaFollowing> following;
   final TVMatch? match;
   final String? statusMessage;
   final List<String> deliveryMessages;
@@ -653,6 +702,8 @@ class RequestStatusDetail {
 
   const RequestStatusDetail({
     this.isKnown = true,
+    this.availability,
+    this.following = const [],
     this.match,
     this.statusMessage,
     this.deliveryMessages = const [],
@@ -686,6 +737,8 @@ class RequestStatusDetail {
       }
     }
     return RequestStatusDetail(
+      availability: json['availability'] is Map ? MediaAvailability.fromJson(Map<String, dynamic>.from(json['availability'] as Map)) : null,
+      following: [for (final row in (json['following'] as List?) ?? const []) MediaFollowing.fromJson(Map<String, dynamic>.from(row as Map))],
       isKnown: json['status_known'] != false,
       match: json['match'] is Map<String, dynamic>
           ? TVMatch.fromJson(json['match'] as Map<String, dynamic>) : null,
@@ -839,6 +892,7 @@ class RequestService {
     List<int>? seasons,
     int? qualityProfileId,
     String? instanceId,
+    String? requestMode,
   }) async {
     lastRequestError = null;
     lastRequestQuotaExceeded = false;
@@ -846,6 +900,7 @@ class RequestService {
       final body = <String, dynamic>{
         'tmdb_id': tmdbId,
         'media_type': mediaType.name,
+        if (requestMode != null) 'request_mode': requestMode,
       };
       if (title != null) body['title'] = title;
       if (tvdbId != null && tvdbId != 0) body['tvdb_id'] = tvdbId;
@@ -877,6 +932,10 @@ class RequestService {
       lastRequestError = quota ?? tvMatchError(error);
       return null;
     }
+  }
+
+  Future<void> stopFollowing(int requestId) async {
+    await _backendDio.post('/api/requests/$requestId/follow/stop');
   }
 
   /// Check the current user's request state for a book, keyed by the Chaptarr/

@@ -125,9 +125,9 @@ type SystemInfo struct {
 // server's user policy expects when restricting an account to specific
 // libraries — never a filesystem path.
 type Library struct {
-	ID             string
-	Name           string
-	CollectionType string
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	CollectionType string `json:"collection_type"`
 }
 
 // RemoteUser is the subset of a media-server account Cantinarr acts on. On an

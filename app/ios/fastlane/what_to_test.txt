@@ -4,6 +4,8 @@ Please test upgrading from the current app with your sign-in retained, browsing 
 
 When reporting an issue, include your device, iOS version, and Cantinarr server version.
 
+On a compatible 1.1.0 server, test Plex, Jellyfin, and Emby library scanning and Library access only for household users. Check unmanaged movie and episode availability, deliberate Request in library copies, missing-episode requests, and Follow season/Stop following. Scanning or associating a library must never start a download by itself.
+
 AI provider choices now use current model IDs and the matching API or OAuth endpoint. Check saving your selected provider/model and an AI conversation with tool lookups.
 
 Optional fallback uses provider-managed defaults or rolling aliases for OpenAI OAuth, Gemini, xAI API, and Grok OAuth. Check that unsupported providers hide the switch, the saved choice stays unchanged, and chat and administrator notices identify the replacement.

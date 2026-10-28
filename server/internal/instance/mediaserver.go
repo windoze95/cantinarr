@@ -60,8 +60,9 @@ func mediaServerTypeList() string {
 // library identifiers new accounts may see; empty shares every library,
 // including ones added later.
 type MediaServerConfig struct {
-	PublicAddress string   `json:"public_address"`
-	LibraryIDs    []string `json:"library_ids"`
+	PublicAddress    string                  `json:"public_address"`
+	LibraryIDs       []string                `json:"library_ids"`
+	AvailabilityScan *AvailabilityScanConfig `json:"availability_scan,omitempty"`
 	// ListeningApps (Audiobookshelf) supplies defaults users can override.
 	ListeningApps *ListeningApps `json:"listening_apps,omitempty"`
 	VideoApps     *VideoApps     `json:"video_apps,omitempty"`
@@ -88,6 +89,20 @@ type MediaServerConfig struct {
 	PlexOwnerEmail    string `json:"plex_owner_email,omitempty"`
 }
 
+// AvailabilityScanConfig selects native catalog libraries independently of
+// account sharing. Empty never means all: indexing is explicitly opt-in.
+type AvailabilityScanConfig struct {
+	Enabled    bool     `json:"enabled"`
+	LibraryIDs []string `json:"library_ids"`
+}
+
+func (c *AvailabilityScanConfig) Clone() *AvailabilityScanConfig {
+	if c == nil {
+		return nil
+	}
+	return &AvailabilityScanConfig{Enabled: c.Enabled, LibraryIDs: append([]string{}, c.LibraryIDs...)}
+}
+
 func (c MediaServerConfig) clone() MediaServerConfig {
 	var videoApps *VideoApps
 	if c.VideoApps != nil {
@@ -102,6 +117,7 @@ func (c MediaServerConfig) clone() MediaServerConfig {
 	return MediaServerConfig{
 		PublicAddress:     c.PublicAddress,
 		LibraryIDs:        append([]string{}, c.LibraryIDs...),
+		AvailabilityScan:  c.AvailabilityScan.Clone(),
 		ListeningApps:     listeningApps,
 		VideoApps:         videoApps,
 		MachineIdentifier: c.MachineIdentifier,
@@ -165,6 +181,10 @@ func normalizeMediaServerConfig(inst *Instance) {
 	inst.MediaServerConfig.MachineIdentifier = strings.TrimSpace(inst.MediaServerConfig.MachineIdentifier)
 	if !IsVideoServerType(inst.ServiceType) {
 		inst.MediaServerConfig.VideoApps = nil
+		inst.MediaServerConfig.AvailabilityScan = nil
+	}
+	if c := inst.MediaServerConfig.AvailabilityScan; c != nil {
+		c.LibraryIDs = tidyLibraryIDs(c.LibraryIDs)
 	}
 	if inst.ServiceType != "audiobookshelf" {
 		inst.MediaServerConfig.ListeningApps = nil
@@ -207,6 +227,27 @@ func encodeMediaServerConfig(inst *Instance) (string, error) {
 // normalized copy that will be stored.
 func validateMediaServerConfig(cfg MediaServerConfig) (MediaServerConfig, error) {
 	out := MediaServerConfig{LibraryIDs: []string{}}
+	if cfg.AvailabilityScan != nil {
+		c := cfg.AvailabilityScan.Clone()
+		if len(c.LibraryIDs) > 1000 {
+			return out, fmt.Errorf("too many availability scan libraries")
+		}
+		for _, id := range c.LibraryIDs {
+			if id == "" || len(id) > 128 || strings.ContainsAny(id, "/\\, ") {
+				return out, fmt.Errorf("invalid availability scan library id")
+			}
+			for _, r := range id {
+				if unicode.IsSpace(r) || unicode.IsControl(r) {
+					return out, fmt.Errorf("invalid availability scan library id")
+				}
+			}
+		}
+		c.LibraryIDs = tidyLibraryIDs(c.LibraryIDs)
+		if c.Enabled && len(c.LibraryIDs) == 0 {
+			return out, fmt.Errorf("select at least one availability scan library")
+		}
+		out.AvailabilityScan = c
+	}
 	if cfg.VideoApps != nil {
 		if err := cfg.VideoApps.Validate(); err != nil {
 			return out, err
@@ -267,6 +308,9 @@ func validateMediaServerConfig(cfg MediaServerConfig) (MediaServerConfig, error)
 // a present field replaces it after validation. Non-media types may only send
 // an empty config.
 func (h *Handler) applyMediaServerConfig(inst *Instance, provided *MediaServerConfig, existing *Instance) error {
+	if provided != nil && provided.AvailabilityScan != nil && !IsVideoServerType(inst.ServiceType) {
+		return fmt.Errorf("availability_scan is supported only for Plex, Jellyfin, and Emby")
+	}
 	if provided != nil && provided.VideoApps != nil && !IsVideoServerType(inst.ServiceType) {
 		return fmt.Errorf("video_apps is supported only for Plex, Jellyfin, and Emby")
 	}
@@ -296,6 +340,10 @@ func (h *Handler) applyMediaServerConfig(inst *Instance, provided *MediaServerCo
 		// Server-managed; a request can neither set nor clear them.
 		normalized.ClientID = existing.MediaServerConfig.ClientID
 		normalized.setPlexOwner(existing.MediaServerConfig.plexOwner())
+		// Older apps omit this independent setting during unrelated edits.
+		if provided.AvailabilityScan == nil {
+			normalized.AvailabilityScan = existing.MediaServerConfig.AvailabilityScan.Clone()
+		}
 	}
 	inst.MediaServerConfig = normalized
 	inst.MediaServerConfigInvalid = false
