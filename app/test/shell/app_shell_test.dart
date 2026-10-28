@@ -258,7 +258,9 @@ void main() {
     await closeDrawer();
 
     router.push('/browse/movie/popular');
-    await tester.pumpAndSettle();
+    // Start on the first visible frame, before the history notification has
+    // had a second frame to rebuild the outer shell.
+    await tester.pump();
     expect(backAvailability, contains(true),
         reason: 'the shell must still report back handling to its ancestors');
     await edgeDrag();
@@ -310,6 +312,22 @@ void main() {
     await edgeDrag();
     expect(shellState().isDrawerOpen, isTrue,
         reason: 'a fresh root gesture can open the drawer again');
+    await closeDrawer();
+
+    router.push('/dashboard/movies?copy=1');
+    await tester.pump();
+    await edgeDrag();
+    expect(shellState().isDrawerOpen, isFalse,
+        reason: 'same-path pushes also protect their first frame');
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(router.canPop(), isFalse);
+
+    router.go('/radarr/library');
+    await tester.pumpAndSettle();
+    await edgeDrag();
+    expect(shellState().isDrawerOpen, isTrue,
+        reason: 'switching root modules must retain drawer edge access');
   });
 
   testWidgets('iOS keeps drawer edge access on a pushed page', (tester) async {

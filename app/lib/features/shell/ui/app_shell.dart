@@ -120,6 +120,20 @@ class _AppShellState extends ConsumerState<AppShell>
   // while building this outer shell can still see the previous page stack.
   bool _childHandlesBack = false;
 
+  bool _hasRouteHistory() {
+    // GoRouter updates its matches before building the child Navigator. Read
+    // that prospective page stack to protect even the first pushed frame.
+    var matches =
+        GoRouter.of(context).routerDelegate.currentConfiguration.matches;
+    while (matches.isNotEmpty) {
+      if (matches.length > 1) return true;
+      final match = matches.single;
+      if (match is! ShellRouteMatch) return false;
+      matches = match.matches;
+    }
+    return false;
+  }
+
   bool _handleNavigationNotification(NavigationNotification notification) {
     if (_childHandlesBack != notification.canHandlePop) {
       setState(() => _childHandlesBack = notification.canHandlePop);
@@ -845,7 +859,7 @@ class _AppShellState extends ConsumerState<AppShell>
       // opening the shell drawer. The hamburger and root drawer swipe remain.
       drawerEnableOpenDragGesture: kIsWeb ||
           Theme.of(context).platform != TargetPlatform.android ||
-          !_childHandlesBack,
+          (!_hasRouteHistory() && !_childHandlesBack),
       // A closed drawer collapses its attention group again, so reopening it
       // always lands on the same short menu rather than on however far the
       // last visit had unfolded it.
