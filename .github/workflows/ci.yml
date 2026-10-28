@@ -157,8 +157,8 @@ jobs:
       - name: Install dependencies
         run: flutter pub get --enforce-lockfile
 
-      - name: Test generated native language declarations
-        run: python3 -m unittest discover -s tool -p 'test_sync_ios_localizations.py' -v
+      - name: Test localization tooling
+        run: python3 -m unittest discover -s tool -p 'test_*.py' -v
 
       - name: Analyze
         run: flutter analyze --no-fatal-infos --no-pub
