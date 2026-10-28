@@ -63,16 +63,20 @@ func tvReceipt(season int, when time.Time) string {
 
 func TestCorrectedTVPollUsesActualImportsWhileParentKeepsDownloading(t *testing.T) {
 	h, b, client, content, _, _ := newTVImportLab(t)
+	advanceImportTestClock(h)
 	h.pollSonarrInstance("tv-a", client)
 	// One episode of S2 lands while S3 still downloads on the same parent.
-	b.set(&b.history, "["+tvReceipt(2, time.Now())+"]")
+	b.set(&b.history, "["+tvReceipt(2, nextImportTestTime(h))+"]")
+	advanceImportTestClock(h)
 	h.pollSonarrInstance("tv-a", client)
 	if got := content.episodeCalls(); !reflect.DeepEqual(got, []string{"Story 225634|225634"}) {
 		t.Fatalf("concurrent/partial import = %v", got)
 	}
 	// Another library gets its own witness and identical corrected destination.
+	advanceImportTestClock(h)
 	h.pollSonarrInstance("tv-b", client)
-	b.set(&b.history, "["+tvReceipt(3, time.Now())+"]")
+	b.set(&b.history, "["+tvReceipt(3, nextImportTestTime(h))+"]")
+	advanceImportTestClock(h)
 	h.pollSonarrInstance("tv-b", client)
 	if got := content.episodeCalls(); len(got) != 2 || got[1] != "Story 286801|286801" {
 		t.Fatalf("second library = %v", got)
@@ -80,6 +84,7 @@ func TestCorrectedTVPollUsesActualImportsWhileParentKeepsDownloading(t *testing.
 	// Removing the remaining download proves no new import, despite old files.
 	b.set(&b.queue, `[]`)
 	b.set(&b.history, `[]`)
+	advanceImportTestClock(h)
 	h.pollSonarrInstance("tv-a", client)
 	if got := content.episodeCalls(); len(got) != 2 {
 		t.Fatalf("removed download announced: %v", got)
@@ -88,13 +93,15 @@ func TestCorrectedTVPollUsesActualImportsWhileParentKeepsDownloading(t *testing.
 
 func TestCorrectedTVPollGroupsPacksAndUpgradesByStory(t *testing.T) {
 	h, b, client, content, _, _ := newTVImportLab(t)
+	advanceImportTestClock(h)
 	h.pollSonarrInstance("tv-a", client)
-	when := time.Now()
+	when := nextImportTestTime(h)
 	// Two S2 imports, only one delete: mixed/new. S3's sole import is an
 	// upgrade. S1 and S4 remain independent new stories on this same parent.
 	receipts := []string{tvReceipt(1, when), tvReceipt(2, when), tvReceipt(2, when), tvReceipt(3, when), tvReceipt(4, when)}
 	b.set(&b.history, "["+strings.Join(receipts, ",")+"]")
 	b.set(&b.deleteHistory, fmt.Sprintf(`[{"episodeId":20,"eventType":"episodeFileDeleted","date":%q,"data":{"reason":"Upgrade"}},{"episodeId":30,"eventType":"episodeFileDeleted","date":%q,"data":{"reason":"Upgrade"}}]`, when.Format(time.RFC3339Nano), when.Format(time.RFC3339Nano)))
+	advanceImportTestClock(h)
 	h.pollSonarrInstance("tv-a", client)
 	if got := content.episodeCalls(); !reflect.DeepEqual(got, []string{"Story 113988|113988", "Story 225634|225634", "Story 299939|299939"}) {
 		t.Fatalf("new stories = %v", got)
@@ -109,6 +116,7 @@ func TestCorrectedTVImportRecoveryGuards(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			h, b, client, content, database, svc := newTVImportLab(t)
 			if mode != "first boot" {
+				advanceImportTestClock(h)
 				h.pollSonarrInstance("tv-a", client)
 			}
 			age := 30 * time.Minute
@@ -150,8 +158,11 @@ func TestCorrectedTVImportRecoveryGuards(t *testing.T) {
 			}
 			h.restoreQueueWitness()
 			if mode == "legacy upgrade new import" {
-				b.set(&b.history, "["+tvReceipt(2, time.Now().Add(-time.Minute))+","+tvReceipt(3, time.Now())+"]")
+				fresh := time.Now().Truncate(time.Second).Add(-31 * time.Second)
+				h.legacySonarrSince["tv-a"] = fresh.Add(-time.Nanosecond)
+				b.set(&b.history, "["+tvReceipt(2, fresh.Add(-time.Minute))+","+tvReceipt(3, fresh)+"]")
 			}
+			advanceImportTestClock(h)
 			h.pollSonarrInstance("tv-a", client)
 			want := 0
 			if mode == "restart" || mode == "legacy upgrade new import" {
@@ -165,6 +176,7 @@ func TestCorrectedTVImportRecoveryGuards(t *testing.T) {
 			}
 			if gate != nil {
 				gate.ready = true
+				advanceImportTestClock(h)
 				h.pollSonarrInstance("tv-a", client)
 				if len(content.episodeCalls()) != 1 {
 					t.Fatal("held import was lost")
@@ -174,6 +186,7 @@ func TestCorrectedTVImportRecoveryGuards(t *testing.T) {
 			h.SetTVImportResolver(svc)
 			h.restoreQueueWitness()
 			before := len(content.episodeCalls())
+			advanceImportTestClock(h)
 			h.pollSonarrInstance("tv-a", client)
 			if len(content.episodeCalls()) != before {
 				t.Fatal("replayed historical alert")
@@ -198,8 +211,10 @@ func TestSonarrImportRequiresMatchingLiveSeries(t *testing.T) {
 			client := sonarr.NewClient(srv.URL, "fixture")
 			content := &recordingContent{}
 			h := NewHub(nil, nil, nil, nil, content, nil)
+			advanceImportTestClock(h)
 			h.pollSonarrInstance("tv-a", client)
-			b.set(&b.history, freshImportRecords("seriesId", "downloadFolderImported", 6))
+			b.set(&b.history, freshImportRecords(h, "seriesId", "downloadFolderImported", 6))
+			advanceImportTestClock(h)
 			h.pollSonarrInstance("tv-a", client)
 			if calls := content.episodeCalls(); len(calls) != 0 {
 				t.Fatalf("unverified series announced: %v", calls)

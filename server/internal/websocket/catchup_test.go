@@ -103,10 +103,10 @@ func historyDate(ago time.Duration) string {
 	return time.Now().Add(-ago).UTC().Format(time.RFC3339)
 }
 
-// freshImportRecords records imports between two polls with enough timestamp
-// precision to distinguish them from the first poll's observation cursor.
-func freshImportRecords(field, event string, ids ...int) string {
-	when := time.Now().UTC().Format(time.RFC3339Nano)
+// freshImportRecords uses the next whole-second timestamp after the resolved
+// cursor, matching providers that do not expose subsecond history precision.
+func freshImportRecords(h *Hub, field, event string, ids ...int) string {
+	when := nextImportTestTime(h).UTC().Format(time.RFC3339)
 	records := make([]string, 0, len(ids))
 	for _, id := range ids {
 		records = append(records, fmt.Sprintf(`{"id":%d,%q:%d,"eventType":%q,"date":%q}`, 900+id, field, id, event, when))
@@ -132,6 +132,7 @@ func TestResumedPollCatchesImportsMissedEntirely(t *testing.T) {
 	// Process 1 last saw an empty queue: nothing in flight, nothing witnessed.
 	backend.set(&backend.queue, `[]`)
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollRadarrInstance("movies-a", client)
 
 	// While the process was down, movie 42 was added directly in Radarr,
@@ -149,6 +150,7 @@ func TestResumedPollCatchesImportsMissedEntirely(t *testing.T) {
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollRadarrInstance("movies-a", client)
 
 	if got := after.movieCalls(); len(got) != 1 || got[0] != "The Matrix|603" {
@@ -156,6 +158,7 @@ func TestResumedPollCatchesImportsMissedEntirely(t *testing.T) {
 	}
 
 	// The next tick is steady state: the same history record must not repeat.
+	advanceImportTestClock(hubB)
 	hubB.pollRadarrInstance("movies-a", client)
 	if got := after.movieCalls(); len(got) != 1 {
 		t.Errorf("catch-up re-announced on a steady tick: %v", got)
@@ -177,6 +180,7 @@ func TestResumedCatchUpMergesWithDepartures(t *testing.T) {
 
 	backend.set(&backend.queue, `[{"id":1,"movieId":42,"status":"downloading","size":100,"sizeleft":50}]`)
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollRadarrInstance("movies-a", client)
 
 	if _, err := database.Exec(
@@ -196,6 +200,7 @@ func TestResumedCatchUpMergesWithDepartures(t *testing.T) {
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollRadarrInstance("movies-a", client)
 
 	got := after.movieCalls()
@@ -222,6 +227,7 @@ func TestResumedCatchUpDropsMergedBatchOverCap(t *testing.T) {
 
 	backend.set(&backend.queue, `[]`)
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollRadarrInstance("movies-a", client)
 
 	if _, err := database.Exec(
@@ -235,6 +241,7 @@ func TestResumedCatchUpDropsMergedBatchOverCap(t *testing.T) {
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollRadarrInstance("movies-a", client)
 
 	if got := after.movieCalls(); len(got) != 0 {
@@ -259,6 +266,7 @@ func TestResumedCatchUpOverflowDropsWholeBatch(t *testing.T) {
 
 	backend.set(&backend.queue, `[{"id":1,"movieId":42,"status":"downloading","size":100,"sizeleft":50}]`)
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollRadarrInstance("movies-a", client)
 
 	if _, err := database.Exec(
@@ -278,6 +286,7 @@ func TestResumedCatchUpOverflowDropsWholeBatch(t *testing.T) {
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollRadarrInstance("movies-a", client)
 
 	if got := after.movieCalls(); len(got) != 0 {
@@ -300,6 +309,7 @@ func TestPollGapTriggersCatchUpWithoutRestart(t *testing.T) {
 	content := &recordingContent{}
 	hub := NewHub(nil, nil, nil, nil, content, nil)
 	backend.set(&backend.queue, `[]`)
+	advanceImportTestClock(hub)
 	hub.pollRadarrInstance("movies-a", client)
 
 	// The outage: no successful polls for half an hour, during which movie 42
@@ -309,6 +319,7 @@ func TestPollGapTriggersCatchUpWithoutRestart(t *testing.T) {
 		`[{"id":900,"movieId":42,"eventType":"downloadFolderImported","date":"%s"}]`,
 		historyDate(10*time.Minute)))
 
+	advanceImportTestClock(hub)
 	hub.pollRadarrInstance("movies-a", client)
 	if got := content.movieCalls(); len(got) != 1 || got[0] != "The Matrix|603" {
 		t.Fatalf("outage catch-up alerts = %v, want exactly The Matrix|603", got)
@@ -332,6 +343,7 @@ func TestPollGapPastStalenessStaysSilent(t *testing.T) {
 	content := &recordingContent{}
 	hub := NewHub(nil, nil, nil, nil, content, nil)
 	backend.set(&backend.queue, `[{"id":1,"movieId":42,"status":"downloading","size":100,"sizeleft":50}]`)
+	advanceImportTestClock(hub)
 	hub.pollRadarrInstance("movies-a", client)
 
 	hub.lastPollAt["movies-a"] = time.Now().Add(-queueWitnessStaleAfter - time.Hour)
@@ -340,6 +352,7 @@ func TestPollGapPastStalenessStaysSilent(t *testing.T) {
 		`[{"id":900,"movieId":42,"eventType":"downloadFolderImported","date":"%s"}]`,
 		historyDate(30*time.Minute)))
 
+	advanceImportTestClock(hub)
 	hub.pollRadarrInstance("movies-a", client)
 	if got := content.movieCalls(); len(got) != 0 {
 		t.Fatalf("stale gap announced %v, want silence", got)
@@ -348,9 +361,11 @@ func TestPollGapPastStalenessStaysSilent(t *testing.T) {
 	// The poller is reseeded, not wedged: a fresh completion still alerts.
 	backend.set(&backend.history, `[]`)
 	backend.set(&backend.queue, `[{"id":2,"movieId":77,"status":"downloading","size":100,"sizeleft":10}]`)
+	advanceImportTestClock(hub)
 	hub.pollRadarrInstance("movies-a", client)
 	backend.set(&backend.queue, `[]`)
-	backend.set(&backend.history, freshImportRecords("movieId", "downloadFolderImported", 77))
+	backend.set(&backend.history, freshImportRecords(hub, "movieId", "downloadFolderImported", 77))
+	advanceImportTestClock(hub)
 	hub.pollRadarrInstance("movies-a", client)
 	if got := content.movieCalls(); len(got) != 1 || got[0] != "Heat|949" {
 		t.Errorf("post-reseed completion = %v, want exactly Heat|949", got)
@@ -371,16 +386,19 @@ func TestSteadyStatePollRequiresHistory(t *testing.T) {
 	content := &recordingContent{}
 	hub := NewHub(nil, nil, nil, nil, content, nil)
 	backend.set(&backend.queue, `[{"id":1,"movieId":42,"status":"downloading","size":100,"sizeleft":50}]`)
+	advanceImportTestClock(hub)
 	hub.pollRadarrInstance("movies-a", client)
 	if history, _ := backend.counts(); history != 0 {
 		t.Fatalf("seed poll read history %d time(s), want 0", history)
 	}
 	backend.set(&backend.queue, `[]`)
+	advanceImportTestClock(hub)
 	hub.pollRadarrInstance("movies-a", client)
 	if got := content.movieCalls(); len(got) != 0 {
 		t.Fatalf("departure without import evidence = %v, want no alert", got)
 	}
-	backend.set(&backend.history, freshImportRecords("movieId", "downloadFolderImported", 42))
+	backend.set(&backend.history, freshImportRecords(hub, "movieId", "downloadFolderImported", 42))
+	advanceImportTestClock(hub)
 	hub.pollRadarrInstance("movies-a", client)
 
 	if got := content.movieCalls(); len(got) != 1 {
@@ -417,6 +435,7 @@ func TestCatchUpErrorRetainsWitnessForRetry(t *testing.T) {
 
 	inner.set(&inner.queue, `[{"id":1,"movieId":42,"status":"downloading","size":100,"sizeleft":50}]`)
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollRadarrInstance("movies-a", client)
 
 	if _, err := database.Exec(
@@ -434,6 +453,7 @@ func TestCatchUpErrorRetainsWitnessForRetry(t *testing.T) {
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
 	before := hubB.lastPollAt["movies-a"]
+	advanceImportTestClock(hubB)
 	hubB.pollRadarrInstance("movies-a", client)
 
 	if got := after.movieCalls(); len(got) != 0 {
@@ -449,10 +469,12 @@ func TestCatchUpErrorRetainsWitnessForRetry(t *testing.T) {
 	mu.Lock()
 	failHistory = false
 	mu.Unlock()
+	advanceImportTestClock(hubB)
 	hubB.pollRadarrInstance("movies-a", client)
 	if got := after.movieCalls(); len(got) != 1 || got[0] != "The Matrix|603" {
 		t.Fatalf("recovered history = %v, want exactly the proven import", got)
 	}
+	advanceImportTestClock(hubB)
 	hubB.pollRadarrInstance("movies-a", client)
 	if got := after.movieCalls(); len(got) != 1 {
 		t.Fatalf("recovered history replayed: %v", got)
@@ -474,6 +496,7 @@ func TestSonarrCatchUpCollapsesToSeries(t *testing.T) {
 
 	backend.set(&backend.queue, `[]`)
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollSonarrInstance("tv-a", client)
 
 	if _, err := database.Exec(
@@ -491,6 +514,7 @@ func TestSonarrCatchUpCollapsesToSeries(t *testing.T) {
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollSonarrInstance("tv-a", client)
 
 	if got := after.episodeCalls(); len(got) != 1 || got[0] != "Andor|83867" {
@@ -512,6 +536,7 @@ func TestChaptarrCatchUpAppliesImportGuards(t *testing.T) {
 
 	backend.setQueue(`[]`)
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollChaptarrInstance("books-a", client)
 
 	if _, err := database.Exec(
@@ -530,6 +555,7 @@ func TestChaptarrCatchUpAppliesImportGuards(t *testing.T) {
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollChaptarrInstance("books-a", client)
 
 	if got := after.calls(); len(got) != 1 || got[0] != "Ahsoka (Star Wars)|29749107|books-a|ebook" {
@@ -560,6 +586,7 @@ func TestRadarrCatchUpReroutesProvenUpgrades(t *testing.T) {
 	// Movie 42 (an upgrade grab) is in flight when the process goes down.
 	backend.set(&backend.queue, `[{"id":1,"movieId":42,"status":"downloading","size":100,"sizeleft":50}]`)
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollRadarrInstance("movies-a", client)
 
 	if _, err := database.Exec(
@@ -582,6 +609,7 @@ func TestRadarrCatchUpReroutesProvenUpgrades(t *testing.T) {
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollRadarrInstance("movies-a", client)
 
 	if got := after.movieCalls(); len(got) != 1 || got[0] != "Heat|949" {
@@ -608,6 +636,7 @@ func TestCatchUpUpgradeProofRequiresNameAndReason(t *testing.T) {
 
 	backend.set(&backend.queue, `[]`)
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollRadarrInstance("movies-a", client)
 
 	if _, err := database.Exec(
@@ -628,6 +657,7 @@ func TestCatchUpUpgradeProofRequiresNameAndReason(t *testing.T) {
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollRadarrInstance("movies-a", client)
 
 	if got := after.movieCalls(); len(got) != 2 {
@@ -652,6 +682,7 @@ func TestCatchUpUpgradeDeletePageFailureAnnouncesAllAsNew(t *testing.T) {
 
 	backend.set(&backend.queue, `[]`)
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollRadarrInstance("movies-a", client)
 
 	if _, err := database.Exec(
@@ -675,6 +706,7 @@ func TestCatchUpUpgradeDeletePageFailureAnnouncesAllAsNew(t *testing.T) {
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollRadarrInstance("movies-a", client)
 
 	if got := after.movieCalls(); len(got) != 1 || got[0] != "The Matrix|603" {
@@ -711,6 +743,7 @@ func TestCatchUpUpgradesFilteredBeforeCap(t *testing.T) {
 
 	backend.set(&backend.queue, `[]`)
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollRadarrInstance("movies-a", client)
 
 	if _, err := database.Exec(
@@ -725,6 +758,7 @@ func TestCatchUpUpgradesFilteredBeforeCap(t *testing.T) {
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollRadarrInstance("movies-a", client)
 
 	if got := after.movieCalls(); len(got) != 4 {
@@ -751,6 +785,7 @@ func TestSonarrCatchUpMixedSeriesBroadcasts(t *testing.T) {
 
 	backend.set(&backend.queue, `[]`)
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollSonarrInstance("tv-a", client)
 
 	if _, err := database.Exec(
@@ -774,6 +809,7 @@ func TestSonarrCatchUpMixedSeriesBroadcasts(t *testing.T) {
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollSonarrInstance("tv-a", client)
 
 	if got := after.episodeCalls(); len(got) != 1 || got[0] != "Andor|83867" {
@@ -796,6 +832,7 @@ func TestChaptarrCatchUpReroutesProvenUpgrades(t *testing.T) {
 
 	backend.setQueue(`[]`)
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollChaptarrInstance("books-a", client)
 
 	if _, err := database.Exec(
@@ -814,6 +851,7 @@ func TestChaptarrCatchUpReroutesProvenUpgrades(t *testing.T) {
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollChaptarrInstance("books-a", client)
 
 	if got := after.calls(); len(got) != 0 {

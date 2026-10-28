@@ -132,6 +132,7 @@ func TestPollLidarrWitnessesImportedDepartures(t *testing.T) {
 		{"id":101,"albumId":10,"status":"downloading","sizeleft":2000},
 		{"id":102,"albumId":0,"status":"queued","sizeleft":3000}
 	]`)
+	advanceImportTestClock(hub)
 	hub.pollLidarrInstance("music-a", client)
 	if events := drainBroadcasts(t, hub); len(events) != 0 {
 		t.Fatalf("first poll broadcast %v, want none (no previous composition)", events)
@@ -146,7 +147,8 @@ func TestPollLidarrWitnessesImportedDepartures(t *testing.T) {
 	// Second poll: everything left the queue. Only the record with files may
 	// alert, and the unmapped id must not be fetched at all.
 	backend.setQueue(`[]`)
-	backend.setHistory(freshImportRecords("albumId", "trackFileImported", 9, 10, 0))
+	backend.setHistory(freshImportRecords(hub, "albumId", "trackFileImported", 9, 10, 0))
+	advanceImportTestClock(hub)
 	hub.pollLidarrInstance("music-a", client)
 
 	events := drainBroadcasts(t, hub)
@@ -167,6 +169,7 @@ func TestPollLidarrWitnessesImportedDepartures(t *testing.T) {
 	}
 
 	// Third poll: an empty queue again — no repeat alerts for old departures.
+	advanceImportTestClock(hub)
 	hub.pollLidarrInstance("music-a", client)
 	if calls := content.musicCalls(); len(calls) != 1 {
 		t.Errorf("witness re-alerted on an unchanged empty queue: %v", calls)
@@ -193,6 +196,7 @@ func TestLidarrQueueWitnessSurvivesRestart(t *testing.T) {
 
 	first := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
 	backend.setQueue(`[{"id":100,"albumId":9,"status":"downloading","sizeleft":1000}]`)
+	advanceImportTestClock(first)
 	first.pollLidarrInstance("music-a", client)
 	drainBroadcasts(t, first)
 
@@ -219,6 +223,7 @@ func TestLidarrCatchUpAppliesImportGuards(t *testing.T) {
 
 	backend.setQueue(`[]`)
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollLidarrInstance("music-a", client)
 
 	if _, err := database.Exec(
@@ -237,6 +242,7 @@ func TestLidarrCatchUpAppliesImportGuards(t *testing.T) {
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollLidarrInstance("music-a", client)
 
 	if got := after.musicCalls(); len(got) != 1 || got[0] != "Fear Inoculum|Tool|1f4a9e6b-63d5-4c0c-8ee6-a6a9155e6bd2|music-a" {
@@ -263,6 +269,7 @@ func TestLidarrCatchUpReroutesProvenUpgrades(t *testing.T) {
 
 	backend.setQueue(`[]`)
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollLidarrInstance("music-a", client)
 
 	if _, err := database.Exec(
@@ -281,6 +288,7 @@ func TestLidarrCatchUpReroutesProvenUpgrades(t *testing.T) {
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollLidarrInstance("music-a", client)
 
 	if got := after.musicCalls(); len(got) != 0 {

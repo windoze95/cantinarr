@@ -131,6 +131,7 @@ func TestArrRestartRequiresFreshImportAndPreservesLaterCompletion(t *testing.T) 
 			for _, queueFailure := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/reappears=%t/queue-failure=%t", service, reappears, queueFailure), func(t *testing.T) {
 					b, h, content, poll := restartFixture(t, service)
+					advanceImportTestClock(h)
 					poll(h) // seed; old library files and old imports are not news
 					initial := h.lastPollAt[service]
 					b.mu.Lock()
@@ -138,6 +139,7 @@ func TestArrRestartRequiresFreshImportAndPreservesLaterCompletion(t *testing.T) 
 					b.queueFailed = queueFailure
 					b.mu.Unlock()
 					if queueFailure {
+						advanceImportTestClock(h)
 						poll(h) // arr is unavailable during restart
 						if !h.lastPollAt[service].Equal(initial) {
 							t.Fatal("failed queue advanced cursor")
@@ -147,27 +149,33 @@ func TestArrRestartRequiresFreshImportAndPreservesLaterCompletion(t *testing.T) 
 					b.queueFailed = false
 					b.queue = "[]"
 					b.mu.Unlock()
+					advanceImportTestClock(h)
 					poll(h) // successful, transiently empty queue; old file still exists
 					assertImportCalls(t, content, 0)
+					advanceImportTestClock(h)
 					poll(h) // another empty response must not manufacture evidence
 					assertImportCalls(t, content, 0)
 					if reappears {
 						b.mu.Lock()
 						b.queue = downloading
 						b.mu.Unlock()
+						advanceImportTestClock(h)
 						poll(h)
 					}
 					b.mu.Lock()
 					b.queue = "[]"
-					b.history = b.receipt(time.Now())
+					b.history = b.receipt(nextImportTestTime(h))
 					b.mu.Unlock()
+					advanceImportTestClock(h)
 					poll(h) // genuine later import, including when the queue never reappeared
 					assertImportCalls(t, content, 1)
+					advanceImportTestClock(h)
 					poll(h)
 					assertImportCalls(t, content, 1)
 					// The resolved cursor is durable across a subsequent Cantinarr restart.
 					resumed := NewHub(nil, nil, nil, h.witness.db, content, nil)
 					resumed.restoreQueueWitness()
+					advanceImportTestClock(resumed)
 					poll(resumed)
 					assertImportCalls(t, content, 1)
 				})
@@ -180,14 +188,16 @@ func TestImportHistoryFailureRetriesDurableWindow(t *testing.T) {
 	for _, service := range []string{"radarr", "sonarr", "chaptarr", "lidarr"} {
 		t.Run(service, func(t *testing.T) {
 			b, h, content, poll := restartFixture(t, service)
+			advanceImportTestClock(h)
 			poll(h)
 			drainBroadcasts(t, h)
 			initial := h.lastPollAt[service]
 			b.mu.Lock()
 			b.queue = "[]"
 			b.historyFailed = true
-			b.history = b.receipt(time.Now())
+			b.history = b.receipt(nextImportTestTime(h))
 			b.mu.Unlock()
+			advanceImportTestClock(h)
 			poll(h)
 			assertImportCalls(t, content, 0)
 			queueChanges := 0
@@ -211,8 +221,10 @@ func TestImportHistoryFailureRetriesDurableWindow(t *testing.T) {
 			b.mu.Lock()
 			b.historyFailed = false
 			b.mu.Unlock()
+			advanceImportTestClock(resumed)
 			poll(resumed)
 			assertImportCalls(t, content, 1)
+			advanceImportTestClock(resumed)
 			poll(resumed)
 			assertImportCalls(t, content, 1)
 		})
@@ -223,21 +235,26 @@ func TestImportWhileStillQueuedAndDuringHistoryRead(t *testing.T) {
 	for _, service := range []string{"radarr", "sonarr", "chaptarr", "lidarr"} {
 		t.Run(service, func(t *testing.T) {
 			b, h, content, poll := restartFixture(t, service)
+			advanceImportTestClock(h)
 			poll(h)
 			b.mu.Lock()
 			// The import occurs after history is read but before that poll completes.
 			// A poll-end cursor would step over it permanently.
-			b.afterHistory = func() { b.history = b.receipt(time.Now()) }
+			b.afterHistory = func() { b.history = b.receipt(h.pollTime()) }
 			b.mu.Unlock()
+			advanceImportTestClock(h)
 			poll(h)
 			assertImportCalls(t, content, 0)
+			advanceImportTestClock(h)
 			poll(h) // title remains queued for another episode/file
 			assertImportCalls(t, content, 1)
+			advanceImportTestClock(h)
 			poll(h)
 			assertImportCalls(t, content, 1)
 			b.mu.Lock()
 			b.queue = "[]"
 			b.mu.Unlock()
+			advanceImportTestClock(h)
 			poll(h)
 			assertImportCalls(t, content, 1)
 		})
@@ -248,19 +265,23 @@ func TestImportDuringReadWaitsForDurableBoundary(t *testing.T) {
 	for _, service := range []string{"radarr", "sonarr", "chaptarr", "lidarr"} {
 		t.Run(service, func(t *testing.T) {
 			b, h, content, poll := restartFixture(t, service)
+			advanceImportTestClock(h)
 			poll(h)
 			b.mu.Lock()
 			// This receipt appears in the response, but is newer than the
 			// cursor this poll can persist. Announcing it now would replay it.
-			b.beforeHistory = func() { b.history = b.receipt(time.Now()) }
+			b.beforeHistory = func() { b.history = b.receipt(h.pollTime()) }
 			b.mu.Unlock()
+			advanceImportTestClock(h)
 			poll(h)
 			assertImportCalls(t, content, 0)
 			// Restart before the next poll to exercise the saved boundary too.
 			resumed := NewHub(nil, nil, nil, h.witness.db, content, nil)
 			resumed.restoreQueueWitness()
+			advanceImportTestClock(resumed)
 			poll(resumed)
 			assertImportCalls(t, content, 1)
+			advanceImportTestClock(resumed)
 			poll(resumed)
 			assertImportCalls(t, content, 1)
 		})
@@ -271,9 +292,10 @@ func TestUpgradeEvidenceUsesSamePollBoundary(t *testing.T) {
 	for _, service := range []string{"radarr", "sonarr", "chaptarr", "lidarr"} {
 		t.Run(service, func(t *testing.T) {
 			b, h, content, poll := restartFixture(t, service)
+			advanceImportTestClock(h)
 			poll(h)
 			b.mu.Lock()
-			b.history = b.receipt(time.Now())
+			b.history = b.receipt(nextImportTestTime(h))
 			// A deletion for a subsequent upgrade happens during the read.
 			// It cannot reclassify the earlier import in this closed window.
 			b.beforeHistory = func() {
@@ -286,9 +308,10 @@ func TestUpgradeEvidenceUsesSamePollBoundary(t *testing.T) {
 				case "lidarr":
 					field, event = "albumId", "trackFileDeleted"
 				}
-				b.deleteHistory = fmt.Sprintf(`[{"id":901,%q:%d,"eventType":%q,"date":%q,"data":{"reason":"Upgrade"}}]`, field, id, event, time.Now().UTC().Format(time.RFC3339Nano))
+				b.deleteHistory = fmt.Sprintf(`[{"id":901,%q:%d,"eventType":%q,"date":%q,"data":{"reason":"Upgrade"}}]`, field, id, event, h.pollTime().UTC().Format(time.RFC3339Nano))
 			}
 			b.mu.Unlock()
+			advanceImportTestClock(h)
 			poll(h)
 			assertImportCalls(t, content, 1)
 			upgrades := len(content.upgradedMovieCalls()) + len(content.upgradedEpisodeCalls()) + len(content.upgradedBookCalls()) + len(content.upgradedMusicCalls())

@@ -100,6 +100,7 @@ func TestQueueWitnessResumesBookDepartureAcrossRestart(t *testing.T) {
 	before := &recordingContent{}
 	hubA := NewHub(nil, nil, nil, database, before, nil)
 	backend.setQueue(`[{"id":100,"bookId":7,"status":"downloading","sizeleft":1000}]`)
+	advanceImportTestClock(hubA)
 	hubA.pollChaptarrInstance("books-a", client)
 	if calls := before.calls(); len(calls) != 0 {
 		t.Fatalf("seed poll notified %v, want none", calls)
@@ -107,12 +108,13 @@ func TestQueueWitnessResumesBookDepartureAcrossRestart(t *testing.T) {
 
 	// The download completes while the process is down.
 	backend.setQueue(`[]`)
-	backend.setHistory(freshImportRecords("bookId", "bookFileImported", 7))
+	backend.setHistory(freshImportRecords(hubA, "bookId", "bookFileImported", 7))
 
 	// Process 2: a fresh hub over the same database.
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollChaptarrInstance("books-a", client)
 
 	calls := after.calls()
@@ -121,6 +123,7 @@ func TestQueueWitnessResumesBookDepartureAcrossRestart(t *testing.T) {
 	}
 
 	// And it must not repeat on the next poll.
+	advanceImportTestClock(hubB)
 	hubB.pollChaptarrInstance("books-a", client)
 	if calls := after.calls(); len(calls) != 1 {
 		t.Errorf("resumed witness re-alerted: %v", calls)
@@ -154,13 +157,15 @@ func TestQueueWitnessResumesRadarrDepartureAcrossRestart(t *testing.T) {
 
 	queue = `[{"id":1,"movieId":42,"status":"downloading","size":100,"sizeleft":50}]`
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollRadarrInstance("movies-a", client)
 
 	queue = `[]`
-	imports = freshImportRecords("movieId", "downloadFolderImported", 42)
+	imports = freshImportRecords(hubA, "movieId", "downloadFolderImported", 42)
 	after := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, after, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollRadarrInstance("movies-a", client)
 
 	if got := after.movieCalls(); len(got) != 1 || got[0] != "The Matrix|603" {
@@ -203,10 +208,12 @@ func TestPollSkipsUnknownMediaRows(t *testing.T) {
 		`{"id":2,"movieId":0,"title":"Unmatched.Release","status":"downloading","size":100,"sizeleft":80}]`
 	content := &recordingContent{}
 	hub := NewHub(nil, nil, nil, database, content, nil)
+	advanceImportTestClock(hub)
 	hub.pollRadarrInstance("movies-a", client)
 
 	queue = `[]`
-	imports = freshImportRecords("movieId", "downloadFolderImported", 42)
+	imports = freshImportRecords(hub, "movieId", "downloadFolderImported", 42)
+	advanceImportTestClock(hub)
 	hub.pollRadarrInstance("movies-a", client)
 	if got := content.movieCalls(); len(got) != 1 || got[0] != "The Matrix|603" {
 		t.Fatalf("departure alerts = %v, want exactly the matched movie", got)
@@ -225,6 +232,7 @@ func TestQueueWitnessPersistsBeforeNotifying(t *testing.T) {
 
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
 	backend.setQueue(`[{"id":100,"bookId":7,"status":"downloading","sizeleft":1000}]`)
+	advanceImportTestClock(hubA)
 	hubA.pollChaptarrInstance("books-a", client)
 
 	// This notifier reads the persisted membership at the moment it is called.
@@ -235,9 +243,10 @@ func TestQueueWitnessPersistsBeforeNotifying(t *testing.T) {
 	}}
 
 	backend.setQueue(`[]`)
-	backend.setHistory(freshImportRecords("bookId", "bookFileImported", 7))
+	backend.setHistory(freshImportRecords(hubA, "bookId", "bookFileImported", 7))
 	hubB := NewHub(nil, nil, nil, database, probe, nil)
 	hubB.restoreQueueWitness()
+	advanceImportTestClock(hubB)
 	hubB.pollChaptarrInstance("books-a", client)
 
 	select {
@@ -263,15 +272,17 @@ func TestRestoredDiffHeldUntilContentReady(t *testing.T) {
 
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
 	backend.setQueue(`[{"id":100,"bookId":7,"status":"downloading","sizeleft":1000}]`)
+	advanceImportTestClock(hubA)
 	hubA.pollChaptarrInstance("books-a", client)
 
 	backend.setQueue(`[]`)
-	backend.setHistory(freshImportRecords("bookId", "bookFileImported", 7))
+	backend.setHistory(freshImportRecords(hubA, "bookId", "bookFileImported", 7))
 	content := &readyContent{}
 	content.setReady(false)
 	hubB := NewHub(nil, nil, nil, database, content, nil)
 	hubB.restoreQueueWitness()
 
+	advanceImportTestClock(hubB)
 	hubB.pollChaptarrInstance("books-a", client)
 	if calls := content.calls(); len(calls) != 0 {
 		t.Fatalf("held diff notified %v, want none while the gateway is unenrolled", calls)
@@ -283,6 +294,7 @@ func TestRestoredDiffHeldUntilContentReady(t *testing.T) {
 
 	// Gateway comes up; the very next tick delivers.
 	content.setReady(true)
+	advanceImportTestClock(hubB)
 	hubB.pollChaptarrInstance("books-a", client)
 	if calls := content.calls(); len(calls) != 1 {
 		t.Fatalf("after readiness calls = %v, want exactly one", calls)
@@ -300,14 +312,16 @@ func TestHeldRestoredDiffExpiresAtStalenessCutoff(t *testing.T) {
 
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
 	backend.setQueue(`[{"id":100,"bookId":7,"status":"downloading","sizeleft":1000}]`)
+	advanceImportTestClock(hubA)
 	hubA.pollChaptarrInstance("books-a", client)
 
 	backend.setQueue(`[]`)
-	backend.setHistory(freshImportRecords("bookId", "bookFileImported", 7))
+	backend.setHistory(freshImportRecords(hubA, "bookId", "bookFileImported", 7))
 	content := &readyContent{} // never ready
 	hubB := NewHub(nil, nil, nil, database, content, nil)
 	hubB.restoreQueueWitness()
 
+	advanceImportTestClock(hubB)
 	hubB.pollChaptarrInstance("books-a", client)
 	if len(content.calls()) != 0 {
 		t.Fatal("held diff notified while unready")
@@ -315,6 +329,7 @@ func TestHeldRestoredDiffExpiresAtStalenessCutoff(t *testing.T) {
 
 	// Age the retained snapshot past the cutoff.
 	hubB.restoredWitness["books-a"] = time.Now().Add(-queueWitnessStaleAfter - time.Minute)
+	advanceImportTestClock(hubB)
 	hubB.pollChaptarrInstance("books-a", client)
 
 	if calls := content.calls(); len(calls) != 0 {
@@ -340,6 +355,7 @@ func TestQueueWitnessIgnoresStaleSnapshot(t *testing.T) {
 
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
 	backend.setQueue(`[{"id":100,"bookId":7,"status":"downloading","sizeleft":1000}]`)
+	advanceImportTestClock(hubA)
 	hubA.pollChaptarrInstance("books-a", client)
 
 	if _, err := database.Exec(
@@ -354,6 +370,7 @@ func TestQueueWitnessIgnoresStaleSnapshot(t *testing.T) {
 	hubB := NewHub(nil, nil, nil, database, content, nil)
 	hubB.restoreQueueWitness()
 	askedBefore := len(backend.asked())
+	advanceImportTestClock(hubB)
 	hubB.pollChaptarrInstance("books-a", client)
 
 	if calls := content.calls(); len(calls) != 0 {
@@ -385,6 +402,7 @@ func TestRestoredDiffDropsBatchOverCap(t *testing.T) {
 	}
 	backend.setQueue("[" + joinComma(records) + "]")
 	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	advanceImportTestClock(hubA)
 	hubA.pollChaptarrInstance("books-a", client)
 
 	backend.setQueue(`[]`)
@@ -392,11 +410,12 @@ func TestRestoredDiffDropsBatchOverCap(t *testing.T) {
 	for i := 1; i <= restoredAlertCap+1; i++ {
 		imported = append(imported, i)
 	}
-	backend.setHistory(freshImportRecords("bookId", "bookFileImported", imported...))
+	backend.setHistory(freshImportRecords(hubA, "bookId", "bookFileImported", imported...))
 	content := &recordingContent{}
 	hubB := NewHub(nil, nil, nil, database, content, nil)
 	hubB.restoreQueueWitness()
 	askedBefore := len(backend.asked())
+	advanceImportTestClock(hubB)
 	hubB.pollChaptarrInstance("books-a", client)
 
 	if calls := content.calls(); len(calls) != 0 {
@@ -408,9 +427,11 @@ func TestRestoredDiffDropsBatchOverCap(t *testing.T) {
 
 	// The cap is one-shot and per-instance: steady state is never capped.
 	backend.setQueue(`[{"id":900,"bookId":7,"status":"downloading","sizeleft":1}]`)
+	advanceImportTestClock(hubB)
 	hubB.pollChaptarrInstance("books-a", client)
 	backend.setQueue(`[]`)
-	backend.setHistory(freshImportRecords("bookId", "bookFileImported", 7))
+	backend.setHistory(freshImportRecords(hubB, "bookId", "bookFileImported", 7))
+	advanceImportTestClock(hubB)
 	hubB.pollChaptarrInstance("books-a", client)
 	if calls := content.calls(); len(calls) != 1 {
 		t.Errorf("steady-state departure after a capped batch = %v, want exactly one alert", calls)
@@ -437,6 +458,7 @@ func TestQueueWitnessIgnoresServiceTypeMismatch(t *testing.T) {
 	hub := NewHub(nil, nil, nil, database, content, nil)
 	hub.restoreQueueWitness()
 	backend.setQueue(`[]`)
+	advanceImportTestClock(hub)
 	hub.pollChaptarrInstance("books-a", client)
 
 	if calls := content.calls(); len(calls) != 0 {
@@ -455,8 +477,10 @@ func TestSaveQueueWitnessUpsertsSingleRow(t *testing.T) {
 
 	hub := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
 	backend.setQueue(`[{"id":100,"bookId":7,"status":"downloading","sizeleft":1}]`)
+	advanceImportTestClock(hub)
 	hub.pollChaptarrInstance("books-a", client)
 	backend.setQueue(`[{"id":101,"bookId":9,"status":"downloading","sizeleft":1},{"id":100,"bookId":7,"status":"downloading","sizeleft":1}]`)
+	advanceImportTestClock(hub)
 	hub.pollChaptarrInstance("books-a", client)
 
 	var count int
@@ -487,9 +511,11 @@ func TestPollChaptarrIgnoresDeletedBook(t *testing.T) {
 	content := &recordingContent{}
 	hub := NewHub(nil, nil, nil, nil, content, nil)
 	backend.setQueue(`[{"id":100,"bookId":7,"status":"downloading","sizeleft":1}]`)
+	advanceImportTestClock(hub)
 	hub.pollChaptarrInstance("books-a", client)
 	backend.setQueue(`[]`)
-	backend.setHistory(freshImportRecords("bookId", "bookFileImported", 7))
+	backend.setHistory(freshImportRecords(hub, "bookId", "bookFileImported", 7))
+	advanceImportTestClock(hub)
 	hub.pollChaptarrInstance("books-a", client) // must not panic
 
 	if calls := content.calls(); len(calls) != 0 {
@@ -511,12 +537,14 @@ func TestNilDBHubBehavesAsBefore(t *testing.T) {
 	hub.restoreQueueWitness() // must be a no-op, not a panic
 
 	backend.setQueue(`[{"id":100,"bookId":7,"status":"downloading","sizeleft":1}]`)
+	advanceImportTestClock(hub)
 	hub.pollChaptarrInstance("books-a", client)
 	if len(content.calls()) != 0 {
 		t.Fatal("seed poll notified")
 	}
 	backend.setQueue(`[]`)
-	backend.setHistory(freshImportRecords("bookId", "bookFileImported", 7))
+	backend.setHistory(freshImportRecords(hub, "bookId", "bookFileImported", 7))
+	advanceImportTestClock(hub)
 	hub.pollChaptarrInstance("books-a", client)
 	if calls := content.calls(); len(calls) != 1 {
 		t.Errorf("in-memory witness calls = %v, want exactly one", calls)

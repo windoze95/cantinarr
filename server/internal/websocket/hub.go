@@ -177,13 +177,16 @@ type Hub struct {
 	// announced. Their first resume accepts only imports observed after boot.
 	legacySonarrSince map[string]time.Time
 
-	// lastPollAt records the start of each arr instance's last successfully
-	// resolved poll, the exclusive lower bound for its next import window.
+	// lastPollAt records the end of each arr instance's last resolved history
+	// window, the exclusive lower bound for its next import window.
 	// A gap of queueResumeAfter or more means completions
 	// may have been grabbed and imported entirely unwatched — an arr or network
 	// outage while the process stayed up — so the next poll runs the same
 	// capped resumption as a restart. Written only from the poll goroutine.
 	lastPollAt map[string]time.Time
+
+	// pollTime supplies the wall clock for import windows; nil uses time.Now.
+	pollTime func() time.Time
 
 	// prevArrQueueHash tracks the queue composition (id/status/sizeleft
 	// tuples) per arr instance so any change can emit an invalidation ping.
@@ -569,17 +572,37 @@ func (h *Hub) resumeOrigin(instanceID string) (since time.Time, boot bool) {
 	return time.Time{}, false
 }
 
+// importPollCutoff leaves the current second open because upstream history may
+// have only second precision. A receipt that arrives after this poll with a
+// timestamp at the start of the same second must still belong to the next
+// window. Fractional timestamps use the same non-overlapping bounds. Initial
+// seeding skips completed seconds; a genuine import in the partial seed second
+// is eligible once that second closes.
+func (h *Hub) importPollCutoff(instanceID string) time.Time {
+	now := time.Now()
+	if h.pollTime != nil {
+		now = h.pollTime()
+	}
+	cutoff := now.Truncate(time.Second).Add(-time.Nanosecond)
+	// A legacy precise cursor, or a clock adjustment, must never move backward.
+	if previous := h.lastPollAt[instanceID]; cutoff.Before(previous) {
+		return previous
+	}
+	return cutoff
+}
+
 // resolveAnnouncements requires a fresh import receipt, even when an item
 // disappears from the queue. A successful empty queue after an arr restart is
 // not evidence of completion, and files already in the library prove nothing
 // about the download that disappeared.
 //
-// Every poll after the initial seed reads history from the last resolved poll's
-// start through this poll's start, inclusive. Receipts created during a read
-// wait for the next poll, so saving this cursor cannot replay them. This catches
+// Every poll after the initial seed reads through the last complete second.
+// Arr history can truncate timestamps to seconds: closing a partial second
+// would lose a later import recorded in that same second. Those receipts wait
+// for the next poll, without overlapping resolved windows. This catches
 // imports while a title remains queued and later completions after a transient
-// empty queue. Failed history reads preserve the
-// cursor for retry. Resumptions retain the age, page, burst and gateway guards.
+// empty queue. Failed history reads preserve the cursor for retry. Resumptions
+// retain the age, page, burst and gateway guards.
 func (h *Hub) resolveAnnouncements(instanceID string, importsSince func(time.Time) (fresh, upgraded []int, err error)) (announce, upgraded []int, hold bool) {
 	since, boot := h.resumeOrigin(instanceID)
 	resuming := !since.IsZero()
@@ -1367,7 +1390,7 @@ func (h *Hub) pollAllLidarr() {
 // observation pass as the other pollers, feeding album queue snapshots to
 // remediation.
 func (h *Hub) pollLidarrInstance(instanceID string, client *lidarr.Client) {
-	pollStarted := time.Now()
+	windowEnd := h.importPollCutoff(instanceID)
 	queue, err := client.GetQueue()
 	if err != nil {
 		log.Printf("websocket: poll lidarr queue (%s): %v", instanceID, err)
@@ -1388,7 +1411,7 @@ func (h *Hub) pollLidarrInstance(instanceID string, client *lidarr.Client) {
 	}
 
 	announce, upgraded, hold := h.resolveAnnouncements(instanceID, func(since time.Time) (fresh, upgrades []int, err error) {
-		return lidarrImportsSince(client, since, pollStarted)
+		return lidarrImportsSince(client, since, windowEnd)
 	})
 	if hold {
 		// Retain membership and the import cursor for a history retry or
@@ -1403,8 +1426,8 @@ func (h *Hub) pollLidarrInstance(instanceID string, client *lidarr.Client) {
 	// of a crashlooping container. The save is deliberately outside the
 	// h.content check — enabling push later must not start from amnesia.
 	h.prevLidarrQueue[instanceID] = currentQueue
-	h.saveQueueWitnessAt(instanceID, "lidarr", setKeys(currentQueue), pollStarted)
-	h.lastPollAt[instanceID] = pollStarted
+	h.saveQueueWitnessAt(instanceID, "lidarr", setKeys(currentQueue), windowEnd)
+	h.lastPollAt[instanceID] = windowEnd
 
 	if h.content != nil {
 		// Upgrades pass the same live re-verification as broadcasts; only the
@@ -1449,7 +1472,7 @@ func (h *Hub) pollLidarrInstance(instanceID string, client *lidarr.Client) {
 }
 
 func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
-	pollStarted := time.Now()
+	windowEnd := h.importPollCutoff(instanceID)
 	queue, err := client.GetQueue()
 	if err != nil {
 		log.Printf("websocket: poll radarr queue (%s): %v", instanceID, err)
@@ -1492,7 +1515,7 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 	}
 
 	announce, upgraded, hold := h.resolveAnnouncements(instanceID, func(since time.Time) (fresh, upgrades []int, err error) {
-		return radarrImportsSince(client, since, pollStarted)
+		return radarrImportsSince(client, since, windowEnd)
 	})
 	if hold {
 		h.noteArrQueueComposition(instanceID, "radarr", tuples)
@@ -1502,8 +1525,8 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 
 	// Persist before announcing — see pollChaptarrInstance.
 	h.prevRadarrQueue[instanceID] = currentQueue
-	h.saveQueueWitnessAt(instanceID, "radarr", progressKeys(currentQueue), pollStarted)
-	h.lastPollAt[instanceID] = pollStarted
+	h.saveQueueWitnessAt(instanceID, "radarr", progressKeys(currentQueue), windowEnd)
+	h.lastPollAt[instanceID] = windowEnd
 
 	// Upgrades pass the same live re-verification as broadcasts; only the
 	// audience differs (admins opted into content_upgraded).
@@ -1550,7 +1573,7 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 }
 
 func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
-	pollStarted := time.Now()
+	windowEnd := h.importPollCutoff(instanceID)
 	queue, err := client.GetQueue()
 	if err != nil {
 		log.Printf("websocket: poll sonarr queue (%s): %v", instanceID, err)
@@ -1603,7 +1626,7 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 		sort.Ints(departed)
 	}
 
-	announce, refreshed, hold := h.resolveSonarrAnnouncements(instanceID, client, pollStarted, departed)
+	announce, refreshed, hold := h.resolveSonarrAnnouncements(instanceID, client, windowEnd, departed)
 	if hold {
 		h.noteArrQueueComposition(instanceID, "sonarr", tuples)
 		h.autoDispatchSonarr(instanceID, client)
@@ -1612,8 +1635,8 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 
 	// Persist before announcing — see pollChaptarrInstance.
 	h.prevSonarrQueue[instanceID] = currentQueue
-	h.saveQueueWitnessAt(instanceID, "sonarr", progressKeys(currentQueue), pollStarted)
-	h.lastPollAt[instanceID] = pollStarted
+	h.saveQueueWitnessAt(instanceID, "sonarr", progressKeys(currentQueue), windowEnd)
+	h.lastPollAt[instanceID] = windowEnd
 	delete(h.legacySonarrSince, instanceID)
 
 	// Library refresh is independent of title-specific notification resolution.
@@ -1679,7 +1702,7 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 // with the same auto-dispatch observation pass as Radarr/Sonarr, feeding book
 // queue snapshots to remediation.
 func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
-	pollStarted := time.Now()
+	windowEnd := h.importPollCutoff(instanceID)
 	queue, err := client.GetQueue()
 	if err != nil {
 		log.Printf("websocket: poll chaptarr queue (%s): %v", instanceID, err)
@@ -1700,7 +1723,7 @@ func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 	}
 
 	announce, upgraded, hold := h.resolveAnnouncements(instanceID, func(since time.Time) (fresh, upgrades []int, err error) {
-		return chaptarrImportsSince(client, since, pollStarted)
+		return chaptarrImportsSince(client, since, windowEnd)
 	})
 	if hold {
 		// Retain membership and the import cursor for a history retry or
@@ -1715,8 +1738,8 @@ func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 	// of a crashlooping container. The save is deliberately outside the
 	// h.content check — enabling push later must not start from amnesia.
 	h.prevChaptarrQueue[instanceID] = currentQueue
-	h.saveQueueWitnessAt(instanceID, "chaptarr", setKeys(currentQueue), pollStarted)
-	h.lastPollAt[instanceID] = pollStarted
+	h.saveQueueWitnessAt(instanceID, "chaptarr", setKeys(currentQueue), windowEnd)
+	h.lastPollAt[instanceID] = windowEnd
 
 	if h.content != nil {
 		// Upgrades pass the same live re-verification as broadcasts; only the

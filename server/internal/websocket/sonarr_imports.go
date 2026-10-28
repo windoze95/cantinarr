@@ -71,7 +71,7 @@ func sonarrImportEvidence(client *sonarr.Client, since, until time.Time) (map[in
 // while it stays in the queue. Queue departures still refresh library status,
 // but never authorize an alert. Resumptions share the six-hour window, one-page
 // limit, enrollment hold and independent ten-title caps with the other arrs.
-func (h *Hub) resolveSonarrAnnouncements(instanceID string, client *sonarr.Client, pollStarted time.Time, departed []int) (titles []sonarr.ImportedTitle, refreshed []int, hold bool) {
+func (h *Hub) resolveSonarrAnnouncements(instanceID string, client *sonarr.Client, windowEnd time.Time, departed []int) (titles []sonarr.ImportedTitle, refreshed []int, hold bool) {
 	since, boot := h.resumeOrigin(instanceID)
 	resuming := !since.IsZero()
 	if resuming && time.Since(since) > queueWitnessStaleAfter {
@@ -108,7 +108,7 @@ func (h *Hub) resolveSonarrAnnouncements(instanceID string, client *sonarr.Clien
 	if since.IsZero() {
 		return nil, departed, false // first poll only seeds the witness
 	}
-	imports, err := sonarrImportEvidence(client, since, pollStarted)
+	imports, err := sonarrImportEvidence(client, since, windowEnd)
 	if err == errImportBacklogOverflow {
 		delete(h.restoredWitness, instanceID)
 		log.Printf("websocket: skipping TV import alerts for %s: history exceeds one page", instanceID)

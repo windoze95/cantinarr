@@ -209,6 +209,7 @@ func TestPollChaptarrWitnessesImportedDepartures(t *testing.T) {
 		{"id":101,"bookId":8,"status":"downloading","sizeleft":2000},
 		{"id":102,"bookId":0,"status":"queued","sizeleft":3000}
 	]`)
+	advanceImportTestClock(hub)
 	hub.pollChaptarrInstance("books-a", client)
 	if calls := content.calls(); len(calls) != 0 {
 		t.Fatalf("first poll notified %v, want none (no previous state)", calls)
@@ -217,7 +218,8 @@ func TestPollChaptarrWitnessesImportedDepartures(t *testing.T) {
 	// Second poll: everything left the queue. Only the record with a file may
 	// alert, and the unmapped id must not be fetched at all.
 	backend.setQueue(`[]`)
-	backend.setHistory(freshImportRecords("bookId", "bookFileImported", 7, 8, 0))
+	backend.setHistory(freshImportRecords(hub, "bookId", "bookFileImported", 7, 8, 0))
+	advanceImportTestClock(hub)
 	hub.pollChaptarrInstance("books-a", client)
 
 	calls := content.calls()
@@ -231,6 +233,7 @@ func TestPollChaptarrWitnessesImportedDepartures(t *testing.T) {
 	}
 
 	// Third poll: an empty queue again — no repeat alerts for old departures.
+	advanceImportTestClock(hub)
 	hub.pollChaptarrInstance("books-a", client)
 	if calls := content.calls(); len(calls) != 1 {
 		t.Errorf("witness re-alerted on an unchanged empty queue: %v", calls)
