@@ -233,6 +233,114 @@ void main() {
     );
   });
 
+  testWidgets('Android back history reserves the edge without losing the menu',
+      (tester) async {
+    final backAvailability = <bool>[];
+    final router = await _pumpScrollShell(tester,
+        onBackAvailability: backAvailability.add);
+    final shell = find.byWidgetPredicate(
+        (widget) => widget is Scaffold && widget.drawer != null);
+    ScaffoldState shellState() => tester.state<ScaffoldState>(shell);
+
+    Future<void> edgeDrag() async {
+      await tester.dragFrom(const Offset(1, 400), const Offset(250, 0));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> closeDrawer() async {
+      await tester.tapAt(const Offset(370, 400));
+      await tester.pumpAndSettle();
+    }
+
+    await edgeDrag();
+    expect(shellState().isDrawerOpen, isTrue,
+        reason: 'the root retains its drawer swipe');
+    await closeDrawer();
+
+    router.push('/browse/movie/popular');
+    // Start on the first visible frame, before the history notification has
+    // had a second frame to rebuild the outer shell.
+    await tester.pump();
+    expect(backAvailability, contains(true),
+        reason: 'the shell must still report back handling to its ancestors');
+    await edgeDrag();
+    expect(shellState().isDrawerOpen, isFalse,
+        reason: 'the first swipe after a push must use the new history');
+    expect(router.state.uri.path, '/browse/movie/popular');
+
+    router.push('/movie/1');
+    await tester.pumpAndSettle();
+    final canceled = await tester.startGesture(const Offset(1, 400));
+    await canceled.moveBy(const Offset(150, 0));
+    await tester.pump();
+    await canceled.cancel();
+    await tester.pumpAndSettle();
+    expect(shellState().isDrawerOpen, isFalse);
+    expect(router.state.uri.path, '/movie/1',
+        reason: 'a canceled edge drag must not change either navigation stack');
+
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+    expect(shellState().isDrawerOpen, isTrue,
+        reason: 'pushed pages retain explicit menu access');
+    await closeDrawer();
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(router.state.uri.path, '/browse/movie/popular');
+    await edgeDrag();
+    expect(shellState().isDrawerOpen, isFalse,
+        reason: 'detail back must leave the category history protected');
+
+    // A native back may commit while the original touch sequence is still
+    // ending. Re-enabling the root drawer must not admit that same pointer.
+    final completing = await tester.startGesture(const Offset(1, 400));
+    await completing.moveBy(const Offset(100, 0));
+    await tester.pump();
+    backAvailability.clear();
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await completing.moveBy(const Offset(150, 0));
+    await completing.up();
+    await tester.pumpAndSettle();
+    expect(router.state.uri.path, '/dashboard/movies');
+    expect(shellState().isDrawerOpen, isFalse,
+        reason: 'returning to discovery must not also reveal the drawer');
+    expect(backAvailability, contains(false),
+        reason: 'root back availability must also propagate');
+
+    await edgeDrag();
+    expect(shellState().isDrawerOpen, isTrue,
+        reason: 'a fresh root gesture can open the drawer again');
+    await closeDrawer();
+
+    router.push('/dashboard/movies?copy=1');
+    await tester.pump();
+    await edgeDrag();
+    expect(shellState().isDrawerOpen, isFalse,
+        reason: 'same-path pushes also protect their first frame');
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(router.canPop(), isFalse);
+
+    router.go('/radarr/library');
+    await tester.pumpAndSettle();
+    await edgeDrag();
+    expect(shellState().isDrawerOpen, isTrue,
+        reason: 'switching root modules must retain drawer edge access');
+  });
+
+  testWidgets('iOS keeps drawer edge access on a pushed page', (tester) async {
+    final router = await _pumpScrollShell(tester);
+    router.push('/movie/1');
+    await tester.pumpAndSettle();
+    await tester.dragFrom(const Offset(1, 400), const Offset(250, 0));
+    await tester.pumpAndSettle();
+    final shell = find.byWidgetPredicate(
+        (widget) => widget is Scaffold && widget.drawer != null);
+    expect(tester.state<ScaffoldState>(shell).isDrawerOpen, isTrue);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
   testWidgets(
       'search-bar assistant submit opens route over previous shell content',
       (tester) async {
@@ -2033,7 +2141,10 @@ Future<GoRouter> _pumpAdminDrawer(
 }
 
 /// Shell over long scrollable pages: two module routes and one pushed route.
-Future<GoRouter> _pumpScrollShell(WidgetTester tester) async {
+Future<GoRouter> _pumpScrollShell(
+  WidgetTester tester, {
+  ValueChanged<bool>? onBackAvailability,
+}) async {
   tester.view.physicalSize = const Size(390, 844);
   tester.view.devicePixelRatio = 1;
   addTearDown(() {
@@ -2064,6 +2175,9 @@ Future<GoRouter> _pumpScrollShell(WidgetTester tester) async {
             builder: (_, __) => page('radarr-scroll'),
           ),
           GoRoute(path: '/movie/1', builder: (_, __) => page('detail-scroll')),
+          GoRoute(
+              path: '/browse/movie/popular',
+              builder: (_, __) => page('category-scroll')),
         ],
       ),
     ],
@@ -2078,7 +2192,16 @@ Future<GoRouter> _pumpScrollShell(WidgetTester tester) async {
         backendClientProvider.overrideWithValue(_fakeDio()),
         realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
       ],
-      child: MaterialApp.router(routerConfig: router),
+      child: MaterialApp.router(
+        routerConfig: router,
+        builder: (context, child) => NotificationListener<NavigationNotification>(
+          onNotification: (notification) {
+            onBackAvailability?.call(notification.canHandlePop);
+            return false;
+          },
+          child: child!,
+        ),
+      ),
     ),
   );
   await tester.pumpAndSettle();

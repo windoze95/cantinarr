@@ -371,6 +371,8 @@ One authenticated shell hosts both module pages and secondary work screens over 
 
 Selecting an already open secondary page from the sidebar or mobile drawer keeps the current page and its Back history. Repeated clicks do not add duplicate pages; selecting the same entry from a detail page still opens its parent screen. The mobile drawer closes after either selection.
 
+On Android, the drawer's edge swipe is available at a navigation root. While a category, detail, or other pushed page has Back history, edge swipes leave the drawer closed so they cannot compete with system Back. The hamburger button still opens the drawer on those pages. Other platforms retain their existing drawer gestures.
+
 | Module | Tabs | Access |
 |---|---|---|
 | `/dashboard` | Movies · TV · Releases · Books¹ · Music² | everyone |

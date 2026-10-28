@@ -1,8 +1,9 @@
-Play Sun branding and alternate icons in Settings.
-French interface and metadata; language menus follow translations.
-Clearer media-user imports, invitations, and account linking.
-Updated AI models and optional recommended-model fallback.
+Play Sun branding and alternate app icons.
+French interface and metadata language choices.
+Clearer user imports, invitations, and account linking.
+Updated AI models with optional fallback.
 Smoother web scrolling and reliable artwork.
-Plex, Jellyfin, and Emby availability scans and household access.
-Request missing episodes, follow seasons, or choose another library copy.
-Only my requests filters phone availability alerts on compatible servers.
+Plex, Jellyfin, and Emby availability and household access.
+Request missing episodes, follow seasons, or another library copy.
+Only my requests filters phone availability alerts.
+Back swipes keep the drawer closed on nested pages.
