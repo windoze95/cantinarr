@@ -22,7 +22,10 @@ class DownloadsContentScreen extends ConsumerWidget {
     final activity = ref.watch(downloadsActivityProvider);
     final admin = ref.watch(authProvider).valueOrNull?.user?.isAdmin == true;
     void refresh() => ref.read(downloadsRefreshProvider.notifier).refresh();
-    final value = activity.valueOrNull;
+    // A failed activity read cannot establish current title visibility. Do not
+    // revive retained data after a refusal, transport failure, or remount; only
+    // a successful response can restore it. Pending retries retain the error.
+    final value = activity.hasError ? null : activity.valueOrNull;
     if (value == null && activity.isLoading) {
       return const Center(child: CircularProgressIndicator());
     }

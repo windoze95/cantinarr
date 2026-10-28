@@ -22,6 +22,7 @@ class _Adapter implements HttpClientAdapter {
   final calls = <RequestOptions>[];
   Completer<void>? frenchGate;
   bool fail = false;
+  bool transportFailure = false;
   bool unavailable = false;
   int? accessStatus;
 
@@ -29,6 +30,10 @@ class _Adapter implements HttpClientAdapter {
   Future<ResponseBody> fetch(RequestOptions options,
       Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async {
     calls.add(options);
+    if (transportFailure) {
+      throw DioException(
+          requestOptions: options, type: DioExceptionType.connectionError);
+    }
     final language = options.queryParameters['metadata_language'];
     if (language == 'fr-FR') await frenchGate?.future;
     if (accessStatus != null) {
@@ -150,6 +155,33 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('English title'), findsOneWidget);
     expect(find.text('Titre français'), findsNothing);
+  });
+
+  test('native fallback requires an authorized response even in a fresh client',
+      () async {
+    for (final transportFailure in [false, true]) {
+      final adapter = _Adapter()
+        ..fail = !transportFailure
+        ..transportFailure = transportFailure;
+      final client = MetadataPresentationClient(_dio(adapter), 'fr-FR');
+      const native = MetadataReference.native('movie', 'radarr', 5);
+      const catalog = MetadataReference.catalog('movie', 1);
+      await Future.wait([
+        expectLater(
+            client.load(native),
+            throwsA(isA<MetadataAccessUnavailable>()
+                .having((error) => error.denied, 'denied', false))),
+        expectLater(client.load(catalog), completion(isNull)),
+      ]);
+      adapter
+        ..fail = false
+        ..transportFailure = false
+        ..unavailable = true;
+      expect(await client.load(native), isNull,
+          reason:
+              'authorized translation outage preserves the source fallback');
+      client.dispose();
+    }
   });
 
   test('access and policy refusals remain errors, not source fallbacks',
@@ -276,6 +308,17 @@ void main() {
     expect(find.text('Source series'), findsNothing);
     expect(find.text('Vérification impossible · Réessayer'), findsOneWidget);
     adapter.accessStatus = null;
+    adapter.transportFailure = true;
+    await tester.tap(find.text('Vérification impossible · Réessayer'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 1));
+    await tester.pumpAndSettle();
+    expect(find.text('Vérification impossible · Réessayer'), findsOneWidget);
+    expect(find.text('Source series'), findsNothing,
+        reason:
+            'failed transport cannot reauthorize a previously refused source');
+    expect(find.text('Titre français'), findsNothing);
+    adapter.transportFailure = false;
     await tester.tap(find.text('Vérification impossible · Réessayer'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 1));

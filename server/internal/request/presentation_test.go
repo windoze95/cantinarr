@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
@@ -237,5 +240,159 @@ func TestCombinedTVPresentationRechecksGrantAndCorrectionDuringEnrichment(t *tes
 				t.Fatalf("%s change returned %v, want %v", change, err, want)
 			}
 		})
+	}
+}
+
+func presentationKidsPolicy(t *testing.T, s *Service, uid int64, getter contentpolicy.RawGetter) *contentpolicy.Service {
+	t.Helper()
+	policy := contentpolicy.New(s.db, func() contentpolicy.RawGetter { return getter }, nil)
+	s.SetContentPolicy(policy)
+	if err := policy.Store.Set(uid, contentpolicy.Policy{MaxMovieRating: "PG", MaxTVRating: "TV-PG", RatingRegion: "US", BlockUnrated: true}); err != nil {
+		t.Fatal(err)
+	}
+	return policy
+}
+
+func TestNativePresentationFallbackRequiresKidsPolicyProof(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		change        func(*correctionLab)
+		blocked, down bool
+		episode       int
+		want          error
+	}{
+		{name: "combined allowed"},
+		{name: "combined blocked", blocked: true, want: ErrTitleNotAvailable},
+		{name: "combined rating unreadable", down: true, want: ErrContentPolicyUnavailable},
+		{name: "combined unmapped season", change: func(l *correctionLab) {
+			l.parent["seasons"] = append(l.seasonMetadata(), map[string]any{"seasonNumber": 5})
+		}, want: ErrContentPolicyUnavailable},
+		{name: "unknown ordinary identity", change: func(l *correctionLab) { l.parent["tvdbId"] = 123 }, want: ErrContentPolicyUnavailable},
+		{name: "unreadable native record", change: func(l *correctionLab) { l.parent = nil }, want: ErrContentPolicyUnavailable},
+		{name: "unreadable native episode", change: func(l *correctionLab) { l.episodesDown = true }, episode: 11, want: ErrContentPolicyUnavailable},
+		{name: "absent native episode", episode: 999, want: ErrContentPolicyUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, uid, _, lab := newCorrectionLab(t)
+			libraryParent(lab)
+			if tc.change != nil {
+				tc.change(lab)
+			}
+			presentationKidsPolicy(t, s, uid, &libraryRatings{allAllowed: !tc.blocked, down: tc.down})
+			_, instance, _ := s.resolveSonarr(uid, "")
+			// No metadata source is configured: authorization must still run.
+			got, err := s.NativePresentation(context.Background(), uid, "tv", instance, 42, tc.episode, "fr-FR")
+			if !errors.Is(err, tc.want) || got != nil {
+				t.Fatalf("source fallback %+v %v, want %v", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestNativeMovieFallbackUnknownIdentityOnlyAllowedForAdults(t *testing.T) {
+	for _, kids := range []bool{false, true} {
+		for _, unreadable := range []bool{false, true} {
+			t.Run(fmt.Sprintf("kids=%t/unreadable=%t", kids, unreadable), func(t *testing.T) {
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if unreadable {
+						w.WriteHeader(503)
+						return
+					}
+					_, _ = w.Write([]byte(`{"id":42,"tmdbId":0,"title":"Source title"}`))
+				}))
+				defer upstream.Close()
+				s, uid := newHistoryTestService(t, upstream.URL, "", "")
+				if kids {
+					presentationKidsPolicy(t, s, uid, &libraryRatings{})
+				}
+				_, instance, _ := s.resolveRadarr(uid, "")
+				got, err := s.Presentations(context.Background(), uid, []PresentationReference{{Key: "native", MediaType: "movie", InstanceID: instance, RecordID: 42}}, "fr-FR")
+				if kids {
+					if !errors.Is(err, ErrContentPolicyUnavailable) || got != nil {
+						t.Fatalf("unproved movie escaped: %+v %v", got, err)
+					}
+				} else if err != nil || got == nil || got.Unavailable["native"] == "" {
+					t.Fatalf("adult fallback %+v %v", got, err)
+				}
+			})
+		}
+	}
+}
+
+type presentationRatingsFunc func(string, url.Values) ([]byte, error)
+
+func (f presentationRatingsFunc) DoGetRaw(path string, query url.Values) ([]byte, error) {
+	return f(path, query)
+}
+
+func TestPresentationBatchRechecksNativeFallbackPolicyAfterSibling(t *testing.T) {
+	s, uid, _, lab := newCorrectionLab(t)
+	libraryParent(lab)
+	policy := presentationKidsPolicy(t, s, uid, presentationRatingsFunc(func(path string, _ url.Values) ([]byte, error) {
+		rating := "TV-PG"
+		if path == "/tv/456/content_ratings" {
+			rating = "TV-Y"
+		}
+		return []byte(fmt.Sprintf(`{"results":[{"iso_3166_1":"US","rating":%q}]}`, rating)), nil
+	}))
+	s.SetMetadataService(&presentationFake{read: func(context.Context, string, int, string) (*mediametadata.Presentation, error) {
+		if err := policy.Store.Set(uid, contentpolicy.Policy{MaxMovieRating: "PG", MaxTVRating: "TV-Y", RatingRegion: "US", BlockUnrated: true}); err != nil {
+			t.Error(err)
+		}
+		return &mediametadata.Presentation{Title: "Permitted sibling"}, nil
+	}})
+	_, instance, _ := s.resolveSonarr(uid, "")
+	got, err := s.Presentations(context.Background(), uid, []PresentationReference{
+		{Key: "combined", MediaType: "tv", InstanceID: instance, RecordID: 42},
+		{Key: "sibling", MediaType: "tv", TMDBID: 456},
+	}, "fr-FR")
+	if !errors.Is(err, ErrTitleNotAvailable) || got != nil {
+		t.Fatalf("changed policy accepted source parent: %+v %v", got, err)
+	}
+}
+
+func TestNativePresentationFallbackRechecksCorrectionAfterRatings(t *testing.T) {
+	s, uid, _, lab := newCorrectionLab(t)
+	libraryParent(lab)
+	var once sync.Once
+	presentationKidsPolicy(t, s, uid, &libraryRatings{allAllowed: true, onRead: func() {
+		once.Do(func() {
+			_, err := s.db.Exec(`INSERT INTO tv_match_overrides(tmdb_id,mode,revision) VALUES(113988,'paused',1)`)
+			if err != nil {
+				t.Error(err)
+			}
+		})
+	}})
+	_, instance, _ := s.resolveSonarr(uid, "")
+	got, err := s.NativePresentation(context.Background(), uid, "tv", instance, 42, 0, "fr-FR")
+	if !errors.Is(err, ErrContentPolicyUnavailable) || got != nil {
+		t.Fatalf("changed correction accepted proof: %+v %v", got, err)
+	}
+}
+
+func TestPresentationDeadlineCannotAuthorizeSkippedNativeReferences(t *testing.T) {
+	var reads atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reads.Add(1)
+		<-r.Context().Done()
+	}))
+	defer upstream.Close()
+	s, uid := newHistoryTestService(t, upstream.URL, "", "")
+	presentationKidsPolicy(t, s, uid, &libraryRatings{})
+	_, instance, _ := s.resolveRadarr(uid, "")
+	refs := make([]PresentationReference, 50)
+	for i := range refs {
+		refs[i] = PresentationReference{Key: fmt.Sprint(i), MediaType: "movie", InstanceID: instance, RecordID: i + 1}
+	}
+	started := time.Now()
+	got, err := s.Presentations(context.Background(), uid, refs, "fr-FR")
+	if !errors.Is(err, ErrContentPolicyUnavailable) || got != nil {
+		t.Fatalf("deadline fallback %+v %v", got, err)
+	}
+	if count := reads.Load(); count > 4 {
+		t.Fatalf("deadline started %d native reads, want at most 4", count)
+	}
+	if time.Since(started) > 8*time.Second {
+		t.Fatal("policy proof started another native read budget")
 	}
 }

@@ -103,15 +103,23 @@ void main() {
     final cache = container.read(browseSessionProvider);
     final notifier = container.read(shellSearchProvider.notifier);
     notifier.updateSearch('Matrix');
+    final searchCompleted = Completer<void>();
+    final subscription = container.listen(shellSearchProvider, (_, state) {
+      if (!state.isLoadingSearch && !searchCompleted.isCompleted) {
+        searchCompleted.complete();
+      }
+    });
+    addTearDown(subscription.close);
     await container
         .read(metadataLanguageProvider.notifier)
         .setLanguage('fr-FR');
     await container.pump();
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    await searchCompleted.future;
     expect(container.read(backendClientProvider), same(client));
     expect(container.read(browseSessionProvider), isNot(same(cache)));
     expect(container.read(shellSearchProvider.notifier), same(notifier));
     expect(notifier.state.searchQuery, 'Matrix');
+    expect(notifier.state.error, isNull);
     expect(notifier.state.searchResults.single.title, 'Matrice');
     expect(adapter.requests.last.queryParameters['metadata_language'], 'fr-FR');
   });

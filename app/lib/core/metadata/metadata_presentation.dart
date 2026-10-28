@@ -169,14 +169,19 @@ class MetadataPresentationClient {
             if (!entry.value.isCompleted) entry.value.complete(value);
           }
         } catch (error, stack) {
-          // An optional translation outage can retain source text. A fresh
-          // denial or unreadable policy cannot reuse the older source read.
+          // Only a successful native response confirms current library access.
+          // Provider translation outages arrive as authorized 200 fallbacks;
+          // a transport failure cannot resurrect an older native source read.
           final accessError = _accessUnavailable(error);
           for (final entry in batch) {
             _cache.remove(entry.key);
             if (!entry.value.isCompleted) {
-              if (accessError != null) {
-                entry.value.completeError(accessError, stack);
+              final failure = accessError ??
+                  (!_disposed && entry.key.tmdbId == null
+                      ? const MetadataAccessUnavailable(denied: false)
+                      : null);
+              if (failure != null) {
+                entry.value.completeError(failure, stack);
               } else {
                 entry.value.complete(null);
               }

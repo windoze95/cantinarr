@@ -127,7 +127,7 @@ func (s *Service) Presentations(ctx context.Context, userID int64, refs []Presen
 		if results[i].err != nil {
 			return nil, results[i].err
 		}
-		if err := s.recheckPresentationAccess(userID, ref); err != nil {
+		if err := s.recheckPresentationAccess(ctx, userID, ref); err != nil {
 			return nil, err
 		}
 		if p := results[i].p; p != nil && p.TMDBID > 0 {
@@ -144,16 +144,135 @@ func (s *Service) Presentations(ctx context.Context, userID int64, refs []Presen
 	return out, nil
 }
 
-func (s *Service) recheckPresentationAccess(userID int64, ref PresentationReference) error {
+func (s *Service) recheckPresentationAccess(ctx context.Context, userID int64, ref PresentationReference) error {
 	if ref.InstanceID == "" {
 		return s.checkContentPolicy(userID, s.userIsAdmin(userID), ref.MediaType, ref.TMDBID)
 	}
-	if ref.MediaType == "movie" {
-		_, _, err := s.resolveRadarr(userID, ref.InstanceID)
+	checkGrant := func() error {
+		if ref.MediaType == "movie" {
+			_, _, err := s.resolveRadarr(userID, ref.InstanceID)
+			return err
+		}
+		_, _, err := s.resolveSonarr(userID, ref.InstanceID)
 		return err
 	}
-	_, _, err := s.resolveSonarr(userID, ref.InstanceID)
-	return err
+	if err := checkGrant(); err != nil {
+		return err
+	}
+	policy, err := s.contentPolicyFor(userID, s.userIsAdmin(userID))
+	if err != nil || policy == nil {
+		return err
+	}
+	// Optional translation may fail, be skipped, or have no catalog parent.
+	// None of those outcomes proves that source-language fallback is safe for
+	// a child. Use only completed native reads from this response; a missing
+	// proof fails closed without starting another round of provider work.
+	if ref.MediaType == "movie" {
+		movie, ok := completedPresentationRead[*radarr.Movie](ctx, fmt.Sprintf("movie:%s:%d", ref.InstanceID, ref.RecordID))
+		if !ok || movie == nil || movie.ID != ref.RecordID || movie.TmdbID <= 0 {
+			return ErrContentPolicyUnavailable
+		}
+		if err := s.checkContentPolicy(userID, false, "movie", movie.TmdbID); err != nil {
+			return err
+		}
+		return checkGrant()
+	}
+	series, ok := completedPresentationRead[*sonarr.Series](ctx, fmt.Sprintf("series:%s:%d", ref.InstanceID, ref.RecordID))
+	if !ok || series == nil || series.ID != ref.RecordID {
+		return ErrContentPolicyUnavailable
+	}
+	if ref.EpisodeID > 0 {
+		episodes, ok := completedPresentationRead[[]sonarr.Episode](ctx, fmt.Sprintf("episodes:%s:%d", ref.InstanceID, ref.RecordID))
+		if !ok {
+			return ErrContentPolicyUnavailable
+		}
+		count := 0
+		for _, episode := range episodes {
+			if episode.ID == ref.EpisodeID {
+				if episode.SeriesID != ref.RecordID {
+					return ErrContentPolicyUnavailable
+				}
+				count++
+			}
+		}
+		if count != 1 {
+			return ErrContentPolicyUnavailable
+		}
+	}
+	s.tvMatchMu.Lock()
+	corrected, candidates, err := s.importTVMatches(series)
+	s.tvMatchMu.Unlock()
+	if err != nil {
+		return ErrContentPolicyUnavailable
+	}
+	configuration, _ := json.Marshal([]any{corrected, candidates})
+	ids := map[int]bool{}
+	if !corrected {
+		if series.TmdbID <= 0 {
+			return ErrContentPolicyUnavailable
+		}
+		ids[series.TmdbID] = true
+	} else {
+		for _, season := range series.Seasons {
+			if season.SeasonNumber <= 0 {
+				continue
+			}
+			owner, count := 0, 0
+			for _, candidate := range candidates {
+				for _, target := range candidate.SeasonMap {
+					if target == season.SeasonNumber {
+						owner, count = candidate.TmdbID, count+1
+					}
+				}
+			}
+			if count != 1 || owner <= 0 {
+				return ErrContentPolicyUnavailable
+			}
+			ids[owner] = true
+		}
+		if len(ids) == 0 {
+			return ErrContentPolicyUnavailable
+		}
+	}
+	for id := range ids {
+		if err := s.checkContentPolicy(userID, false, "tv", id); err != nil {
+			return err
+		}
+	}
+	if err := checkGrant(); err != nil {
+		return err
+	}
+	// Rating reads may contact TMDB. Correction edits remain unlocked during
+	// those reads, then invalidate the proof if its ownership changed.
+	s.tvMatchMu.Lock()
+	currentCorrected, currentCandidates, err := s.importTVMatches(series)
+	s.tvMatchMu.Unlock()
+	current, _ := json.Marshal([]any{currentCorrected, currentCandidates})
+	if err != nil || string(current) != string(configuration) {
+		return ErrContentPolicyUnavailable
+	}
+	return nil
+}
+
+func completedPresentationRead[T any](ctx context.Context, key string) (T, bool) {
+	var zero T
+	reads, _ := ctx.Value(presentationContextKey{}).(*nativePresentationReads)
+	if reads == nil {
+		return zero, false
+	}
+	reads.mu.Lock()
+	entry := reads.entries[key]
+	reads.mu.Unlock()
+	if entry == nil {
+		return zero, false
+	}
+	select {
+	case <-entry.done:
+		value, ok := entry.value.(T)
+		return value, ok && entry.err == nil
+	default:
+		return zero, false
+	}
 }
 
 func (s *Service) catalogPresentation(ctx context.Context, userID int64, kind string, id int, language string) (*mediametadata.Presentation, error) {
@@ -183,10 +302,19 @@ func (s *Service) catalogPresentation(ctx context.Context, userID int64, kind st
 
 // NativePresentation resolves identities on the server. A positive Sonarr
 // tmdbId alone does not make a corrected/composite parent a catalog title.
-func (s *Service) NativePresentation(ctx context.Context, userID int64, kind, instanceID string, recordID, episodeID int, language string) (*mediametadata.Presentation, error) {
+func (s *Service) NativePresentation(ctx context.Context, userID int64, kind, instanceID string, recordID, episodeID int, language string) (out *mediametadata.Presentation, resultErr error) {
 	if instanceID == "" || recordID <= 0 {
 		return nil, ErrArrInstanceInvalid
 	}
+	ctx = PresentationContext(ctx)
+	defer func() {
+		if resultErr == nil {
+			ref := PresentationReference{MediaType: kind, InstanceID: instanceID, RecordID: recordID, EpisodeID: episodeID}
+			if err := s.recheckPresentationAccess(ctx, userID, ref); err != nil {
+				out, resultErr = nil, err
+			}
+		}
+	}()
 	if kind == "movie" {
 		client, _, err := s.resolveRadarr(userID, instanceID)
 		if err != nil {

@@ -499,10 +499,8 @@ void main() {
         requestOptions: pending[1].request,
         type: DioExceptionType.connectionError));
     await tester.pumpAndSettle();
-    expect(find.text('A show with a season pack'), findsOneWidget);
-    expect(
-        find.text('Could not refresh downloads. Showing the previous update.'),
-        findsOneWidget);
+    expect(find.text('A show with a season pack'), findsNothing);
+    expect(find.text('Download activity is unavailable.'), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsNothing);
 
     events.add(const WsEvent(type: 'config_changed', data: {}));
@@ -518,6 +516,86 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('A show with a season pack'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
+    c.dispose();
+    await events.close();
+  });
+
+  testWidgets('Content never restores denied titles across retries or remounts',
+      (tester) async {
+    final pending =
+        <({RequestOptions request, RequestInterceptorHandler handler})>[];
+    final dio = Dio(BaseOptions(baseUrl: 'http://server.test'));
+    dio.interceptors.add(InterceptorsWrapper(onRequest: (request, handler) {
+      pending.add((request: request, handler: handler));
+    }));
+    final events = StreamController<WsEvent>.broadcast();
+    final c = ProviderContainer(overrides: [
+      authProvider.overrideWith(() => TestAuth(session())),
+      backendClientProvider.overrideWithValue(dio),
+      realtimeEventsProvider.overrideWithValue(events.stream),
+      effectiveMetadataLanguageProvider.overrideWithValue('fr-FR'),
+    ]);
+    // Keep the activity state alive like another mounted subscriber while the
+    // Content widget is removed and rebuilt.
+    final subscription = c.listen(downloadsActivityProvider, (_, __) {});
+    Future<void> mount() => tester.pumpWidget(UncontrolledProviderScope(
+        container: c,
+        child:
+            const MaterialApp(home: Scaffold(body: DownloadsContentScreen()))));
+    Future<void> refresh() async {
+      c.read(downloadsRefreshProvider.notifier).refresh();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+
+    void expectNoTitles() {
+      expect(find.text('Série française'), findsNothing);
+      expect(find.text('A show with a season pack'), findsNothing);
+      expect(find.text('An actual movie title'), findsNothing);
+    }
+
+    final french = sampleJson();
+    french['groups'][0]['presentation'] = {'title': 'Série française'};
+    await mount();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+    pending.single.handler.resolve(
+        Response(requestOptions: pending.single.request, data: french));
+    await tester.pumpAndSettle();
+    expect(find.text('Série française'), findsOneWidget);
+
+    await refresh();
+    pending.last.handler.reject(DioException(
+      requestOptions: pending.last.request,
+      type: DioExceptionType.badResponse,
+      response: Response(requestOptions: pending.last.request, statusCode: 503),
+    ));
+    await tester.pumpAndSettle();
+    expectNoTitles();
+    expect(find.text('Download activity is unavailable.'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    await mount();
+    await tester.pumpAndSettle();
+    expectNoTitles();
+    await refresh();
+    expectNoTitles();
+    pending.last.handler.reject(DioException(
+        requestOptions: pending.last.request,
+        type: DioExceptionType.connectionError));
+    await tester.pumpAndSettle();
+    expectNoTitles();
+    expect(find.text('Download activity is unavailable.'), findsOneWidget);
+
+    await refresh();
+    expectNoTitles();
+    pending.last.handler
+        .resolve(Response(requestOptions: pending.last.request, data: french));
+    await tester.pumpAndSettle();
+    expect(find.text('Série française'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    subscription.close();
+    await tester.pump(const Duration(milliseconds: 1));
     c.dispose();
     await events.close();
   });
