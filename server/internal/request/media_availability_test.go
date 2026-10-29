@@ -128,25 +128,28 @@ func TestMediaCoverageUsesCanonicalEpisodeIdentity(t *testing.T) {
 // This fixture preserves unrelated native monitoring and records every write.
 // Canonical episode IDs differ from Sonarr record IDs and native numbering.
 type missingTVFixture struct {
-	missingBinding    map[int]bool
-	onMonitor         func()
-	commandsCompleted bool
-	findCalls         int
-	queueUnavailable  bool
-	commandHistory    bool
-	commandTimes      []time.Time
-	unavailable       bool
-	mu                sync.Mutex
-	exists, monitored bool
-	count             int
-	future            map[int]bool
-	files             map[int]bool
-	monitoredEpisodes map[int]bool
-	adds              []sonarr.AddSeriesRequest
-	monitorWrites     [][]int
-	commands          [][]int
-	uncertain         bool
-	externalCalls     int
+	missingBinding      map[int]bool
+	onMonitor           func()
+	commandsCompleted   bool
+	findCalls           int
+	queueUnavailable    bool
+	episodesUnavailable bool
+	episodesPayload     string
+	commandHistory      bool
+	commandTimes        []time.Time
+	unavailable         bool
+	mu                  sync.Mutex
+	exists, monitored   bool
+	count               int
+	future              map[int]bool
+	airDates            map[int]string
+	files               map[int]bool
+	monitoredEpisodes   map[int]bool
+	adds                []sonarr.AddSeriesRequest
+	monitorWrites       [][]int
+	commands            [][]int
+	uncertain           bool
+	externalCalls       int
 }
 
 func newMissingTVFixture(t *testing.T) (*Service, int64, *missingTVFixture, *fakeMediaAvailability) {
@@ -198,6 +201,14 @@ func newMissingTVFixture(t *testing.T) (*Service, int64, *missingTVFixture, *fak
 			}
 			json.NewEncoder(w).Encode(series())
 		case r.Method == "GET" && r.URL.Path == "/api/v3/episode":
+			if f.episodesUnavailable {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			if f.episodesPayload != "" {
+				_, _ = w.Write([]byte(f.episodesPayload))
+				return
+			}
 			episodes := []map[string]any{}
 			for n := 1; n <= f.count; n++ {
 				air := "2020-01-01T00:00:00Z"
@@ -322,6 +333,9 @@ func newMissingTVFixture(t *testing.T) (*Service, int64, *missingTVFixture, *fak
 				air := "2020-01-01"
 				if f.future[n] && season == 1 {
 					air = "2099-01-01"
+				}
+				if override, ok := f.airDates[n]; ok && season == 1 {
+					air = override
 				}
 				episodes = append(episodes, map[string]any{"id": id, "season_number": season, "episode_number": n, "air_date": air})
 			}
@@ -495,6 +509,133 @@ func TestAvailabilityProjectionPreservesArrStateAndAvoidsEpisodeIDFanout(t *test
 	}
 	if f.externalCalls != 0 {
 		t.Fatalf("catalog read fanned out %d external-id calls", f.externalCalls)
+	}
+}
+
+func TestEmptyTVAvailabilityDoesNotDependOnEpisodeAirDates(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		airDate       string
+		providerKnown bool
+	}{
+		{"aired", "2020-01-01", true},
+		{"future", "2099-01-01", true},
+		{"missing date", "", true},
+		{"invalid date", "not-a-date", true},
+		{"unverified provider remains unknown", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, uid, f, source := newMissingTVFixture(t)
+			f.airDates = map[int]string{1: tc.airDate}
+			// Sonarr successfully returns no series, and the provider reports
+			// no files. Only a verified provider read can prove absence.
+			result := knownMedia()
+			result.Known = tc.providerKnown
+			source.set(result)
+			out, err := s.GetUserStatus(uid, 200, "tv", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.Status != StatusUnavailable || out.StatusKnown == nil || !*out.StatusKnown || out.Match == nil || out.Match.State != "resolved" {
+				t.Fatalf("fixture must establish known Sonarr absence and a resolved match: %+v", out)
+			}
+			if out.Availability == nil || out.Availability.Status != StatusUnavailable || out.Availability.StatusKnown != tc.providerKnown {
+				t.Fatalf("empty library availability must reflect provider verification, not episode dates: %+v", out.Availability)
+			}
+		})
+	}
+}
+
+func TestTVUnknownDatesPreserveIncompleteEvidence(t *testing.T) {
+	for _, scenario := range []string{"provider files", "Sonarr files", "paused match", "unreadable Sonarr"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, uid, f, source := newMissingTVFixture(t)
+			f.airDates = map[int]string{1: ""}
+			source.set(knownMedia())
+			switch scenario {
+			case "provider files":
+				source.set(knownMedia(2))
+			case "Sonarr files":
+				f.exists = true
+				f.files[2] = true
+			case "paused match":
+				if _, err := s.db.Exec(`INSERT INTO tv_match_overrides(tmdb_id,mode,revision) VALUES(200,'paused',1)`); err != nil {
+					t.Fatal(err)
+				}
+			case "unreadable Sonarr":
+				f.unavailable = true
+			}
+			out, err := s.GetUserStatus(uid, 200, "tv", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.Availability == nil || out.Availability.StatusKnown || out.Availability.Status == StatusAvailable {
+				t.Fatalf("incomplete evidence must not become known absence or complete coverage: %+v", out.Availability)
+			}
+			if scenario == "provider files" && out.Availability.Status != StatusPartial {
+				t.Fatalf("verified files must remain partial: %+v", out.Availability)
+			}
+			if scenario == "Sonarr files" && out.Status != StatusPartial {
+				t.Fatalf("fixture must retain live Sonarr files: %+v", out)
+			}
+			if scenario == "paused match" || scenario == "unreadable Sonarr" {
+				if out.StatusKnown == nil || *out.StatusKnown {
+					t.Fatalf("failed match/library evidence became known: %+v", out)
+				}
+			}
+		})
+	}
+}
+
+func TestTVUnknownDatesRecheckEmptyLibraryAfterInitialStatus(t *testing.T) {
+	for _, scenario := range []string{"still absent", "empty series", "empty episode list", "warm import", "cold import", "series read fails", "episode read fails", "null episode list"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, uid, f, source := newMissingTVFixture(t)
+			f.airDates = map[int]string{1: ""}
+			source.set(knownMedia())
+			out, err := s.userTVStatus(uid, 200, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.Status != StatusUnavailable || out.StatusKnown == nil || !*out.StatusKnown {
+				t.Fatalf("fixture must begin with verified Sonarr absence: %+v", out)
+			}
+			// The later coverage read must stand on its own, even when an
+			// import's episode identities have never been cached before.
+			if scenario == "warm import" {
+				if _, err := s.canonicalEpisodes(200, []int{1, 2}, true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch scenario {
+			case "empty series":
+				f.exists = true
+			case "empty episode list":
+				f.exists = true
+				f.episodesPayload = "[]"
+			case "warm import", "cold import":
+				f.exists = true
+				f.files[2] = true
+			case "series read fails":
+				f.unavailable = true
+			case "episode read fails":
+				f.exists = true
+				f.episodesUnavailable = true
+			case "null episode list":
+				f.exists = true
+				f.episodesPayload = "null"
+			}
+			if err := s.attachMediaAvailability(context.Background(), uid, 200, "tv", "", out); err != nil {
+				t.Fatal(err)
+			}
+			wantKnown := scenario == "still absent" || scenario == "empty series" || scenario == "empty episode list"
+			if out.Availability == nil || out.Availability.StatusKnown != wantKnown || out.Availability.Status == StatusAvailable {
+				t.Fatalf("later files or failed reads must not reuse earlier absence: %+v", out.Availability)
+			}
+			if scenario == "warm import" && out.Availability.Status != StatusPartial {
+				t.Fatalf("verified episode files must remain partial: %+v", out.Availability)
+			}
+		})
 	}
 }
 
