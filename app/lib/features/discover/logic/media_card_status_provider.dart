@@ -56,7 +56,12 @@ final mediaCardStatusProvider = FutureProvider.autoDispose
   ref.onResume(() =>
       timer = Timer(cache.remainingFreshness(key.$2), ref.invalidateSelf));
   final result = await cache.read(key.$2);
-  if (!disposed)
-    timer = Timer(cache.remainingFreshness(key.$2), ref.invalidateSelf);
+  // Replacing the authorization scope cancels its pending cache reads. Their
+  // completion is not a backend verdict for the replacement scope.
+  if (disposed ||
+      !identical(cache, ref.read(mediaCardStatusCacheProvider(key.$1)))) {
+    return null;
+  }
+  timer = Timer(cache.remainingFreshness(key.$2), ref.invalidateSelf);
   return result;
 });

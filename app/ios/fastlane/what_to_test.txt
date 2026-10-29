@@ -1,8 +1,8 @@
-Browse and request movies, TV, books, and music from your self-hosted Cantinarr server. Follow downloads and receive notifications when requests are ready. Administrators can manage libraries, approvals, accounts, and connected services. Optional AI tools use the provider you or your administrator configure.
+Browse and request movies, TV, books, and music from your Cantinarr server. Follow downloads and receive availability alerts. Administrators manage libraries, approvals, users, and services.
 
 Please test upgrading from the current app with your sign-in retained, browsing and requesting media, passkey sign-in, Cantinarr connect links, and push notifications. Check both the stable 1.0.1 server and the 1.1.0 candidate server. Administrators should also check Request Defaults quality-profile lists and OpenAI OAuth model choices.
 
-When reporting an issue, include your device, iOS version, and Cantinarr server version.
+Report issues with your device, iOS version, and server version.
 
 On a compatible 1.1.0 server, test Plex, Jellyfin, and Emby library scanning and Library access only for household users. Check unmanaged movie and episode availability, deliberate Request in library copies, missing-episode requests, and Follow season/Stop following. Scanning or associating a library must never start a download by itself.
 
@@ -21,3 +21,5 @@ New Play Sun branding. In Settings > Account > App icon, try Play Sign, Play Dom
 In Settings > Notifications > Push Notifications, test Only my requests on a compatible server. Movie, TV episode, book-format, and music availability alerts should follow your requests and selected library. Check shared book requests, selected TV seasons and episode following, other household requests, saved choices after restart, and existing category/master opt-outs. Discord settings remain separate. Older servers should hide the new switch.
 
 iPhone: test completed/canceled left-edge Back swipes on direct and nested detail/category pages, list position, tab switches and app resume. Hamburger and root drawer swipes still work. Protected editors, even unchanged, use button Back. Keep editing must retain the draft and page position; Discard changes must exit.
+
+Discovery: check badges after sign-in refresh, titles absent from your libraries, and complete shows with an empty upcoming season. Real library failures must still show Status unknown.

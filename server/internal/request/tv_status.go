@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
+	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
 
 func tvUnknown(match *TVMatch, err error) *StatusResponse {
@@ -57,7 +58,9 @@ func (s *Service) tvLiveStatus(userID int64, tmdbID int, instanceID string) (*St
 		seasons[season.SeasonNumber] = season
 	}
 	epMonitored := map[int]bool{}
+	epPresent := map[int]bool{}
 	for _, ep := range episodes {
+		epPresent[ep.SeasonNumber] = true
 		if ep.Monitored {
 			epMonitored[ep.SeasonNumber] = true
 		}
@@ -66,7 +69,7 @@ func (s *Service) tvLiveStatus(userID int64, tmdbID int, instanceID string) (*St
 	requested := false
 	for source, target := range m.SeasonMap {
 		season, exists := seasons[target]
-		if !exists {
+		if !exists && (epErr != nil || epPresent[target] || !s.tvEmptySeasonPlaceholder(m, source, time.Now())) {
 			known = false
 			out.StatusUnknownReason = "tv_seasons_unmapped"
 		}
@@ -93,6 +96,44 @@ func (s *Service) tvLiveStatus(userID int64, tmdbID int, instanceID string) (*St
 		out.tvFileIDs = countedEpisodeFiles(episodes, m.SeasonMap)
 	}
 	return out, nil
+}
+
+// An announced empty season can precede its Sonarr season row. Confirm absence
+// in both catalog reads before letting it leave verified aired files unchanged.
+// This is status-only evidence: it never validates or alters a request target.
+func (s *Service) tvEmptySeasonPlaceholder(match *TVMatch, source int, now time.Time) bool {
+	if match == nil || match.State != "resolved" || match.SeasonMap[source] != source ||
+		(match.Provenance != "metadata" && match.Provenance != "title") {
+		return false
+	}
+	details, err := s.tvSource(match.TmdbID)
+	if err != nil {
+		return false
+	}
+	var season *tmdb.TVSeason
+	for i := range details.Seasons {
+		if details.Seasons[i].SeasonNumber == source {
+			if season != nil {
+				return false
+			}
+			season = &details.Seasons[i]
+		}
+	}
+	if season == nil || season.EpisodeCount != 0 {
+		return false
+	}
+	if season.AirDate != "" {
+		date, err := time.Parse("2006-01-02", season.AirDate)
+		if err != nil || !date.After(now.UTC().Truncate(24*time.Hour)) {
+			return false
+		}
+	}
+	client := s.bridge.TMDB()
+	if client == nil {
+		return false
+	}
+	episodes, err := client.GetTVSeason(match.TmdbID, source)
+	return err == nil && episodes != nil && episodes.SeasonNumber == source && episodes.Episodes != nil && len(episodes.Episodes) == 0
 }
 
 // countedEpisodeFiles lists the files behind the episodes this status counted:

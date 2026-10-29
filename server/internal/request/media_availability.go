@@ -293,9 +293,25 @@ func (s *Service) attachMediaAvailability(ctx context.Context, userID int64, tmd
 		canonical = s.bindProviderEpisodeIDs(tmdbID, canonical, result.Episodes)
 		covered, fourK, known := mediaEpisodeCoverage(tmdbID, canonical, result)
 		a.StatusKnown = a.StatusKnown && known
+		arrEmptyVerified := false
 		if client, _, e := s.resolveSonarr(userID, instanceID); e == nil && client != nil && out.Match != nil && out.Match.State == "resolved" {
-			if series, e := client.GetSeriesByTVDB(out.Match.TVDBID); e == nil && series != nil {
-				if episodes, e := client.GetAllEpisodes(series.ID); e == nil {
+			if series, e := client.GetSeriesByTVDB(out.Match.TVDBID); e == nil {
+				if series == nil {
+					arrEmptyVerified = true
+				} else if episodes, e := client.GetAllEpisodes(series.ID); e == nil && episodes != nil {
+					arrEmptyVerified = true
+					mappedSeasons := map[int]bool{}
+					for _, target := range out.Match.SeasonMap {
+						mappedSeasons[target] = true
+					}
+					// Raw files disprove emptiness even before their canonical
+					// episode bindings are cached.
+					for _, ep := range episodes {
+						if ep.HasFile && mappedSeasons[ep.SeasonNumber] {
+							arrEmptyVerified = false
+							break
+						}
+					}
 					for _, ep := range canonical {
 						if native, e := resolveCanonicalEpisode(ep, series.ID, episodes); e == nil && native != nil && native.HasFile {
 							covered[ep.key()] = true
@@ -307,11 +323,17 @@ func (s *Service) attachMediaAvailability(ctx context.Context, userID int64, tmd
 		counts := map[int]*SeasonStatus{}
 		total, files, all4K := 0, 0, true
 		unknownDates := map[int]bool{}
+		// Successful provider and arr reads can prove there are no files
+		// without knowing when every episode airs. Keep date uncertainty for
+		// actual holdings and for any library whose state is not verified.
+		knownEmpty := a.StatusKnown && arrEmptyVerified && len(result.Episodes) == 0 && len(covered) == 0 &&
+			out.StatusKnown != nil && *out.StatusKnown &&
+			out.Status != StatusAvailable && out.Status != StatusPartial
 		for _, ep := range canonical {
 			if counts[ep.SeasonNumber] == nil {
 				counts[ep.SeasonNumber] = &SeasonStatus{SeasonNumber: ep.SeasonNumber, Status: StatusUnavailable}
 			}
-			if _, e := time.Parse("2006-01-02", ep.AirDate); e != nil && !covered[ep.key()] {
+			if _, e := time.Parse("2006-01-02", ep.AirDate); e != nil && !covered[ep.key()] && !knownEmpty {
 				a.StatusKnown = false
 				unknownDates[ep.SeasonNumber] = true
 			}
