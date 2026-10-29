@@ -1,17 +1,51 @@
 ---
 title: Plex, Jellyfin, and Emby
-description: Grant playback access, choose shared libraries, and connect titles to a user's actual media account.
+description: Scan existing movies and shows, associate household libraries, and manage playback accounts.
 sidebar:
   order: 3
 ---
 
-Media-server connections manage access to existing playback services. They are separate from Radarr and Sonarr, which manage acquisition and imported library files.
+Media-server connections can report movies and episodes that already exist in Plex, Jellyfin, or Emby, including titles that Radarr and Sonarr do not manage. They also manage access to those playback services.
+
+Scanning only reads your libraries. It never adds a show to Sonarr, creates a request, or starts a download, including for shows that are still airing.
 
 ## Connect a service
 
 Open **Settings > Add Instance** and select Plex, Jellyfin, or Emby. Use a connection address the Cantinarr server can reach.
 
 For Plex, follow the browser PIN flow with the account that owns the server, then select the server to share. For Jellyfin and Emby, use the service credentials requested by the form. Test before selecting libraries.
+
+## Scan existing movies and shows
+
+1. Open the saved server under **Settings**.
+2. In **Library availability**, enable scanning and select the movie and TV libraries to include.
+3. Save, then use **Scan now** to check the first inventory. Review the progress, last successful scan, and any error.
+
+Scan selection is separate from **Shared libraries**. Changing which libraries are scanned does not change any media-server account or sharing permission. Empty selection scans nothing, and existing installations start with scanning off.
+
+Cantinarr checks additions and changes every five minutes and performs a full reconciliation every 24 hours. Before making a missing-content request, it verifies current coverage again. A failed scan or inaccessible server is an unknown result, not proof that content is missing. Retry the scan or fix the connection before relying on it.
+
+## Choose who sees availability
+
+For a user with a linked account, Cantinarr checks that account's current access to the selected libraries. A server owner seeing a title does not prove that another account can see it.
+
+For a household that shares one account on the TV, open the user's **Media server accounts** section under **Settings > Users** and choose **Library access only**. Select the server and libraries, review the selection, and save. The user does not need a personal Plex, Jellyfin, or Emby account for this association.
+
+If the selected provider has only one eligible connected server, the picker preselects that server and its current scan libraries. Nothing is assigned until the administrator saves this separate access choice. Adding another scan library later does not expand the saved association.
+
+A library-only association affects availability and missing-content decisions. It does not create an account, send an invitation, grant playback credentials, or allow TV control. Kids' content limits still apply. Linking an individual account replaces the library-only association; unlinking it does not restore the old association.
+
+## Request missing content or another copy
+
+Movie and TV details can show **Available** from a media server while the selected Radarr or Sonarr library has a different status. The library chips continue to describe each acquisition library's own files and requests.
+
+Use the ordinary request action to acquire missing content. For a partly available season, Cantinarr counts distinct episodes across accessible sources and searches only for verified missing episodes. An explicit **Follow selected seasons** request keeps checking that selected season for newly aired missing episodes. It does not add other seasons or begin following shows merely discovered by a scan.
+
+Episode numbering must map safely to catalog identities. Combined episode files with ambiguous ordering remain unverified. When air metadata supplies only a date, automatic searches wait until that UTC date has ended.
+
+Use **Request in library** when you deliberately want a copy in a particular authorized Radarr or Sonarr library, such as a different quality target. Existing approval and quota rules still apply.
+
+**Stop following** ends future Cantinarr scheduling. It does not delete files, cancel shared downloads, or change monitoring already configured in Sonarr. Existing Sonarr automation can still acquire content independently of Cantinarr.
 
 ## Set the address users open
 

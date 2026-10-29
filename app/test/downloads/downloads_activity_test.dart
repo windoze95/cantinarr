@@ -7,6 +7,7 @@ import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/network/websocket_client.dart';
 import 'package:cantinarr/core/providers/module_provider.dart';
 import 'package:cantinarr/core/providers/realtime_provider.dart';
+import 'package:cantinarr/core/storage/metadata_preferences.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/downloads/data/downloads_activity.dart';
@@ -23,36 +24,92 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Map<String, dynamic> sampleJson({int? count = 2, bool complete = true}) => {
-  'count': count, 'complete': complete, 'scope': 'all', 'user_scope': 'all',
-  'jobs': [
-    {'id': 'pack', 'status': 'paused', 'size_bytes': 1000, 'size_left_bytes': 500,
-      'progress': 50, 'name': 'Show.S01.1080p.Pack', 'control': {'instance_id': 'nzb',
-        'item_id': '42', 'service_type': 'nzbget', 'client_name': 'NZBGet'}},
-    {'id': 'movie-job', 'status': 'downloading', 'size_bytes': 1000,
-      'size_left_bytes': 250, 'progress': 75},
-  ],
-  'groups': [
-    {'id': 'show', 'media_type': 'tv', 'title': 'A show with a season pack',
-      'instance_name': 'Family TV', 'job_ids': ['pack'], 'progress': 50,
-      'details_known': true, 'children': [
-        {'id': 'e1', 'season': 1, 'episode': 1, 'title': 'A beginning', 'job_ids': ['pack']},
-        {'id': 'e2', 'season': 1, 'episode': 2, 'title': 'The next day', 'job_ids': ['pack']},
-      ]},
-    {'id': 'movie', 'media_type': 'movie', 'title': 'An actual movie title',
-      'year': 2026, 'instance_name': 'Movies', 'job_ids': ['movie-job'],
-      'progress': 75, 'details_known': true, 'children': []},
-  ],
-};
+      'count': count,
+      'complete': complete,
+      'scope': 'all',
+      'user_scope': 'all',
+      'jobs': [
+        {
+          'id': 'pack',
+          'status': 'paused',
+          'size_bytes': 1000,
+          'size_left_bytes': 500,
+          'progress': 50,
+          'name': 'Show.S01.1080p.Pack',
+          'control': {
+            'instance_id': 'nzb',
+            'item_id': '42',
+            'service_type': 'nzbget',
+            'client_name': 'NZBGet'
+          }
+        },
+        {
+          'id': 'movie-job',
+          'status': 'downloading',
+          'size_bytes': 1000,
+          'size_left_bytes': 250,
+          'progress': 75
+        },
+      ],
+      'groups': [
+        {
+          'id': 'show',
+          'media_type': 'tv',
+          'title': 'A show with a season pack',
+          'instance_name': 'Family TV',
+          'job_ids': ['pack'],
+          'progress': 50,
+          'details_known': true,
+          'children': [
+            {
+              'id': 'e1',
+              'season': 1,
+              'episode': 1,
+              'title': 'A beginning',
+              'job_ids': ['pack']
+            },
+            {
+              'id': 'e2',
+              'season': 1,
+              'episode': 2,
+              'title': 'The next day',
+              'job_ids': ['pack']
+            },
+          ]
+        },
+        {
+          'id': 'movie',
+          'media_type': 'movie',
+          'title': 'An actual movie title',
+          'year': 2026,
+          'instance_name': 'Movies',
+          'job_ids': ['movie-job'],
+          'progress': 75,
+          'details_known': true,
+          'children': []
+        },
+      ],
+    };
 
 DownloadsActivity sample({int? count = 2, bool complete = true}) =>
     DownloadsActivity.fromJson(sampleJson(count: count, complete: complete));
 
-AuthState session({bool admin = false, bool supported = true, String scope = 'all',
-    int user = 2, String server = 'http://server.test'}) => AuthState(
-  user: UserProfile(id: user, username: 'viewer', role: admin ? 'admin' : 'user'),
-  connection: BackendConnection(serverUrl: server, accessToken: 'test', refreshToken: 'test',
-      downloadsActivity: supported, downloadsUserScope: scope),
-);
+AuthState session(
+        {bool admin = false,
+        bool supported = true,
+        String scope = 'all',
+        int user = 2,
+        String server = 'http://server.test'}) =>
+    AuthState(
+      user: UserProfile(
+          id: user, username: 'viewer', role: admin ? 'admin' : 'user'),
+      connection: BackendConnection(
+          serverUrl: server,
+          accessToken: 'test',
+          refreshToken: 'test',
+          downloadsActivity: supported,
+          downloadsUserScope: scope),
+    );
 
 class TestAuth extends AuthNotifier {
   final AuthState initial;
@@ -65,17 +122,76 @@ class TestAuth extends AuthNotifier {
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
+  testWidgets('metadata language switches Content without retaining old labels',
+      (tester) async {
+    final pending =
+        <({RequestOptions request, RequestInterceptorHandler handler})>[];
+    final dio = Dio(BaseOptions(baseUrl: 'http://server.test'));
+    dio.interceptors.add(InterceptorsWrapper(onRequest: (request, handler) {
+      pending.add((request: request, handler: handler));
+    }));
+    final events = StreamController<WsEvent>.broadcast();
+    final language = StateProvider<String?>((_) => 'en-US');
+    final c = ProviderContainer(overrides: [
+      authProvider.overrideWith(() => TestAuth(session())),
+      backendClientProvider.overrideWithValue(dio),
+      realtimeEventsProvider.overrideWithValue(events.stream),
+      effectiveMetadataLanguageProvider
+          .overrideWith((ref) => ref.watch(language)),
+    ]);
+    await tester.pumpWidget(UncontrolledProviderScope(
+        container: c,
+        child:
+            const MaterialApp(home: Scaffold(body: DownloadsContentScreen()))));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+    expect(
+        pending.single.request.queryParameters['metadata_language'], 'en-US');
+    final english = sampleJson();
+    english['groups'][0]['presentation'] = {'title': 'English show'};
+    pending.single.handler.resolve(
+        Response(requestOptions: pending.single.request, data: english));
+    await tester.pumpAndSettle();
+    expect(find.text('English show'), findsOneWidget);
+
+    c.read(language.notifier).state = 'fr-FR';
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+    expect(find.text('English show'), findsNothing);
+    expect(pending, hasLength(2));
+    expect(pending.last.request.queryParameters['metadata_language'], 'fr-FR');
+    final french = sampleJson();
+    french['groups'][0]['presentation'] = {'title': 'Série française'};
+    pending.last.handler
+        .resolve(Response(requestOptions: pending.last.request, data: french));
+    await tester.pumpAndSettle();
+    expect(find.text('Série française'), findsOneWidget);
+    expect(pending.every((p) => p.request.path == '/api/downloads/activity'),
+        isTrue);
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+    await events.close();
+  });
+
   for (final width in [390.0, 1100.0]) {
-    testWidgets('Content groups and shared progress fit width $width', (tester) async {
+    testWidgets('Content groups and shared progress fit width $width',
+        (tester) async {
       tester.view.physicalSize = Size(width, 844);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       final actions = <String>[];
-      await tester.pumpWidget(MaterialApp(theme: AppTheme.dark,
-        debugShowCheckedModeBanner: false,
-        home: Scaffold(body: RepaintBoundary(key: const Key('content-golden'),
-          child: DownloadsActivityView(activity: sample(), admin: true, onRefresh: () {},
-            onAction: (job, action, title) => actions.add('${job.control?.itemId}:$action'))))));
+      await tester.pumpWidget(MaterialApp(
+          theme: AppTheme.dark,
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+              body: RepaintBoundary(
+                  key: const Key('content-golden'),
+                  child: DownloadsActivityView(
+                      activity: sample(),
+                      admin: true,
+                      onRefresh: () {},
+                      onAction: (job, action, title) =>
+                          actions.add('${job.control?.itemId}:$action'))))));
       await tester.tap(find.text('A show with a season pack'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Season 1'));
@@ -83,7 +199,8 @@ void main() {
       expect(find.text('E01 · A beginning'), findsOneWidget);
       expect(find.text('E02 · The next day'), findsOneWidget);
       expect(find.text('Paused · 50.0% · 500 B of 1000 B'), findsOneWidget);
-      expect(find.text('Downloading · 75.0% · 750 B of 1000 B'), findsOneWidget);
+      expect(
+          find.text('Downloading · 75.0% · 750 B of 1000 B'), findsOneWidget);
       expect(find.text('Show.S01.1080p.Pack'), findsOneWidget);
       expect(find.textContaining('Job '), findsNothing);
       expect(tester.takeException(), isNull);
@@ -93,8 +210,10 @@ void main() {
           find.byKey(const Key('content-golden')));
       final golden = await boundary.toImage(pixelRatio: 2);
       try {
-        await expectLater(golden,
-            matchesGoldenFile('goldens/downloads_content_${width.toInt()}.png'));
+        await expectLater(
+            golden,
+            matchesGoldenFile(
+                'goldens/downloads_content_${width.toInt()}.png'));
       } finally {
         golden.dispose();
       }
@@ -106,16 +225,22 @@ void main() {
     });
   }
 
-  testWidgets('requester sees Content and filter without admin surfaces', (tester) async {
+  testWidgets('requester sees Content and filter without admin surfaces',
+      (tester) async {
     final container = ProviderContainer(overrides: [
       authProvider.overrideWith(() => TestAuth(session())),
       downloadsActivityProvider.overrideWith((_) => AsyncData(sample())),
       downloadsSummaryProvider.overrideWith((_) => AsyncData(sample())),
     ]);
     addTearDown(container.dispose);
-    await tester.pumpWidget(UncontrolledProviderScope(container: container,
-      child: MaterialApp(theme: AppTheme.dark, home: DownloadsModuleShell(
-        currentIndex: 0, onTabChanged: (_) {}, child: const DownloadsQueuePage()))));
+    await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+            theme: AppTheme.dark,
+            home: DownloadsModuleShell(
+                currentIndex: 0,
+                onTabChanged: (_) {},
+                child: const DownloadsQueuePage()))));
     await tester.pumpAndSettle();
     expect(find.text('All downloads'), findsOneWidget);
     expect(find.text('My requests'), findsOneWidget);
@@ -130,8 +255,10 @@ void main() {
     expect(find.text('Paused · 50.0% · 500 B of 1000 B'), findsOneWidget);
     expect(find.text('Show.S01.1080p.Pack'), findsNothing);
     expect(find.text('Client controls unavailable'), findsNothing);
-    expect(container.read(moduleProvider).modules.map((m) => m.type), contains(ModuleType.downloads));
-    (container.read(authProvider.notifier) as TestAuth).replace(session(scope: 'mine'));
+    expect(container.read(moduleProvider).modules.map((m) => m.type),
+        contains(ModuleType.downloads));
+    (container.read(authProvider.notifier) as TestAuth)
+        .replace(session(scope: 'mine'));
     await tester.pumpAndSettle();
     expect(find.text('All downloads'), findsNothing);
     expect(container.read(downloadsScopeProvider), 'mine');
@@ -141,7 +268,9 @@ void main() {
   testWidgets('requester scope control stays fixed while its summary refreshes',
       (tester) async {
     final restricted = DownloadsActivity.fromJson({
-      ...sampleJson(), 'user_scope': 'mine', 'scope': 'mine',
+      ...sampleJson(),
+      'user_scope': 'mine',
+      'scope': 'mine',
     });
     final summaryState = StateProvider<AsyncValue<DownloadsActivity?>>(
         (_) => AsyncData(restricted));
@@ -150,14 +279,16 @@ void main() {
       downloadsActivityProvider.overrideWith((_) => AsyncData(sample())),
       downloadsSummaryProvider.overrideWith((ref) => ref.watch(summaryState)),
     ]);
-    await tester.pumpWidget(UncontrolledProviderScope(container: c,
+    await tester.pumpWidget(UncontrolledProviderScope(
+        container: c,
         child: const MaterialApp(home: Scaffold(body: DownloadsQueuePage()))));
     await tester.pumpAndSettle();
     expect(find.text('All downloads'), findsNothing);
     expect(find.text('My requests'), findsOneWidget);
 
-    c.read(summaryState.notifier).state = const AsyncLoading<DownloadsActivity?>()
-        .copyWithPrevious(c.read(summaryState), isRefresh: false);
+    c.read(summaryState.notifier).state =
+        const AsyncLoading<DownloadsActivity?>()
+            .copyWithPrevious(c.read(summaryState), isRefresh: false);
     await tester.pump();
     expect(find.text('All downloads'), findsNothing);
     expect(find.text('My requests'), findsOneWidget);
@@ -165,13 +296,16 @@ void main() {
     c.dispose();
   });
 
-  testWidgets('admin starts in Clients and can remember Content with visibility menu', (tester) async {
+  testWidgets(
+      'admin starts in Clients and can remember Content with visibility menu',
+      (tester) async {
     final c = ProviderContainer(overrides: [
       authProvider.overrideWith(() => TestAuth(session(admin: true))),
       downloadsActivityProvider.overrideWith((_) => AsyncData(sample())),
       downloadsSummaryProvider.overrideWith((_) => AsyncData(sample())),
     ]);
-    await tester.pumpWidget(UncontrolledProviderScope(container: c,
+    await tester.pumpWidget(UncontrolledProviderScope(
+        container: c,
         child: const MaterialApp(home: Scaffold(body: DownloadsQueuePage()))));
     await tester.pumpAndSettle();
     expect(find.byType(DownloadsContentScreen), findsNothing);
@@ -188,52 +322,72 @@ void main() {
     c.dispose();
   });
 
-  test('view and scope preferences are isolated by account and server', () async {
-    final container = ProviderContainer(overrides: [authProvider.overrideWith(() => TestAuth(session(admin: true)))]);
+  test('view and scope preferences are isolated by account and server',
+      () async {
+    final container = ProviderContainer(overrides: [
+      authProvider.overrideWith(() => TestAuth(session(admin: true)))
+    ]);
     addTearDown(container.dispose);
     final listener = container.listen(downloadsPreferencesProvider, (_, __) {});
     addTearDown(listener.close);
     await container.read(authProvider.future);
-    expect((await container.read(downloadsPreferencesProvider.future)).content, false);
-    await container.read(downloadsPreferencesProvider.notifier).select(content: true, scope: 'mine');
+    expect((await container.read(downloadsPreferencesProvider.future)).content,
+        false);
+    await container
+        .read(downloadsPreferencesProvider.notifier)
+        .select(content: true, scope: 'mine');
     final auth = container.read(authProvider.notifier) as TestAuth;
     auth.replace(session(user: 3));
     await container.pump();
     final other = await container.read(downloadsPreferencesProvider.future);
-    expect(other.content, false); expect(other.scope, 'all');
+    expect(other.content, false);
+    expect(other.scope, 'all');
     auth.replace(session(server: 'http://other.test'));
     await container.pump();
-    expect((await container.read(downloadsPreferencesProvider.future)).scope, 'all');
+    expect((await container.read(downloadsPreferencesProvider.future)).scope,
+        'all');
     auth.replace(session(admin: true));
     await container.pump();
     final saved = await container.read(downloadsPreferencesProvider.future);
-    expect(saved.content, true); expect(saved.scope, 'mine');
-    expect(container.read(downloadsScopeProvider), 'all'); // admin badge is server-wide
+    expect(saved.content, true);
+    expect(saved.scope, 'mine');
+    expect(container.read(downloadsScopeProvider),
+        'all'); // admin badge is server-wide
   });
 
   test('older servers keep requester Downloads hidden', () async {
-    final c = ProviderContainer(overrides: [authProvider.overrideWith(() => TestAuth(session(supported: false)))]);
+    final c = ProviderContainer(overrides: [
+      authProvider.overrideWith(() => TestAuth(session(supported: false)))
+    ]);
     addTearDown(c.dispose);
     await c.read(authProvider.future);
-    expect(c.read(moduleProvider).modules.map((m) => m.type), isNot(contains(ModuleType.downloads)));
+    expect(c.read(moduleProvider).modules.map((m) => m.type),
+        isNot(contains(ModuleType.downloads)));
   });
 
   testWidgets('badge shows only an exact non-zero count', (tester) async {
     for (final count in [0, 2, null]) {
-      await tester.pumpWidget(ProviderScope(key: ValueKey(count), overrides: [
-        downloadsSummaryProvider.overrideWith((_) =>
-            AsyncData(sample(count: count, complete: count != null))),
-      ], child: const MaterialApp(home: Scaffold(body: DownloadsMenuBadge()))));
+      await tester.pumpWidget(ProviderScope(
+          key: ValueKey(count),
+          overrides: [
+            downloadsSummaryProvider.overrideWith((_) =>
+                AsyncData(sample(count: count, complete: count != null))),
+          ],
+          child:
+              const MaterialApp(home: Scaffold(body: DownloadsMenuBadge()))));
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('downloads-menu-count')), count == 2 ? findsOneWidget : findsNothing);
+      expect(find.byKey(const Key('downloads-menu-count')),
+          count == 2 ? findsOneWidget : findsNothing);
       expect(find.text('?'), findsNothing);
     }
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('badge keeps its count during polling and clears it for config changes',
+  testWidgets(
+      'badge keeps its count during polling and clears it for config changes',
       (tester) async {
-    final pending = <({RequestOptions request, RequestInterceptorHandler handler})>[];
+    final pending =
+        <({RequestOptions request, RequestInterceptorHandler handler})>[];
     final dio = Dio(BaseOptions(baseUrl: 'http://server.test'));
     dio.interceptors.add(InterceptorsWrapper(onRequest: (request, handler) {
       pending.add((request: request, handler: handler));
@@ -244,15 +398,20 @@ void main() {
       backendClientProvider.overrideWithValue(dio),
       realtimeEventsProvider.overrideWithValue(events.stream),
     ]);
-    await tester.pumpWidget(UncontrolledProviderScope(container: c,
-        child: const MaterialApp(home: DownloadsMenuBadge())));
+    await tester.pumpWidget(UncontrolledProviderScope(
+        container: c, child: const MaterialApp(home: DownloadsMenuBadge())));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('downloads-menu-count')), findsNothing);
     expect(pending, hasLength(1));
 
-    pending[0].handler.resolve(Response(requestOptions: pending[0].request, data: {
-      'count': 4, 'complete': true, 'scope': 'all', 'user_scope': 'all',
-    }));
+    pending[0]
+        .handler
+        .resolve(Response(requestOptions: pending[0].request, data: {
+          'count': 4,
+          'complete': true,
+          'scope': 'all',
+          'user_scope': 'all',
+        }));
     await tester.pumpAndSettle();
     expect(find.text('4'), findsOneWidget);
 
@@ -266,9 +425,14 @@ void main() {
     expect(find.text('4'), findsOneWidget);
     expect(find.text('?'), findsNothing);
 
-    pending[1].handler.resolve(Response(requestOptions: pending[1].request, data: {
-      'count': 5, 'complete': true, 'scope': 'all', 'user_scope': 'all',
-    }));
+    pending[1]
+        .handler
+        .resolve(Response(requestOptions: pending[1].request, data: {
+          'count': 5,
+          'complete': true,
+          'scope': 'all',
+          'user_scope': 'all',
+        }));
     await tester.pumpAndSettle();
     expect(find.text('5'), findsOneWidget);
 
@@ -279,9 +443,14 @@ void main() {
     expect(pending, hasLength(3));
     expect(find.byKey(const Key('downloads-menu-count')), findsNothing);
 
-    pending[2].handler.resolve(Response(requestOptions: pending[2].request, data: {
-      'count': 6, 'complete': true, 'scope': 'all', 'user_scope': 'all',
-    }));
+    pending[2]
+        .handler
+        .resolve(Response(requestOptions: pending[2].request, data: {
+          'count': 6,
+          'complete': true,
+          'scope': 'all',
+          'user_scope': 'all',
+        }));
     await tester.pumpAndSettle();
     expect(find.text('6'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
@@ -289,9 +458,11 @@ void main() {
     await events.close();
   });
 
-  testWidgets('Content stays rendered while a routine activity refresh is pending',
+  testWidgets(
+      'Content stays rendered while a routine activity refresh is pending',
       (tester) async {
-    final pending = <({RequestOptions request, RequestInterceptorHandler handler})>[];
+    final pending =
+        <({RequestOptions request, RequestInterceptorHandler handler})>[];
     final dio = Dio(BaseOptions(baseUrl: 'http://server.test'));
     dio.interceptors.add(InterceptorsWrapper(onRequest: (request, handler) {
       pending.add((request: request, handler: handler));
@@ -302,15 +473,17 @@ void main() {
       backendClientProvider.overrideWithValue(dio),
       realtimeEventsProvider.overrideWithValue(events.stream),
     ]);
-    await tester.pumpWidget(UncontrolledProviderScope(container: c,
-        child: const MaterialApp(home: Scaffold(body: DownloadsContentScreen()))));
+    await tester.pumpWidget(UncontrolledProviderScope(
+        container: c,
+        child:
+            const MaterialApp(home: Scaffold(body: DownloadsContentScreen()))));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 10));
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     expect(pending, hasLength(1));
 
-    pending[0].handler.resolve(Response(
-        requestOptions: pending[0].request, data: sampleJson()));
+    pending[0].handler.resolve(
+        Response(requestOptions: pending[0].request, data: sampleJson()));
     await tester.pumpAndSettle();
     expect(find.text('A show with a season pack'), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsNothing);
@@ -323,10 +496,11 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsNothing);
 
     pending[1].handler.reject(DioException(
-        requestOptions: pending[1].request, type: DioExceptionType.connectionError));
+        requestOptions: pending[1].request,
+        type: DioExceptionType.connectionError));
     await tester.pumpAndSettle();
-    expect(find.text('A show with a season pack'), findsOneWidget);
-    expect(find.text('Could not refresh downloads. Showing the previous update.'), findsOneWidget);
+    expect(find.text('A show with a season pack'), findsNothing);
+    expect(find.text('Download activity is unavailable.'), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsNothing);
 
     events.add(const WsEvent(type: 'config_changed', data: {}));
@@ -337,8 +511,8 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     expect(pending, hasLength(3));
 
-    pending[2].handler.resolve(Response(
-        requestOptions: pending[2].request, data: sampleJson()));
+    pending[2].handler.resolve(
+        Response(requestOptions: pending[2].request, data: sampleJson()));
     await tester.pumpAndSettle();
     expect(find.text('A show with a season pack'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
@@ -346,21 +520,113 @@ void main() {
     await events.close();
   });
 
-  testWidgets('incomplete empty activity never claims no active downloads', (tester) async {
-    final value = DownloadsActivity.fromJson({'complete': false, 'count': null, 'groups': []});
-    await tester.pumpWidget(MaterialApp(home: Scaffold(body: DownloadsActivityView(
-      activity: value, admin: false, onRefresh: () {}, onAction: (_, __, ___) {}))));
+  testWidgets('Content never restores denied titles across retries or remounts',
+      (tester) async {
+    final pending =
+        <({RequestOptions request, RequestInterceptorHandler handler})>[];
+    final dio = Dio(BaseOptions(baseUrl: 'http://server.test'));
+    dio.interceptors.add(InterceptorsWrapper(onRequest: (request, handler) {
+      pending.add((request: request, handler: handler));
+    }));
+    final events = StreamController<WsEvent>.broadcast();
+    final c = ProviderContainer(overrides: [
+      authProvider.overrideWith(() => TestAuth(session())),
+      backendClientProvider.overrideWithValue(dio),
+      realtimeEventsProvider.overrideWithValue(events.stream),
+      effectiveMetadataLanguageProvider.overrideWithValue('fr-FR'),
+    ]);
+    // Keep the activity state alive like another mounted subscriber while the
+    // Content widget is removed and rebuilt.
+    final subscription = c.listen(downloadsActivityProvider, (_, __) {});
+    Future<void> mount() => tester.pumpWidget(UncontrolledProviderScope(
+        container: c,
+        child:
+            const MaterialApp(home: Scaffold(body: DownloadsContentScreen()))));
+    Future<void> refresh() async {
+      c.read(downloadsRefreshProvider.notifier).refresh();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+
+    void expectNoTitles() {
+      expect(find.text('Série française'), findsNothing);
+      expect(find.text('A show with a season pack'), findsNothing);
+      expect(find.text('An actual movie title'), findsNothing);
+    }
+
+    final french = sampleJson();
+    french['groups'][0]['presentation'] = {'title': 'Série française'};
+    await mount();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+    pending.single.handler.resolve(
+        Response(requestOptions: pending.single.request, data: french));
+    await tester.pumpAndSettle();
+    expect(find.text('Série française'), findsOneWidget);
+
+    await refresh();
+    pending.last.handler.reject(DioException(
+      requestOptions: pending.last.request,
+      type: DioExceptionType.badResponse,
+      response: Response(requestOptions: pending.last.request, statusCode: 503),
+    ));
+    await tester.pumpAndSettle();
+    expectNoTitles();
+    expect(find.text('Download activity is unavailable.'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    await mount();
+    await tester.pumpAndSettle();
+    expectNoTitles();
+    await refresh();
+    expectNoTitles();
+    pending.last.handler.reject(DioException(
+        requestOptions: pending.last.request,
+        type: DioExceptionType.connectionError));
+    await tester.pumpAndSettle();
+    expectNoTitles();
+    expect(find.text('Download activity is unavailable.'), findsOneWidget);
+
+    await refresh();
+    expectNoTitles();
+    pending.last.handler
+        .resolve(Response(requestOptions: pending.last.request, data: french));
+    await tester.pumpAndSettle();
+    expect(find.text('Série française'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    subscription.close();
+    await tester.pump(const Duration(milliseconds: 1));
+    c.dispose();
+    await events.close();
+  });
+
+  testWidgets('incomplete empty activity never claims no active downloads',
+      (tester) async {
+    final value = DownloadsActivity.fromJson(
+        {'complete': false, 'count': null, 'groups': []});
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: DownloadsActivityView(
+                activity: value,
+                admin: false,
+                onRefresh: () {},
+                onAction: (_, __, ___) {}))));
     expect(find.text('No active downloads'), findsNothing);
     expect(find.text('No verified downloads to show yet'), findsOneWidget);
   });
 
-  testWidgets('summary polls in foreground, refreshes on resume and config events', (tester) async {
+  testWidgets(
+      'summary polls in foreground, refreshes on resume and config events',
+      (tester) async {
     final paths = <String>[];
     final dio = Dio(BaseOptions(baseUrl: 'http://server.test'));
     dio.interceptors.add(InterceptorsWrapper(onRequest: (request, handler) {
       paths.add(request.path);
       handler.resolve(Response(requestOptions: request, data: {
-        'count': 1, 'complete': true, 'scope': 'all', 'user_scope': 'all',
+        'count': 1,
+        'complete': true,
+        'scope': 'all',
+        'user_scope': 'all',
       }));
     }));
     final events = StreamController<WsEvent>.broadcast();
@@ -369,8 +635,8 @@ void main() {
       backendClientProvider.overrideWithValue(dio),
       realtimeEventsProvider.overrideWithValue(events.stream),
     ]);
-    await tester.pumpWidget(UncontrolledProviderScope(container: c,
-        child: const MaterialApp(home: DownloadsMenuBadge())));
+    await tester.pumpWidget(UncontrolledProviderScope(
+        container: c, child: const MaterialApp(home: DownloadsMenuBadge())));
     await tester.pumpAndSettle();
     final initial = paths.length;
     expect(initial, greaterThan(0));
@@ -398,8 +664,10 @@ void main() {
     await events.close();
   });
 
-  testWidgets('account change clears count and discards the old response', (tester) async {
-    final pending = <({RequestOptions request, RequestInterceptorHandler handler})>[];
+  testWidgets('account change clears count and discards the old response',
+      (tester) async {
+    final pending =
+        <({RequestOptions request, RequestInterceptorHandler handler})>[];
     final dio = Dio(BaseOptions(baseUrl: 'http://server.test'));
     dio.interceptors.add(InterceptorsWrapper(onRequest: (request, handler) {
       pending.add((request: request, handler: handler));
@@ -409,22 +677,29 @@ void main() {
       backendClientProvider.overrideWithValue(dio),
       realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
     ]);
-    await tester.pumpWidget(UncontrolledProviderScope(container: c,
-        child: const MaterialApp(home: DownloadsMenuBadge())));
+    await tester.pumpWidget(UncontrolledProviderScope(
+        container: c, child: const MaterialApp(home: DownloadsMenuBadge())));
     await tester.pumpAndSettle();
     final old = pending.last;
-    (c.read(authProvider.notifier) as TestAuth).replace(session(user: 3, scope: 'mine'));
+    (c.read(authProvider.notifier) as TestAuth)
+        .replace(session(user: 3, scope: 'mine'));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('downloads-menu-count')), findsNothing);
     expect(old.request.cancelToken!.isCancelled, isTrue);
     final latest = pending.last;
     expect(latest.request.queryParameters['scope'], 'mine');
     latest.handler.resolve(Response(requestOptions: latest.request, data: {
-      'count': 2, 'complete': true, 'scope': 'mine', 'user_scope': 'mine',
+      'count': 2,
+      'complete': true,
+      'scope': 'mine',
+      'user_scope': 'mine',
     }));
     await tester.pumpAndSettle();
     old.handler.resolve(Response(requestOptions: old.request, data: {
-      'count': 9, 'complete': true, 'scope': 'all', 'user_scope': 'all',
+      'count': 9,
+      'complete': true,
+      'scope': 'all',
+      'user_scope': 'all',
     }));
     await tester.pumpAndSettle();
     expect(find.text('2'), findsOneWidget);
@@ -435,10 +710,16 @@ void main() {
 
   testWidgets('hidden Content does not fetch full activity', (tester) async {
     var reads = 0;
-    await tester.pumpWidget(ProviderScope(overrides: [
-      downloadsActivityProvider.overrideWith((_) { reads++; return AsyncData(sample()); }),
-    ], child: const MaterialApp(home: TickerMode(enabled: false,
-        child: DownloadsContentScreen()))));
+    await tester.pumpWidget(ProviderScope(
+        overrides: [
+          downloadsActivityProvider.overrideWith((_) {
+            reads++;
+            return AsyncData(sample());
+          }),
+        ],
+        child: const MaterialApp(
+            home:
+                TickerMode(enabled: false, child: DownloadsContentScreen()))));
     await tester.pumpAndSettle();
     expect(reads, 0);
   });

@@ -70,6 +70,8 @@ Join [Discord](https://discord.gg/zAgRwGwmVB) for help and discussion. Report bu
 
 Pull requests are welcome. See the [contributor guide](https://docs.cantinarr.com/contributing/development/) and [repository instructions](AGENTS.md). You can support development through [GitHub Sponsors](https://github.com/sponsors/windoze95).
 
+Speak another language? [Improve a translation or add a language](https://docs.cantinarr.com/contributing/translations/) with an ARB file, without editing application code.
+
 ## License
 
 [AGPL-3.0](LICENSE). Copyright (c) 2026 Julian Dice.

@@ -59,6 +59,8 @@ See [instances and library selection](/admin/instances/) for multiple-library se
 
 Plex, Jellyfin, Emby, and Audiobookshelf grants are separate from request-library access. A user who can request a movie is not automatically entitled to every Plex library.
 
+For Plex, Jellyfin, and Emby, **Library access only** is a separate option for household members who use a shared TV account. An administrator explicitly associates selected scanned libraries with a Cantinarr user without creating a remote account or changing shares. The sole eligible server is preselected only inside this flow, and the separate save applies the association. An unrelated user edit does not assign access. See [media-server availability](/integrations/media-servers/#choose-who-sees-availability).
+
 For a media-server instance, review both **User Access** and the shared or default libraries. Check the resulting account in the actual service. Plex invitations are not active shares until accepted.
 
 ## Included AI is also separate

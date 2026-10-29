@@ -15,6 +15,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/mediametadata"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
 	"golang.org/x/sync/singleflight"
 )
@@ -193,6 +194,12 @@ func (h *Handler) serveActivity(w http.ResponseWriter, r *http.Request, summary 
 	if err != nil {
 		writeError(w, 503, "download visibility unavailable; refresh and retry")
 		return
+	}
+	if !summary {
+		if err = h.presentActivity(r.Context(), claims.UserID, view, mediametadata.Language(r)); err != nil {
+			writeError(w, 503, "download visibility unavailable; refresh and retry")
+			return
+		}
 	}
 	latest, err := h.activity.access(r.Context(), claims, scope)
 	if err != nil || latest.fingerprint != access.fingerprint {
@@ -413,6 +420,7 @@ func (s *ActivityService) project(ctx context.Context, access activityAccess) (*
 			g := groups[groupID]
 			if g == nil {
 				g = &ContentGroup{ID: groupID, InstanceID: inst.ID, InstanceName: inst.Name, MediaType: media, Title: row.parent.str("title"), Year: row.parent.num("year"), Creator: row.creator, Artwork: artwork(row.parent, inst), DetailsKnown: true, Children: []ContentChild{}}
+				g.recordID = row.parent.num("id")
 				if media == "book" {
 					g.Format = bookFormat(row.parent)
 				}

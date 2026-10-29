@@ -204,6 +204,9 @@ func (c *watchClient) get(ctx context.Context, path string, params url.Values, o
 		return errors.New("plex watch: server did not answer")
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return mediaserver.ErrItemNotFound
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("plex watch: server returned HTTP %d", resp.StatusCode)
 	}

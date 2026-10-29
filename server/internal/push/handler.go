@@ -174,6 +174,7 @@ func (h *Handler) UpdatePreferences(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Prefs
 		PushEnabled         *bool `json:"push_enabled"`
+		RequesterOnly       *bool `json:"requester_only"`
 		RequestAutoApproved *bool `json:"request_auto_approved"`
 		MediaServerAccess   *bool `json:"media_server_access"`
 		PlexInviteSent      *bool `json:"plex_invite_sent"` // old apps share the renamed preference
@@ -185,7 +186,7 @@ func (h *Handler) UpdatePreferences(w http.ResponseWriter, r *http.Request) {
 	if body.MediaServerAccess == nil {
 		body.MediaServerAccess = body.PlexInviteSent
 	}
-	if err := h.prefs.set(claims.UserID, body.Prefs, body.PushEnabled, body.RequestAutoApproved, body.MediaServerAccess); err != nil {
+	if err := h.prefs.set(claims.UserID, body.Prefs, body.PushEnabled, body.RequestAutoApproved, body.MediaServerAccess, body.RequesterOnly); err != nil {
 		h.logger.Error("push: set notification prefs", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save preferences"})
 		return

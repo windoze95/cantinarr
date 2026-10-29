@@ -78,6 +78,66 @@ void main() {
   }
 
   test(
+      'metadata languages survive restore and persistence, and clear on older servers',
+      () async {
+    final storage = snapshotStorage();
+    final snapshot = jsonDecode(storage[StorageKeys.sessionConnection]!)
+        as Map<String, dynamic>;
+    snapshot['metadata_languages'] = ['en-US', 'fr-FR'];
+    snapshot['metadata_language_tags'] = true;
+    storage[StorageKeys.sessionConnection] = jsonEncode(snapshot);
+    final fake = _FakeAuthService(
+        refreshResult: freshResp,
+        config: const ServerConfig(
+            serverName: 'Home',
+            services: AvailableServices(),
+            metadataLanguages: ['en-US', 'fr-FR'],
+            metadataLanguageTags: true));
+    final container = makeContainer(storage, fake);
+    expect(
+        (await container.read(authProvider.future))
+            .connection!
+            .metadataLanguages,
+        ['en-US', 'fr-FR']);
+    await _pumpUntil(
+        () => !container.read(authProvider).valueOrNull!.isReconnecting);
+    expect(
+        jsonDecode(
+            storage[StorageKeys.sessionConnection]!)['metadata_languages'],
+        ['en-US', 'fr-FR']);
+    final connection = container.read(authProvider).requireValue.connection!;
+    expect(connection.metadataLanguageTags, isTrue);
+    expect(connection.copyWith(accessToken: 'rotated').metadataLanguageTags,
+        isTrue);
+    expect(
+        jsonDecode(
+            storage[StorageKeys.sessionConnection]!)['metadata_language_tags'],
+        isTrue);
+    expect(connection.copyWith(accessToken: 'rotated').metadataLanguages,
+        ['en-US', 'fr-FR']);
+    fake.config = config;
+    await container.read(authProvider.notifier).refreshConfig();
+    expect(
+        container
+            .read(authProvider)
+            .requireValue
+            .connection!
+            .metadataLanguageTags,
+        isFalse);
+    expect(
+        jsonDecode(
+            storage[StorageKeys.sessionConnection]!)['metadata_language_tags'],
+        isFalse);
+    expect(
+        container.read(authProvider).requireValue.connection!.metadataLanguages,
+        isEmpty);
+    expect(
+        jsonDecode(
+            storage[StorageKeys.sessionConnection]!)['metadata_languages'],
+        isEmpty);
+  });
+
+  test(
       'hidden tabs survive restore, live refresh, persistence, and an older server',
       () async {
     final storage = snapshotStorage();
@@ -184,14 +244,16 @@ void main() {
         () => !container.read(authProvider).valueOrNull!.isReconnecting);
     expect(container.read(authProvider).requireValue.connection!.cover4KBadges,
         isFalse);
-    expect(jsonDecode(storage[StorageKeys.sessionConnection]!)['cover_4k_badges'],
+    expect(
+        jsonDecode(storage[StorageKeys.sessionConnection]!)['cover_4k_badges'],
         isFalse);
     fake.config = const ServerConfig(
         serverName: 'Home', services: AvailableServices(), cover4KBadges: true);
     await container.read(authProvider.notifier).refreshConfig();
     expect(container.read(authProvider).requireValue.connection!.cover4KBadges,
         isTrue);
-    expect(jsonDecode(storage[StorageKeys.sessionConnection]!)['cover_4k_badges'],
+    expect(
+        jsonDecode(storage[StorageKeys.sessionConnection]!)['cover_4k_badges'],
         isTrue);
   });
 

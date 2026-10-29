@@ -43,32 +43,32 @@ const (
 const queueWitnessStaleAfter = 6 * time.Hour
 
 // restoredAlertCap bounds the single announce batch resumed after a restart or
-// a poll gap — witnessed queue departures and history catch-up together. Above
+// a poll gap, using only fresh import receipts. Above
 // it the whole batch is dropped rather than partially delivered: new-content
 // alerts fan out to the entire household by default and the only remedy a user
 // has is a permanent category opt-out, so a burst of stale alerts costs more
 // trust than silence — and past this count the app's live view is the better
-// answer anyway. Steady-state departures are never capped.
+// answer anyway. Steady-state import batches are never capped here.
 const restoredAlertCap = 10
 
 // queueResumeAfter is the gap between successful polls beyond which the next
-// one is treated as a resumption rather than steady state: the departure diff
-// becomes capped (it may hold a gap's worth of stale completions) and the
-// import-history catch-up runs to recover completions no queue snapshot ever
-// witnessed. It covers arr/network outages and process suspensions the same
+// one is treated as a resumption rather than steady state: the import batch
+// becomes capped because it may hold a gap's worth of stale completions.
+// History is read on ordinary polls too. The resumption guard covers arr and
+// network outages and process suspensions the same
 // way a restart is covered, and must sit far above the poll period so a
 // missed tick or two stays steady state.
 const queueResumeAfter = 5 * time.Minute
 
-// catchUpHistoryPageSize bounds the single history page a resumption reads.
-// One page must prove it covered the whole gap; a window holding more import
+// catchUpHistoryPageSize bounds the single history page each resolved poll reads.
+// One page must prove it covered the whole window; a window holding more import
 // records than this is a mass job (bulk manual import, weeks of automation),
 // and the whole batch is dropped rather than sampled.
 const catchUpHistoryPageSize = 200
 
 // errImportBacklogOverflow reports that the catch-up window holds more import
 // history than one bounded page can prove complete. It is a "too many to
-// announce" verdict, not a failure: the resumed batch is dropped whole, the
+// announce" verdict, not a failure: the import batch is dropped whole, the
 // same as a batch over restoredAlertCap.
 var errImportBacklogOverflow = errors.New("import history window overflow")
 
@@ -164,26 +164,29 @@ type Hub struct {
 	prevChaptarrQueue map[string]map[int]struct{} // instanceID -> set of book record ids
 	prevLidarrQueue   map[string]map[int]struct{} // instanceID -> set of album record ids
 
-	// witness persists the three prev*Queue maps so a restart resumes the
-	// departure diff instead of re-seeding from empty. nil disables persistence
-	// and leaves the poller on its in-memory-only behavior.
+	// witness persists queue membership and the resolved import-history cursor
+	// so a restart can recover fresh imports. nil disables persistence and
+	// leaves the poller on its in-memory-only behavior.
 	witness *queueWitness
 
-	// restoredWitness marks the instances whose membership came from disk and
-	// whose first diff has not run yet, holding the snapshot's observed_at so
-	// the diff can be re-checked for staleness while it is deferred. An entry is
-	// cleared as soon as that first diff is resolved.
+	// restoredWitness marks instances restored from disk whose first import
+	// window has not resolved. The snapshot's observed_at is rechecked for
+	// staleness while history or gateway readiness defers the window.
 	restoredWitness map[string]time.Time
 	// Older Sonarr snapshots cannot prove which corrected story was already
 	// announced. Their first resume accepts only imports observed after boot.
 	legacySonarrSince map[string]time.Time
 
-	// lastPollAt records when each arr instance's queue was last successfully
-	// polled and resolved. A gap of queueResumeAfter or more means completions
+	// lastPollAt records the end of each arr instance's last resolved history
+	// window, the exclusive lower bound for its next import window.
+	// A gap of queueResumeAfter or more means completions
 	// may have been grabbed and imported entirely unwatched — an arr or network
 	// outage while the process stayed up — so the next poll runs the same
 	// capped resumption as a restart. Written only from the poll goroutine.
 	lastPollAt map[string]time.Time
+
+	// pollTime supplies the wall clock for import windows; nil uses time.Now.
+	pollTime func() time.Time
 
 	// prevArrQueueHash tracks the queue composition (id/status/sizeleft
 	// tuples) per arr instance so any change can emit an invalidation ping.
@@ -206,8 +209,8 @@ type Hub struct {
 // download completes; pass nil (or a nil *push.Notifier) when push is disabled.
 // opener receives stuck/blocked downloads for auto-dispatch; pass nil (or a nil
 // remediation.AutoDispatcher) to keep the whole auto-dispatch path off. database
-// persists the poller's queue-departure memory across restarts; pass nil to keep
-// that memory in-process only.
+// persists queue membership and the import-history cursor across restarts;
+// pass nil to keep that memory in-process only.
 func NewHub(authService *auth.Service, registry *instance.Registry, store *instance.Store, database *sql.DB, content ContentNotifier, opener IssueOpener) *Hub {
 	return &Hub{
 		clients:            make(map[*Client]bool),
@@ -480,8 +483,8 @@ func (h *Hub) pollLoop(ctx context.Context) {
 	// Restore the previous process's queue membership before the first tick, on
 	// this goroutine: it owns the prev*Queue maps, so no lock is needed, and it
 	// broadcasts nothing, so it cannot fill the broadcast channel before Run's
-	// drain loop is live. The ordinary first tick then performs the resumed
-	// diff — there is exactly one code path that witnesses completions.
+	// drain loop is live. The ordinary first tick then reads the resumed import
+	// window through the same evidence path as every later poll.
 	h.restoreQueueWitness()
 
 	arrTicker := time.NewTicker(pollPeriod)
@@ -504,11 +507,9 @@ func (h *Hub) pollLoop(ctx context.Context) {
 	}
 }
 
-// restoreQueueWitness seeds the prev*Queue maps from the last poll of the
-// previous process, so the first tick diffs against real membership instead of
-// re-seeding from empty. On a first boot the table is empty, nothing is
-// restored, and the existing seed-only behavior is unchanged — which is why no
-// upgrade can produce a burst of alerts.
+// restoreQueueWitness restores membership and the import-history cursor from
+// the previous process. On a first boot the table is empty, nothing is
+// restored, and the first poll only seeds the cursor without replaying history.
 func (h *Hub) restoreQueueWitness() {
 	if h.witness == nil {
 		return
@@ -571,86 +572,76 @@ func (h *Hub) resumeOrigin(instanceID string) (since time.Time, boot bool) {
 	return time.Time{}, false
 }
 
-// resolveAnnouncements decides what one successful poll may announce. In
-// steady state it passes the departure diff through untouched — never capped,
-// and at zero extra cost (importsSince is not called). On a resumption — a
-// process restart or a poll gap of queueResumeAfter or more — it recovers what
-// happened while nobody watched and applies every storm guard:
+// importPollCutoff leaves the current second open because upstream history may
+// have only second precision. A receipt that arrives after this poll with a
+// timestamp at the start of the same second must still belong to the next
+// window. Fractional timestamps use the same non-overlapping bounds. Initial
+// seeding skips completed seconds; a genuine import in the partial seed second
+// is eligible once that second closes.
+func (h *Hub) importPollCutoff(instanceID string) time.Time {
+	now := time.Now()
+	if h.pollTime != nil {
+		now = h.pollTime()
+	}
+	cutoff := now.Truncate(time.Second).Add(-time.Nanosecond)
+	// A legacy precise cursor, or a clock adjustment, must never move backward.
+	if previous := h.lastPollAt[instanceID]; cutoff.Before(previous) {
+		return previous
+	}
+	return cutoff
+}
+
+// resolveAnnouncements requires a fresh import receipt, even when an item
+// disappears from the queue. A successful empty queue after an arr restart is
+// not evidence of completion, and files already in the library prove nothing
+// about the download that disappeared.
 //
-//   - Completions grabbed AND imported entirely inside the gap never appear in
-//     any queue snapshot, so no membership diff can see them. importsSince
-//     replays the arr's own import-history event log (the durable form of the
-//     same event its webhook delivers, written only by the download-import
-//     path — a library rescan or restore stamps no such records) and its ids
-//     are merged into the departure diff. History may only ever ADD alerts:
-//     a fetch failure degrades to the witnessed departures, never silences
-//     them, and every merged id still passes the same live re-verification
-//     (HasFile / BookFileCount) before anything is announced.
-//   - History proof may REROUTE an alert, never suppress it: an import whose
-//     every record is matched by a delete-for-upgrade goes to the returned
-//     upgraded list (the admin content_upgraded audience) instead of the
-//     broadcast. The proof read fails open — any error, drift, or ambiguity
-//     leaves the id in the broadcast list, so vocabulary drift re-pages
-//     upgrades as new content rather than silencing anything.
-//   - A window older than queueWitnessStaleAfter describes completions the
-//     user has long since found in the app: the whole batch is dropped.
-//   - A merged batch over restoredAlertCap, or a window importsSince reports
-//     as too big to enumerate (errImportBacklogOverflow), is dropped whole
-//     rather than partially delivered.
-//   - On a boot resumption only, a non-empty batch waits (hold=true: persist
-//     nothing, announce nothing, retry next tick) until the push gateway
-//     enrolls, so recovered alerts are not dropped into a nil client. It
-//     cannot wedge: the staleness arm above drops the batch unconditionally
-//     once the snapshot ages out. A hold requires push configured but
-//     unenrolled, so it cannot happen on a push-disabled server. While one is
-//     in effect this instance's membership stays frozen, which also defers its
-//     request_status_changed broadcasts — accepted because the push those
-//     alerts exist for is undeliverable during exactly that window, and
-//     availability is recomputed live on every read.
-func (h *Hub) resolveAnnouncements(instanceID string, departed []int, importsSince func(time.Time) (fresh, upgraded []int, err error)) (announce, upgraded []int, hold bool) {
+// Every poll after the initial seed reads through the last complete second.
+// Arr history can truncate timestamps to seconds: closing a partial second
+// would lose a later import recorded in that same second. Those receipts wait
+// for the next poll, without overlapping resolved windows. This catches
+// imports while a title remains queued and later completions after a transient
+// empty queue. Failed history reads preserve the cursor for retry. Resumptions
+// retain the age, page, burst and gateway guards.
+func (h *Hub) resolveAnnouncements(instanceID string, importsSince func(time.Time) (fresh, upgraded []int, err error)) (announce, upgraded []int, hold bool) {
 	since, boot := h.resumeOrigin(instanceID)
+	resuming := !since.IsZero()
+	if !resuming {
+		since = h.lastPollAt[instanceID]
+	}
 	if since.IsZero() {
-		return departed, nil, false // steady state is never gated
+		return nil, nil, false // first poll seeds without replaying old imports
 	}
 	if time.Since(since) > queueWitnessStaleAfter {
 		delete(h.restoredWitness, instanceID)
-		if len(departed) > 0 {
-			log.Printf("websocket: dropping %d stale resumed completion(s) for %s", len(departed), instanceID)
-		}
+		log.Printf("websocket: dropping stale import window for %s", instanceID)
 		return nil, nil, false
 	}
-	catchup, upgrades, err := importsSince(since)
+	fresh, upgrades, err := importsSince(since)
 	if errors.Is(err, errImportBacklogOverflow) {
 		delete(h.restoredWitness, instanceID)
-		log.Printf("websocket: skipping resumed alerts for %s: over %d imports while unwatched", instanceID, catchUpHistoryPageSize)
+		log.Printf("websocket: skipping import alerts for %s: over %d imports in window", instanceID, catchUpHistoryPageSize)
 		return nil, nil, false
 	}
 	if err != nil {
-		log.Printf("websocket: import catch-up (%s): %v (announcing witnessed departures only)", instanceID, err)
-		catchup, upgrades = nil, nil
+		log.Printf("websocket: import history (%s): %v (retrying without announcing)", instanceID, err)
+		return nil, nil, true
 	}
-	// A departed id history proved to be an upgrade moves to the upgrade list:
-	// both witnesses saw the same import, and the proof travels with it. A
-	// departed id history never saw stays a broadcast — suppression requires
-	// positive proof.
-	merged := subtractInts(unionInts(departed, catchup), upgrades)
-	if len(merged)+len(upgrades) > 0 && boot && !h.contentReady() {
+	if len(fresh)+len(upgrades) > 0 && boot && !h.contentReady() {
 		return nil, nil, true
 	}
 	delete(h.restoredWitness, instanceID)
-	// Independent caps, each dropped whole: upgrades are filtered out before
-	// the broadcast cap is judged, so a mass upgrade sweep during the gap
-	// cannot evict a genuine new-content alert — and an over-cap upgrade batch
-	// is dropped without touching the broadcasts.
-	if len(merged) > restoredAlertCap {
-		log.Printf("websocket: skipping %d resumed completion alert(s) for %s (over cap)", len(merged), instanceID)
-		merged = nil
+	// Only resumptions need the burst cap. Upgrade and new-content batches
+	// remain independent so a mass upgrade cannot evict genuine new content.
+	if resuming && len(fresh) > restoredAlertCap {
+		log.Printf("websocket: skipping %d resumed completion alert(s) for %s (over cap)", len(fresh), instanceID)
+		fresh = nil
 	}
-	if len(upgrades) > restoredAlertCap {
+	if resuming && len(upgrades) > restoredAlertCap {
 		log.Printf("websocket: skipping %d resumed upgrade alert(s) for %s (over cap)", len(upgrades), instanceID)
 		upgrades = nil
 	}
-	return merged, upgrades, false
+	return fresh, upgrades, false
 }
 
 // historyDataValue reads a history record's data value by case-insensitive
@@ -667,25 +658,6 @@ func historyDataValue(data map[string]string, key string) string {
 		}
 	}
 	return ""
-}
-
-// subtractInts returns the members of a not present in b, preserving a's order.
-func subtractInts(a, b []int) []int {
-	if len(b) == 0 {
-		return a
-	}
-	drop := make(map[int]struct{}, len(b))
-	for _, id := range b {
-		drop[id] = struct{}{}
-	}
-	var out []int
-	for _, id := range a {
-		if _, gone := drop[id]; gone {
-			continue
-		}
-		out = append(out, id)
-	}
-	return out
 }
 
 // unionInts merges two id sets into one sorted, duplicate-free slice.
@@ -709,15 +681,14 @@ func unionInts(a, b []int) []int {
 // history record dated after since, split into fresh imports and proven
 // upgrades. The event name is re-checked against the response (the query asks
 // by enum id) so a renumbered enum in a fork yields an empty catch-up rather
-// than presenting deletions as imports — history may only ever add alerts, so
-// an unrecognized vocabulary degrades to the queue witness instead of
-// misfiring.
+// than presenting deletions as imports. An unrecognized vocabulary contributes
+// no evidence; queue membership can never substitute for an import receipt.
 //
 // A movie is a proven upgrade only when every one of its window imports is
 // matched by a delete-for-upgrade record (count-aware: two imports against one
 // upgrade delete means at least one filled a gap, so the movie broadcasts).
 // The proof read itself fails open — see radarrUpgradeDeletesSince.
-func radarrImportsSince(client *radarr.Client, since time.Time) (fresh, upgraded []int, err error) {
+func radarrImportsSince(client *radarr.Client, since, until time.Time) (fresh, upgraded []int, err error) {
 	records, complete, err := client.GetImportHistorySince(since, catchUpHistoryPageSize)
 	if err != nil {
 		return nil, nil, err
@@ -728,6 +699,9 @@ func radarrImportsSince(client *radarr.Client, since time.Time) (fresh, upgraded
 	imports := make(map[int]int, len(records))
 	var ids []int
 	for _, rec := range records {
+		if rec.Date.After(until) {
+			continue
+		}
 		if !strings.EqualFold(rec.EventType, "downloadFolderImported") || rec.MovieID <= 0 {
 			continue
 		}
@@ -740,7 +714,7 @@ func radarrImportsSince(client *radarr.Client, since time.Time) (fresh, upgraded
 	if len(ids) == 0 {
 		return nil, nil, nil
 	}
-	deletes := radarrUpgradeDeletesSince(client, since)
+	deletes := radarrUpgradeDeletesSince(client, since, until)
 	for _, id := range ids {
 		if deletes[id] >= imports[id] {
 			upgraded = append(upgraded, id)
@@ -757,7 +731,7 @@ func radarrImportsSince(client *radarr.Client, since time.Time) (fresh, upgraded
 // content. History proof can only reroute an alert to admins by positively
 // matching both the event name and the Upgrade reason; drift degrades to
 // alerting, never to silence.
-func radarrUpgradeDeletesSince(client *radarr.Client, since time.Time) map[int]int {
+func radarrUpgradeDeletesSince(client *radarr.Client, since, until time.Time) map[int]int {
 	records, complete, err := client.GetUpgradeDeleteHistorySince(since, catchUpHistoryPageSize)
 	if err != nil {
 		log.Printf("websocket: radarr upgrade-delete catch-up: %v (announcing all imports as new)", err)
@@ -769,6 +743,9 @@ func radarrUpgradeDeletesSince(client *radarr.Client, since time.Time) map[int]i
 	}
 	counts := make(map[int]int, len(records))
 	for _, rec := range records {
+		if rec.Date.After(until) {
+			continue
+		}
 		if !strings.EqualFold(rec.EventType, "movieFileDeleted") || rec.MovieID <= 0 {
 			continue
 		}
@@ -782,7 +759,7 @@ func radarrUpgradeDeletesSince(client *radarr.Client, since time.Time) map[int]i
 
 // sonarrUpgradeDeletesSince counts the window's delete-for-upgrade records per
 // episode, failing open exactly like radarrUpgradeDeletesSince.
-func sonarrUpgradeDeletesSince(client *sonarr.Client, since time.Time) map[int]int {
+func sonarrUpgradeDeletesSince(client *sonarr.Client, since, until time.Time) map[int]int {
 	records, complete, err := client.GetUpgradeDeleteHistorySince(since, catchUpHistoryPageSize)
 	if err != nil {
 		log.Printf("websocket: sonarr upgrade-delete catch-up: %v (announcing all imports as new)", err)
@@ -794,6 +771,9 @@ func sonarrUpgradeDeletesSince(client *sonarr.Client, since time.Time) map[int]i
 	}
 	counts := make(map[int]int, len(records))
 	for _, rec := range records {
+		if rec.Date.After(until) {
+			continue
+		}
 		if !strings.EqualFold(rec.EventType, "episodeFileDeleted") {
 			continue
 		}
@@ -818,7 +798,7 @@ func sonarrUpgradeDeletesSince(client *sonarr.Client, since time.Time) map[int]i
 // agree on what counts as an import and an unrecognized fork vocabulary
 // contributes nothing rather than misfiring. Upgrade proof pairs per book
 // record, count-aware like the Radarr split.
-func chaptarrImportsSince(client *chaptarr.Client, since time.Time) (fresh, upgraded []int, err error) {
+func chaptarrImportsSince(client *chaptarr.Client, since, until time.Time) (fresh, upgraded []int, err error) {
 	records, complete, err := client.GetImportHistorySince(since, catchUpHistoryPageSize)
 	if err != nil {
 		return nil, nil, err
@@ -829,6 +809,9 @@ func chaptarrImportsSince(client *chaptarr.Client, since time.Time) (fresh, upgr
 	imports := make(map[int]int, len(records))
 	var ids []int
 	for _, rec := range records {
+		if rec.Date == nil || rec.Date.After(until) {
+			continue
+		}
 		if !chaptarr.IsImportEventType(rec.EventType) || rec.BookID <= 0 {
 			continue
 		}
@@ -841,7 +824,7 @@ func chaptarrImportsSince(client *chaptarr.Client, since time.Time) (fresh, upgr
 	if len(ids) == 0 {
 		return nil, nil, nil
 	}
-	deletes := chaptarrUpgradeDeletesSince(client, since)
+	deletes := chaptarrUpgradeDeletesSince(client, since, until)
 	for _, id := range ids {
 		if deletes[id] >= imports[id] {
 			upgraded = append(upgraded, id)
@@ -854,7 +837,7 @@ func chaptarrImportsSince(client *chaptarr.Client, since time.Time) (fresh, upgr
 
 // chaptarrUpgradeDeletesSince counts the window's delete-for-upgrade records
 // per book, failing open exactly like radarrUpgradeDeletesSince.
-func chaptarrUpgradeDeletesSince(client *chaptarr.Client, since time.Time) map[int]int {
+func chaptarrUpgradeDeletesSince(client *chaptarr.Client, since, until time.Time) map[int]int {
 	records, complete, err := client.GetUpgradeDeleteHistorySince(since, catchUpHistoryPageSize)
 	if err != nil {
 		log.Printf("websocket: chaptarr upgrade-delete catch-up: %v (announcing all imports as new)", err)
@@ -866,6 +849,9 @@ func chaptarrUpgradeDeletesSince(client *chaptarr.Client, since time.Time) map[i
 	}
 	counts := make(map[int]int, len(records))
 	for _, rec := range records {
+		if rec.Date == nil || rec.Date.After(until) {
+			continue
+		}
 		if !strings.EqualFold(rec.EventType, "bookFileDeleted") || rec.BookID <= 0 {
 			continue
 		}
@@ -881,7 +867,7 @@ func chaptarrUpgradeDeletesSince(client *chaptarr.Client, since time.Time) map[i
 // the webhook receiver's import vocabulary (lidarr.IsImportEventType) so the
 // two witnesses can never disagree about what counts as an import. Upgrade
 // proof pairs per album record, count-aware like the other splits.
-func lidarrImportsSince(client *lidarr.Client, since time.Time) (fresh, upgraded []int, err error) {
+func lidarrImportsSince(client *lidarr.Client, since, until time.Time) (fresh, upgraded []int, err error) {
 	records, complete, err := client.GetImportHistorySince(since, catchUpHistoryPageSize)
 	if err != nil {
 		return nil, nil, err
@@ -892,6 +878,9 @@ func lidarrImportsSince(client *lidarr.Client, since time.Time) (fresh, upgraded
 	imports := make(map[int]int, len(records))
 	var ids []int
 	for _, rec := range records {
+		if rec.Date == nil || rec.Date.After(until) {
+			continue
+		}
 		if !lidarr.IsImportEventType(rec.EventType) || rec.AlbumID <= 0 {
 			continue
 		}
@@ -904,7 +893,7 @@ func lidarrImportsSince(client *lidarr.Client, since time.Time) (fresh, upgraded
 	if len(ids) == 0 {
 		return nil, nil, nil
 	}
-	deletes := lidarrUpgradeDeletesSince(client, since)
+	deletes := lidarrUpgradeDeletesSince(client, since, until)
 	for _, id := range ids {
 		if deletes[id] >= imports[id] {
 			upgraded = append(upgraded, id)
@@ -919,7 +908,7 @@ func lidarrImportsSince(client *lidarr.Client, since time.Time) (fresh, upgraded
 // album, failing open exactly like chaptarrUpgradeDeletesSince. Lidarr has no
 // trackFileDelete webhook toggle, so this history read is the only witness
 // upgrade-deletes have.
-func lidarrUpgradeDeletesSince(client *lidarr.Client, since time.Time) map[int]int {
+func lidarrUpgradeDeletesSince(client *lidarr.Client, since, until time.Time) map[int]int {
 	records, complete, err := client.GetUpgradeDeleteHistorySince(since, catchUpHistoryPageSize)
 	if err != nil {
 		log.Printf("websocket: lidarr upgrade-delete catch-up: %v (announcing all imports as new)", err)
@@ -931,6 +920,9 @@ func lidarrUpgradeDeletesSince(client *lidarr.Client, since time.Time) map[int]i
 	}
 	counts := make(map[int]int, len(records))
 	for _, rec := range records {
+		if rec.Date == nil || rec.Date.After(until) {
+			continue
+		}
 		if !strings.EqualFold(rec.EventType, "trackFileDeleted") || rec.AlbumID <= 0 {
 			continue
 		}
@@ -942,13 +934,9 @@ func lidarrUpgradeDeletesSince(client *lidarr.Client, since time.Time) map[int]i
 	return counts
 }
 
-// saveQueueWitness records this instance's current queue membership. A failure
-// is logged and swallowed: degrading to in-memory-only behavior is right, but
-// suppressing the alerts this poll already found is not.
-func (h *Hub) saveQueueWitness(instanceID, serviceType string, ids []int) {
-	h.saveQueueWitnessAt(instanceID, serviceType, ids, time.Now())
-}
-
+// saveQueueWitnessAt records membership and the resolved import-history cursor.
+// A failed save retains in-memory progress; durable push claims still absorb
+// duplicate notifications if a later restart replays the older cursor.
 func (h *Hub) saveQueueWitnessAt(instanceID, serviceType string, ids []int, observedAt time.Time) {
 	if h.witness == nil {
 		return
@@ -1394,15 +1382,15 @@ func (h *Hub) pollAllLidarr() {
 }
 
 // pollLidarrInstance emits an arr_queue_changed invalidation ping whenever the
-// instance's download queue composition changes, and witnesses queue departures
-// to push new_music alerts — the same completion witness the Chaptarr poller
-// uses. It is the fallback witness for music: instances where the admin never
+// instance's download queue composition changes, and reads fresh import receipts
+// to push new_music alerts, the same completion evidence the Chaptarr poller uses. It is the fallback witness for music: instances where the admin never
 // configured instant updates, and imports of files already on disk. Like
 // Chaptarr it emits no per-item download_progress events (albums carry no TMDB
 // id, which those events key on). It ends with the same auto-dispatch
 // observation pass as the other pollers, feeding album queue snapshots to
 // remediation.
 func (h *Hub) pollLidarrInstance(instanceID string, client *lidarr.Client) {
+	windowEnd := h.importPollCutoff(instanceID)
 	queue, err := client.GetQueue()
 	if err != nil {
 		log.Printf("websocket: poll lidarr queue (%s): %v", instanceID, err)
@@ -1422,25 +1410,12 @@ func (h *Hub) pollLidarrInstance(instanceID string, client *lidarr.Client) {
 		currentQueue[item.AlbumID] = struct{}{}
 	}
 
-	// An album that left the queue and now has files finished importing; one
-	// that departed without a file failed or was removed — say nothing.
-	var departed []int
-	if prevQueue := h.prevLidarrQueue[instanceID]; prevQueue != nil {
-		for albumID := range prevQueue {
-			if _, stillInQueue := currentQueue[albumID]; stillInQueue || albumID <= 0 {
-				continue
-			}
-			departed = append(departed, albumID)
-		}
-		sort.Ints(departed)
-	}
-
-	announce, upgraded, hold := h.resolveAnnouncements(instanceID, departed, func(since time.Time) (fresh, upgrades []int, err error) {
-		return lidarrImportsSince(client, since)
+	announce, upgraded, hold := h.resolveAnnouncements(instanceID, func(since time.Time) (fresh, upgrades []int, err error) {
+		return lidarrImportsSince(client, since, windowEnd)
 	})
 	if hold {
-		// Keep the restored membership and retry next tick, so these
-		// completions are not lost to an unenrolled gateway.
+		// Retain membership and the import cursor for a history retry or
+		// until the gateway can receive the restored batch.
 		h.noteArrQueueComposition(instanceID, "lidarr", tuples)
 		h.autoDispatchLidarr(instanceID, client)
 		return
@@ -1451,8 +1426,8 @@ func (h *Hub) pollLidarrInstance(instanceID string, client *lidarr.Client) {
 	// of a crashlooping container. The save is deliberately outside the
 	// h.content check — enabling push later must not start from amnesia.
 	h.prevLidarrQueue[instanceID] = currentQueue
-	h.saveQueueWitness(instanceID, "lidarr", setKeys(currentQueue))
-	h.lastPollAt[instanceID] = time.Now()
+	h.saveQueueWitnessAt(instanceID, "lidarr", setKeys(currentQueue), windowEnd)
+	h.lastPollAt[instanceID] = windowEnd
 
 	if h.content != nil {
 		// Upgrades pass the same live re-verification as broadcasts; only the
@@ -1497,6 +1472,7 @@ func (h *Hub) pollLidarrInstance(instanceID string, client *lidarr.Client) {
 }
 
 func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
+	windowEnd := h.importPollCutoff(instanceID)
 	queue, err := client.GetQueue()
 	if err != nil {
 		log.Printf("websocket: poll radarr queue (%s): %v", instanceID, err)
@@ -1538,20 +1514,8 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 		})
 	}
 
-	// Check for items that were previously downloading but are no longer in queue
-	var departed []int
-	if prevQueue := h.prevRadarrQueue[instanceID]; prevQueue != nil {
-		for movieID := range prevQueue {
-			if _, stillInQueue := currentQueue[movieID]; stillInQueue || movieID <= 0 {
-				continue
-			}
-			departed = append(departed, movieID)
-		}
-		sort.Ints(departed)
-	}
-
-	announce, upgraded, hold := h.resolveAnnouncements(instanceID, departed, func(since time.Time) (fresh, upgrades []int, err error) {
-		return radarrImportsSince(client, since)
+	announce, upgraded, hold := h.resolveAnnouncements(instanceID, func(since time.Time) (fresh, upgrades []int, err error) {
+		return radarrImportsSince(client, since, windowEnd)
 	})
 	if hold {
 		h.noteArrQueueComposition(instanceID, "radarr", tuples)
@@ -1561,8 +1525,8 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 
 	// Persist before announcing — see pollChaptarrInstance.
 	h.prevRadarrQueue[instanceID] = currentQueue
-	h.saveQueueWitness(instanceID, "radarr", progressKeys(currentQueue))
-	h.lastPollAt[instanceID] = time.Now()
+	h.saveQueueWitnessAt(instanceID, "radarr", progressKeys(currentQueue), windowEnd)
+	h.lastPollAt[instanceID] = windowEnd
 
 	// Upgrades pass the same live re-verification as broadcasts; only the
 	// audience differs (admins opted into content_upgraded).
@@ -1609,7 +1573,7 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 }
 
 func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
-	pollStarted := time.Now()
+	windowEnd := h.importPollCutoff(instanceID)
 	queue, err := client.GetQueue()
 	if err != nil {
 		log.Printf("websocket: poll sonarr queue (%s): %v", instanceID, err)
@@ -1662,7 +1626,7 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 		sort.Ints(departed)
 	}
 
-	announce, refreshed, hold := h.resolveSonarrAnnouncements(instanceID, client, currentQueue, departed)
+	announce, refreshed, hold := h.resolveSonarrAnnouncements(instanceID, client, windowEnd, departed)
 	if hold {
 		h.noteArrQueueComposition(instanceID, "sonarr", tuples)
 		h.autoDispatchSonarr(instanceID, client)
@@ -1671,8 +1635,8 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 
 	// Persist before announcing — see pollChaptarrInstance.
 	h.prevSonarrQueue[instanceID] = currentQueue
-	h.saveQueueWitnessAt(instanceID, "sonarr", progressKeys(currentQueue), pollStarted)
-	h.lastPollAt[instanceID] = pollStarted
+	h.saveQueueWitnessAt(instanceID, "sonarr", progressKeys(currentQueue), windowEnd)
+	h.lastPollAt[instanceID] = windowEnd
 	delete(h.legacySonarrSince, instanceID)
 
 	// Library refresh is independent of title-specific notification resolution.
@@ -1714,9 +1678,9 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 	if h.content != nil {
 		for _, title := range announce {
 			if title.Upgrade {
-				h.content.NotifyUpgradedEpisode(title.Title, title.TmdbID, instanceID)
+				sonarr.NotifyImportedUpgrade(h.content, title, instanceID)
 			} else {
-				h.content.NotifyNewEpisode(title.Title, title.TmdbID, instanceID)
+				sonarr.NotifyImportedEpisodes(h.content, title, instanceID)
 			}
 		}
 	}
@@ -1728,8 +1692,8 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 }
 
 // pollChaptarrInstance emits an arr_queue_changed invalidation ping whenever
-// the instance's download queue composition changes, and witnesses queue
-// departures to push new_book alerts — the same completion witness the Radarr
+// the instance's download queue composition changes, and reads fresh import
+// receipts to push new_book alerts, the same completion evidence the Radarr
 // poller uses. It is the fallback witness for books: instances where the admin
 // never configured instant updates, and imports of files already on disk, which
 // the Readarr lineage does not announce over its webhook.
@@ -1738,6 +1702,7 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 // with the same auto-dispatch observation pass as Radarr/Sonarr, feeding book
 // queue snapshots to remediation.
 func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
+	windowEnd := h.importPollCutoff(instanceID)
 	queue, err := client.GetQueue()
 	if err != nil {
 		log.Printf("websocket: poll chaptarr queue (%s): %v", instanceID, err)
@@ -1757,27 +1722,12 @@ func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 		currentQueue[item.BookID] = struct{}{}
 	}
 
-	// A book record that left the queue and now has a file finished importing.
-	// Ebook and audiobook are separate records sharing a foreignBookId, so each
-	// format alerts on its own import; a record that departed without a file
-	// failed or was removed — say nothing.
-	var departed []int
-	if prevQueue := h.prevChaptarrQueue[instanceID]; prevQueue != nil {
-		for bookID := range prevQueue {
-			if _, stillInQueue := currentQueue[bookID]; stillInQueue || bookID <= 0 {
-				continue
-			}
-			departed = append(departed, bookID)
-		}
-		sort.Ints(departed)
-	}
-
-	announce, upgraded, hold := h.resolveAnnouncements(instanceID, departed, func(since time.Time) (fresh, upgrades []int, err error) {
-		return chaptarrImportsSince(client, since)
+	announce, upgraded, hold := h.resolveAnnouncements(instanceID, func(since time.Time) (fresh, upgrades []int, err error) {
+		return chaptarrImportsSince(client, since, windowEnd)
 	})
 	if hold {
-		// Keep the restored membership and retry next tick, so these
-		// completions are not lost to an unenrolled gateway.
+		// Retain membership and the import cursor for a history retry or
+		// until the gateway can receive the restored batch.
 		h.noteArrQueueComposition(instanceID, "chaptarr", tuples)
 		h.autoDispatchChaptarr(instanceID, client)
 		return
@@ -1788,8 +1738,8 @@ func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 	// of a crashlooping container. The save is deliberately outside the
 	// h.content check — enabling push later must not start from amnesia.
 	h.prevChaptarrQueue[instanceID] = currentQueue
-	h.saveQueueWitness(instanceID, "chaptarr", setKeys(currentQueue))
-	h.lastPollAt[instanceID] = time.Now()
+	h.saveQueueWitnessAt(instanceID, "chaptarr", setKeys(currentQueue), windowEnd)
+	h.lastPollAt[instanceID] = windowEnd
 
 	if h.content != nil {
 		// Upgrades pass the same live re-verification as broadcasts; only the

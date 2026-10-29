@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/metadata/metadata_presentation.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/widgets/featured_media_hero.dart';
 import '../../../core/widgets/horizontal_item_row.dart';
@@ -61,7 +62,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
   @override
   Widget build(BuildContext context) {
     final library = ref.watch(librarySnapshotProvider);
-    final scope = ref.watch(discoverSessionProvider);
+    final scope = ref.watch(metadataSessionProvider);
     final discover = ref.watch(movieDiscoverProvider);
     final discoverNotifier = ref.watch(movieDiscoverProvider.notifier);
     final show4K = ref.watch(cover4KBadgesProvider);
@@ -109,6 +110,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
                   items: discover.featured.skip(1).toList(growable: false),
                   isLoading: discover.isLoadingFeatured,
                   isTvRow: false,
+                  resolveTVStatus: true,
                   libraryStatus: libraryStatus,
                   // The grid continues whichever source answered; until one has,
                   // there is nothing to continue.
@@ -127,6 +129,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
                     items: discover.nowPlaying,
                     isLoading: discover.isLoadingNowPlaying,
                     isTvRow: false,
+                    resolveTVStatus: true,
                     libraryStatus: libraryStatus,
                     onLoadMore: (_) => discoverNotifier.loadMoreNowPlaying(),
                     onSeeAll: () =>
@@ -140,6 +143,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
                     items: discover.topRated,
                     isLoading: discover.isLoadingTopRated,
                     isTvRow: false,
+                    resolveTVStatus: true,
                     libraryStatus: libraryStatus,
                     onLoadMore: (_) => discoverNotifier.loadMoreTopRated(),
                     onSeeAll: () => _seeAll(BrowseFeed.topRated, 'Top Rated'),
@@ -152,6 +156,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
                     items: discover.upcoming,
                     isLoading: discover.isLoadingUpcoming,
                     isTvRow: false,
+                    resolveTVStatus: true,
                     libraryStatus: libraryStatus,
                     onLoadMore: (_) => discoverNotifier.loadMoreUpcoming(),
                     onSeeAll: () => _seeAll(BrowseFeed.upcoming, 'Coming Soon'),
@@ -164,6 +169,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
                     items: discover.anticipated,
                     isLoading: discover.isLoadingAnticipated,
                     isTvRow: false,
+                    resolveTVStatus: true,
                     libraryStatus: libraryStatus,
                     onLoadMore: (_) => discoverNotifier.loadMoreAnticipated(),
                     onSeeAll: () =>
@@ -251,18 +257,22 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
                 MediaCard.rowExtraHeight(context, withSubtitle: false),
             itemBuilder: (movie) {
               final badge = badgeBuilder(movie);
-              return MediaCard(
-                id: movie.id,
-                title: movie.title,
-                posterPath: movie.posterUrl,
-                statusLabel: badge.label,
-                statusColor: badge.color,
-                is4K: mark4K && (movie.movieFile?.measures4K ?? false),
-                width: cardWidth,
-                onTap: (movie.tmdbId ?? 0) > 0
-                    ? () => context.push('/detail/movie/${movie.tmdbId}')
-                    : null,
-              );
+              return MetadataPresentationBuilder(
+                  reference: MetadataReference.native(
+                      'movie', _library.radarrInstanceId, movie.id),
+                  builder: (presentation) => MediaCard(
+                        id: movie.id,
+                        title: presentation?.title ?? movie.title,
+                        posterPath: presentation?.posterPath ?? movie.posterUrl,
+                        statusLabel: badge.label,
+                        statusColor: badge.color,
+                        is4K: mark4K && (movie.movieFile?.measures4K ?? false),
+                        width: cardWidth,
+                        onTap: (movie.tmdbId ?? 0) > 0
+                            ? () =>
+                                context.push('/detail/movie/${movie.tmdbId}')
+                            : null,
+                      ));
             },
           ),
         ],

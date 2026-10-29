@@ -2,6 +2,7 @@ import 'package:cantinarr/l10n/shell_labels.dart';
 import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -114,6 +115,32 @@ class _AppShellState extends ConsumerState<AppShell>
   /// preserves this state; closing the mobile drawer resets it so reopening
   /// the drawer starts with the module list.
   bool _attentionExpanded = false;
+
+  // The child Navigator reports after updating its history. Reading canPop
+  // while building this outer shell can still see the previous page stack.
+  bool _childHandlesBack = false;
+
+  bool _hasRouteHistory() {
+    // GoRouter updates its matches before building the child Navigator. Read
+    // that prospective page stack to protect even the first pushed frame.
+    var matches =
+        GoRouter.of(context).routerDelegate.currentConfiguration.matches;
+    while (matches.isNotEmpty) {
+      if (matches.length > 1) return true;
+      final match = matches.single;
+      if (match is! ShellRouteMatch) return false;
+      matches = match.matches;
+    }
+    return false;
+  }
+
+  bool _handleNavigationNotification(NavigationNotification notification) {
+    if (_childHandlesBack != notification.canHandlePop) {
+      setState(() => _childHandlesBack = notification.canHandlePop);
+    }
+    // Android also needs this notification to choose its native back handler.
+    return false;
+  }
 
   @override
   void initState() {
@@ -828,6 +855,12 @@ class _AppShellState extends ConsumerState<AppShell>
 
     final scaffold = Scaffold(
       key: _scaffoldKey,
+      // Reserve native mobile back swipes for the pushed page instead of
+      // opening the shell drawer. The hamburger and root drawer swipe remain.
+      drawerEnableOpenDragGesture: kIsWeb ||
+          (Theme.of(context).platform != TargetPlatform.android &&
+              Theme.of(context).platform != TargetPlatform.iOS) ||
+          (!_hasRouteHistory() && !_childHandlesBack),
       // A closed drawer collapses its attention group again, so reopening it
       // always lands on the same short menu rather than on however far the
       // last visit had unfolded it.
@@ -891,7 +924,10 @@ class _AppShellState extends ConsumerState<AppShell>
                             mobile && !searchOverlayActive && !isAiReady
                                 ? _handleScrollNotification
                                 : null,
-                        child: widget.child,
+                        child: NotificationListener<NavigationNotification>(
+                          onNotification: _handleNavigationNotification,
+                          child: widget.child,
+                        ),
                       ),
                       if (isAiReady)
                         Positioned.fill(

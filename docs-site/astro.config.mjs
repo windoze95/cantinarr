@@ -48,7 +48,7 @@ export default defineConfig({
         'reference/generated/privacy',
       ], collapsed: true },
       { label: 'Contribute', items: [
-        'contributing/development', 'contributing/testing', 'contributing/documentation',
+        'contributing/development', 'contributing/translations', 'contributing/testing', 'contributing/documentation',
         'contributing/generated/releases',
       ], collapsed: true },
     ],

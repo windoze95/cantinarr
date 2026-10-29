@@ -58,7 +58,8 @@ final libraryChangedEventsProvider = StreamProvider.autoDispose<WsEvent>((ref) {
       e.type == 'request_status_changed' ||
       e.type == 'arr_queue_changed' ||
       e.type == 'request_decision' ||
-      e.type == 'request_updated');
+      e.type == 'request_updated' ||
+      e.type == 'media_availability_changed');
 });
 
 /// Approval decisions for the current user's own requests

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
+import 'package:cantinarr/core/metadata/metadata_presentation.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
@@ -23,6 +24,27 @@ import 'package:go_router/go_router.dart';
 /// onto Discover browse-row posters, with no second Radarr call and no badge
 /// on the featured hero.
 void main() {
+  testWidgets(
+      'library metadata retains the originating Radarr record and grant',
+      (tester) async {
+    final adapter = _RadarrAdapter(
+      movies: [_movie(id: 7, title: 'Requested movie', tmdbId: 101)],
+      featured: const [],
+    );
+    await _pumpMoviesTab(tester, adapter);
+    final reference = tester
+        .widgetList<MetadataPresentationBuilder>(
+            find.byType(MetadataPresentationBuilder))
+        .single
+        .reference!;
+    expect(reference.toJson(), {
+      'key': 'movie:movies:7:0',
+      'media_type': 'movie',
+      'instance_id': 'movies',
+      'record_id': 7,
+    });
+  });
+
   testWidgets(
       'Movies Discover browse rows badge Available/Requested from the Radarr library',
       (tester) async {
@@ -104,7 +126,8 @@ void main() {
     await _pumpMoviesTab(tester, adapter);
 
     expect(find.text('In Theaters'), findsOneWidget);
-    expect(_browseRowCards(tester).map((c) => c.title), contains('Theater Movie'));
+    expect(
+        _browseRowCards(tester).map((c) => c.title), contains('Theater Movie'));
   });
 
   testWidgets(
@@ -130,7 +153,8 @@ void main() {
     await _pumpMoviesTab(tester, adapter);
 
     final titles = _browseRowCards(tester).map((c) => c.title).toList();
-    expect(titles, containsAll(['First Page Movie', 'Shared Movie', 'Second Page Movie']));
+    expect(titles,
+        containsAll(['First Page Movie', 'Shared Movie', 'Second Page Movie']));
     expect(titles.where((t) => t == 'Shared Movie'), hasLength(1));
     expect(adapter.topRatedPagesRequested, [1, 2]);
   });

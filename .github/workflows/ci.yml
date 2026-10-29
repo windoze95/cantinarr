@@ -157,6 +157,9 @@ jobs:
       - name: Install dependencies
         run: flutter pub get --enforce-lockfile
 
+      - name: Test localization tooling
+        run: python3 -m unittest discover -s tool -p 'test_*.py' -v
+
       - name: Analyze
         run: flutter analyze --no-fatal-infos --no-pub
 
@@ -174,6 +177,9 @@ jobs:
 
       - name: Build web
         run: flutter build web --release --no-pub
+
+      - name: Verify single-file language onboarding
+        run: python3 tool/check_language_onboarding.py
 
   release-tooling:
     name: Release tooling

@@ -1,3 +1,5 @@
+import '../../../core/metadata/metadata_presentation.dart';
+
 class DownloadsActivity {
   final int? count;
   final bool complete;
@@ -14,12 +16,19 @@ class DownloadsActivity {
         stale = json['stale'] == true,
         scope = json['scope'] as String? ?? 'all',
         userScope = json['user_scope'] as String? ?? 'mine',
-        groups = [for (final g in json['groups'] as List? ?? [])
-          DownloadContentGroup.fromJson(g as Map<String, dynamic>)],
-        jobs = {for (final j in json['jobs'] as List? ?? [])
-          j['id'] as String: DownloadActivityJob.fromJson(j as Map<String, dynamic>)},
-        unavailableSources = [for (final s in json['sources'] as List? ?? [])
-          if (s['available'] != true) s['name'] as String];
+        groups = [
+          for (final g in json['groups'] as List? ?? [])
+            DownloadContentGroup.fromJson(g as Map<String, dynamic>)
+        ],
+        jobs = {
+          for (final j in json['jobs'] as List? ?? [])
+            j['id'] as String:
+                DownloadActivityJob.fromJson(j as Map<String, dynamic>)
+        },
+        unavailableSources = [
+          for (final s in json['sources'] as List? ?? [])
+            if (s['available'] != true) s['name'] as String
+        ];
 }
 
 class DownloadContentGroup {
@@ -29,10 +38,18 @@ class DownloadContentGroup {
   final bool detailsKnown;
   final List<String> jobIds;
   final List<DownloadContentChild> children;
+  final MetadataPresentation? presentation;
+
+  String get displayTitle => presentation?.title ?? title;
+  String get displayArtwork => presentation?.posterUrl ?? artwork;
 
   DownloadContentGroup.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String,
         title = j['title'] as String,
+        presentation = j['presentation'] is Map<String, dynamic>
+            ? MetadataPresentation.fromJson(
+                j['presentation'] as Map<String, dynamic>)
+            : null,
         mediaType = j['media_type'] as String,
         instanceName = j['instance_name'] as String? ?? '',
         creator = j['creator'] as String? ?? '',
@@ -42,8 +59,10 @@ class DownloadContentGroup {
         progress = (j['progress'] as num? ?? 0).toDouble(),
         detailsKnown = j['details_known'] == true,
         jobIds = (j['job_ids'] as List? ?? []).cast<String>(),
-        children = [for (final c in j['children'] as List? ?? [])
-          DownloadContentChild.fromJson(c as Map<String, dynamic>)];
+        children = [
+          for (final c in j['children'] as List? ?? [])
+            DownloadContentChild.fromJson(c as Map<String, dynamic>)
+        ];
 }
 
 class DownloadContentChild {
@@ -51,10 +70,17 @@ class DownloadContentChild {
   final int? season;
   final int episode, disc;
   final List<String> jobIds;
+  final MetadataPresentation? presentation;
+
+  String get displayTitle => presentation?.title ?? title;
 
   DownloadContentChild.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String,
         title = j['title'] as String,
+        presentation = j['presentation'] is Map<String, dynamic>
+            ? MetadataPresentation.fromJson(
+                j['presentation'] as Map<String, dynamic>)
+            : null,
         track = j['track'] as String? ?? '',
         season = j['season'] as int?,
         episode = j['episode'] as int? ?? 0,
@@ -62,8 +88,8 @@ class DownloadContentChild {
         jobIds = (j['job_ids'] as List? ?? []).cast<String>();
 
   String get label => season != null
-      ? 'E${episode.toString().padLeft(2, '0')} · $title'
-      : '${disc > 0 ? 'Disc $disc · ' : ''}${track.isEmpty ? '' : '$track · '}$title';
+      ? 'E${episode.toString().padLeft(2, '0')} · $displayTitle'
+      : '${disc > 0 ? 'Disc $disc · ' : ''}${track.isEmpty ? '' : '$track · '}$displayTitle';
 }
 
 class DownloadActivityJob {
@@ -80,7 +106,8 @@ class DownloadActivityJob {
         sizeBytes = (j['size_bytes'] as num? ?? 0).toInt(),
         sizeLeftBytes = (j['size_left_bytes'] as num? ?? 0).toInt(),
         speedBps = (j['speed_bps'] as num? ?? 0).toInt(),
-        control = j['control'] == null ? null
+        control = j['control'] == null
+            ? null
             : DownloadJobControl.fromJson(j['control'] as Map<String, dynamic>);
 }
 

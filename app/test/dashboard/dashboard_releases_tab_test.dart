@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
+import 'package:cantinarr/core/metadata/metadata_presentation.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
@@ -13,16 +14,61 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('TV calendar keeps the Sonarr series, season and originating library', (tester) async {
-    final adapter = _CalendarAdapter(tv: true);
-    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))..httpClientAdapter = adapter;
+  testWidgets(
+      'movie calendar metadata retains its exact native library identity',
+      (tester) async {
+    final adapter = _CalendarAdapter(movie: true);
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
     await tester.pumpWidget(ProviderScope(overrides: [
-      authProvider.overrideWith(() => _FakeAuthNotifier(_noInstancesState.copyWith(
-        connection: _noInstancesState.connection!.copyWith(
-          tvLibraryNavigation: true,
-          instances: const [ServiceInstance(id: 'tv-other', serviceType: 'sonarr', name: 'TV', isDefault: true)],
-        ),
-      ))),
+      authProvider
+          .overrideWith(() => _FakeAuthNotifier(_noInstancesState.copyWith(
+                connection: _noInstancesState.connection!.copyWith(
+                  instances: const [
+                    ServiceInstance(
+                        id: 'movies-other',
+                        serviceType: 'radarr',
+                        name: 'Movies',
+                        isDefault: true)
+                  ],
+                ),
+              ))),
+      backendClientProvider.overrideWithValue(dio),
+    ], child: const MaterialApp(home: Scaffold(body: DashboardReleasesTab()))));
+    await tester.pumpAndSettle();
+    final reference = tester
+        .widgetList<MetadataPresentationBuilder>(
+            find.byType(MetadataPresentationBuilder))
+        .single
+        .reference!;
+    expect(reference.toJson(), {
+      'key': 'movie:movies-other:7:0',
+      'media_type': 'movie',
+      'instance_id': 'movies-other',
+      'record_id': 7,
+    });
+  });
+
+  testWidgets(
+      'TV calendar keeps the Sonarr series, season and originating library',
+      (tester) async {
+    final adapter = _CalendarAdapter(tv: true);
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(ProviderScope(overrides: [
+      authProvider
+          .overrideWith(() => _FakeAuthNotifier(_noInstancesState.copyWith(
+                connection: _noInstancesState.connection!.copyWith(
+                  tvLibraryNavigation: true,
+                  instances: const [
+                    ServiceInstance(
+                        id: 'tv-other',
+                        serviceType: 'sonarr',
+                        name: 'TV',
+                        isDefault: true)
+                  ],
+                ),
+              ))),
       backendClientProvider.overrideWithValue(dio),
     ], child: const MaterialApp(home: Scaffold(body: DashboardReleasesTab()))));
     await tester.pumpAndSettle();
@@ -84,8 +130,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(adapter.calendarPaths,
-        ['/api/instances/music-1/api/v1/calendar'],
+    expect(adapter.calendarPaths, ['/api/instances/music-1/api/v1/calendar'],
         reason: 'the granted Lidarr instance is the one read');
     expect(find.text('Fear Inoculum'), findsOneWidget);
     expect(find.text('Tool'), findsOneWidget);
@@ -94,8 +139,9 @@ void main() {
 
 /// Serves one album on the Lidarr calendar; anything else gets `{}`.
 class _CalendarAdapter implements HttpClientAdapter {
-  _CalendarAdapter({this.tv = false});
+  _CalendarAdapter({this.tv = false, this.movie = false});
   final bool tv;
+  final bool movie;
   final calendarPaths = <String>[];
 
   @override
@@ -106,10 +152,29 @@ class _CalendarAdapter implements HttpClientAdapter {
   ) async {
     Object body = const <String, dynamic>{};
     if (tv && options.path.endsWith('/series')) {
-      body = [{'id': 42, 'title': 'Monster (2022)', 'tmdbId': 0}];
+      body = [
+        {'id': 42, 'title': 'Monster (2022)', 'tmdbId': 0}
+      ];
     } else if (tv && options.path.endsWith('/calendar')) {
-      body = [{'seriesId': 42, 'seasonNumber': 2, 'episodeNumber': 1,
-        'airDateUtc': DateTime.now().add(const Duration(days: 1)).toIso8601String()}];
+      body = [
+        {
+          'seriesId': 42,
+          'seasonNumber': 2,
+          'episodeNumber': 1,
+          'airDateUtc':
+              DateTime.now().add(const Duration(days: 1)).toIso8601String()
+        }
+      ];
+    } else if (movie && options.path.endsWith('/calendar')) {
+      body = [
+        {
+          'id': 7,
+          'title': 'Source movie',
+          'tmdbId': 101,
+          'digitalRelease':
+              DateTime.now().add(const Duration(days: 1)).toIso8601String()
+        }
+      ];
     } else if (options.path.endsWith('/calendar')) {
       calendarPaths.add(options.path);
       body = [

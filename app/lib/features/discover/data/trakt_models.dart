@@ -23,6 +23,7 @@ class TraktIds {
 class TraktItem {
   final int? tmdbId;
   final String title;
+  final String? sourceTitle;
   final int? year;
   final String? overview;
   final TraktIds ids;
@@ -33,6 +34,7 @@ class TraktItem {
   const TraktItem({
     this.tmdbId,
     required this.title,
+    this.sourceTitle,
     this.year,
     this.overview,
     required this.ids,
@@ -41,14 +43,14 @@ class TraktItem {
     this.posterUrl,
   });
 
-  factory TraktItem.fromTrendingJson(
-      Map<String, dynamic> json, String type) {
-    final inner = json[type == 'movies' ? 'movie' : 'show']
-        as Map<String, dynamic>;
+  factory TraktItem.fromTrendingJson(Map<String, dynamic> json, String type) {
+    final inner =
+        json[type == 'movies' ? 'movie' : 'show'] as Map<String, dynamic>;
     final ids = TraktIds.fromJson(inner['ids'] as Map<String, dynamic>? ?? {});
     return TraktItem(
       tmdbId: ids.tmdb,
       title: (inner['title'] ?? 'Untitled') as String,
+      sourceTitle: inner['source_title'] as String?,
       year: inner['year'] as int?,
       overview: inner['overview'] as String?,
       ids: ids,
@@ -59,8 +61,8 @@ class TraktItem {
 
   factory TraktItem.fromAnticipatedJson(
       Map<String, dynamic> json, String type) {
-    final inner = json[type == 'movies' ? 'movie' : 'show']
-        as Map<String, dynamic>;
+    final inner =
+        json[type == 'movies' ? 'movie' : 'show'] as Map<String, dynamic>;
     final ids = TraktIds.fromJson(inner['ids'] as Map<String, dynamic>? ?? {});
     // Extract poster URL from Trakt images (extended=full).
     String? posterUrl;
@@ -75,6 +77,7 @@ class TraktItem {
     return TraktItem(
       tmdbId: ids.tmdb,
       title: (inner['title'] ?? 'Untitled') as String,
+      sourceTitle: inner['source_title'] as String?,
       year: inner['year'] as int?,
       overview: inner['overview'] as String?,
       ids: ids,
@@ -83,12 +86,12 @@ class TraktItem {
     );
   }
 
-  factory TraktItem.fromPopularJson(
-      Map<String, dynamic> json, String type) {
+  factory TraktItem.fromPopularJson(Map<String, dynamic> json, String type) {
     final ids = TraktIds.fromJson(json['ids'] as Map<String, dynamic>? ?? {});
     return TraktItem(
       tmdbId: ids.tmdb,
       title: (json['title'] ?? 'Untitled') as String,
+      sourceTitle: json['source_title'] as String?,
       year: json['year'] as int?,
       overview: json['overview'] as String?,
       ids: ids,
@@ -105,6 +108,7 @@ class TraktItem {
   MediaItem toMediaItem() => MediaItem(
         id: tmdbId ?? 0,
         title: title,
+        sourceTitle: sourceTitle,
         posterPath: posterUrl,
         mediaType: mediaType == 'movie' ? MediaType.movie : MediaType.tv,
         releaseDate: year?.toString(),

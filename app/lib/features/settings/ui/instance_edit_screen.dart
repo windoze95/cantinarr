@@ -1,3 +1,4 @@
+import '../../media_availability/ui/availability_scan_section.dart';
 import '../../media_access/ui/media_access_labels.dart';
 import 'package:cantinarr/l10n/l10n.dart';
 import 'dart:async';
@@ -113,6 +114,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _plexAutoApprove,
         _listeningApps?.toJson(),
         _videoApps?.toJson(),
+        _availabilityScan?.toJson(),
       ];
   Object get _mappingValues => [
         for (final mapping in _mediaPathMappings)
@@ -242,6 +244,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   String? _mediaServerLibrariesError;
   Set<String> _selectedLibraryIds = <String>{};
   bool _mediaServerConfigDirty = false;
+  AvailabilityScanConfig? _availabilityScan;
+  bool _availabilityScanDirty = false;
 
   // Plex section state: the PIN link that yields the instance's token (held
   // server-side and referenced by pin id on save), the linked account's
@@ -738,6 +742,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             _publicAddressController.text = config.publicAddress;
           }
           _selectedLibraryIds = config.libraryIds.toSet();
+          _availabilityScan = config.availabilityScan;
+          _availabilityScanDirty = false;
           _listeningApps = config.listeningApps;
           _videoApps = config.videoApps;
           if (_isAbs) {
@@ -760,6 +766,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             _isPlex && config.autoApprove,
             config.listeningApps?.toJson(),
             config.videoApps?.toJson(),
+            config.availabilityScan?.toJson(),
           ]);
         }
         if (details.containsKey('media_path_mappings')) {
@@ -1136,6 +1143,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   }
 
   String? _validate() {
+    if (_availabilityScan?.enabled == true && _availabilityScan!.libraryIds.isEmpty) {
+      return context.l10n.availabilityChooseLibraries;
+    }
     if (_isAbs) {
       if (widget.isEditing && !_absAccessLoaded) {
         return context.l10n.settingsLoadTheLibraryAssignmentsBeforeSaving;
@@ -1549,6 +1559,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     final mediaServerConfig =
         _isMediaServer && (!widget.isEditing || _mediaServerConfigDirty)
             ? MediaServerConfig(
+                availabilityScan: _availabilityScan,
                 publicAddress: _publicAddressController.text.trim(),
                 libraryIds: _isAbs && widget.isEditing
                     ? _absSavedDefaultIds
@@ -3211,6 +3222,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                   _mediaServerLibrariesError = null;
                   _mediaServerLibrariesLoading = false;
                   _selectedLibraryIds = <String>{};
+                  _availabilityScan = null;
+                  _availabilityScanDirty = false;
                   // And the Plex link, which belongs to nothing else.
                   _plexPollTimer?.cancel();
                   _plexLinking = false;
@@ -3378,6 +3391,22 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               ),
             const SizedBox(height: 24),
             _buildSharedLibrariesSection(),
+            if (VideoApps.serviceTypes.contains(_serviceType) &&
+                ref.watch(authProvider).valueOrNull?.connection?.mediaLibraryAvailability == true) ...[
+              const SizedBox(height: 24),
+              AvailabilityScanSection(
+                key: ValueKey('availability-$_serviceType'),
+                instanceId: widget.instanceId,
+                value: _availabilityScan ?? const AvailabilityScanConfig(),
+                initialLibraries: _mediaServerLibraries,
+                unsaved: _availabilityScanDirty || _mediaServerConfigDirty || _detailsDraft.hasChanges(_detailValues),
+                onChanged: (value) => setState(() {
+                  _availabilityScan = value;
+                  _availabilityScanDirty = true;
+                  _mediaServerConfigDirty = true;
+                }),
+              ),
+            ],
             if (VideoApps.serviceTypes.contains(_serviceType)) ...[
               const SizedBox(height: 24),
               Text(context.l10n.settingsDefaultVideoApp,

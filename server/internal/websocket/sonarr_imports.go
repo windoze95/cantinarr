@@ -14,7 +14,7 @@ func (h *Hub) SetTVImportResolver(resolver sonarr.ImportResolver) { h.tvImports 
 // sonarrImportEvidence keeps episode identity until after reverse resolution.
 // Upgrade proof remains count-aware per episode; only the final title grouping
 // decides whether a mixed batch is news for the household.
-func sonarrImportEvidence(client *sonarr.Client, since time.Time) (map[int][]sonarr.ImportedEpisode, error) {
+func sonarrImportEvidence(client *sonarr.Client, since, until time.Time) (map[int][]sonarr.ImportedEpisode, error) {
 	records, complete, err := client.GetImportHistorySince(since, catchUpHistoryPageSize)
 	if err != nil {
 		return nil, err
@@ -25,6 +25,9 @@ func sonarrImportEvidence(client *sonarr.Client, since time.Time) (map[int][]son
 	imports := map[int][]sonarr.ImportedEpisode{}
 	counts := map[int]int{}
 	for _, rec := range records {
+		if rec.Date.After(until) {
+			continue
+		}
 		if !strings.EqualFold(rec.EventType, "downloadFolderImported") {
 			continue
 		}
@@ -54,7 +57,7 @@ func sonarrImportEvidence(client *sonarr.Client, since time.Time) (map[int][]son
 	if len(imports) == 0 {
 		return imports, nil
 	}
-	deletes := sonarrUpgradeDeletesSince(client, since)
+	deletes := sonarrUpgradeDeletesSince(client, since, until)
 	for _, episodes := range imports {
 		for i := range episodes {
 			id := episodes[i].EpisodeID
@@ -64,11 +67,11 @@ func sonarrImportEvidence(client *sonarr.Client, since time.Time) (map[int][]son
 	return imports, nil
 }
 
-// resolveSonarrAnnouncements uses import receipts for corrected parents even
-// while they stay in the queue. Ordinary series retain the existing departure
-// fallback. Resumptions share the six-hour window, one-page limit, enrollment
-// hold and independent ten-title caps with the other arrs.
-func (h *Hub) resolveSonarrAnnouncements(instanceID string, client *sonarr.Client, current map[int]float64, departed []int) (titles []sonarr.ImportedTitle, refreshed []int, hold bool) {
+// resolveSonarrAnnouncements requires import receipts for every series, even
+// while it stays in the queue. Queue departures still refresh library status,
+// but never authorize an alert. Resumptions share the six-hour window, one-page
+// limit, enrollment hold and independent ten-title caps with the other arrs.
+func (h *Hub) resolveSonarrAnnouncements(instanceID string, client *sonarr.Client, windowEnd time.Time, departed []int) (titles []sonarr.ImportedTitle, refreshed []int, hold bool) {
 	since, boot := h.resumeOrigin(instanceID)
 	resuming := !since.IsZero()
 	if resuming && time.Since(since) > queueWitnessStaleAfter {
@@ -79,7 +82,6 @@ func (h *Hub) resolveSonarrAnnouncements(instanceID string, client *sonarr.Clien
 	if !resuming {
 		since = h.lastPollAt[instanceID]
 	}
-	observed := unionInts(progressKeys(current), progressKeys(h.prevSonarrQueue[instanceID]))
 	seriesCache := map[int]*sonarr.Series{}
 	corrected := map[int]bool{}
 	load := func(id int) *sonarr.Series {
@@ -87,11 +89,12 @@ func (h *Hub) resolveSonarrAnnouncements(instanceID string, client *sonarr.Clien
 			return series
 		}
 		series, err := client.GetSeries(id)
-		seriesCache[id] = series
-		if err != nil {
+		if err != nil || series == nil || series.ID != id {
+			seriesCache[id] = nil
 			log.Printf("websocket: cannot verify imported TV series %d (%s)", id, instanceID)
 			return nil
 		}
+		seriesCache[id] = series
 		if h.tvImports != nil {
 			var e error
 			corrected[id], e = h.tvImports.HasTVImportCorrection(series)
@@ -102,33 +105,22 @@ func (h *Hub) resolveSonarrAnnouncements(instanceID string, client *sonarr.Clien
 		}
 		return series
 	}
-	needsHistory := resuming
-	for _, id := range observed {
-		if load(id) != nil && corrected[id] {
-			needsHistory = true
-		}
+	if since.IsZero() {
+		return nil, departed, false // first poll only seeds the witness
 	}
-	imports := map[int][]sonarr.ImportedEpisode{}
-	if needsHistory && !since.IsZero() {
-		var err error
-		imports, err = sonarrImportEvidence(client, since)
-		if err == errImportBacklogOverflow {
-			delete(h.restoredWitness, instanceID)
-			log.Printf("websocket: skipping TV import alerts for %s: history exceeds one page", instanceID)
-			return nil, departed, false
-		}
-		if err != nil {
-			log.Printf("websocket: TV import history unavailable (%s); corrected scopes skipped: %v", instanceID, err)
-			imports = map[int][]sonarr.ImportedEpisode{}
-		}
+	imports, err := sonarrImportEvidence(client, since, windowEnd)
+	if err == errImportBacklogOverflow {
+		delete(h.restoredWitness, instanceID)
+		log.Printf("websocket: skipping TV import alerts for %s: history exceeds one page", instanceID)
+		return nil, departed, false
 	}
-	// A first poll only seeds the witness. Never inspect old files or replay
-	// historical imports merely because a correction shipped in an upgrade.
+	if err != nil {
+		log.Printf("websocket: TV import history unavailable (%s); retrying without announcing: %v", instanceID, err)
+		return nil, nil, true
+	}
 	ids := append([]int(nil), departed...)
 	for id := range imports {
-		if resuming || containsID(observed, id) {
-			ids = unionInts(ids, []int{id})
-		}
+		ids = unionInts(ids, []int{id})
 	}
 	byTitle := map[int]sonarr.ImportedTitle{}
 	for _, id := range ids {
@@ -138,6 +130,9 @@ func (h *Hub) resolveSonarrAnnouncements(instanceID string, client *sonarr.Clien
 		}
 		refreshed = append(refreshed, id)
 		episodes := imports[id]
+		if len(episodes) == 0 {
+			continue
+		}
 		if corrected[id] {
 			if floor, legacy := h.legacySonarrSince[instanceID]; legacy {
 				fresh := make([]sonarr.ImportedEpisode, 0, len(episodes))
@@ -175,6 +170,9 @@ func (h *Hub) resolveSonarrAnnouncements(instanceID string, client *sonarr.Clien
 			}
 			episodes = verified
 		}
+		if len(episodes) == 0 {
+			continue
+		}
 		resolved := sonarr.UncorrectedImportTitle(series, episodes)
 		if h.tvImports != nil {
 			var err error
@@ -186,6 +184,8 @@ func (h *Hub) resolveSonarrAnnouncements(instanceID string, client *sonarr.Clien
 		for _, title := range resolved {
 			if previous, ok := byTitle[title.TmdbID]; ok {
 				title.Upgrade = title.Upgrade && previous.Upgrade
+				title.EpisodeIDs = append(title.EpisodeIDs, previous.EpisodeIDs...)
+				title.UpgradeEpisodeIDs = append(title.UpgradeEpisodeIDs, previous.UpgradeEpisodeIDs...)
 			}
 			byTitle[title.TmdbID] = title
 		}
@@ -208,13 +208,4 @@ func (h *Hub) resolveSonarrAnnouncements(instanceID string, client *sonarr.Clien
 	}
 	sort.Slice(titles, func(i, j int) bool { return titles[i].TmdbID < titles[j].TmdbID })
 	return titles, refreshed, false
-}
-
-func containsID(ids []int, id int) bool {
-	for _, candidate := range ids {
-		if candidate == id {
-			return true
-		}
-	}
-	return false
 }

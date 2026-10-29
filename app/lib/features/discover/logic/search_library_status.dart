@@ -60,16 +60,23 @@ const unknownTVLibraryStatus = LibraryStatus(
 /// Server-corrected TV identity and counts are already in TMDB coordinates.
 /// Do not join this projection to Sonarr's parent-wide identity or statistics.
 LibraryStatus? tvLibraryStatus(RequestStatusDetail detail) {
+  final availability = detail.availability;
+  if (availability?.hasFiles == true) {
+    return availability!.status == RequestStatus.available
+        ? (availability.is4K ? _available4K : _available)
+        : _scopedPartial(availability.seasons);
+  }
+  if (availability?.isKnown == false) return unknownTVLibraryStatus;
   if (!detail.isKnown || !(detail.match?.isResolved ?? true)) {
     return unknownTVLibraryStatus;
   }
   return switch (detail.status) {
     RequestStatus.available => detail.is4K ? _available4K : _available,
     RequestStatus.requested => _requested,
-    RequestStatus.pending => const LibraryStatus(
-        label: 'Pending', color: AppTheme.requested),
-    RequestStatus.downloading => const LibraryStatus(
-        label: 'Downloading', color: AppTheme.downloading),
+    RequestStatus.pending =>
+      const LibraryStatus(label: 'Pending', color: AppTheme.requested),
+    RequestStatus.downloading =>
+      const LibraryStatus(label: 'Downloading', color: AppTheme.downloading),
     RequestStatus.partial => _scopedPartial(detail.seasons),
     RequestStatus.unavailable || RequestStatus.denied => null,
   };
@@ -183,7 +190,8 @@ SonarrSeries? _titleYearMatch(
 ) {
   final year = tmdbPremiereYear(item.releaseDate);
   if (year == null) return null;
-  final title = item.title.toLowerCase();
+  final title = item.matchingTitle.toLowerCase();
+  if (title.trim().isEmpty) return null;
   return byTitleYear[(title, year)] ??
       byTitleYear[(title, year - 1)] ??
       byTitleYear[(title, year + 1)];

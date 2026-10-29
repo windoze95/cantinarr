@@ -311,7 +311,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "/bin/sh \"$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh\" embed_and_thin";
+			shellScript = "set -e\n/bin/sh \"$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh\" embed_and_thin\n/usr/bin/env python3 \"${PROJECT_DIR}/../tool/sync_ios_localizations.py\" --arb-dir \"${PROJECT_DIR}/../lib/l10n\" --plist \"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\n";
 		};
 		9740EEB61CF901F6004384FC /* Run Script */ = {
 			isa = PBXShellScriptBuildPhase;

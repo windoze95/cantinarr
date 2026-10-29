@@ -22,6 +22,9 @@ class ReportScope {
   final String? bookFormat; // book: 'ebook' | 'audiobook'
   final String? title;
 
+  /// Canonical source label sent to the server; display remains localized.
+  final String? sourceTitle;
+
   const ReportScope({
     required this.instanceId,
     required this.mediaType,
@@ -32,6 +35,7 @@ class ReportScope {
     this.foreignId,
     this.bookFormat,
     this.title,
+    this.sourceTitle,
   });
 
   /// Books carry no TMDB identity: the report names the library's
@@ -43,6 +47,7 @@ class ReportScope {
     required String foreignId,
     String? format,
     String? title,
+    String? sourceTitle,
   }) : this(
           instanceId: instanceId,
           mediaType: 'book',
@@ -50,6 +55,7 @@ class ReportScope {
           foreignId: foreignId,
           bookFormat: format,
           title: title,
+          sourceTitle: sourceTitle,
         );
 
   /// Music mirrors books minus the format axis: the report names the
@@ -59,23 +65,27 @@ class ReportScope {
     required String instanceId,
     required String foreignId,
     String? title,
+    String? sourceTitle,
   }) : this(
           instanceId: instanceId,
           mediaType: 'music',
           tmdbId: 0,
           foreignId: foreignId,
           title: title,
+          sourceTitle: sourceTitle,
         );
 
   const ReportScope.movie({
     required String instanceId,
     required int tmdbId,
     String? title,
+    String? sourceTitle,
   }) : this(
           instanceId: instanceId,
           mediaType: 'movie',
           tmdbId: tmdbId,
           title: title,
+          sourceTitle: sourceTitle,
         );
 
   const ReportScope.episode({
@@ -85,6 +95,7 @@ class ReportScope {
     required int seasonNumber,
     required int episodeNumber,
     String? title,
+    String? sourceTitle,
   }) : this(
           instanceId: instanceId,
           mediaType: 'tv',
@@ -93,6 +104,7 @@ class ReportScope {
           seasonNumber: seasonNumber,
           episodeNumber: episodeNumber,
           title: title,
+          sourceTitle: sourceTitle,
         );
 
   const ReportScope.series({
@@ -101,6 +113,7 @@ class ReportScope {
     int? tvdbId,
     int? seasonNumber,
     String? title,
+    String? sourceTitle,
   }) : this(
           instanceId: instanceId,
           mediaType: 'tv',
@@ -108,6 +121,7 @@ class ReportScope {
           tvdbId: tvdbId,
           seasonNumber: seasonNumber,
           title: title,
+          sourceTitle: sourceTitle,
         );
 }
 
@@ -247,7 +261,7 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
             bookFormat: scope.bookFormat,
             category: _category,
             reason: reason.isEmpty ? null : reason,
-            title: scope.title,
+            title: scope.sourceTitle ?? scope.title,
           );
       if (!mounted) return;
       Navigator.of(context).pop(true);

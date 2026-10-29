@@ -174,11 +174,12 @@ type AddSeriesRequest struct {
 }
 
 type QueueItem struct {
-	SeriesID int     `json:"seriesId"`
-	Title    string  `json:"title"`
-	Status   string  `json:"status"`
-	Sizeleft float64 `json:"sizeleft"`
-	Size     float64 `json:"size"`
+	SeriesID  int     `json:"seriesId"`
+	EpisodeID int     `json:"episodeId"`
+	Title     string  `json:"title"`
+	Status    string  `json:"status"`
+	Sizeleft  float64 `json:"sizeleft"`
+	Size      float64 `json:"size"`
 }
 
 // do executes a request with an optional JSON body, fails on non-2xx status,
@@ -281,7 +282,12 @@ func (c *Client) LookupByTitle(title string) ([]LookupResult, error) {
 }
 
 func (c *Client) GetSeries(id int) (*Series, error) {
-	resp, err := c.doRequest("GET", fmt.Sprintf("/api/v3/series/%d", id))
+	return c.GetSeriesContext(context.Background(), id)
+}
+
+// GetSeriesContext bounds optional presentation reads to the caller's lifetime.
+func (c *Client) GetSeriesContext(ctx context.Context, id int) (*Series, error) {
+	resp, err := c.doRequestContext(ctx, "GET", fmt.Sprintf("/api/v3/series/%d", id))
 	if err != nil {
 		return nil, fmt.Errorf("sonarr get series: %w", err)
 	}
@@ -1055,6 +1061,7 @@ func (c *Client) GetHealth() ([]HealthCheck, error) {
 
 type Episode struct {
 	ID            int        `json:"id"`
+	TVDBID        int        `json:"tvdbId"`
 	SeriesID      int        `json:"seriesId"`
 	SeasonNumber  int        `json:"seasonNumber"`
 	EpisodeNumber int        `json:"episodeNumber"`
@@ -1178,6 +1185,24 @@ func (c *Client) GetAllEpisodes(seriesID int) ([]Episode, error) {
 	path := fmt.Sprintf("/api/v3/episode?seriesId=%d", seriesID)
 	if err := c.do("GET", path, nil, &episodes); err != nil {
 		return nil, fmt.Errorf("sonarr episodes: %w", err)
+	}
+	return episodes, nil
+}
+
+// GetAllEpisodesContext reads the native episode identities once for a bounded
+// presentation batch. It never scans catalog seasons or searches by title.
+func (c *Client) GetAllEpisodesContext(ctx context.Context, seriesID int) ([]Episode, error) {
+	resp, err := c.doRequestContext(ctx, http.MethodGet, fmt.Sprintf("/api/v3/episode?seriesId=%d", seriesID))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("sonarr episodes: status %d", resp.StatusCode)
+	}
+	var episodes []Episode
+	if err = json.NewDecoder(resp.Body).Decode(&episodes); err != nil {
+		return nil, fmt.Errorf("decode sonarr episodes: %w", err)
 	}
 	return episodes, nil
 }

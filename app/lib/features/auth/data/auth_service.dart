@@ -595,10 +595,13 @@ class ServerConfig {
   /// Whether a Plex server exists that an ungranted user can ask access to.
   final bool plexAccessRequestable;
   final bool adminCatalogBrowsing;
+  final List<String> metadataLanguages;
+  final bool metadataLanguageTags;
 
   /// Supports linking accounts independently from managing their access.
   final bool mediaAccountManagement;
   final bool mediaUserImportExplicitLinking;
+  final bool mediaLibraryAvailability;
 
   /// Server supports paired Apple TV handoffs.
   final bool appleTvRemote;
@@ -630,8 +633,11 @@ class ServerConfig {
     this.allowReporting = false,
     this.plexAccessRequestable = false,
     this.adminCatalogBrowsing = false,
+    this.metadataLanguages = const [],
+    this.metadataLanguageTags = false,
     this.mediaAccountManagement = false,
     this.mediaUserImportExplicitLinking = false,
+    this.mediaLibraryAvailability = false,
     this.appleTvRemote = false,
     this.tvMatchCorrections = false,
     this.tvLibraryNavigation = false,
@@ -662,10 +668,16 @@ class ServerConfig {
       allowReporting: json['allow_reporting'] as bool? ?? false,
       plexAccessRequestable: json['plex_access_requestable'] as bool? ?? false,
       adminCatalogBrowsing: json['admin_catalog_browsing'] as bool? ?? false,
+      metadataLanguageTags: json['metadata_language_tags'] == true,
+      metadataLanguages:
+          (json['metadata_languages'] as List?)?.whereType<String>().toList() ??
+              const [],
       mediaAccountManagement:
           json['media_account_management'] as bool? ?? false,
       mediaUserImportExplicitLinking:
           json['media_user_import_explicit_linking'] as bool? ?? false,
+      mediaLibraryAvailability:
+          json['media_library_availability'] as bool? ?? false,
       appleTvRemote: json['apple_tv_remote'] as bool? ?? false,
       tvMatchCorrections: json['tv_match_corrections'] as bool? ?? false,
       tvLibraryNavigation: json['tv_library_navigation'] as bool? ?? false,

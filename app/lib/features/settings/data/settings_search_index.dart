@@ -1,4 +1,5 @@
 import 'package:cantinarr/l10n/app_localizations.dart';
+import 'package:cantinarr/l10n/app_languages.dart';
 
 import 'package:flutter/material.dart';
 
@@ -158,18 +159,45 @@ const List<SettingsSearchEntry> _rootEntries = [
     icon: Icons.app_registration_outlined,
     route: '/settings',
     screenTitle: 'Settings',
-    keywords: ['icon', 'logo', 'appearance', 'play sun', 'play sign', 'play dome', 'original'],
+    keywords: [
+      'icon',
+      'logo',
+      'appearance',
+      'play sun',
+      'play sign',
+      'play dome',
+      'original'
+    ],
     gate: gateAppIcons,
   ),
   SettingsSearchEntry(
     id: 'root.language',
-    title: 'Language',
+    title: 'App language',
     icon: Icons.language,
     route: '/settings',
     screenTitle: 'Settings',
     keywords: ['language', 'locale', 'english', 'french', 'français', 'langue'],
     gate: gateEveryone,
     anchorId: 'root.language',
+  ),
+  SettingsSearchEntry(
+    id: 'root.metadata-language',
+    title: 'Metadata language',
+    icon: Icons.translate,
+    route: '/settings',
+    screenTitle: 'Settings',
+    keywords: [
+      'language',
+      'metadata',
+      'titles',
+      'descriptions',
+      'english',
+      'french',
+      'français',
+      'langue'
+    ],
+    gate: gateEveryone,
+    anchorId: 'root.metadata-language',
   ),
   SettingsSearchEntry(
     id: 'screen.setup-checklist',
@@ -1085,6 +1113,16 @@ const List<SettingsSearchEntry> _notificationEntries = [
     anchorId: SettingsAnchors.notificationsRequestDecision,
   ),
   SettingsSearchEntry(
+    id: SettingsAnchors.notificationsRequesterOnly,
+    title: 'Only my requests',
+    icon: Icons.notifications_outlined,
+    route: '/settings/push-notifications',
+    screenTitle: 'Push Notifications',
+    keywords: ['push', 'requested', 'availability', 'episodes', 'personal'],
+    gate: gateEveryone,
+    anchorId: SettingsAnchors.notificationsRequesterOnly,
+  ),
+  SettingsSearchEntry(
     id: SettingsAnchors.notificationsNewMovie,
     title: 'New movie available',
     icon: Icons.notifications_outlined,
@@ -1697,8 +1735,16 @@ List<SettingsSearchEntry> searchSettingsIndex(
     final localized =
         localizations == null ? entry : entry.localized(localizations);
     final title = localized.title.toLowerCase();
+    final languages = entry.id == 'root.language' ||
+            entry.id == 'root.metadata-language'
+        ? appLanguages
+            .map((language) =>
+                '${language.nativeName} ${language.tag} ${language.metadataTag}')
+            .join(' ')
+            .toLowerCase()
+        : '';
     final primary =
-        '$title ${entry.title.toLowerCase()} ${entry.keywords.join(' ').toLowerCase()}';
+        '$title ${entry.title.toLowerCase()} ${entry.keywords.join(' ').toLowerCase()} $languages';
     final haystack =
         '$primary ${localized.screenTitle.toLowerCase()} ${localized.section.toLowerCase()} ${entry.screenTitle.toLowerCase()} ${entry.section.toLowerCase()}';
     if (!terms.every(haystack.contains)) continue;
@@ -1717,6 +1763,8 @@ String _settingsSearchLabel(AppLocalizations l10n, String label) =>
     switch (label) {
       'App icon' => l10n.settingsAppIcon,
       'Language' => l10n.settingsLanguage,
+      'App language' => l10n.settingsAppLanguage,
+      'Metadata language' => l10n.settingsMetadataLanguage,
       'Settings' => l10n.settingsTitle,
       'Setup Checklist' => l10n.settingsSetupChecklist,
       'Sign out' => l10n.settingsSignOut,
@@ -1800,6 +1848,7 @@ String _settingsSearchLabel(AppLocalizations l10n, String label) =>
       'Failed auto investigations before pausing' =>
         l10n.settingsFailedAutoInvestigationsBeforePausing,
       'Receive push notifications' => l10n.notificationReceivePush,
+      'Only my requests' => l10n.notificationOnlyMyRequests,
       'Request approved or denied' => l10n.notificationRequestDecision,
       'New movie available' => l10n.notificationNewMovie,
       'New episodes available' => l10n.notificationNewEpisodes,

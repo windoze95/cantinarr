@@ -36,6 +36,9 @@ type HistoryRequester struct {
 }
 
 type AdminHistoryItem struct {
+	RequestScope     *TVEpisodeScope     `json:"request_scope,omitempty"`
+	RequestMode      string              `json:"request_mode,omitempty"`
+	SourceSeasons    []int               `json:"source_seasons,omitempty"`
 	ID               int64               `json:"id"`
 	TmdbID           int                 `json:"tmdb_id"`
 	ForeignID        string              `json:"foreign_id,omitempty"`
@@ -191,6 +194,8 @@ func (s *Service) adminHistory(ctx context.Context, f adminHistoryFilter) (*Admi
 	}
 	for i := range page.Requests {
 		item := &page.Requests[i]
+		item.RequestMode, item.SourceSeasons = savedMediaIntent(tx, item.ID)
+		item.RequestScope = savedTVScope(tx, item.ID)
 		item.RequesterTagging, err = loadRequesterTagStatus(ctx, tx, item.ID)
 		if err != nil {
 			return nil, err

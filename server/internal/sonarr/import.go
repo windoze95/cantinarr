@@ -15,9 +15,11 @@ type ImportedEpisode struct {
 // ImportedTitle is one notification destination, after season corrections and
 // per-title upgrade classification. The caller supplies the importing instance.
 type ImportedTitle struct {
-	TmdbID  int
-	Title   string
-	Upgrade bool
+	EpisodeIDs        []int
+	UpgradeEpisodeIDs []int
+	TmdbID            int
+	Title             string
+	Upgrade           bool
 }
 
 // ImportResolver is implemented by request.Service, the owner of TV matching.
@@ -31,9 +33,44 @@ type ImportResolver interface {
 // UncorrectedImportTitle preserves ordinary series identity and treats a mixed
 // batch as new content. A nil episode slice represents the legacy queue witness.
 func UncorrectedImportTitle(series *Series, episodes []ImportedEpisode) []ImportedTitle {
+	var ids, upgrades []int
 	upgrade := len(episodes) > 0
 	for _, episode := range episodes {
 		upgrade = upgrade && episode.Upgrade
+		if episode.EpisodeID > 0 {
+			if episode.Upgrade {
+				upgrades = append(upgrades, episode.EpisodeID)
+			} else {
+				ids = append(ids, episode.EpisodeID)
+			}
+		}
 	}
-	return []ImportedTitle{{TmdbID: series.TmdbID, Title: series.Title, Upgrade: upgrade}}
+	return []ImportedTitle{{TmdbID: series.TmdbID, Title: series.Title, Upgrade: upgrade, EpisodeIDs: ids, UpgradeEpisodeIDs: upgrades}}
+}
+
+// NotifyImportedEpisodes preserves episode evidence for sinks that can target
+// saved requests. Legacy sinks still receive the established title event.
+func NotifyImportedEpisodes(sink interface{ NotifyNewEpisode(string, int, string) }, title ImportedTitle, instanceID string) {
+	if scoped, ok := sink.(interface {
+		RecordEpisodeUpgrades(string, int, string, []int)
+	}); ok {
+		scoped.RecordEpisodeUpgrades(title.Title, title.TmdbID, instanceID, title.UpgradeEpisodeIDs)
+	}
+	if scoped, ok := sink.(interface {
+		NotifyNewEpisodes(string, int, string, []int)
+	}); ok {
+		scoped.NotifyNewEpisodes(title.Title, title.TmdbID, instanceID, title.EpisodeIDs)
+	} else {
+		sink.NotifyNewEpisode(title.Title, title.TmdbID, instanceID)
+	}
+}
+
+func NotifyImportedUpgrade(sink interface{ NotifyUpgradedEpisode(string, int, string) }, title ImportedTitle, instanceID string) {
+	if scoped, ok := sink.(interface {
+		NotifyUpgradedEpisodes(string, int, string, []int)
+	}); ok && len(title.UpgradeEpisodeIDs) > 0 {
+		scoped.NotifyUpgradedEpisodes(title.Title, title.TmdbID, instanceID, title.UpgradeEpisodeIDs)
+	} else {
+		sink.NotifyUpgradedEpisode(title.Title, title.TmdbID, instanceID)
+	}
 }

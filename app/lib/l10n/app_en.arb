@@ -1,5 +1,9 @@
 {
   "@@locale": "en",
+  "languageNativeName": "English",
+  "@languageNativeName": {"description": "Name of this language in its own language, including region or script when needed to distinguish variants. Used in language selectors."},
+  "metadataLanguageTag": "en-US",
+  "@metadataLanguageTag": {"description": "TMDB metadata language: a two-letter ISO 639-1 code with optional ISO 3166-1 country, such as es or pt-BR. Use an empty string when unsupported. This is a protocol identifier, not translated prose."},
   "authSignInServer": "Sign in to your server",
   "authServerUrl": "Server URL",
   "authUsername": "Username",
@@ -5492,6 +5496,8 @@
   "notificationServerSettings": "Server settings",
   "notificationServerSettingsHelp": "Choose which push notifications this server may send.",
   "notificationMyNotifications": "My notifications",
+  "notificationOnlyMyRequests": "Only my requests",
+  "notificationOnlyMyRequestsHelp": "Limit movie, TV episode, book, and music availability alerts on my devices to my requests. Discord notifications keep their own settings.",
   "notificationAdminAlerts": "Administrator alerts",
   "notificationSendTest": "Send test notification",
   "notificationStatus": "Status",
@@ -8198,5 +8204,118 @@
   "settingsAppIconOriginal": "Original",
   "settingsAppIconDefault": "Default",
   "settingsAppIconUnsupported": "This device does not support alternate app icons.",
-  "settingsAppIconError": "Could not update the app icon. Try again."
+  "settingsAppIconError": "Could not update the app icon. Try again.",
+  "availabilityScanTitle": "Scan library availability",
+  "availabilityScanExplanation": "Recognize movies and episodes already on this server, even when they are not in Radarr or Sonarr. This does not change account sharing.",
+  "availabilityScanLibraries": "Libraries to scan",
+  "availabilityChooseLibraries": "Choose at least one library.",
+  "availabilityUnknownLibrary": "Unavailable library ({id})",
+  "@availabilityUnknownLibrary": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
+  },
+  "availabilityScanning": "Scanning libraries…",
+  "availabilityLastScan": "Last successful scan: {date} · {count} items",
+  "@availabilityLastScan": {
+    "placeholders": {
+      "date": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "availabilityNotScanned": "No successful scan yet.",
+  "availabilityScanFailed": "Could not check these libraries. The previous scan has not been treated as an empty library. Retry the scan.",
+  "availabilitySaveBeforeScan": "Save these settings before starting a scan.",
+  "availabilityScanNow": "Scan now",
+  "availabilityRefresh": "Refresh",
+  "availabilityLibraryAccessOnly": "Library access only",
+  "availabilityHouseholdExplanation": "Use these libraries to check what this person can already watch in your household. This does not link a media account, create a login, or enable playback and TV controls. A linked account takes precedence.",
+  "availabilityProvider": "Media server type",
+  "availabilityNoEligibleServers": "No scanned libraries are available for this server type. Enable scanning in the server settings first.",
+  "availabilityLinkedAccountWins": "Linked account access is used instead.",
+  "availabilityServerUnconfirmed": "Could not verify this server. Retry before adding access.",
+  "availabilityLibraryNotScanned": "This library is no longer selected for scanning.",
+  "availabilityAccessReadFailed": "Could not load library access. Retry before making changes.",
+  "availabilityAccessSaveFailed": "Could not save library access. Reload and try again.",
+  "availabilityOnServers": "Available on {servers}",
+  "@availabilityOnServers": {
+    "placeholders": {
+      "servers": {
+        "type": "String"
+      }
+    }
+  },
+  "availabilityStatusUnknown": "Some library availability could not be verified. Retry before requesting missing content.",
+  "availabilityLibraryRequest": "Request in this library: {status}",
+  "@availabilityLibraryRequest": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
+  "availabilityRequestLibraryCopy": "Request in library",
+  "availabilityFollowing": "Following new episodes",
+  "availabilityFollowingPaused": "Episode following paused",
+  "availabilityFollowingStopped": "Episode following stopped",
+  "availabilityFollowingAttention": "Episode following needs attention",
+  "availabilityFollowingSeasons": "Selected seasons: {seasons}",
+  "@availabilityFollowingSeasons": {
+    "placeholders": {
+      "seasons": {
+        "type": "String"
+      }
+    }
+  },
+  "availabilityStopFollowing": "Stop following",
+  "availabilityStopFailed": "Could not stop following. Try again.",
+  "availabilityFollowSeasons": "Follow selected seasons",
+  "availabilityFollowExplanation": "Choose the seasons to keep checking for missing episodes. Seasons added later are not included. Your usual request permissions and approval rules apply.",
+  "availabilityRequestMissingIntent": "Request missing items",
+  "availabilitySelectedSeasons": "Selected seasons: {seasons}",
+  "@availabilitySelectedSeasons": {
+    "placeholders": {
+      "seasons": {
+        "type": "String"
+      }
+    }
+  },
+  "availabilityMissingEpisodeScope": "Missing when requested: {count, plural, =1{1 episode} other{{count} episodes}}",
+  "availabilitySatisfiedEpisodeScope": "Already available and excluded: {count, plural, =1{1 episode} other{{count} episodes}}",
+  "availabilityEpisodeScopeSeason": "Season {season}: episodes {episodes}",
+  "@availabilityMissingEpisodeScope": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "@availabilitySatisfiedEpisodeScope": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "@availabilityEpisodeScopeSeason": {
+    "placeholders": {
+      "season": {
+        "type": "int"
+      },
+      "episodes": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsAppLanguage": "App language",
+  "settingsMetadataLanguage": "Metadata language",
+  "settingsMetadataFollowApp": "Follow app language",
+  "settingsMetadataLanguageHelp": "Use translated movie and TV titles, descriptions, and artwork when available. Original language filters, release dates, and audio are unchanged.",
+  "settingsMetadataServerUpdate": "Update your Cantinarr server to choose metadata language. Titles currently use their source language."
 }

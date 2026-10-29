@@ -22,7 +22,9 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/mcpserver"
 	"github.com/windoze95/cantinarr-server/internal/mediaaccess"
+	"github.com/windoze95/cantinarr-server/internal/mediaavailability"
 	"github.com/windoze95/cantinarr-server/internal/mediafiles"
+	"github.com/windoze95/cantinarr-server/internal/mediametadata"
 	"github.com/windoze95/cantinarr-server/internal/musicdiscovery"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
@@ -67,10 +69,21 @@ func NewRouter(
 	contentPolicyHandler *contentpolicy.Handler,
 	discordNotifications *discordnotify.Service,
 	seerrHandler *seerrcompat.Handler,
+	availabilityHandlers ...*mediaavailability.Handler,
 ) http.Handler {
+	var availabilityHandler *mediaavailability.Handler
+	if len(availabilityHandlers) > 0 {
+		availabilityHandler = availabilityHandlers[0]
+	}
 	configChanged := func() {
+		if availabilityHandler != nil {
+			availabilityHandler.Invalidate()
+		}
 		if wsHub != nil {
 			wsHub.Broadcast(ws.Event{Type: "config_changed"})
+			if availabilityHandler != nil {
+				wsHub.Broadcast(ws.Event{Type: "media_availability_changed"})
+			}
 		}
 	}
 	if instanceHandler != nil {
@@ -86,6 +99,9 @@ func NewRouter(
 	}
 	if mediaAccessHandler != nil {
 		mediaAccessHandler.SetConfigChangedObserver(configChanged)
+	}
+	if availabilityHandler != nil {
+		availabilityHandler.SetConfigChangedObserver(configChanged)
 	}
 	r := chi.NewRouter()
 	musicDiscovery := musicdiscovery.NewHandlerWithService(instanceStore, requestHandler.MusicCatalog())
@@ -320,6 +336,13 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/media-servers/{instanceID}/account", mediaAccessHandler.LinkAccount)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}/media-servers/{instanceID}/account", mediaAccessHandler.UnlinkAccount)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Patch("/users/{userID}/media-servers/{instanceID}/account/management", mediaAccessHandler.SetManagement)
+			if availabilityHandler != nil {
+				r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/media-availability/{instanceID}/libraries", availabilityHandler.Libraries)
+				r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/media-availability/{instanceID}/status", availabilityHandler.Status)
+				r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Post("/media-availability/{instanceID}/scan", availabilityHandler.Scan)
+				r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users/{userID}/media-availability", availabilityHandler.Household)
+				r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/media-availability", availabilityHandler.Household)
+			}
 
 			// Per-user default *arr instance overrides (admin-managed). Pins which
 			// instance is a given user's default source per service type, and —
@@ -513,6 +536,7 @@ func NewRouter(
 			r.Get("/requests/tv-library", requestHandler.GetTVLibrary)
 			r.Post("/requests/tv-library", requestHandler.CreateTVLibraryRequest)
 			r.Post("/requests/{id}/delivery", requestHandler.UpdateDelivery)
+			r.Post("/requests/{requestID}/follow/stop", requestHandler.StopTVFollow)
 			r.Get("/requests/book-status", requestHandler.GetBookStatus)
 			r.Get("/requests/book-library", requestHandler.GetBookLibrary)
 			r.Get("/requests/book-recent", requestHandler.GetBookRecent)
@@ -547,6 +571,7 @@ func NewRouter(
 			r.Use(auth.RequirePermission(auth.PermissionMediaDiscover))
 
 			// Discover
+			r.Post("/metadata/presentation", requestHandler.GetPresentations)
 			books := bookdiscovery.NewHandler()
 			r.Get("/discover/books/search", books.Search)
 			// The one live book feed: Hardcover's trending list, read with
@@ -1012,6 +1037,8 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			// grant can still ask for access from the guide.
 			"plex_access_requestable":            plexRequestable,
 			"admin_catalog_browsing":             true,
+			"metadata_languages":                 mediametadata.SupportedLanguages,
+			"metadata_language_tags":             true,
 			"request_quotas":                     true,
 			"requester_tagging":                  true,
 			"instance_assignments":               true,
@@ -1023,6 +1050,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"apple_tv_remote":                    len(appleTVCapability) > 0 && appleTVCapability[0](),
 			"media_account_management":           true,
 			"media_user_import_explicit_linking": true,
+			"media_library_availability":         true,
 			"hidden_discover_tabs":               hiddenTabs,
 			// An admin choice for every cover on this server; see the
 			// status route's include_4k for how shows are answered.

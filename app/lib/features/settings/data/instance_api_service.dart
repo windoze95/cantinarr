@@ -88,6 +88,7 @@ class InstanceWebhookStatus {
 class MediaServerConfig {
   final String publicAddress;
   final List<String> libraryIds;
+  final AvailabilityScanConfig? availabilityScan;
   final ListeningApps? listeningApps;
   final VideoApps? videoApps;
 
@@ -100,6 +101,7 @@ class MediaServerConfig {
   const MediaServerConfig({
     this.publicAddress = '',
     this.libraryIds = const [],
+    this.availabilityScan,
     this.listeningApps,
     this.videoApps,
     this.machineIdentifier = '',
@@ -108,6 +110,9 @@ class MediaServerConfig {
 
   factory MediaServerConfig.fromJson(Map<String, dynamic> json) =>
       MediaServerConfig(
+        availabilityScan: json['availability_scan'] is Map
+            ? AvailabilityScanConfig.fromJson(Map<String, dynamic>.from(json['availability_scan'] as Map))
+            : null,
         publicAddress: json['public_address'] as String? ?? '',
         videoApps: json['video_apps'] is Map
             ? VideoApps.fromJson(json['video_apps'])
@@ -126,11 +131,24 @@ class MediaServerConfig {
   Map<String, dynamic> toJson() => {
         'public_address': publicAddress,
         'library_ids': libraryIds,
+        if (availabilityScan != null) 'availability_scan': availabilityScan!.toJson(),
         if (listeningApps != null) 'listening_apps': listeningApps!.toJson(),
         if (videoApps != null) 'video_apps': videoApps!.toJson(),
         if (machineIdentifier.isNotEmpty) 'machine_identifier': machineIdentifier,
         if (autoApprove) 'auto_approve': true,
       };
+}
+
+/// Scanning is independent of the libraries shared with remote accounts.
+class AvailabilityScanConfig {
+  final bool enabled;
+  final List<String> libraryIds;
+  const AvailabilityScanConfig({this.enabled = false, this.libraryIds = const []});
+  factory AvailabilityScanConfig.fromJson(Map<String, dynamic> json) => AvailabilityScanConfig(
+    enabled: json['enabled'] == true,
+    libraryIds: (json['library_ids'] as List? ?? const []).map((id) => id.toString()).toList(),
+  );
+  Map<String, dynamic> toJson() => {'enabled': enabled, 'library_ids': libraryIds};
 }
 
 /// One owned Plex Media Server of a linked plex.tv account, for the editor's

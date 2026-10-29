@@ -23,6 +23,7 @@ class SeasonTable extends StatefulWidget {
   final List<Season> seasons;
   final RequestNotifier notifier;
   final String? title;
+  final String? sourceTitle;
   final int? tvdbId;
 
   /// Whether the current user may pick specific seasons (the server's
@@ -31,6 +32,7 @@ class SeasonTable extends StatefulWidget {
   /// explicit season list from a user who isn't allowed to choose, which would
   /// make the picker a silent no-op.
   final bool canRequest;
+  final bool usePlaybackAvailability;
 
   /// Called after a season request is accepted, so the caller can nudge
   /// stale-by-design surfaces (the shell's search-chip snapshot).
@@ -47,7 +49,9 @@ class SeasonTable extends StatefulWidget {
     super.key,
     required this.seasons,
     required this.notifier,
+    this.usePlaybackAvailability = true,
     this.title,
+    this.sourceTitle,
     this.tvdbId,
     this.canRequest = true,
     this.onRequested,
@@ -112,7 +116,10 @@ class _SeasonTableState extends State<SeasonTable> {
 
   /// Live per-season status keyed by season number, from the backend.
   Map<int, RequestSeasonStatus> get _statusBySeason => {
-        for (final s in widget.notifier.state.seasons) s.seasonNumber: s,
+        for (final s in widget.usePlaybackAvailability
+            ? widget.notifier.state.displaySeasons
+            : widget.notifier.state.seasons)
+          s.seasonNumber: s,
       };
 
   RequestSeasonStatus _statusFor(int seasonNumber) {
@@ -121,8 +128,10 @@ class _SeasonTableState extends State<SeasonTable> {
     // A title-wide pending badge must not erase an explicit mapping/status
     // problem on one native library season.
     if (season?.hasRequestIssue ?? false) return season!;
+    if (season?.isAvailable == true) return season!;
     // Pending approval covers the title; the API may omit its season rows.
-    if (state.status == RequestStatus.pending) {
+    if (state.status == RequestStatus.pending &&
+        season?.status != RequestStatus.partial) {
       return RequestSeasonStatus(
           seasonNumber: seasonNumber, status: RequestStatus.pending);
     }
@@ -137,8 +146,29 @@ class _SeasonTableState extends State<SeasonTable> {
         );
   }
 
+  RequestStatus? _targetStatusFor(int seasonNumber) {
+    final state = widget.notifier.state;
+    if (!widget.usePlaybackAvailability ||
+        state.availability?.seasons.isNotEmpty != true) return null;
+    final target = state.seasons
+        .where((s) => s.seasonNumber == seasonNumber)
+        .firstOrNull
+        ?.status;
+    final status =
+        target ?? (state.status == RequestStatus.pending ? state.status : null);
+    return switch (status) {
+      RequestStatus.pending ||
+      RequestStatus.requested ||
+      RequestStatus.downloading =>
+        status,
+      _ => null,
+    };
+  }
+
   bool _canRequestSeason(int seasonNumber) =>
-      widget.canRequest && _statusFor(seasonNumber).isRequestable;
+      widget.canRequest &&
+      _statusFor(seasonNumber).isRequestable &&
+      _targetStatusFor(seasonNumber) == null;
 
   void _toggle(int seasonNumber, bool? value) {
     if (_busy || !_canRequestSeason(seasonNumber)) return;
@@ -202,7 +232,7 @@ class _SeasonTableState extends State<SeasonTable> {
       if (seasons.isEmpty || !notifier.state.hasStatus) return;
       final instanceId = notifier.instanceId;
       final accepted = await notifier.request(
-        title: widget.title,
+        title: widget.sourceTitle ?? widget.title,
         tvdbId: widget.tvdbId,
         seasons: seasons,
       );
@@ -276,6 +306,7 @@ class _SeasonTableState extends State<SeasonTable> {
                       _SeasonRow(
                         season: seasons[i],
                         status: _statusFor(seasons[i].seasonNumber),
+                        targetStatus: _targetStatusFor(seasons[i].seasonNumber),
                         selected: _selected.contains(seasons[i].seasonNumber),
                         showCheckbox: widget.canRequest,
                         enabled: !_busy &&
@@ -334,6 +365,7 @@ class _SeasonTableState extends State<SeasonTable> {
 class _SeasonRow extends StatelessWidget {
   final Season season;
   final RequestSeasonStatus status;
+  final RequestStatus? targetStatus;
   final bool selected;
   final bool showCheckbox;
   final bool enabled;
@@ -344,6 +376,7 @@ class _SeasonRow extends StatelessWidget {
   const _SeasonRow({
     required this.season,
     required this.status,
+    this.targetStatus,
     required this.selected,
     required this.showCheckbox,
     required this.enabled,
@@ -363,7 +396,7 @@ class _SeasonRow extends StatelessWidget {
             true,
           _ => false,
         };
-    final checked = accepted || selected;
+    final checked = accepted || selected || targetStatus != null;
     return InkWell(
       onTap: enabled ? () => onChanged(!selected) : null,
       child: Padding(
@@ -411,6 +444,12 @@ class _SeasonRow extends StatelessWidget {
                           style: const TextStyle(
                               color: AppTheme.textSecondary, fontSize: 12)),
                     ),
+                  if (targetStatus != null && targetStatus != status.status)
+                    Text(
+                        context.l10n.availabilityLibraryRequest(
+                            browseLabel(context, targetStatus!.label)),
+                        style: const TextStyle(
+                            color: AppTheme.textSecondary, fontSize: 12)),
                 ],
               ),
             ),

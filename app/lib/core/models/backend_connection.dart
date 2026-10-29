@@ -88,11 +88,16 @@ class BackendConnection {
   /// External book/music metadata can be browsed by admins before setup.
   final bool adminCatalogBrowsing;
 
+  /// Localized metadata languages advertised by this server; empty on older servers.
+  final List<String> metadataLanguages;
+  final bool metadataLanguageTags;
+
   /// Supports linking accounts independently from managing their access.
   final bool mediaAccountManagement;
 
   /// Imports create new users; existing identities require explicit linking.
   final bool mediaUserImportExplicitLinking;
+  final bool mediaLibraryAvailability;
 
   /// Server supports paired Apple TV handoffs.
   final bool appleTvRemote;
@@ -131,8 +136,11 @@ class BackendConnection {
     this.allowReporting = false,
     this.plexAccessRequestable = false,
     this.adminCatalogBrowsing = false,
+    this.metadataLanguages = const [],
+    this.metadataLanguageTags = false,
     this.mediaAccountManagement = false,
     this.mediaUserImportExplicitLinking = false,
+    this.mediaLibraryAvailability = false,
     this.appleTvRemote = false,
     this.tvMatchCorrections = false,
     this.tvLibraryNavigation = false,
@@ -160,8 +168,11 @@ class BackendConnection {
     bool? allowReporting,
     bool? plexAccessRequestable,
     bool? adminCatalogBrowsing,
+    List<String>? metadataLanguages,
+    bool? metadataLanguageTags,
     bool? mediaAccountManagement,
     bool? mediaUserImportExplicitLinking,
+    bool? mediaLibraryAvailability,
     bool? appleTvRemote,
     bool? tvMatchCorrections,
     bool? tvLibraryNavigation,
@@ -184,6 +195,8 @@ class BackendConnection {
         serverVersion: serverVersion ?? this.serverVersion,
         minAppVersion: minAppVersion ?? this.minAppVersion,
         adminCatalogBrowsing: adminCatalogBrowsing ?? this.adminCatalogBrowsing,
+        metadataLanguages: metadataLanguages ?? this.metadataLanguages,
+        metadataLanguageTags: metadataLanguageTags ?? this.metadataLanguageTags,
         appleTvRemote: appleTvRemote ?? this.appleTvRemote,
         tvMatchCorrections: tvMatchCorrections ?? this.tvMatchCorrections,
         tvLibraryNavigation: tvLibraryNavigation ?? this.tvLibraryNavigation,
@@ -196,6 +209,8 @@ class BackendConnection {
         cover4KBadges: cover4KBadges ?? this.cover4KBadges,
         mediaAccountManagement:
             mediaAccountManagement ?? this.mediaAccountManagement,
+        mediaLibraryAvailability:
+            mediaLibraryAvailability ?? this.mediaLibraryAvailability,
         mediaUserImportExplicitLinking: mediaUserImportExplicitLinking ??
             this.mediaUserImportExplicitLinking,
         hiddenDiscoverTabs: clearHiddenDiscoverTabs

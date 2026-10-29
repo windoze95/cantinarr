@@ -253,6 +253,16 @@ class _PushNotificationsScreenState
                   },
           ),
         _SectionHeader(title: context.l10n.notificationMyNotifications),
+        if (prefs.supportsRequesterOnly)
+          _toggle(
+            title: context.l10n.notificationOnlyMyRequests,
+            subtitle: context.l10n.notificationOnlyMyRequestsHelp,
+            value: prefs.requesterOnly,
+            onChanged: _saving || !prefs.pushEnabled || !prefs.serverEnabled
+                ? null
+                : (value) => _save(prefs.copyWith(requesterOnly: value), prefs),
+            anchor: SettingsAnchors.notificationsRequesterOnly,
+          ),
         for (final category in pushCategories.where((c) => !c.admin))
           if ((category.service != 'chaptarr' || showBooks) &&
               (category.service != 'lidarr' || showMusic))

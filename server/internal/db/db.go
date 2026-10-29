@@ -429,6 +429,7 @@ CREATE TABLE IF NOT EXISTS listening_app_preferences (
 CREATE TABLE IF NOT EXISTS notification_prefs (
     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     push_enabled INTEGER NOT NULL DEFAULT 1,
+    requester_only INTEGER NOT NULL DEFAULT 0,
     request_auto_approved INTEGER NOT NULL DEFAULT 0,
     request_decision INTEGER NOT NULL DEFAULT 0,
     request_pending  INTEGER NOT NULL DEFAULT 1,
@@ -1038,7 +1039,7 @@ CREATE INDEX IF NOT EXISTS idx_profile_change_proposals_status
     ON profile_change_proposals(status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_profile_change_proposals_one_pending
     ON profile_change_proposals(service_type, instance_id, profile_id) WHERE status = 'pending';
-`
+` + mediaAvailabilitySQL + mediaFollowSQL
 
 type schemaMigration struct {
 	alter    string
@@ -1289,6 +1290,7 @@ func Open(dbPath string) (*sql.DB, error) {
 		// additionally scoped in SQL to users who can see the instance.
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN new_music INTEGER NOT NULL DEFAULT 1"},
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN push_enabled INTEGER NOT NULL DEFAULT 1"},
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN requester_only INTEGER NOT NULL DEFAULT 0"},
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN request_auto_approved INTEGER NOT NULL DEFAULT 0"},
 		// Broaden the former Plex-invite preference without opting anyone back
 		// in. Retain the old column for upgrades; the new one owns future saves.

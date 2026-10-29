@@ -244,12 +244,13 @@ var toolDefinitions = []Tool{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"search_term":  map[string]interface{}{"type": "string", "description": "Original Chaptarr search query that returned the selected book."},
+				"request_mode": map[string]interface{}{"type": "string", "enum": []string{"missing", "library_copy"}, "description": "Movies/TV: missing (default) uses accessible media-server coverage and TV follows only selected seasons. library_copy deliberately requests a separate copy in the selected automation library; use only when the user explicitly requests that copy."},
 				"season_scope": map[string]interface{}{"type": "string", "enum": []string{"all", "first", "latest", "pilot"}, "description": "TV selection when no explicit seasons are supplied. A pilot costs one season."},
 				"seasons":      map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "integer", "minimum": 1}, "description": "Explicit TV seasons shown to the user, excluding specials. Overrides season_scope when season choice is allowed."},
 				"catalog_ref":  map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "enum": []string{"musicbrainz", "musicbrainz_release"}}, "id": map[string]interface{}{"type": "string"}}, "required": []string{"provider", "id"}, "description": "Public identity from catalog search, separate from a native foreign_id."},
 
 				"request_id": map[string]interface{}{"type": "integer", "description": "Saved request to retry, cancel, or confirm."},
-				"action":     map[string]interface{}{"type": "string", "enum": []string{"retry", "cancel"}, "description": "Modify saved delivery. confirm uses foreign_id and is allowed only after the user explicitly chooses that book from the offered matches. Never infer confirmation from title similarity."},
+				"action":     map[string]interface{}{"type": "string", "enum": []string{"retry", "cancel", "stop_follow"}, "description": "Modify saved delivery. confirm uses foreign_id and is allowed only after the user explicitly chooses that book from the offered matches. Never infer confirmation from title similarity."},
 
 				"tmdb_id": map[string]interface{}{
 					"type":        "integer",
@@ -1046,6 +1047,7 @@ func (s *ToolServer) visibleLibraries(userID int64, mediaType string) []toolLibr
 
 func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolResult, error) {
 	var params struct {
+		RequestMode      string              `json:"request_mode"`
 		SeasonScope      string              `json:"season_scope"`
 		Seasons          []int               `json:"seasons"`
 		CatalogRef       *request.CatalogRef `json:"catalog_ref"`
@@ -1065,6 +1067,14 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 	}
 	if params.Action == "confirm" || (params.Action == "" && params.MediaType == "book" && params.CatalogRef != nil) {
 		return retiredBookCatalogResult(), nil
+	}
+	if params.Action == "stop_follow" {
+		response, err := s.request.StopTVFollow(userID, params.RequestID)
+		if err != nil {
+			return nil, err
+		}
+		data, _ := json.Marshal(response)
+		return &ToolResult{Text: string(data)}, nil
 	}
 	if params.Action != "" {
 		response, err := s.request.DeliveryAction(context.Background(), userID, params.RequestID, params.Action, params.ForeignID, params.BookFormat)
@@ -1089,6 +1099,7 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 	// The request service authorizes the selection; a library outside the
 	// user's granted set comes back as the benign "Request failed" text.
 	resp, err := s.request.CreateMediaRequest(userID, &request.CreateRequest{
+		RequestMode:      params.RequestMode,
 		SeasonScope:      params.SeasonScope,
 		Seasons:          params.Seasons,
 		CatalogRef:       params.CatalogRef,

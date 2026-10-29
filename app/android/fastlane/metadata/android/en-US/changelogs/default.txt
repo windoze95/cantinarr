@@ -1,5 +1,9 @@
-New Play Sun logo and app icon. Choose Play Sign, Play Dome, or the original icon in Settings > Account > App icon. Your choice stays on this device.
-
-French interface: follow your device language or choose English or Français in Settings.
-
-Browse and request movies, TV, books, and music. Follow downloads and receive notifications when requests are ready.
+Play Sun logo and alternate icons.
+French interface and metadata.
+Clearer imports, invites and account links.
+Updated AI models and optional fallback.
+Plex, Jellyfin and Emby availability and household access.
+Request missing episodes, follow seasons or another copy.
+Only my requests filters alerts.
+Nested Back swipes keep the drawer closed.
+Correct discovery status after refresh and for empty seasons.

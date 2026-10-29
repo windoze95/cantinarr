@@ -28,10 +28,16 @@ class ReleaseEvent {
   /// Album identity for the music detail screen: the MusicBrainz
   /// release-group id. Null for movie/tv events.
   final String? foreignId;
-  /// The library the event was read from (TV and music).
+
+  /// The exact library the event was read from.
   final String? instanceId;
+  final int? nativeRecordId;
   final int? seriesId;
   final int? seasonNumber;
+
+  /// Native identity and numbering stay separate from translated episode text.
+  final int? episodeId;
+  final int? episodeNumber;
 
   /// Whether the file already exists in the library.
   final bool hasFile;
@@ -45,14 +51,28 @@ class ReleaseEvent {
     this.tmdbId,
     this.foreignId,
     this.instanceId,
+    this.nativeRecordId,
     this.seriesId,
     this.seasonNumber,
+    this.episodeId,
+    this.episodeNumber,
     this.hasFile = false,
   });
 
   /// The release date truncated to midnight, used for grouping and calendar
   /// markers.
   DateTime get day => DateTime(date.year, date.month, date.day);
+
+  String? episodeSubtitle(String? localizedTitle) {
+    if (localizedTitle == null ||
+        localizedTitle.isEmpty ||
+        seasonNumber == null ||
+        episodeNumber == null) {
+      return subtitle;
+    }
+    return 'S${seasonNumber.toString().padLeft(2, '0')}'
+        'E${episodeNumber.toString().padLeft(2, '0')} • $localizedTitle';
+  }
 }
 
 DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
@@ -66,6 +86,7 @@ DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 ReleaseEvent? releaseEventFromRadarr(
   Map<String, dynamic> json, {
   DateTime? now,
+  String? instanceId,
 }) {
   final movie = RadarrMovie.fromJson(json);
   final candidates = <({DateTime date, String label})>[
@@ -79,9 +100,8 @@ ReleaseEvent? releaseEventFromRadarr(
   if (candidates.isEmpty) return null;
 
   final today = _dateOnly(now ?? DateTime.now());
-  final upcoming = candidates
-      .where((c) => !_dateOnly(c.date).isBefore(today))
-      .toList();
+  final upcoming =
+      candidates.where((c) => !_dateOnly(c.date).isBefore(today)).toList();
   final chosen = upcoming.isNotEmpty ? upcoming.first : candidates.last;
 
   // Movie dates are calendar dates; read the components directly rather than
@@ -94,6 +114,8 @@ ReleaseEvent? releaseEventFromRadarr(
     posterUrl: movie.posterUrl,
     mediaType: ReleaseMediaType.movie,
     tmdbId: movie.tmdbId,
+    instanceId: instanceId,
+    nativeRecordId: movie.id,
     hasFile: movie.hasFile,
   );
 }
@@ -135,6 +157,8 @@ ReleaseEvent? releaseEventFromSonarr(
     instanceId: instanceId,
     seriesId: seriesId,
     seasonNumber: json['seasonNumber'] as int?,
+    episodeId: json['id'] as int?,
+    episodeNumber: json['episodeNumber'] as int?,
     hasFile: json['hasFile'] as bool? ?? false,
   );
 }

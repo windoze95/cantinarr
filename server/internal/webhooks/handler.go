@@ -661,9 +661,9 @@ func (h *Handler) seriesImported(instanceID string, payload arrPayload) {
 	}
 	for _, title := range titles {
 		if title.Upgrade {
-			h.content.NotifyUpgradedEpisode(title.Title, title.TmdbID, instanceID)
+			sonarr.NotifyImportedUpgrade(h.content, title, instanceID)
 		} else {
-			h.content.NotifyNewEpisode(title.Title, title.TmdbID, instanceID)
+			sonarr.NotifyImportedEpisodes(h.content, title, instanceID)
 		}
 	}
 }

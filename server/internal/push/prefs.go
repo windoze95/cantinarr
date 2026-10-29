@@ -3,12 +3,14 @@ package push
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // Prefs is a user's per-category push notification preferences. Each field
 // gates one notification category; see the category constants below.
 type Prefs struct {
 	PushEnabled         bool `json:"push_enabled"`
+	RequesterOnly       bool `json:"requester_only"`
 	RequestAutoApproved bool `json:"request_auto_approved"`
 	RequestDecision     bool `json:"request_decision"`
 	RequestPending      bool `json:"request_pending"`
@@ -160,10 +162,10 @@ func NewPrefsStore(db *sql.DB) *PrefsStore {
 func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 	p := defaultPrefs
 	err := s.db.QueryRow(
-		`SELECT request_decision, request_pending, new_movie, new_episode, new_book, new_music, issue_created, agent_action_pending, plex_access_request, media_server_access, issue_report_update, agent_digest, content_upgraded, push_enabled, request_auto_approved
+		`SELECT request_decision, request_pending, new_movie, new_episode, new_book, new_music, issue_created, agent_action_pending, plex_access_request, media_server_access, issue_report_update, agent_digest, content_upgraded, push_enabled, request_auto_approved, requester_only
 		 FROM notification_prefs WHERE user_id = ?`,
 		userID,
-	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.NewBook, &p.NewMusic, &p.IssueCreated, &p.AgentActionPending, &p.PlexAccessRequest, &p.MediaServerAccess, &p.IssueReportUpdate, &p.AgentDigest, &p.ContentUpgraded, &p.PushEnabled, &p.RequestAutoApproved)
+	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.NewBook, &p.NewMusic, &p.IssueCreated, &p.AgentActionPending, &p.PlexAccessRequest, &p.MediaServerAccess, &p.IssueReportUpdate, &p.AgentDigest, &p.ContentUpgraded, &p.PushEnabled, &p.RequestAutoApproved, &p.RequesterOnly)
 	if err == sql.ErrNoRows {
 		return defaultPrefs, nil
 	}
@@ -175,16 +177,20 @@ func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 
 // Set upserts a user's preferences.
 func (s *PrefsStore) Set(userID int64, p Prefs) error {
-	return s.set(userID, p, &p.PushEnabled, &p.RequestAutoApproved, &p.MediaServerAccess)
+	return s.set(userID, p, &p.PushEnabled, &p.RequestAutoApproved, &p.MediaServerAccess, &p.RequesterOnly)
 }
 
 // Omitted new fields survive saves from clients that do not know them yet.
 // COALESCE in the upsert preserves them atomically, without a read/write race.
-func (s *PrefsStore) set(userID int64, p Prefs, enabled, autoApproved, mediaAccess *bool) error {
+func (s *PrefsStore) set(userID int64, p Prefs, enabled, autoApproved, mediaAccess *bool, requesterOnly ...*bool) error {
+	var only *bool
+	if len(requesterOnly) > 0 {
+		only = requesterOnly[0]
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO notification_prefs
-		   (user_id, request_decision, request_pending, new_movie, new_episode, new_book, new_music, issue_created, agent_action_pending, plex_access_request, media_server_access, issue_report_update, agent_digest, content_upgraded, push_enabled, request_auto_approved)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 1), ?, ?, ?, COALESCE(?, 1), COALESCE(?, 0))
+		   (user_id, request_decision, request_pending, new_movie, new_episode, new_book, new_music, issue_created, agent_action_pending, plex_access_request, media_server_access, issue_report_update, agent_digest, content_upgraded, push_enabled, request_auto_approved, requester_only)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 1), ?, ?, ?, COALESCE(?, 1), COALESCE(?, 0), COALESCE(?, 0))
 		 ON CONFLICT(user_id) DO UPDATE SET
 		   request_decision = excluded.request_decision,
 		   request_pending  = excluded.request_pending,
@@ -200,9 +206,10 @@ func (s *PrefsStore) set(userID int64, p Prefs, enabled, autoApproved, mediaAcce
 		   agent_digest         = excluded.agent_digest,
 		   content_upgraded     = excluded.content_upgraded,
 		   push_enabled         = COALESCE(?, notification_prefs.push_enabled),
-		   request_auto_approved = COALESCE(?, notification_prefs.request_auto_approved)`,
+		   request_auto_approved = COALESCE(?, notification_prefs.request_auto_approved),
+		   requester_only = COALESCE(?, notification_prefs.requester_only)`,
 		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode, p.NewBook, p.NewMusic, p.IssueCreated, p.AgentActionPending, p.PlexAccessRequest, mediaAccess, p.IssueReportUpdate, p.AgentDigest, p.ContentUpgraded,
-		enabled, autoApproved, mediaAccess, enabled, autoApproved,
+		enabled, autoApproved, only, mediaAccess, enabled, autoApproved, only,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert notification prefs: %w", err)
@@ -275,6 +282,9 @@ func (s *PrefsStore) usersOptedIntoNewMusic(instanceID string) ([]int64, error) 
 	return s.usersOptedIntoInstance(CategoryNewMusic, "lidarr", instanceID)
 }
 func (s *PrefsStore) usersOptedIntoInstance(category, serviceType, instanceID string) ([]int64, error) {
+	return s.contentLibraryUsers(category, serviceType, instanceID, false)
+}
+func (s *PrefsStore) contentLibraryUsers(category, serviceType, instanceID string, includeMuted bool) ([]int64, error) {
 	if instanceID == "" {
 		return []int64{}, nil
 	}
@@ -289,6 +299,9 @@ func (s *PrefsStore) usersOptedIntoInstance(category, serviceType, instanceID st
  OR (u.role='admin' AND (EXISTS(SELECT 1 FROM user_default_instances d WHERE d.user_id=u.id AND d.instance_id=?)
  OR (NOT EXISTS(SELECT 1 FROM user_default_instances d WHERE d.user_id=u.id AND d.service_type=?)
  AND NOT EXISTS(SELECT 1 FROM user_instance_grants g JOIN service_instances si ON si.id=g.instance_id WHERE g.user_id=u.id AND si.service_type=?)))))`, col.column, def)
+	if includeMuted {
+		query = strings.Replace(query, fmt.Sprintf("COALESCE(p.%s,%d)=1", col.column, def), "1=1", 1)
+	}
 	return s.queryUserIDs(query, instanceID, instanceID, serviceType, serviceType)
 }
 

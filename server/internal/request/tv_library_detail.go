@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/mediametadata"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
 
@@ -449,6 +450,9 @@ func (h *Handler) GetTVLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.service.TVLibraryDetail(claims.UserID, instanceID, id)
+	if err == nil {
+		err = h.service.localizeTVLibrary(r.Context(), claims.UserID, out, mediametadata.Language(r))
+	}
 	tvMatchReply(w, out, err)
 }
 

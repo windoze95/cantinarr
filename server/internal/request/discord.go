@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/contentnotify"
 	"github.com/windoze95/cantinarr-server/internal/discordnotify"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
@@ -20,6 +21,10 @@ import (
 // Channel publication is an explicit administrator-controlled disclosure, as
 // with submission alerts; a mention additionally requires this current grant.
 func (s *Service) DiscordAuthorize(ctx context.Context, userID int64, subject discordnotify.Subject) (bool, error) {
+	return s.authorizeContentRecipient(ctx, userID, subject)
+}
+
+func (s *Service) authorizeContentRecipient(ctx context.Context, userID int64, subject contentnotify.Subject) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -65,7 +70,11 @@ func (s *Service) DiscordAuthorize(ctx context.Context, userID int64, subject di
 // DiscordAvailability reads the exact saved request. The cross-library Seerr
 // ledger and the aggregate user history are intentionally unsuitable here.
 func (s *Service) DiscordAvailability(ctx context.Context, id int64, fresh bool) (discordnotify.Availability, error) {
-	out := discordnotify.Availability{Units: []discordnotify.Unit{}}
+	return s.requestContentAvailability(ctx, id, &contentAvailabilityRead{freshEpisodes: fresh})
+}
+
+func (s *Service) requestContentAvailability(ctx context.Context, id int64, read *contentAvailabilityRead) (contentnotify.Availability, error) {
+	out := contentnotify.Availability{Units: []contentnotify.Unit{}}
 	if err := ctx.Err(); err != nil {
 		return out, err
 	}
@@ -73,7 +82,7 @@ func (s *Service) DiscordAvailability(ctx context.Context, id int64, fresh bool)
 	if err != nil {
 		return out, err
 	}
-	out.Subject = discordnotify.Subject{RequestID: id, Title: r.title, MediaType: r.mediaType, TmdbID: r.tmdbID, ForeignID: r.foreignID, InstanceID: r.instanceID}
+	out.Subject = contentnotify.Subject{RequestID: id, Title: r.title, MediaType: r.mediaType, TmdbID: r.tmdbID, ForeignID: r.foreignID, InstanceID: r.instanceID}
 	if r.instanceID == "" || s.registry == nil {
 		return out, fmt.Errorf("request has no verifiable library")
 	}
@@ -99,11 +108,11 @@ func (s *Service) DiscordAvailability(ctx context.Context, id int64, fresh bool)
 		if !accepted[""] {
 			return out, nil
 		}
-		digest, known := s.movieAvailabilityDigestForInstance(r.instanceID)
-		if !known {
-			return out, fmt.Errorf("movie library could not be read")
+		available, err := s.contentMovieAvailable(r.instanceID, r.tmdbID, read)
+		if err != nil {
+			return out, err
 		}
-		if digest[r.tmdbID].HasFile {
+		if available {
 			out.Units = append(out.Units, discordnotify.Unit{Key: "movie", Label: "Ready to watch"})
 		}
 	case "tv":
@@ -120,23 +129,25 @@ func (s *Service) DiscordAvailability(ctx context.Context, id int64, fresh bool)
 			return out, nil
 		}
 		out.Baseline = repairOf > 0
-		return s.discordTVAvailability(ctx, id, r, out, fresh)
+		return s.requestTVAvailability(ctx, id, r, out, read)
 	case "book":
 		client, err := s.registry.GetChaptarrClient(r.instanceID)
 		if err != nil {
 			return out, err
 		}
-		projection, err := s.liveBookProjectionCached(client, r.instanceID)
+		projection, err := s.contentBookProjection(client, r.instanceID, read)
 		if err != nil {
 			return out, err
 		}
 		var live map[string]string
+		var liveID string
 		resolved := false
 		for _, format := range expandBookFormat(r.bookFormat) {
 			if !accepted[""] && !accepted[format] {
 				continue
 			}
 			state := StatusUnavailable
+			unitForeignID := r.foreignID
 			var recordID int
 			err = s.db.QueryRow(`SELECT COALESCE(NULLIF(d.book_record_id,0),r.book_record_id,0) FROM request_log r LEFT JOIN request_dispatch d ON d.request_id=r.id AND d.format=? WHERE r.id=?`, format, id).Scan(&recordID)
 			if err != nil {
@@ -146,23 +157,25 @@ func (s *Service) DiscordAvailability(ctx context.Context, id int64, fresh bool)
 				state = record.Status
 				if state == StatusAvailable {
 					out.Subject.ForeignID = record.ForeignID
+					unitForeignID = record.ForeignID
 				}
 			} else {
 				if !resolved {
-					live, _, err = projection.resolveFormatsWithLookup(client, r.foreignID, nil)
+					live, liveID, err = projection.resolveFormatsWithLookup(client, r.foreignID, nil)
 					if err != nil {
 						return out, err
 					}
 					resolved = true
 				}
 				state = live[format]
+				unitForeignID = liveID
 			}
 			if state == StatusAvailable {
 				label := "eBook ready"
 				if format == BookFormatAudiobook {
 					label = "Audiobook ready"
 				}
-				out.Units = append(out.Units, discordnotify.Unit{Key: format, Label: label, Format: format})
+				out.Units = append(out.Units, discordnotify.Unit{Key: format, Label: label, Format: format, ForeignID: unitForeignID})
 			}
 		}
 	case "music":
@@ -173,7 +186,7 @@ func (s *Service) DiscordAvailability(ctx context.Context, id int64, fresh bool)
 		if err != nil {
 			return out, err
 		}
-		projection, err := s.liveMusicProjectionCached(client, r.instanceID)
+		projection, err := s.contentMusicProjection(client, r.instanceID, read)
 		if err != nil {
 			return out, err
 		}
@@ -200,7 +213,7 @@ func (s *Service) DiscordAvailability(ctx context.Context, id int64, fresh bool)
 	return out, nil
 }
 
-func (s *Service) discordTVAvailability(ctx context.Context, id int64, r *resolvedRequest, out discordnotify.Availability, fresh bool) (discordnotify.Availability, error) {
+func (s *Service) requestTVAvailability(ctx context.Context, id int64, r *resolvedRequest, out contentnotify.Availability, read *contentAvailabilityRead) (contentnotify.Availability, error) {
 	s.tvMatchMu.Lock()
 	defer s.tvMatchMu.Unlock()
 	client, err := s.registry.GetSonarrClient(r.instanceID)
@@ -255,14 +268,10 @@ func (s *Service) discordTVAvailability(ctx context.Context, id int64, r *resolv
 	}
 	// Delivery can share a brief snapshot; observation must read fresh episode
 	// state after its digest check. Recipients are rechecked after either read.
-	type snapshot struct {
-		Series   *sonarr.Series   `json:"series"`
-		Episodes []sonarr.Episode `json:"episodes"`
-	}
-	var snap snapshot
+	var snap contentTVSnapshot
 	key := "discord-tv:" + r.instanceID + ":" + strconv.Itoa(m.TVDBID)
-	cached := false
-	if s.libraryCache != nil && !fresh {
+	snap, cached := read.tv[key]
+	if !cached && s.libraryCache != nil && !read.freshEpisodes {
 		if data, ok := s.libraryCache.Get(key); ok {
 			cached = json.Unmarshal(data, &snap) == nil
 		}
@@ -283,15 +292,23 @@ func (s *Service) discordTVAvailability(ctx context.Context, id int64, r *resolv
 			s.libraryCache.Set(key, raw, 10*time.Second)
 		}
 	}
+	if read.tv == nil {
+		read.tv = map[string]contentTVSnapshot{}
+	}
+	read.tv[key] = snap
 	if snap.Series == nil {
 		return out, nil
 	}
 	if err = validateTVSeasons(selectedMapping, target.SourceSeasons, snap.Series.Seasons); err != nil {
 		return out, err
 	}
+	selectedEpisodes, err := s.requestedTVEpisodeIDs(id, target, snap.Series.ID, snap.Episodes)
+	if err != nil {
+		return out, err
+	}
 	imports := []sonarr.ImportedEpisode{}
 	for _, ep := range snap.Episodes {
-		if _, ok := scopes[ep.SeasonNumber]; ok && ep.HasFile {
+		if _, ok := scopes[ep.SeasonNumber]; ok && ep.HasFile && (selectedEpisodes == nil || selectedEpisodes[ep.ID]) {
 			imports = append(imports, sonarr.ImportedEpisode{EpisodeID: ep.ID, SeasonNumber: ep.SeasonNumber})
 		}
 	}
@@ -322,7 +339,7 @@ func (s *Service) discordTVAvailability(ctx context.Context, id int64, r *resolv
 	}
 	for _, ep := range snap.Episodes {
 		source, ok := scopes[ep.SeasonNumber]
-		if !ok || !ep.HasFile || ep.ID <= 0 || (target.Pilot && ep.EpisodeNumber != 1) {
+		if !ok || !ep.HasFile || ep.ID <= 0 || (target.Pilot && ep.EpisodeNumber != 1) || (selectedEpisodes != nil && !selectedEpisodes[ep.ID]) {
 			continue
 		}
 		out.Units = append(out.Units, discordnotify.Unit{Key: fmt.Sprintf("episode:%d:%d", snap.Series.ID, ep.ID), Label: fmt.Sprintf("S%02dE%02d", source, ep.EpisodeNumber)})

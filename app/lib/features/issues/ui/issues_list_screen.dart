@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/layout/adaptive.dart';
+import '../../../core/metadata/metadata_presentation.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/attention_menu_visibility_switch.dart';
@@ -433,16 +434,17 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
 
 enum _IssueFilter { needsAttention, tracking, closed }
 
-class _IssueTile extends StatelessWidget {
+class _IssueTile extends ConsumerWidget {
   final Issue issue;
   final VoidCallback onTap;
 
   const _IssueTile({required this.issue, required this.onTap});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final category = issue.category;
     final tracking = issue.status.isTracking;
+    final isAdmin = ref.watch(authProvider).valueOrNull?.user?.isAdmin == true;
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       // Unread affordance: a small filled accent dot. The slot is reserved in
@@ -457,18 +459,25 @@ class _IssueTile extends StatelessWidget {
       ),
       minLeadingWidth: 8,
       horizontalTitleGap: 12,
-      title: Text(
-        issue.title.isEmpty
-            ? context.l10n.opsIssueNumber(issue.id.toString())
-            : issue.title,
-        style: TextStyle(
-          color: tracking ? AppTheme.textSecondary : AppTheme.textPrimary,
-          fontWeight:
-              issue.read || tracking ? FontWeight.w600 : FontWeight.w800,
-        ),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
+      title: MetadataPresentationBuilder(
+          reference: isAdmin
+              ? null
+              : MetadataReference.catalog(issue.mediaType, issue.tmdbId),
+          builder: (presentation) => Text(
+                presentation?.title ??
+                    (issue.title.isEmpty
+                        ? context.l10n.opsIssueNumber(issue.id.toString())
+                        : issue.title),
+                style: TextStyle(
+                  color:
+                      tracking ? AppTheme.textSecondary : AppTheme.textPrimary,
+                  fontWeight: issue.read || tracking
+                      ? FontWeight.w600
+                      : FontWeight.w800,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              )),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

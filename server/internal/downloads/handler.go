@@ -5,6 +5,7 @@
 package downloads
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,9 +18,11 @@ import (
 
 // Handler provides REST endpoints for managing download clients.
 type Handler struct {
-	store    *instance.Store
-	registry *instance.Registry
-	activity *ActivityService
+	presentation        PresentationResolver
+	presentationContext func(context.Context) context.Context
+	store               *instance.Store
+	registry            *instance.Registry
+	activity            *ActivityService
 }
 
 // NewHandler creates a new downloads handler.

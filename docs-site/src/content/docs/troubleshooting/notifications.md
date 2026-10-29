@@ -24,6 +24,8 @@ Check the relevant instance's **Instant updates**. Small ebook downloads can fin
 
 Confirm the title and format changed in the intended library and the event category is enabled for that recipient. An ebook import does not prove the audiobook is ready.
 
+If **Only my requests** is on under **Push Notifications**, confirm that this person requested the title in that library and the arriving book format, TV season, or episode matches their request. Another household member's request alone does not qualify. This preference does not change Discord delivery.
+
 ## An old device receives alerts
 
 Review **Connected Devices** and revoke the old device if it should no longer have access. A phone reinstall can require fresh sign-in and notification permission.

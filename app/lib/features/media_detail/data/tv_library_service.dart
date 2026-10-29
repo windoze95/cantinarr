@@ -17,11 +17,14 @@ class TVLibraryDetail {
   TVLibraryDetail.fromJson(Map<String, dynamic> json)
       : catalogId = json['tmdb_id'] as int? ?? 0,
         detail = json['detail'] is Map<String, dynamic>
-            ? TVDetail.fromJson(json['detail'] as Map<String, dynamic>) : null,
+            ? TVDetail.fromJson(json['detail'] as Map<String, dynamic>)
+            : null,
         status = RequestStatusDetail.fromJson(
             json['status'] as Map<String, dynamic>? ?? {'status_known': false}),
-        matches = [for (final value in (json['matches'] as List?) ?? [])
-          TVMatch.fromJson(value as Map<String, dynamic>)],
+        matches = [
+          for (final value in (json['matches'] as List?) ?? [])
+            TVMatch.fromJson(value as Map<String, dynamic>)
+        ],
         revision = json['revision'] as String? ?? '';
 
   TVMatch? sourceForSeason(int number) {
@@ -39,41 +42,76 @@ class TVLibraryService extends RequestService {
   final String libraryId;
   final int seriesId;
   TVLibraryDetail? current;
+  String? metadataLanguage;
+  int _metadataRevision = 0;
 
-  TVLibraryService({required this.dio, required this.libraryId,
-    required this.seriesId}) : super(backendDio: dio);
+  TVLibraryService(
+      {required this.dio,
+      required this.libraryId,
+      required this.seriesId,
+      this.metadataLanguage})
+      : super(backendDio: dio);
+
+  void updateMetadataLanguage(String? language) {
+    if (metadataLanguage == language) return;
+    metadataLanguage = language;
+    _metadataRevision++;
+    current = null;
+  }
 
   Future<TVLibraryDetail> load({CancelToken? cancelToken}) async {
+    final revision = _metadataRevision;
     final response = await dio.get('/api/requests/tv-library',
-      queryParameters: {'instance_id': libraryId, 'series_id': seriesId},
-      cancelToken: cancelToken);
+        queryParameters: {
+          'instance_id': libraryId,
+          'series_id': seriesId,
+          if (metadataLanguage != null) 'metadata_language': metadataLanguage
+        },
+        cancelToken: cancelToken);
     final data = response.data as Map<String, dynamic>;
     if (data['instance_id'] != libraryId || data['series_id'] != seriesId) {
-      throw const FormatException('The library series changed. Reopen the title.');
+      throw const FormatException(
+          'The library series changed. Reopen the title.');
     }
     final result = TVLibraryDetail.fromJson(data);
-    if (result.catalogId <= 0 && (result.detail == null ||
-        result.revision.isEmpty ||
-        result.matches.any((m) => m.tmdbId <= 0 || m.seriesId != seriesId || !m.isResolved))) {
+    if (result.catalogId <= 0 &&
+        (result.detail == null ||
+            result.revision.isEmpty ||
+            result.matches.any((m) =>
+                m.tmdbId <= 0 || m.seriesId != seriesId || !m.isResolved))) {
       throw const FormatException('Could not verify this library series.');
     }
     if (result.catalogId <= 0) {
-      final seasons = result.detail!.seasons.where((s) => s.seasonNumber > 0)
-          .map((s) => s.seasonNumber).toSet();
+      final seasons = result.detail!.seasons
+          .where((s) => s.seasonNumber > 0)
+          .map((s) => s.seasonNumber)
+          .toSet();
       final statuses = result.status.seasons.map((s) => s.seasonNumber).toSet();
-      if (seasons.length != statuses.length || !seasons.containsAll(statuses) ||
-          result.status.seasons.any((s) => !s.hasRequestIssue &&
-              result.matches.where((m) => m.seasonMap.containsValue(s.seasonNumber)).length != 1)) {
-        throw const FormatException('Could not verify this series\' season status.');
+      if (seasons.length != statuses.length ||
+          !seasons.containsAll(statuses) ||
+          result.status.seasons.any((s) =>
+              !s.hasRequestIssue &&
+              result.matches
+                      .where((m) => m.seasonMap.containsValue(s.seasonNumber))
+                      .length !=
+                  1)) {
+        throw const FormatException(
+            'Could not verify this series\' season status.');
       }
+    }
+    if (revision != _metadataRevision) {
+      throw const FormatException(
+          'Metadata language changed. Reopen the title.');
     }
     return current = result;
   }
 
   @override
   Future<RequestStatusDetail> checkStatusDetail(int tmdbId, MediaType mediaType,
-      {String? instanceId, bool includeInstanceStatuses = true,
-      bool include4K = false, CancelToken? cancelToken}) async {
+      {String? instanceId,
+      bool includeInstanceStatuses = true,
+      bool include4K = false,
+      CancelToken? cancelToken}) async {
     if (instanceId != libraryId) throw const FormatException('Library changed');
     final result = await load(cancelToken: cancelToken);
     if (result.catalogId > 0) throw const FormatException('Reopen this title');
@@ -84,16 +122,23 @@ class TVLibraryService extends RequestService {
   bool get refreshStatusAfterFailure => true;
 
   @override
-  Future<RequestStatus?> request({required int tmdbId,
-      required MediaType mediaType, String? title, int? tvdbId,
-      String? seasonScope, List<int>? seasons, int? qualityProfileId,
-      String? instanceId}) async {
+  Future<RequestStatus?> request(
+      {required int tmdbId,
+      required MediaType mediaType,
+      String? title,
+      int? tvdbId,
+      String? seasonScope,
+      List<int>? seasons,
+      int? qualityProfileId,
+      String? instanceId,
+      String? requestMode}) async {
     lastRequestError = null;
     lastRequestQuotaExceeded = false;
     if (instanceId != libraryId || current == null) return null;
     try {
       final response = await dio.post('/api/requests/tv-library', data: {
-        'instance_id': libraryId, 'series_id': seriesId,
+        'instance_id': libraryId,
+        'series_id': seriesId,
         'revision': current!.revision,
         if (seasons?.isNotEmpty ?? false) 'seasons': seasons,
         if (seasonScope != null) 'season_scope': seasonScope,
@@ -101,7 +146,8 @@ class TVLibraryService extends RequestService {
       });
       final data = response.data as Map<String, dynamic>;
       if (data['success'] != true) {
-        lastRequestError = data['error'] as String? ?? 'Could not request these seasons.';
+        lastRequestError =
+            data['error'] as String? ?? 'Could not request these seasons.';
         return null;
       }
       return RequestStatus.requested;

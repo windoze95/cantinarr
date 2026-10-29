@@ -68,7 +68,7 @@ void main() {
     final language =
         searchSettingsIndex('lang français', _userGates, localizations: french)
             .singleWhere((entry) => entry.id == 'root.language');
-    expect(language.title, 'Langue');
+    expect(language.title, 'Langue de l’application');
     expect(language.route, '/settings');
     expect(language.anchorId, 'root.language');
 

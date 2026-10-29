@@ -7,6 +7,8 @@ import 'package:cantinarr/features/chaptarr/ui/widgets/book_status.dart';
 import 'package:cantinarr/features/sonarr/data/sonarr_models.dart';
 import 'package:cantinarr/features/sonarr/ui/widgets/season_availability.dart';
 import 'package:cantinarr/l10n/l10n.dart';
+import 'package:cantinarr/l10n/app_languages.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -17,22 +19,69 @@ void main() {
 
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  test('French catalog covers every English message and its parameters', () {
+  test('every ARB covers the template, descriptors, and parameters', () {
     final english = jsonDecode(File('lib/l10n/app_en.arb').readAsStringSync())
-        as Map<String, dynamic>;
-    final french = jsonDecode(File('lib/l10n/app_fr.arb').readAsStringSync())
         as Map<String, dynamic>;
     Set<String> messages(Map<String, dynamic> catalog) =>
         catalog.keys.where((key) => !key.startsWith('@')).toSet();
-    expect(messages(french), messages(english));
-    for (final key in messages(english)) {
-      final translated = french[key] as String;
-      expect(translated.trim(), isNotEmpty, reason: key);
-      final metadata = english['@$key'] as Map<String, dynamic>?;
-      final placeholders = metadata?['placeholders'] as Map<String, dynamic>?;
-      for (final parameter in placeholders?.keys ?? <String>[]) {
-        expect(translated, contains('{$parameter'), reason: '$key: $parameter');
+    final files = Directory('lib/l10n').listSync().whereType<File>().where(
+        (file) => RegExp(r'app_[a-zA-Z_0-9]+\.arb$').hasMatch(file.path));
+    expect(files, isNotEmpty);
+    for (final file in files) {
+      final catalog =
+          jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+      final locale = catalog['@@locale'] as String;
+      expect(file.uri.pathSegments.last, 'app_$locale.arb');
+      final entry = appLanguageForTag(locale);
+      expect(entry, isNotNull, reason: file.path);
+      expect(entry!.tag, locale.replaceAll('_', '-'), reason: file.path);
+      expect(GlobalMaterialLocalizations.delegate.isSupported(entry.locale),
+          isTrue,
+          reason: '$locale needs Flutter Material translations');
+      expect(GlobalCupertinoLocalizations.delegate.isSupported(entry.locale),
+          isTrue,
+          reason: '$locale needs Flutter Cupertino translations');
+      expect(
+          GlobalWidgetsLocalizations.delegate.isSupported(entry.locale), isTrue,
+          reason: '$locale needs Flutter widget translations');
+      expect(catalog['languageNativeName'], entry.nativeName);
+      expect(catalog['metadataLanguageTag'], entry.metadataTag);
+      expect(
+          entry.metadataTag.isEmpty ||
+              RegExp(r'^[a-z]{2}(?:-[A-Z]{2})?$').hasMatch(entry.metadataTag),
+          isTrue,
+          reason:
+              '$locale metadataLanguageTag must be a provider language/country tag or empty');
+      expect(messages(catalog), messages(english), reason: file.path);
+      for (final key in messages(english)) {
+        final translated = catalog[key] as String;
+        if (key != 'metadataLanguageTag') {
+          expect(translated.trim(), isNotEmpty, reason: '$locale: $key');
+        }
+        final metadata = english['@$key'] as Map<String, dynamic>?;
+        final placeholders = metadata?['placeholders'] as Map<String, dynamic>?;
+        for (final parameter in placeholders?.keys ?? <String>[]) {
+          expect(
+              RegExp('\\{\\s*${RegExp.escape(parameter)}(?:\\s*[,}])')
+                  .hasMatch(translated),
+              isTrue,
+              reason: '$locale: $key must preserve {$parameter}');
+        }
       }
+    }
+  });
+
+  test(
+      'language registry uses generated labels and rejects malformed saved tags',
+      () {
+    expect(AppLocalizations.supportedLocales.first, const Locale('en'));
+    expect(appLanguages.map((entry) => entry.locale),
+        AppLocalizations.supportedLocales);
+    expect(appLanguageForTag('en')?.nativeName, 'English');
+    expect(appLanguageForTag('fr')?.nativeName, 'Français');
+    expect(metadataLanguageNames['fr-FR'], 'Français');
+    for (final tag in ['xx', 'fr-extra-private', 'fr--CA', 'FR', 'fr/CA']) {
+      expect(appLanguageForTag(tag), isNull, reason: tag);
     }
   });
 
@@ -47,9 +96,13 @@ void main() {
     await container
         .read(appLocaleProvider.notifier)
         .setLocale(const Locale('en', 'GB'));
-    expect(container.read(appLocaleProvider), const Locale('en'));
+    final expected =
+        AppLocalizations.supportedLocales.contains(const Locale('en', 'GB'))
+            ? const Locale('en', 'GB')
+            : const Locale('en');
+    expect(container.read(appLocaleProvider), expected);
     expect((await SharedPreferences.getInstance()).getString('app_language'),
-        'en');
+        expected.toLanguageTag());
   });
 
   test('an immediate selection wins over preference restoration', () async {
@@ -74,7 +127,7 @@ void main() {
     expect(notifier.state, isNull);
     expect((await SharedPreferences.getInstance()).containsKey('app_language'),
         isFalse);
-    expect(() => notifier.setLocale(const Locale('de')), throwsArgumentError);
+    expect(() => notifier.setLocale(const Locale('zz')), throwsArgumentError);
     final restored = AppLocaleNotifier();
     addTearDown(restored.dispose);
     await Future<void>.delayed(Duration.zero);
@@ -89,10 +142,9 @@ void main() {
     expect(notifier.state, isNull);
   });
 
-  testWidgets(
-      'French Canadian device uses French, explicit English switches live',
+  testWidgets('French device uses French, explicit English switches live',
       (tester) async {
-    tester.platformDispatcher.localesTestValue = const [Locale('fr', 'CA')];
+    tester.platformDispatcher.localesTestValue = const [Locale('fr')];
     addTearDown(tester.platformDispatcher.clearLocalesTestValue);
     final container = ProviderContainer();
     addTearDown(container.dispose);
@@ -117,7 +169,7 @@ void main() {
 
   testWidgets('unsupported system language falls back to English',
       (tester) async {
-    tester.platformDispatcher.localesTestValue = const [Locale('de', 'DE')];
+    tester.platformDispatcher.localesTestValue = const [Locale('zz', 'ZZ')];
     addTearDown(tester.platformDispatcher.clearLocalesTestValue);
     await tester.pumpWidget(const ProviderScope(child: _LocaleHarness()));
     await tester.pumpAndSettle();
@@ -188,7 +240,7 @@ class _LocaleHarness extends ConsumerWidget {
                     body: Column(children: [
                   Text(context.l10n.appSettings),
                   Text(MaterialLocalizations.of(context).closeButtonLabel),
-                  Text(Localizations.localeOf(context).languageCode),
+                  Text(Localizations.localeOf(context).toLanguageTag()),
                 ]))),
       );
 }
