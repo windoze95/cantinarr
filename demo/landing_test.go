@@ -19,7 +19,7 @@ func TestLandingPageConnectsToConfiguredDemo(t *testing.T) {
 	for _, want := range []string{
 		`<html lang="en">`,
 		`<link rel="icon" href="/static/favicon.png?v=4" type="image/png">`,
-		`<img src="/static/lockup.svg" alt="Cantinarr" width="147" height="40" style="border-radius:0" />`,
+		`<img src="/static/lockup.svg?v=transparent-1" alt="Cantinarr" width="155" height="40" style="border-radius:0" />`,
 		`<h1 id="demo-title">Try Cantinarr.</h1>`,
 		`<code>` + serverURL + `</code>`,
 		`href="cantinarr://connect?token=` + demoConnectTokenStr + `&amp;server=` + url.QueryEscape(serverURL) + `"`,
