@@ -393,4 +393,4 @@ Update the Cloudflare DNS A record when you create a new droplet with a differen
 
 ## Branding
 
-The landing page and bundled browser app use round 4 Play Sun artwork by Julian Poidevin. The outlined title-case lockup has a sun-yellow i-dot. Assets are embedded locally; the logo repository is not needed at runtime. Keep these exports aligned with the main application’s `branding/` sources when updating the demo.
+The landing page and bundled browser app use round 4 Play Sun artwork by Julian Poidevin. The landing page uses the transparent `deliverables/play-sun/svg/lockup-horizontal-dark.svg` from `julian-poidevin/cantinarr-logo` at commit `010eebb`, with the outlined title-case lettering and sun-yellow i-dot. The SVG is embedded locally as `assets/lockup.svg`; bump its URL version when replacing it so browsers fetch the new artwork. The logo repository is not needed at runtime. Keep this export aligned with the main application’s transparent web assets in `branding/` when updating the demo.
