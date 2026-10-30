@@ -57,8 +57,18 @@ def save(image, path, size=None, opaque=False):
     image.save(path)
 
 
+def transparent_svg(slug):
+    """Remove only the charcoal tile, retaining the original artwork and canvas."""
+    tree = ET.parse(BRAND / f'{slug}.svg').getroot()
+    tile = tree.find(NS + 'path')
+    if tile is None or tile.get('fill') != '#22221E':
+        raise ValueError(f'{slug} does not start with the expected charcoal tile')
+    tree.remove(tile)
+    return ET.tostring(tree, encoding='unicode')
+
+
 def export_web_assets(site=None):
-    """Copy the kit's transparent artwork without changing application icons."""
+    """Export transparent website artwork without changing launcher icons."""
     docs = ROOT / 'docs-site/public'
     for theme in ('dark', 'light'):
         shutil.copyfile(BRAND / f'play-sun-web-symbol-{theme}.svg',
@@ -68,22 +78,55 @@ def export_web_assets(site=None):
     if site:
         shutil.copyfile(BRAND / 'play-sun-web-lockup-dark.svg',
                         site / 'public/static/lockup-transparent-v1.svg')
+        shutil.copyfile(BRAND / 'play-sun-web-symbol-dark.svg',
+                        site / 'public/static/symbol-transparent-v1.svg')
+    favicon = render(transparent_svg('play-sun-small'), 256)
+    save(favicon, APP / 'web/favicon.png', 48)
+    save(favicon, docs / 'favicon-transparent-v1.png', 48)
+    if site:
+        save(favicon, site / 'public/static/favicon-transparent-v1.png', 48)
+
+
+def export_splash_assets():
+    """Render the untiled mark into the existing native and web launch canvases."""
+    splash = render(transparent_svg('play-sun'), 1024)
+    save(splash, APP / 'assets/splash_icon.png')
+    ios = APP / 'ios/Runner/Assets.xcassets'
+    res = APP / 'android/app/src/main/res'
+    launch = list((APP / 'web/splash/img').glob('*.png'))
+    launch += list((ios / 'LaunchImage.imageset').glob('*.png'))
+    launch += list(res.glob('drawable*/splash.png'))
+    launch += list(res.glob('drawable*/android12splash.png'))
+    for path in launch:
+        old = Image.open(path)
+        canvas = Image.new('RGBA', old.size)
+        # Android 12 clips a circular region in the splash canvas.
+        size = int(min(old.size) * (2 / 3 if path.name == 'android12splash.png' else 1))
+        icon = splash.resize((size, size), Image.Resampling.LANCZOS)
+        canvas.alpha_composite(icon, ((old.width-size)//2, (old.height-size)//2))
+        save(canvas, path)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--site', type=Path, help='Optional cantinarr-site checkout')
-    parser.add_argument('--web-only', action='store_true',
-                        help='Export transparent website SVGs without rendering application icons')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--web-only', action='store_true',
+                      help='Export transparent website SVGs and favicons without rendering launcher icons')
+    mode.add_argument('--splash-only', action='store_true',
+                      help='Render only the native and web loading splash images')
     args = parser.parse_args()
     if args.web_only:
         export_web_assets(args.site)
         print('Exported transparent Play Sun website artwork.')
         return
+    if args.splash_only:
+        export_splash_assets()
+        print('Rendered transparent Play Sun loading splash images.')
+        return
     tiles = {slug: render(svg(slug), 1024) for slug in ('play-sun', 'play-sign', 'play-dome')}
     primary = tiles['play-sun']
     square = render(svg('play-sun', square=True), 1024)
-    small = render((BRAND / 'play-sun-small.svg').read_text(), 256)
     for slug, image in tiles.items():
         save(image, APP / f'assets/app_icon_{slug.replace("-", "_")}.png', 256)
     save(Image.open(BRAND / 'original.png'), APP / 'assets/app_icon_original.png', 256)
@@ -96,8 +139,6 @@ def main():
         svg_string=ET.tostring(wordmark, encoding='unicode'), width=1282, height=240))
     for path in ('app/assets/logo.png', 'docs-site/public/icon.png', 'server/internal/auth/auth_logo.png'):
         save(primary, ROOT / path)
-    for path in ('app/web/favicon.png', 'docs-site/public/favicon.png'):
-        save(small, ROOT / path, 48)
     for size in (192, 512):
         save(primary, APP / f'web/icons/Icon-{size}.png', size)
         save(render(svg('play-sun', square=True, scale=.8), size),
@@ -137,20 +178,7 @@ def main():
         (res / f'values/{name}_background.xml').write_text(
             f'<resources><color name="{name}_background">{colour}</color></resources>\n')
 
-    # Existing launch canvases retain their dimensions and native placement.
-    save(primary, APP / 'assets/splash_icon.png')
-    launch = list((APP / 'web/splash/img').glob('*.png'))
-    launch += list((ios / 'LaunchImage.imageset').glob('*.png'))
-    launch += list(res.glob('drawable*/splash.png'))
-    launch += list(res.glob('drawable*/android12splash.png'))
-    for path in launch:
-        old = Image.open(path)
-        canvas = Image.new('RGBA', old.size)
-        # Android 12 clips a circular region in the splash canvas.
-        size = int(min(old.size) * (2 / 3 if path.name == 'android12splash.png' else 1))
-        icon = primary.resize((size, size), Image.Resampling.LANCZOS)
-        canvas.alpha_composite(icon, ((old.width-size)//2, (old.height-size)//2))
-        save(canvas, path)
+    export_splash_assets()
     # Notification status icons need a single opaque silhouette on transparency.
     mono = render(svg('play-sun', mono=True), 96)
     for path in res.glob('drawable*/ic_stat_notify.png'):
@@ -162,7 +190,6 @@ def main():
         save(primary, static / 'logo.png')
         save(primary, static / 'icon-512.png', 512)
         save(square, static / 'apple-touch-icon.png', 180, opaque=True)
-        save(small, static / 'favicon.png', 48)
     print('Rendered Play Sun defaults and Play Sign / Play Dome alternatives.')
 
 

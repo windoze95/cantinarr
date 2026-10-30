@@ -18,6 +18,8 @@ Language menus and iOS language declarations now come from the translation files
 
 New Play Sun branding. In Settings > Account > App icon, try Play Sign, Play Dome, Original, then Play Sun. Check the home screen, dark/tinted appearance, restart and upgrade persistence, push taps, and connect/passkey/OIDC links with an alternate icon selected.
 
+Check a cold launch: the Play Sun loading mark should appear directly on the dark screen without a charcoal tile. Confirm the artwork remains centered and unclipped before sign-in or your saved session opens.
+
 In Settings > Notifications > Push Notifications, test Only my requests on a compatible server. Movie, TV episode, book-format, and music availability alerts should follow your requests and selected library. Check shared book requests, selected TV seasons and episode following, other household requests, saved choices after restart, and existing category/master opt-outs. Discord settings remain separate. Older servers should hide the new switch.
 
 iPhone: test completed/canceled left-edge Back swipes on direct and nested detail/category pages, list position, tab switches and app resume. Hamburger and root drawer swipes still work. Protected editors, even unchanged, use button Back. Keep editing must retain the draft and page position; Discard changes must exit.
