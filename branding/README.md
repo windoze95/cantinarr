@@ -22,16 +22,16 @@ python3 -m venv /tmp/cantinarr-branding
 
 The script updates Flutter, iOS, Android, macOS, Windows, web/PWA, splash/notification, authentication-page, and documentation assets. The marketing site's social card has its own SVG source in `assets/og-play-sun.svg`.
 
-To refresh only the transparent website SVGs and favicons without rendering launcher icons:
+To refresh only the transparent website SVGs, catalog PNG, and favicons without rendering launcher icons:
 
 ```sh
 /tmp/cantinarr-branding/bin/python scripts/generate_branding.py --web-only
-# Optionally update the marketing site's versioned lockup too:
+# Optionally update the marketing site's versioned lockup and catalog icon too:
 /tmp/cantinarr-branding/bin/python scripts/generate_branding.py --web-only --site /path/to/cantinarr-site
 # Refresh only the iOS, Android, and web loading splash images:
 /tmp/cantinarr-branding/bin/python scripts/generate_branding.py --splash-only
 ```
 
-The documentation header selects the matching symbol for its light or dark theme. Its `lockup-dark.svg` and `lockup-light.svg` exports also use the transparent artwork. The marketing site uses `lockup-transparent-v1.svg` and `symbol-transparent-v1.svg`; use new filenames when changing these assets because the site caches static assets immutably.
+The documentation header selects the matching symbol for its light or dark theme. Its `lockup-dark.svg` and `lockup-light.svg` exports also use the transparent artwork. The marketing site uses `lockup-transparent-v1.svg` and `symbol-transparent-v1.svg`. Its matching `symbol-transparent-v1.png` is a 1024 by 1024 RGBA export for deployment catalogs such as Unraid, with the SVG's aspect ratio preserved on a transparent canvas. Catalog templates can use `https://cantinarr.com/static/symbol-transparent-v1.png`. Use new filenames when changing these assets because the site caches static assets immutably.
 
 The favicon and splash exporters remove only the first charcoal tile path from `play-sun-small.svg` and `play-sun.svg`, respectively. They preserve the original 256 by 256 canvas and all foreground geometry. Splash canvases keep their existing dimensions and Android 12 safe area. Documentation and marketing use `favicon-transparent-v1.png`; the app's favicon URL carries a matching cache version. Launcher, touch, PWA, notification, and in-app navigation icons remain separate exports.

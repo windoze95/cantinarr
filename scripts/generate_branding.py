@@ -80,6 +80,10 @@ def export_web_assets(site=None):
                         site / 'public/static/lockup-transparent-v1.svg')
         shutil.copyfile(BRAND / 'play-sun-web-symbol-dark.svg',
                         site / 'public/static/symbol-transparent-v1.svg')
+        symbol = render((BRAND / 'play-sun-web-symbol-dark.svg').read_text(), 1024)
+        canvas = Image.new('RGBA', (1024, 1024))
+        canvas.alpha_composite(symbol, ((1024-symbol.width)//2, (1024-symbol.height)//2))
+        save(canvas, site / 'public/static/symbol-transparent-v1.png')
     favicon = render(transparent_svg('play-sun-small'), 256)
     save(favicon, APP / 'web/favicon.png', 48)
     save(favicon, docs / 'favicon-transparent-v1.png', 48)
@@ -112,7 +116,7 @@ def main():
     parser.add_argument('--site', type=Path, help='Optional cantinarr-site checkout')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--web-only', action='store_true',
-                      help='Export transparent website SVGs and favicons without rendering launcher icons')
+                      help='Export transparent website SVGs, catalog PNG, and favicons without rendering launcher icons')
     mode.add_argument('--splash-only', action='store_true',
                       help='Render only the native and web loading splash images')
     args = parser.parse_args()
