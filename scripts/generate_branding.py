@@ -57,10 +57,29 @@ def save(image, path, size=None, opaque=False):
     image.save(path)
 
 
+def export_web_assets(site=None):
+    """Copy the kit's transparent artwork without changing application icons."""
+    docs = ROOT / 'docs-site/public'
+    for theme in ('dark', 'light'):
+        shutil.copyfile(BRAND / f'play-sun-web-symbol-{theme}.svg',
+                        docs / f'symbol-{theme}.svg')
+        shutil.copyfile(BRAND / f'play-sun-web-lockup-{theme}.svg',
+                        docs / f'lockup-{theme}.svg')
+    if site:
+        shutil.copyfile(BRAND / 'play-sun-web-lockup-dark.svg',
+                        site / 'public/static/lockup-transparent-v1.svg')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--site', type=Path, help='Optional cantinarr-site checkout')
+    parser.add_argument('--web-only', action='store_true',
+                        help='Export transparent website SVGs without rendering application icons')
     args = parser.parse_args()
+    if args.web_only:
+        export_web_assets(args.site)
+        print('Exported transparent Play Sun website artwork.')
+        return
     tiles = {slug: render(svg(slug), 1024) for slug in ('play-sun', 'play-sign', 'play-dome')}
     primary = tiles['play-sun']
     square = render(svg('play-sun', square=True), 1024)
@@ -137,15 +156,13 @@ def main():
     for path in res.glob('drawable*/ic_stat_notify.png'):
         save(mono, path, Image.open(path).width)
 
-    shutil.copyfile(BRAND / 'play-sun-lockup-dark.svg', ROOT / 'docs-site/public/lockup-dark.svg')
-    shutil.copyfile(BRAND / 'play-sun-lockup-light.svg', ROOT / 'docs-site/public/lockup-light.svg')
+    export_web_assets(args.site)
     if args.site:
         static = args.site / 'public/static'
         save(primary, static / 'logo.png')
         save(primary, static / 'icon-512.png', 512)
         save(square, static / 'apple-touch-icon.png', 180, opaque=True)
         save(small, static / 'favicon.png', 48)
-        shutil.copyfile(BRAND / 'play-sun-lockup-dark.svg', static / 'lockup.svg')
     print('Rendered Play Sun defaults and Play Sign / Play Dome alternatives.')
 
 

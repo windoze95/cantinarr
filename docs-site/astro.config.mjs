@@ -8,7 +8,11 @@ export default defineConfig({
     title: 'Cantinarr Docs',
     description: 'Clear, practical help for setting up Cantinarr, managing your libraries, and getting everyone connected.',
     favicon: '/favicon.png',
-    logo: { src: './public/icon.png', replacesTitle: false },
+    logo: {
+      dark: './public/symbol-dark.svg',
+      light: './public/symbol-light.svg',
+      replacesTitle: false,
+    },
     customCss: ['./src/styles/docs.css'],
     social: [
       { icon: 'github', label: 'Source on GitHub', href: 'https://github.com/windoze95/cantinarr' },

@@ -9,7 +9,7 @@ body{font-feature-settings:'ss01' on;-webkit-font-smoothing:antialiased}
 ::selection{background:#f2ac2d;color:#21160c}
 :focus-visible{outline:3px solid var(--sl-color-accent);outline-offset:4px}
 .site-title{gap:.65rem;font-weight:650;letter-spacing:-.035em;font-size:1.3rem}
-.site-title img{border-radius:.6rem;width:2.35rem;height:2.35rem}
+.site-title img{width:2.35rem;height:2.35rem;object-fit:contain}
 header.header{border-bottom:1px solid var(--sl-color-hairline-light)}
 .page-lede{font-size:1.16rem;line-height:1.7;max-width:66ch;margin-top:1rem;color:var(--sl-color-gray-2)}
 h1{font-family:Fraunces,Georgia,serif;font-weight:550!important;font-size:clamp(2.3rem,3.7vw,3.8rem)!important;line-height:1.14!important;letter-spacing:-.04em;max-width:22ch}
