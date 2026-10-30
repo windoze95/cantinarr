@@ -186,6 +186,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Validate mobile release notes and publishing metadata
+        run: python3 -m unittest discover -s scripts/tests -p 'test_mobile_release_notes.py' -v
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.3'
