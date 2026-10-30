@@ -394,3 +394,5 @@ Update the Cloudflare DNS A record when you create a new droplet with a differen
 ## Branding
 
 The landing page and bundled browser app use round 4 Play Sun artwork by Julian Poidevin. The landing page uses the transparent `deliverables/play-sun/svg/lockup-horizontal-dark.svg` from `julian-poidevin/cantinarr-logo` at commit `010eebb`, with the outlined title-case lettering and sun-yellow i-dot. The SVG is embedded locally as `assets/lockup.svg`; bump its URL version when replacing it so browsers fetch the new artwork. The logo repository is not needed at runtime. Keep this export aligned with the main application’s transparent web assets in `branding/` when updating the demo.
+
+The favicon keeps the small-size Play Sun geometry from the main application’s `branding/play-sun-small.svg`, with its charcoal tile omitted. Its transparent 48 × 48 PNG is embedded as `assets/favicon.png`. Regenerate it through the main application’s branding exporter, copy the resulting favicon here, and bump the landing page URL version when replacing it.
