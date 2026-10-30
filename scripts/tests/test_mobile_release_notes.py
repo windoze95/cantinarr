@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -58,6 +59,19 @@ class MobileReleaseNotesTests(unittest.TestCase):
             (self.root / notes.SOURCES[platform]).unlink()
             with self.assertRaises(FileNotFoundError):
                 self.render(platform)
+
+    def test_checked_in_notes_fit_every_channel_with_publishing_metadata(self):
+        root = Path(__file__).resolve().parents[2]
+        pubspec = (root / 'app/pubspec.yaml').read_text(encoding='utf-8')
+        version = re.search(r'^version:\s*([^+\s]+)', pubspec, re.MULTILINE).group(1)
+        for platform, limit in (('android', 500), ('ios', 4000)):
+            for channel in ('beta', 'candidate', 'preview'):
+                with self.subTest(platform=platform, channel=channel):
+                    # Reserve metadata space for longer build and PR numbers,
+                    # including the complete SHA required by phone previews.
+                    rendered = notes.render(platform, root, version, '2147483647',
+                                            channel, pr='9999999', sha='a' * 40)
+                    self.assertLessEqual(len(rendered.rstrip('\n')), limit)
 
     def test_cli_writes_the_same_selected_notes_without_executing_their_text(self):
         body = "Requests work. Literal $(touch should-not-exist) and `echo text` stay text."

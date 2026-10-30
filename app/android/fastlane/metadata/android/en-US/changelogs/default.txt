@@ -1,10 +1,9 @@
-Play Sun logo and alternate icons.
-Transparent Play Sun loading mark.
+Play Sun, alternate icons and transparent splash.
 French interface and metadata.
 Clearer imports, invites and account links.
 Updated AI models and optional fallback.
 Plex, Jellyfin and Emby availability and household access.
 Request missing episodes, follow seasons or another copy.
-Only my requests filters alerts.
+Only my requests alerts.
 Nested Back swipes keep the drawer closed.
-Correct discovery status after refresh and for empty seasons.
+Discovery status handles refresh and empty seasons.
