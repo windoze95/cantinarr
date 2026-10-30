@@ -1,4 +1,5 @@
 Play Sun logo and alternate icons.
+Transparent Play Sun loading mark.
 French interface and metadata.
 Clearer imports, invites and account links.
 Updated AI models and optional fallback.

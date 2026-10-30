@@ -7,7 +7,7 @@ export default defineConfig({
   integrations: [starlight({
     title: 'Cantinarr Docs',
     description: 'Clear, practical help for setting up Cantinarr, managing your libraries, and getting everyone connected.',
-    favicon: '/favicon.png',
+    favicon: '/favicon-transparent-v1.png',
     logo: {
       dark: './public/symbol-dark.svg',
       light: './public/symbol-light.svg',

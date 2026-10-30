@@ -427,3 +427,5 @@ See the root repository for license information.
 ### App icon
 
 iOS and Android users can open Settings > Account > App icon to choose Play Sun (default), Play Sign, Play Dome, or Original. The operating system saves this choice on the device; changing servers or signing out does not reset it. The in-app logo and web branding remain Play Sun. Browsers and desktop apps use the default icon.
+
+The browser favicon and the iOS, Android, and web loading splash use Play Sun without the charcoal tile. The loading screen retains its dark background, and choosing an alternate launcher icon does not change the splash artwork.
