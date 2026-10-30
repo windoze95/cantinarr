@@ -63,3 +63,5 @@ Verify the live homepage, a nested guide, search assets, a missing route's 404 r
 ## Assets and licensing
 
 Cantinarr's existing logo and typography are reused from its marketing site. Schibsted Grotesk, Fraunces, and IBM Plex Mono are bundled with their OFL license notices in `public/licenses/`. Dependency versions and integrity hashes live in `package-lock.json`. The surrounding repository's license applies to the documentation source.
+
+The header uses transparent Play Sun symbols from Julian Poidevin's logo kit, with separate light and dark variants for contrast. Their checked-in sources and provenance are in `../branding/`; regenerate the documentation SVGs with `python scripts/generate_branding.py --web-only` from the repository root using the branding dependencies. This also refreshes the transparent horizontal lockup exports without changing application icons.
