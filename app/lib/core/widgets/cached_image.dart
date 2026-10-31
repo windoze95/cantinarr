@@ -69,7 +69,6 @@ class FreshNetworkImage extends ImageProvider<Object> {
 /// Bind a headered image to the live session. A retained widget may hold an
 /// expired bearer; replace it only when the URL is under this same backend.
 /// After a server switch, no header is sent to the old server.
-@visibleForTesting
 ImageSource? currentSessionImageSource(ImageSource source, AuthState? auth) {
   if (source.headers?.isNotEmpty != true) return source;
   final conn = auth?.connection;
