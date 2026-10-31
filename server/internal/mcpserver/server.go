@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"net/http"
+	"time"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -11,6 +12,13 @@ import (
 )
 
 const mcpServerInstructions = "Cantinarr manages household media discovery, requests, and administrator workflows. Tool availability is filtered for the authenticated role and current administrator settings. Read guide://cantinarr/agent-guide.md or use the cantinarr-agent-guide prompt before complex workflows."
+
+const (
+	maxMCPSessions        = 256
+	maxMCPSessionsPerUser = 16
+	mcpSessionIdleTTL     = 15 * time.Minute
+	mcpHeartbeatInterval  = 5 * time.Minute
+)
 
 // NewMCPHandler creates an http.Handler that serves the MCP protocol
 // over Streamable HTTP, bridging Cantinarr's existing ToolServer.
@@ -29,13 +37,16 @@ func NewMCPHandler(toolServer *mcp.ToolServer) http.Handler {
 	registerMediaResultsResource(mcpServer)
 	registerAgentGuidance(mcpServer, toolServer)
 
+	sessionIDs := newBoundedSessionIDs(maxMCPSessions, maxMCPSessionsPerUser)
 	httpServer := server.NewStreamableHTTPServer(mcpServer,
 		server.WithEndpointPath("/mcp"),
-		server.WithStateful(true),
+		server.WithSessionIdManagerResolver(sessionIDResolver{ids: sessionIDs}),
+		server.WithSessionIdleTTL(mcpSessionIdleTTL),
+		server.WithHeartbeatInterval(mcpHeartbeatInterval),
 		server.WithHTTPContextFunc(AuthContextFunc),
 	)
 
-	return httpServer
+	return sessionAdmission{next: httpServer, ids: sessionIDs}
 }
 
 // MediaResultsResourceURI is the ui:// URI for the media results MCP App.

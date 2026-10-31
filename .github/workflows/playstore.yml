@@ -149,7 +149,8 @@ jobs:
 
       - name: Verify Play publishing
         run: |
-          gem install fastlane minitest --no-document
+          gem install fastlane --version 2.241.2 --no-document
+          gem install minitest --version 6.0.6 --no-document
           ruby ../scripts/tests/test_playstore_release.rb
 
       - name: Calculate build number

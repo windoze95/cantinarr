@@ -22,7 +22,7 @@ Android is available on Google Play without beta enrollment. iOS is in App Store
 The **Connect to Cantinarr** screen has one **Link or Cantinarr address** field:
 
 - **Have a connection link?** Open it on your phone, or paste the complete link into the field and choose **Connect**. The link supplies the server address and signs you in. If the server requires single sign-on, complete its provider sign-in. An incomplete, expired, or already-used link needs to be replaced by your administrator.
-- **Have a server address?** Enter it and choose **Connect**. Use the Cantinarr address, such as `http://192.168.1.10:8585`, not a Radarr, Sonarr, or Plex address. Sign in with a method enabled by your administrator. A newly installed server asks you to create its first administrator account.
+- **Have a server address?** Enter it and choose **Connect**. Use the Cantinarr address, such as `http://192.168.1.10:8585`, not a Radarr, Sonarr, or Plex address. A bare address uses HTTPS. If your server uses plain HTTP on a trusted network, include `http://` yourself. The app never switches from a failed HTTPS check to HTTP. Sign in with a method enabled by your administrator. A newly installed server asks you to create its first administrator account.
 - **Need to install the server?** Choose **Set up a Cantinarr server** to open the installation guide. If the browser cannot open, the app offers its address to copy.
 
 The app remembers servers after successful sign-in. When you need to sign in again, the last address is filled in without leaving this screen. **Saved servers** expands the saved choices; **Forget** removes a shortcut, with **Undo** if needed.

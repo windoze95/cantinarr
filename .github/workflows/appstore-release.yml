@@ -67,7 +67,7 @@ jobs:
           APP_STORE_SCREENSHOTS_PATH: ${{ github.workspace }}/.release-source/app/ios/fastlane/screenshots
           GH_TOKEN: ${{ github.token }}
         run: |
-          gem install fastlane --no-document
+          gem install fastlane --version 2.241.2 --no-document
           export SOURCE_JSON="$(cat ../../release.json)"
           python3 ../../scripts/release_control.py current
           fastlane metadata

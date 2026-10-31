@@ -57,7 +57,7 @@ jobs:
         run: |
           printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
           export PLAY_JSON_KEY_PATH="$RUNNER_TEMP/play-service-account.json"
-          gem install fastlane --no-document
+          gem install fastlane --version 2.241.2 --no-document
           SOURCE_JSON="$(cat ../../release.json)" python3 ../../scripts/release_control.py current
           fastlane release
 

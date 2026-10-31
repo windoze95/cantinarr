@@ -1,9 +1,10 @@
-Play Sun, alternate icons and transparent splash.
+Play Sun branding and alternate icons.
 French interface and metadata.
-Clearer imports, invites and account links.
-Updated AI models and optional fallback.
-Plex, Jellyfin and Emby availability and household access.
-Request missing episodes, follow seasons or another copy.
+Clearer imports and account links.
+Updated AI models with optional fallback.
+Media-server availability and household access.
+Missing episodes, season follows and extra copies.
 Only my requests alerts.
-Nested Back swipes keep the drawer closed.
-Discovery status handles refresh and empty seasons.
+Improved Back swipes and discovery status.
+Sign-in keeps HTTPS unless HTTP is explicit.
+Protected artwork respects current access.

@@ -23,6 +23,28 @@ import (
 // from here, so callers must present both causes rather than diagnose one.
 var ErrCustomFormatsNotFound = errors.New("radarr: the custom format endpoint returned 404")
 
+const maxJSONResponseBytes int64 = 32 << 20
+
+var errResponseTooLarge = errors.New("radarr response exceeds 32 MiB")
+
+// decodeResponse bounds decoded arr data even when the upstream response is
+// chunked or decompressed by the transport and has no Content-Length.
+func decodeResponse(resp *http.Response, out any) error {
+	return decodeBoundedResponse(resp, out, maxJSONResponseBytes)
+}
+
+func decodeBoundedResponse(resp *http.Response, out any, maxBytes int64) error {
+	if resp.ContentLength > maxBytes {
+		return errResponseTooLarge
+	}
+	limited := &io.LimitedReader{R: resp.Body, N: maxBytes + 1}
+	err := json.NewDecoder(limited).Decode(out)
+	if limited.N == 0 {
+		return errResponseTooLarge
+	}
+	return err
+}
+
 type Client struct {
 	baseURL    string
 	apiKey     string
@@ -66,13 +88,15 @@ func (g mutationGuard) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 type Movie struct {
-	ID          int    `json:"id"`
-	Title       string `json:"title"`
-	TmdbID      int    `json:"tmdbId"`
-	Year        int    `json:"year"`
-	HasFile     bool   `json:"hasFile"`
-	MovieFileID int    `json:"movieFileId"`
-	MovieFile   struct {
+	ID            int      `json:"id"`
+	Title         string   `json:"title"`
+	TmdbID        int      `json:"tmdbId"`
+	Certification string   `json:"certification"`
+	Genres        []string `json:"genres"`
+	Year          int      `json:"year"`
+	HasFile       bool     `json:"hasFile"`
+	MovieFileID   int      `json:"movieFileId"`
+	MovieFile     struct {
 		ID int `json:"id"`
 		// DateAdded is when Radarr imported the file; absent without one.
 		DateAdded *time.Time `json:"dateAdded,omitempty"`
@@ -203,7 +227,7 @@ func (c *Client) doWith(client *http.Client, method, path string, body, out any)
 		return fmt.Errorf("radarr %s %s returned status %d", method, requestPath, resp.StatusCode)
 	}
 	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		if err := decodeResponse(resp, out); err != nil {
 			return fmt.Errorf("decode response: %w", err)
 		}
 	}
@@ -237,7 +261,7 @@ func (c *Client) LookupByTMDB(tmdbID int) (*LookupResult, error) {
 	defer resp.Body.Close()
 
 	var results []LookupResult
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+	if err := decodeResponse(resp, &results); err != nil {
 		return nil, fmt.Errorf("decode radarr lookup: %w", err)
 	}
 	if len(results) == 0 {
@@ -259,7 +283,7 @@ func (c *Client) GetMovieContext(ctx context.Context, id int) (*Movie, error) {
 	defer resp.Body.Close()
 
 	var movie Movie
-	if err := json.NewDecoder(resp.Body).Decode(&movie); err != nil {
+	if err := decodeResponse(resp, &movie); err != nil {
 		return nil, fmt.Errorf("decode radarr movie: %w", err)
 	}
 	return &movie, nil
@@ -297,7 +321,7 @@ func (c *Client) GetMovieByTMDB(tmdbID int) (*Movie, error) {
 	}
 
 	var movies []Movie
-	if err := json.NewDecoder(resp.Body).Decode(&movies); err != nil {
+	if err := decodeResponse(resp, &movies); err != nil {
 		return nil, fmt.Errorf("decode radarr movie: %w", err)
 	}
 	for _, movie := range movies {
@@ -316,7 +340,7 @@ func (c *Client) GetQualityProfiles() ([]QualityProfile, error) {
 	defer resp.Body.Close()
 
 	var profiles []QualityProfile
-	if err := json.NewDecoder(resp.Body).Decode(&profiles); err != nil {
+	if err := decodeResponse(resp, &profiles); err != nil {
 		return nil, fmt.Errorf("decode quality profiles: %w", err)
 	}
 	return profiles, nil
@@ -340,7 +364,7 @@ func (c *Client) GetQualityProfilesRawContext(ctx context.Context) ([]json.RawMe
 		return nil, fmt.Errorf("radarr GET /api/v3/qualityprofile returned status %d", resp.StatusCode)
 	}
 	var profiles []json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&profiles); err != nil {
+	if err := decodeResponse(resp, &profiles); err != nil {
 		return nil, fmt.Errorf("decode quality profiles: %w", err)
 	}
 	return profiles, nil
@@ -372,7 +396,7 @@ func (c *Client) GetLanguagesRawContext(ctx context.Context) ([]json.RawMessage,
 		return nil, fmt.Errorf("radarr GET /api/v3/language returned status %d", resp.StatusCode)
 	}
 	var languages []json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&languages); err != nil {
+	if err := decodeResponse(resp, &languages); err != nil {
 		return nil, fmt.Errorf("decode radarr languages: %w", err)
 	}
 	return languages, nil
@@ -399,7 +423,7 @@ func (c *Client) GetCustomFormatsRawContext(ctx context.Context) ([]json.RawMess
 		return nil, fmt.Errorf("radarr GET /api/v3/customformat returned status %d", resp.StatusCode)
 	}
 	var formats []json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&formats); err != nil {
+	if err := decodeResponse(resp, &formats); err != nil {
 		return nil, fmt.Errorf("decode custom formats: %w", err)
 	}
 	return formats, nil
@@ -436,7 +460,7 @@ func (c *Client) GetRootFolders() ([]RootFolder, error) {
 	defer resp.Body.Close()
 
 	var folders []RootFolder
-	if err := json.NewDecoder(resp.Body).Decode(&folders); err != nil {
+	if err := decodeResponse(resp, &folders); err != nil {
 		return nil, fmt.Errorf("decode root folders: %w", err)
 	}
 	return folders, nil

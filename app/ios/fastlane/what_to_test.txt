@@ -1,10 +1,12 @@
-Browse and request movies, TV, books, and music from your Cantinarr server. Follow downloads and receive availability alerts. Administrators manage libraries, approvals, users, and services.
+Browse and request movies, TV, books, and music. Follow downloads and availability alerts. Admins manage libraries, requests, users, and services.
 
-Please test upgrading from the current app with your sign-in retained, browsing and requesting media, passkey sign-in, Cantinarr connect links, and push notifications. Check both the stable 1.0.1 server and the 1.1.0 candidate server. Administrators should also check Request Defaults quality-profile lists and OpenAI OAuth model choices.
+Test upgrade with sign-in retained, browsing, requests, passkeys, connect links, and push. Try 1.0.1 and 1.1.0 servers. Admins: check Request Defaults profiles and OpenAI OAuth models.
+
+For server sign-in, enter a bare hostname with an unavailable or invalid HTTPS endpoint. It should stay on the address screen and never switch to HTTP. A LAN server without TLS should connect when you explicitly enter its `http://` address. After switching accounts or changing a book/music library assignment, check that previously viewed protected artwork does not appear for the new access context.
 
 Report issues with your device, iOS version, and server version.
 
-On a compatible 1.1.0 server, test Plex, Jellyfin, and Emby library scanning and Library access only for household users. Check unmanaged movie and episode availability, deliberate Request in library copies, missing-episode requests, and Follow season/Stop following. Scanning or associating a library must never start a download by itself.
+On 1.1.0, test Plex/Jellyfin/Emby scanning, household Library access only, in-library copy and missing-episode requests, and season following. Scanning or associating a library must not start a download.
 
 AI provider choices now use current model IDs and the matching API or OAuth endpoint. Check saving your selected provider/model and an AI conversation with tool lookups.
 
@@ -12,16 +14,16 @@ Optional fallback uses provider-managed defaults or rolling aliases for OpenAI O
 
 User onboarding now has labeled Import users and Invite user actions, explicit account linking for Plex/Jellyfin/Emby/Audiobookshelf, and separate sign-in, request, and media-access status. Test importing, existing-account mapping, interrupted retries, and recipient account setup.
 
-French support: check automatic French selection on a French device and Settings > Account > App language. Under Metadata language, test Follow app language, English and Français independently of the interface. Compare known French titles, summaries, posters, Trakt rows, library rows, Releases, Downloads Content and My reports with the providers. Switch languages with a search or title open, restart, and sign out. Verify missing translations retain useful text, combined series retain the correct parent, and requests target the same title/library. An older server should explain that metadata localization requires an update while preserving the saved preference.
+French: check device language and Settings > Account > App language. Test Metadata language options independently. Compare titles, summaries, posters, Trakt, library, Releases, Downloads, and My reports with providers. Switch with a title open, then restart and sign out. Missing translations should retain source text; requests should target the same title. Older servers should explain the update requirement and keep the preference.
 
-Language menus and iOS language declarations now come from the translation files. Confirm English and French still appear in both the app and iOS language settings, and that upgrading retains your saved choices. Regional variants in contributed builds should remain selected after restart.
+Confirm English and French in app and iOS language settings, with saved choices retained after upgrade. Regional variants should survive restart.
 
-New Play Sun branding. In Settings > Account > App icon, try Play Sign, Play Dome, Original, then Play Sun. Check the home screen, dark/tinted appearance, restart and upgrade persistence, push taps, and connect/passkey/OIDC links with an alternate icon selected.
+In Settings > Account > App icon, try Play Sign, Play Dome, Original, and Play Sun. Check dark/tinted appearance, restart, upgrade, push taps, and auth links with an alternate icon.
 
 Cold launch: check Play Sun has no tile.
 
-In Settings > Notifications > Push Notifications, test Only my requests on a compatible server. Movie, TV episode, book-format, and music availability alerts should follow your requests and selected library. Check shared book requests, selected TV seasons and episode following, other household requests, saved choices after restart, and existing category/master opt-outs. Discord settings remain separate. Older servers should hide the new switch.
+In Settings > Notifications > Push Notifications, test Only my requests. Movie, episode, book-format, and music alerts should follow your requests and selected library. Check shared books, season following, other household requests, saved choices, and opt-outs. Discord remains separate; older servers hide the switch.
 
-iPhone: test completed/canceled left-edge Back swipes on direct and nested detail/category pages, list position, tab switches and app resume. Hamburger and root drawer swipes still work. Protected editors, even unchanged, use button Back. Keep editing must retain the draft and page position; Discard changes must exit.
+iPhone: test completed/canceled left-edge Back swipes on direct and nested pages, list position, tabs, and resume. Drawer swipes still work. Protected editors use button Back; Keep editing retains the draft and position, and Discard exits.
 
 Discovery: check badges after sign-in refresh, titles absent from your libraries, and complete shows with an empty upcoming season. Real library failures must still show Status unknown.
