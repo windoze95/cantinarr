@@ -16,20 +16,21 @@ import 'package:flutter_test/flutter_test.dart';
 /// path differs: it never lowercases (the URL is used verbatim as the base
 /// URL) and it strips trailing slashes.
 ///
-/// Also covers the scheme fallback in `checkServer`: a bare address is probed
-/// over https first and retried over http only when https failed at the
-/// transport level (refused / timeout / TLS handshake) — never when https
-/// answered with an HTTP status, and never when the user typed a scheme.
+/// A bare address is probed only over HTTPS. Plain HTTP requires an explicit
+/// scheme so a TLS failure cannot silently downgrade the credential flow.
 void main() {
   Future<_Harness> harness() async {
     final service = _RecordingAuthService();
     final storage = _EmptyStorage();
-    final container = ProviderContainer(overrides: [
-      authServiceProvider.overrideWithValue(service),
-      storageServiceProvider.overrideWithValue(storage),
-      deviceIdentityProvider
-          .overrideWithValue(_FakeDeviceIdentityService(storage)),
-    ]);
+    final container = ProviderContainer(
+      overrides: [
+        authServiceProvider.overrideWithValue(service),
+        storageServiceProvider.overrideWithValue(storage),
+        deviceIdentityProvider.overrideWithValue(
+          _FakeDeviceIdentityService(storage),
+        ),
+      ],
+    );
     addTearDown(container.dispose);
     await container.read(authProvider.future);
     return (container: container, service: service);
@@ -51,7 +52,8 @@ void main() {
     expect(
       await normalized('  media.example.com \n'),
       'https://media.example.com',
-      reason: 'pasted URLs often carry spaces/newlines; they must not end up '
+      reason:
+          'pasted URLs often carry spaces/newlines; they must not end up '
           'inside the URL or defeat the scheme probe',
     );
   });
@@ -116,17 +118,22 @@ void main() {
     );
   });
 
-  test('the connect-token flow normalizes its entered URL the same way',
-      () async {
-    final h = await harness();
-    await h.container
-        .read(authProvider.notifier)
-        .connectWithToken('media.example.com/', 'tok');
-    expect(h.service.redeemUrls, ['https://media.example.com'],
-        reason: 'checkServer and the credential flows share normalizeServerUrl');
-  });
+  test(
+    'the connect-token flow normalizes its entered URL the same way',
+    () async {
+      final h = await harness();
+      await h.container
+          .read(authProvider.notifier)
+          .connectWithToken('media.example.com/', 'tok');
+      expect(
+        h.service.redeemUrls,
+        ['https://media.example.com'],
+        reason: 'checkServer and the credential flows share normalizeServerUrl',
+      );
+    },
+  );
 
-  group('scheme fallback', () {
+  group('scheme selection', () {
     DioException probeFailure(DioExceptionType type, [Object? error]) =>
         DioException(
           requestOptions: RequestOptions(path: '/api/auth/status'),
@@ -134,73 +141,52 @@ void main() {
           error: error,
         );
 
-    test('a bare address falls back to http when https is refused', () async {
+    for (final (label, type, error) in [
+      ('connection refused', DioExceptionType.connectionError, null),
+      ('timeout', DioExceptionType.connectionTimeout, null),
+      ('certificate failure', DioExceptionType.badCertificate, null),
+      (
+        'TLS handshake failure',
+        DioExceptionType.unknown,
+        Exception('HandshakeException: wrong version number'),
+      ),
+      ('HTTP error', DioExceptionType.badResponse, null),
+    ]) {
+      test('a bare address stays on HTTPS after $label', () async {
+        final h = await harness();
+        h.service.statusFailure = (_) => probeFailure(type, error);
+        await expectLater(
+          h.container
+              .read(authProvider.notifier)
+              .checkServer('media.example.com'),
+          throwsA(isA<DioException>()),
+        );
+        expect(h.service.statusUrls, ['https://media.example.com']);
+      });
+    }
+
+    test('an explicit HTTP address uses HTTP once', () async {
       final h = await harness();
-      h.service.statusFailure = (url) => url.startsWith('https://')
-          ? probeFailure(DioExceptionType.connectionError)
-          : null;
       final result = await h.container
           .read(authProvider.notifier)
-          .checkServer('192.168.1.20:8585');
-      expect(h.service.statusUrls,
-          ['https://192.168.1.20:8585', 'http://192.168.1.20:8585']);
-      expect(result.serverUrl, 'http://192.168.1.20:8585',
-          reason: 'the answering URL flows back so login/setup reuse http');
-    });
-
-    test('a TLS handshake against a plaintext port also falls back', () async {
-      // dart:io surfaces this as an unknown-type DioException wrapping a
-      // HandshakeException; the notifier matches it by name (web-safe).
-      final h = await harness();
-      h.service.statusFailure = (url) => url.startsWith('https://')
-          ? probeFailure(
-              DioExceptionType.unknown,
-              Exception('HandshakeException: wrong version number'),
-            )
-          : null;
-      final result = await h.container
-          .read(authProvider.notifier)
-          .checkServer('cantinarr.local:8585');
-      expect(result.serverUrl, 'http://cantinarr.local:8585');
-    });
-
-    test('an https answer with an HTTP status blocks the fallback', () async {
-      // A 404 means https IS available — the URL is wrong, and retrying over
-      // http would mask the real error.
-      final h = await harness();
-      h.service.statusFailure =
-          (url) => probeFailure(DioExceptionType.badResponse);
-      await expectLater(
-        h.container.read(authProvider.notifier).checkServer('media.example.com'),
-        throwsA(isA<DioException>()),
-      );
-      expect(h.service.statusUrls, ['https://media.example.com']);
+          .checkServer('http://192.168.1.20:8585');
+      expect(h.service.statusUrls, ['http://192.168.1.20:8585']);
+      expect(result.serverUrl, 'http://192.168.1.20:8585');
     });
 
     test('an explicit https:// never falls back to http', () async {
       final h = await harness();
-      h.service.statusFailure =
-          (url) => probeFailure(DioExceptionType.connectionError);
+      h.service.statusFailure = (url) =>
+          probeFailure(DioExceptionType.connectionError);
       await expectLater(
         h.container
             .read(authProvider.notifier)
             .checkServer('https://media.example.com'),
         throwsA(isA<DioException>()),
       );
-      expect(h.service.statusUrls, ['https://media.example.com'],
-          reason: 'a typed scheme is respected verbatim');
-    });
-
-    test('when both schemes are unreachable the error surfaces', () async {
-      final h = await harness();
-      h.service.statusFailure =
-          (url) => probeFailure(DioExceptionType.connectionError);
-      await expectLater(
-        h.container.read(authProvider.notifier).checkServer('192.168.1.20'),
-        throwsA(isA<DioException>()),
-      );
-      expect(h.service.statusUrls,
-          ['https://192.168.1.20', 'http://192.168.1.20']);
+      expect(h.service.statusUrls, [
+        'https://media.example.com',
+      ], reason: 'a typed scheme is respected verbatim');
     });
 
     test('a reachable https server keeps https and probes once', () async {
@@ -214,7 +200,10 @@ void main() {
   });
 }
 
-typedef _Harness = ({ProviderContainer container, _RecordingAuthService service});
+typedef _Harness = ({
+  ProviderContainer container,
+  _RecordingAuthService service,
+});
 
 /// Records every server URL the notifier targets. The connect-token call
 /// fails with a transport error after recording, ending the flow before it

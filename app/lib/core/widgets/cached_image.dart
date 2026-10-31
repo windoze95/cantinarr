@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cached_network_image_platform_interface/cached_network_image_platform_interface.dart'
     show ImageRenderMethodForWeb;
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -14,8 +15,13 @@ import '../theme/app_theme.dart';
 /// A resolved image request: the URL to fetch plus any headers it needs.
 typedef ImageSource = ({String url, Map<String, String>? headers});
 
-/// Prefetch uses exactly the same cache and web transport as visible artwork.
-ImageProvider cachedImageProvider(ImageSource source, {bool isWeb = kIsWeb, String? cacheScope}) {
+/// Public native art uses the disk cache; headered native art reads live.
+/// Web artwork uses Flutter's image providers and scoped decoded cache.
+ImageProvider cachedImageProvider(
+  ImageSource source, {
+  bool isWeb = kIsWeb,
+  String? cacheScope,
+}) {
   if (isWeb) {
     final provider = NetworkImage(
       source.url,
@@ -28,19 +34,71 @@ ImageProvider cachedImageProvider(ImageSource source, {bool isWeb = kIsWeb, Stri
         ? SessionNetworkImage(provider, cacheScope)
         : provider;
   }
+  if (source.headers?.isNotEmpty == true) {
+    if (cacheScope == null || cacheScope == _signedOutScope) {
+      throw StateError('Authenticated artwork requires an active session');
+    }
+    return FreshNetworkImage(NetworkImage(source.url, headers: source.headers));
+  }
   return CachedNetworkImageProvider(
     source.url,
-    headers: source.headers,
     cacheManager: appImageCache,
-    imageRenderMethodForWeb: source.headers == null
-        ? ImageRenderMethodForWeb.HtmlImage
-        : ImageRenderMethodForWeb.HttpGet,
+    imageRenderMethodForWeb: ImageRenderMethodForWeb.HtmlImage,
   );
 }
 
-/// Authenticated images share a decoded frame across token rotation, but
-/// never across account, grant or content-policy changes. No credential is
-/// part of this scope. Public CDN images can keep their ordinary URL key.
+/// Each native authenticated read gets a fresh decoded-image key and uses
+/// NetworkImage directly, so neither Flutter nor the disk cache can replay
+/// protected bytes after a server-side grant or policy change.
+@visibleForTesting
+class FreshNetworkImage extends ImageProvider<Object> {
+  final NetworkImage networkImage;
+  final Object _key = Object();
+
+  FreshNetworkImage(this.networkImage);
+
+  @override
+  Future<Object> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture<Object>(_key);
+
+  @override
+  ImageStreamCompleter loadImage(Object key, ImageDecoderCallback decode) =>
+      networkImage.loadImage(networkImage, decode);
+}
+
+/// Bind a headered image to the live session. A retained widget may hold an
+/// expired bearer; replace it only when the URL is under this same backend.
+/// After a server switch, no header is sent to the old server.
+@visibleForTesting
+ImageSource? currentSessionImageSource(ImageSource source, AuthState? auth) {
+  if (source.headers?.isNotEmpty != true) return source;
+  final conn = auth?.connection;
+  if (auth?.isAuthenticated != true || conn == null) return null;
+  final base = conn.serverUrl.endsWith('/')
+      ? conn.serverUrl.substring(0, conn.serverUrl.length - 1)
+      : conn.serverUrl;
+  if (!source.url.startsWith('$base/api/')) return null;
+  final bearer = source.headers!.entries
+      .where((entry) => entry.key.toLowerCase() == 'authorization')
+      .firstOrNull
+      ?.value;
+  if (bearer == null) return source;
+  if (bearer == 'Bearer ${conn.accessToken}') return source;
+  return (
+    url: source.url,
+    headers: {
+      for (final entry in source.headers!.entries)
+        entry.key: entry.key.toLowerCase() == 'authorization'
+            ? 'Bearer ${conn.accessToken}'
+            : entry.value,
+    },
+  );
+}
+
+/// Web authenticated images share a decoded frame across token rotation and
+/// separate known account, assignment and content-policy contexts. Native
+/// authenticated images always fetch fresh. The digest keeps account details
+/// out of cache keys, and public CDN images keep their ordinary URL key.
 ///
 /// Every poster build asks for this, so it is computed once per [AuthState];
 /// a changed session is always a new instance.
@@ -54,11 +112,21 @@ final _signedOutScope = _computeScope(null);
 
 String _computeScope(AuthState? auth) {
   final permissions = [...?auth?.user?.permissions]..sort();
-  final instances = [for (final i in auth?.connection?.instances ?? [])
-    '${i.serviceType}:${i.id}:${i.isDefault}']..sort();
-  return jsonEncode([auth?.connection?.serverUrl, auth?.user?.id,
-    auth?.user?.role, permissions, auth?.user?.child,
-    auth?.user?.contentLimits?.toJson(), instances]);
+  final instances = [
+    for (final i in auth?.connection?.instances ?? [])
+      '${i.serviceType}:${i.id}:${i.isDefault}:${i.assigned}:'
+          '${i.requestDefault}:${i.mediaDownloads}',
+  ]..sort();
+  final context = jsonEncode([
+    auth?.connection?.serverUrl,
+    auth?.user?.id,
+    auth?.user?.role,
+    permissions,
+    auth?.user?.child,
+    auth?.user?.contentLimits?.toJson(),
+    instances,
+  ]);
+  return sha256.convert(utf8.encode(context)).toString();
 }
 
 /// Only the cache key differs from NetworkImage. Fetching, decoding and
@@ -80,13 +148,16 @@ class SessionNetworkImage extends ImageProvider<Object> {
     // A failed stream must not occupy our stable key, or a rotated token
     // would reconnect to that failure instead of retrying with fresh headers.
     late ImageStreamListener listener;
-    listener = ImageStreamListener((image, synchronous) {
-      image.dispose();
-      completer.removeListener(listener);
-    }, onError: (Object error, StackTrace? stack) {
-      PaintingBinding.instance.imageCache.evict(key);
-      completer.removeListener(listener);
-    });
+    listener = ImageStreamListener(
+      (image, synchronous) {
+        image.dispose();
+        completer.removeListener(listener);
+      },
+      onError: (Object error, StackTrace? stack) {
+        PaintingBinding.instance.imageCache.evict(key);
+        completer.removeListener(listener);
+      },
+    );
     completer.addListener(listener);
     return completer;
   }
@@ -94,8 +165,10 @@ class SessionNetworkImage extends ImageProvider<Object> {
   // Image must resolve again when headers rotate: a failed old-token fetch
   // needs a retry. A successfully decoded frame still hits the stable key.
   @override
-  bool operator ==(Object other) => other is SessionNetworkImage &&
-      other.scope == scope && other.networkImage == networkImage &&
+  bool operator ==(Object other) =>
+      other is SessionNetworkImage &&
+      other.scope == scope &&
+      other.networkImage == networkImage &&
       mapEquals(other.networkImage.headers, networkImage.headers);
 
   @override
@@ -113,16 +186,24 @@ class _SessionImageKey {
   };
 
   @override
-  bool operator ==(Object other) => other is _SessionImageKey &&
-      other.scope == scope && other.image.url == image.url &&
+  bool operator ==(Object other) =>
+      other is _SessionImageKey &&
+      other.scope == scope &&
+      other.image.url == image.url &&
       other.image.scale == image.scale &&
       other.image.webHtmlElementStrategy == image.webHtmlElementStrategy &&
       mapEquals(other._nonAuthHeaders, _nonAuthHeaders);
 
   @override
-  int get hashCode => Object.hash(scope, image.url, image.scale,
-      image.webHtmlElementStrategy,
-      Object.hashAllUnordered(_nonAuthHeaders.entries.map((h) => Object.hash(h.key, h.value))));
+  int get hashCode => Object.hash(
+    scope,
+    image.url,
+    image.scale,
+    image.webHtmlElementStrategy,
+    Object.hashAllUnordered(
+      _nonAuthHeaders.entries.map((h) => Object.hash(h.key, h.value)),
+    ),
+  );
 }
 
 /// Hardcover's public covers do not allow cross-origin byte reads. A browser
@@ -231,15 +312,15 @@ class CachedImage extends StatelessWidget {
   });
 
   Widget _fallback() => Container(
-        width: width,
-        height: height,
-        color: AppTheme.surfaceVariant,
-        alignment: Alignment.center,
-        child: Icon(icon, color: AppTheme.textSecondary, size: iconSize),
-      );
+    width: width,
+    height: height,
+    color: AppTheme.surfaceVariant,
+    alignment: Alignment.center,
+    child: Icon(icon, color: AppTheme.textSecondary, size: iconSize),
+  );
 
   Widget _image(ImageSource source, {String? cacheScope}) {
-    if (kIsWeb) {
+    if (kIsWeb || source.headers?.isNotEmpty == true) {
       // Flutter owns the decoded image and listener lifecycle on web. The
       // plugin's multi-image completer decodes again when listeners reconnect,
       // which can dispose the browser image still used by a cached frame.
@@ -259,13 +340,10 @@ class CachedImage extends StatelessWidget {
     }
     return CachedNetworkImage(
       imageUrl: source.url,
-      httpHeaders: source.headers,
       cacheManager: appImageCache,
-      // Native keeps the shared disk cache and the same provider options
-      // as prefetch. Web has already returned through Flutter's Image above.
-      imageRenderMethodForWeb: source.headers == null
-          ? ImageRenderMethodForWeb.HtmlImage
-          : ImageRenderMethodForWeb.HttpGet,
+      // Public native artwork shares the disk cache with its prefetch.
+      // Web and authenticated native art returned through Image above.
+      imageRenderMethodForWeb: ImageRenderMethodForWeb.HtmlImage,
       fit: fit,
       width: width,
       height: height,
@@ -281,20 +359,28 @@ class CachedImage extends StatelessWidget {
   Widget build(BuildContext context) {
     final src = url;
     if (src == null || src.isEmpty) return _fallback();
-    if (!kIsWeb) return _image((url: src, headers: headers));
-    // Web only: the Trakt relay rewrite needs the session's server URL and
-    // bearer, so reach for them lazily here rather than making every native
-    // poster read a provider.
+    if (!kIsWeb && (headers?.isNotEmpty != true)) {
+      return _image((url: src, headers: headers));
+    }
+    // Authenticated images on both platforms need the live session. A widget
+    // left over from the previous account must not fetch with its old bearer
+    // and write the result under the new account's cache scope.
     return Consumer(
       builder: (context, ref, _) {
         final auth = ref.watch(authProvider).valueOrNull;
         final conn = auth?.connection;
-        return _image(resolveImageSource(
-          url: src,
-          headers: headers,
-          serverUrl: conn?.serverUrl,
-          accessToken: conn?.accessToken,
-        ), cacheScope: imageCacheScope(auth));
+        final current = currentSessionImageSource(
+            (url: src, headers: headers), auth);
+        if (current == null) return _fallback();
+        return _image(
+          resolveImageSource(
+            url: current.url,
+            headers: current.headers,
+            serverUrl: conn?.serverUrl,
+            accessToken: conn?.accessToken,
+          ),
+          cacheScope: imageCacheScope(auth),
+        );
       },
     );
   }

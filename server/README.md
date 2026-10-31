@@ -73,7 +73,7 @@ Open `http://your-server:8585` -- the setup wizard creates your admin account. T
 ### From Source
 
 ```bash
-# Requires Go 1.25+
+# Requires Go 1.26.10+
 cd server
 go build -o cantinarr ./cmd/server
 ./cantinarr
@@ -809,7 +809,7 @@ POST     /api/media-files/coverage                   # authenticated: { instance
 GET|HEAD /api/media-files/download/{ticket}          # public bearer capability until expires_at
 ```
 
-Ticket issuance requires `media:download`, re-checks the caller's current account role, and limits requesters to their effective Radarr/Sonarr instance or explicitly granted Chaptarr or Lidarr instance. Administrators may select any configured arr instance. The client supplies only an instance ID and live arr file ID; it never supplies a path. Cantinarr re-fetches that exact file record from Radarr (`moviefile`), Sonarr (`episodefile`), Chaptarr (`bookfile`), or Lidarr (`trackfile`) both when issuing the ticket and for every transfer.
+Ticket issuance requires `media:download`, re-checks the caller's current account role, and limits requesters to their effective Radarr/Sonarr instance or explicitly granted Chaptarr or Lidarr instance. Administrators may select any configured arr instance. The client supplies only an instance ID and live arr file ID; it never supplies a path. Cantinarr re-fetches that exact file record from Radarr (`moviefile`), Sonarr (`episodefile`), Chaptarr (`bookfile`), or Lidarr (`trackfile`) both when issuing the ticket and for every transfer. For a kids account, a Radarr/Sonarr file must also belong to a live movie or series permitted by its current content policy; an unreadable parent or policy refuses the ticket or transfer.
 
 Bytes are available only when two boundaries agree: the live arr path must match a mapping owned by that exact instance, and the mapped Cantinarr path must remain beneath a configured `CANTINARR_MEDIA_ROOTS` root. In Docker the target is the container path of a read-only mount; for a native server it is an absolute local directory readable by the server process. This lets instances that both report `/ebooks` safely map to different mounts, and lets a Chaptarr instance map as many independent ebook/audiobook trees as it uses. Mapping does not infer media format from a directory name; the exact Chaptarr record remains authoritative. Files outside either boundary, directory entries, and symlink escapes are refused.
 
@@ -817,7 +817,7 @@ Downloads have no implicit configuration: every instance starts disabled and ser
 
 The `coverage` endpoint takes up to 200 arr-reported paths under the same authorization as ticket issuance and answers, per path, whether this instance's current mappings would translate it into an allowed root. The verdict is purely lexical -- it never touches the filesystem -- so it reveals mapping shape (which the ticket flow's per-file conflict already does) but nothing about which files exist. Clients use it to withhold download affordances for files no mapping covers -- for example an audiobook tree that is deliberately not mounted -- instead of offering buttons that can only fail; an instance-level capability alone cannot express that per-file truth.
 
-Tickets are opaque, bounded, reusable for ten minutes so browser HEAD probes and resumed Range requests work, and contain neither JWTs nor server paths. Every GET/HEAD re-checks that the user still exists, uses the user's current role, re-checks effective-instance access for non-admins, re-fetches the live file record, and applies the current mapping. Responses are attachment-only `application/octet-stream` with no-store, no-referrer, nosniff, same-origin resource policy, and sandbox CSP headers; errors never expose arr hosts, filesystem paths, or OS details. Delivery covers the primary files indexed by Radarr, Sonarr, Chaptarr, and Lidarr, not arbitrary neighboring files, subtitles, extras, or directories. Multi-file audiobooks and albums remain individual file choices rather than being packaged into an archive.
+Tickets are opaque, bounded, reusable for ten minutes so browser HEAD probes and resumed Range requests work, and contain neither JWTs nor server paths. Every GET/HEAD re-checks that the user still exists, uses the user's current role, re-checks effective-instance access for non-admins, re-fetches the live file record and a kids account's permitted parent title, and applies the current mapping. Responses are attachment-only `application/octet-stream` with no-store, no-referrer, nosniff, same-origin resource policy, and sandbox CSP headers; errors never expose arr hosts, filesystem paths, or OS details. Delivery covers the primary files indexed by Radarr, Sonarr, Chaptarr, and Lidarr, not arbitrary neighboring files, subtitles, extras, or directories. Multi-file audiobooks and albums remain individual file choices rather than being packaged into an archive.
 
 ### Download activity
 
@@ -1373,7 +1373,7 @@ server/
 
 ## Tech Stack
 
-- **Go 1.25** with [Chi](https://github.com/go-chi/chi) router
+- **Go 1.26.10** with [Chi](https://github.com/go-chi/chi) router
 - **SQLite** via [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) (pure Go, no CGO)
 - **JWT** via [golang-jwt](https://github.com/golang-jwt/jwt), **WebAuthn** via [go-webauthn](https://github.com/go-webauthn/webauthn)
 - **WebSocket** via [gorilla/websocket](https://github.com/gorilla/websocket)

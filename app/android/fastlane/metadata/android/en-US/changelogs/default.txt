@@ -7,3 +7,5 @@ Request missing episodes, follow seasons or another copy.
 Only my requests alerts.
 Nested Back swipes keep the drawer closed.
 Discovery status handles refresh and empty seasons.
+Plain HTTP requires http:// for sign-in.
+Protected art respects account access.

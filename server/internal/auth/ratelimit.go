@@ -78,10 +78,10 @@ func (rl *RateLimiter) Allow(ip string) bool {
 // Middleware returns an HTTP middleware that rate-limits requests by IP.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// chi's RealIP middleware puts the proxy-reported address into
-		// RemoteAddr on its own; a direct connection leaves "ip:port" there,
-		// and the port changes with every connection, so it must go or the
-		// limit is per connection rather than per IP.
+		// The router leaves RemoteAddr as the TCP peer. Forwarded headers are
+		// unauthenticated without a configured trusted-proxy boundary, so they
+		// must never select the rate-limit bucket. Strip the connection port so
+		// reconnecting cannot reset a peer's budget.
 		ip := r.RemoteAddr
 		if host, _, err := net.SplitHostPort(ip); err == nil {
 			ip = host

@@ -2,6 +2,8 @@ Browse and request movies, TV, books, and music from your Cantinarr server. Foll
 
 Please test upgrading from the current app with your sign-in retained, browsing and requesting media, passkey sign-in, Cantinarr connect links, and push notifications. Check both the stable 1.0.1 server and the 1.1.0 candidate server. Administrators should also check Request Defaults quality-profile lists and OpenAI OAuth model choices.
 
+For server sign-in, enter a bare hostname with an unavailable or invalid HTTPS endpoint. It should stay on the address screen and never switch to HTTP. A LAN server without TLS should connect when you explicitly enter its `http://` address. After switching accounts or changing a book/music library assignment, check that previously viewed protected artwork does not appear for the new access context.
+
 Report issues with your device, iOS version, and server version.
 
 On a compatible 1.1.0 server, test Plex, Jellyfin, and Emby library scanning and Library access only for household users. Check unmanaged movie and episode availability, deliberate Request in library copies, missing-episode requests, and Follow season/Stop following. Scanning or associating a library must never start a download by itself.

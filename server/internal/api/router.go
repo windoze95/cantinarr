@@ -116,9 +116,12 @@ func NewRouter(
 
 	// Middleware
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	// Keep RemoteAddr as the TCP peer. RealIP accepts client-supplied
+	// X-Forwarded-For/X-Real-IP without a trusted-proxy boundary, which lets a
+	// direct caller rotate the address used by the public auth rate limit.
 	r.Use(safeRequestLogger)
 	r.Use(middleware.Recoverer)
+	r.Use(requestBodyBounds(serverRequestMaxBytes, serverRequestReadWindow))
 
 	oauthHandler := auth.NewOAuthHandler(authService, cfg.OAuthIssuer)
 	r.Get("/.well-known/oauth-protected-resource", oauthHandler.ProtectedResourceMetadata)
@@ -135,14 +138,14 @@ func NewRouter(
 	// metadata endpoints above and the GET authorize form stay unlimited —
 	// they attempt no credential and MCP client discovery depends on them.
 	oauthLimiter := auth.NewRateLimiter(10, 1*time.Minute)
-	r.With(oauthLimiter.Middleware).Post("/oauth/register", oauthHandler.RegisterClient)
+	r.With(oauthLimiter.Middleware, publicRequestBounds).Post("/oauth/register", oauthHandler.RegisterClient)
 	r.Get("/oauth/authorize", oauthHandler.Authorize)
-	r.With(oauthLimiter.Middleware).Post("/oauth/authorize", oauthHandler.Authorize)
-	r.With(oauthLimiter.Middleware).Post("/oauth/passkey/login/begin", oauthHandler.BeginOAuthPasskeyLogin)
-	r.With(oauthLimiter.Middleware).Post("/oauth/passkey/login/finish", oauthHandler.FinishOAuthPasskeyLogin)
-	r.With(oauthLimiter.Middleware).Post("/oauth/token", oauthHandler.Token)
-	r.With(oauthLimiter.Middleware).Post("/api/auth/oidc/mcp/begin", oauthHandler.BeginOIDC)
-	r.With(oauthLimiter.Middleware).Post("/api/auth/plex/mcp/begin", oauthHandler.BeginPlex)
+	r.With(oauthLimiter.Middleware, publicRequestBounds).Post("/oauth/authorize", oauthHandler.Authorize)
+	r.With(oauthLimiter.Middleware, publicRequestBounds).Post("/oauth/passkey/login/begin", oauthHandler.BeginOAuthPasskeyLogin)
+	r.With(oauthLimiter.Middleware, publicRequestBounds).Post("/oauth/passkey/login/finish", oauthHandler.FinishOAuthPasskeyLogin)
+	r.With(oauthLimiter.Middleware, publicRequestBounds).Post("/oauth/token", oauthHandler.Token)
+	r.With(oauthLimiter.Middleware, publicRequestBounds).Post("/api/auth/oidc/mcp/begin", oauthHandler.BeginOIDC)
+	r.With(oauthLimiter.Middleware, publicRequestBounds).Post("/api/auth/plex/mcp/begin", oauthHandler.BeginPlex)
 	r.Get("/passkeys/setup", oauthHandler.PasskeySetup)
 	r.Get("/passkeys/create", oauthHandler.PasskeyCreate)
 
@@ -151,7 +154,7 @@ func NewRouter(
 	// session API's, and /api/v1 is a prefix nothing else uses. Mounted ahead
 	// of /api so chi routes the deeper prefix here.
 	if seerrHandler != nil {
-		r.Mount("/api/v1", seerrHandler.Routes())
+		r.Mount("/api/v1", publicRequestBounds(seerrHandler.Routes()))
 	}
 
 	r.Route("/api", func(r chi.Router) {
@@ -183,7 +186,7 @@ func NewRouter(
 		// Arr webhook receiver (Sonarr/Radarr → Connect → Webhook). No session:
 		// the server-only per-instance credential is supplied through Basic Auth;
 		// query-string credentials are rejected so access logs cannot retain them.
-		r.Post("/webhooks/arr/{instanceID}", webhookHandler.HandleArr)
+		r.With(publicRequestBounds).Post("/webhooks/arr/{instanceID}", webhookHandler.HandleArr)
 
 		// Rate limiter for public auth endpoints: 10 requests per minute per IP
 		authLimiter := auth.NewRateLimiter(10, 1*time.Minute)
@@ -195,6 +198,7 @@ func NewRouter(
 
 		// Auth routes (public)
 		r.Route("/auth", func(r chi.Router) {
+			r.Use(publicRequestBounds)
 			r.Get("/status", authHandler.AuthStatus)
 			r.With(authLimiter.Middleware).Post("/plex/begin", authHandler.PlexBegin)
 			r.With(plexPollLimiter.Middleware).Post("/plex/check", authHandler.PlexCheck)

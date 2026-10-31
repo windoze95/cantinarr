@@ -66,13 +66,15 @@ func (g mutationGuard) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 type Movie struct {
-	ID          int    `json:"id"`
-	Title       string `json:"title"`
-	TmdbID      int    `json:"tmdbId"`
-	Year        int    `json:"year"`
-	HasFile     bool   `json:"hasFile"`
-	MovieFileID int    `json:"movieFileId"`
-	MovieFile   struct {
+	ID            int      `json:"id"`
+	Title         string   `json:"title"`
+	TmdbID        int      `json:"tmdbId"`
+	Certification string   `json:"certification"`
+	Genres        []string `json:"genres"`
+	Year          int      `json:"year"`
+	HasFile       bool     `json:"hasFile"`
+	MovieFileID   int      `json:"movieFileId"`
+	MovieFile     struct {
 		ID int `json:"id"`
 		// DateAdded is when Radarr imported the file; absent without one.
 		DateAdded *time.Time `json:"dateAdded,omitempty"`
