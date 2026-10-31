@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -51,6 +52,13 @@ type RegisterTokenRequest struct {
 	Platform  string `json:"platform"`
 }
 
+const (
+	maxRegisterTokenBodyBytes = 8 << 10
+	maxPushDeviceIDBytes      = 128
+	maxPushTokenBytes         = 4 << 10
+	maxPushPlatformBytes      = 16
+)
+
 // Register upserts the caller's APNs token for one of their own devices and
 // registers it with the gateway. Gateway errors are logged but do not fail the
 // request once the local row is stored.
@@ -62,12 +70,21 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req RegisterTokenRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRegisterTokenBodyBytes)).Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
+		} else {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		}
 		return
 	}
 	if req.DeviceID == "" || req.APNSToken == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and apns_token required"})
+		return
+	}
+	if len(req.DeviceID) > maxPushDeviceIDBytes || len(req.APNSToken) > maxPushTokenBytes || len(req.Platform) > maxPushPlatformBytes || strings.ContainsAny(req.Platform, " \t\r\n") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid push token fields"})
 		return
 	}
 	platform := req.Platform

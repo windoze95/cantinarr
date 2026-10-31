@@ -325,15 +325,13 @@ func TestMCPProtocolRoundTripPropagatesPerTokenIdentity(t *testing.T) {
 		t.Fatalf("requester list_my_requests = %q, want only the requester's rows", requesterText)
 	}
 
-	// Cross-user attribution: replaying the ADMIN's session id with the
-	// REQUESTER's token must attribute the call to the requester. The admin's
-	// data must never appear.
-	crossText := callMCPTool(t, harness.router, requesterToken, adminSession, "list_my_requests", `{}`)
-	if strings.Contains(crossText, "Admin Sentinel Movie") {
-		t.Fatalf("requester token on admin session leaked admin data: %q", crossText)
-	}
-	if !strings.Contains(crossText, "Requester Sentinel Movie") {
-		t.Fatalf("requester token on admin session lost its own identity: %q", crossText)
+	// A session belongs to the account that initialized it. Replaying the
+	// admin's session ID with another user's valid token is rejected before
+	// any tool can observe that session's state.
+	crossUser := postMCP(harness.router, requesterToken, adminSession,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_my_requests","arguments":{}}}`)
+	if crossUser.Code != http.StatusNotFound || strings.Contains(crossUser.Body.String(), "Admin Sentinel Movie") {
+		t.Fatalf("requester token on admin session = %d %q, want opaque 404", crossUser.Code, crossUser.Body.String())
 	}
 
 	// Call-time enforcement through the wire: a requester invoking an admin

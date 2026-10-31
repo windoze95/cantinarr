@@ -44,14 +44,18 @@ func TestPublicLoginLimitIgnoresForgedForwardedAddresses(t *testing.T) {
 
 func TestPublicRequestBoundsRejectsKnownAndChunkedOversizeBodies(t *testing.T) {
 	harness := newRBACRouterHarness(t, false)
-	request := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(strings.Repeat("x", publicRequestMaxBytes+1)))
-	recorder := httptest.NewRecorder()
-	harness.router.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("login oversize status=%d, want 413", recorder.Code)
-	}
-	if recorder.Header().Get("Connection") != "close" {
-		t.Fatal("oversized request must close the connection without draining its body")
+	for _, path := range []string{"/api/auth/login", "/api/auth/refresh", "/mcp"} {
+		t.Run(path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(strings.Repeat("x", publicRequestMaxBytes+1)))
+			recorder := httptest.NewRecorder()
+			harness.router.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("oversize status=%d, want 413", recorder.Code)
+			}
+			if recorder.Header().Get("Connection") != "close" {
+				t.Fatal("oversized request must close the connection without draining its body")
+			}
+		})
 	}
 
 	handler := requestBodyBounds(8, time.Second)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

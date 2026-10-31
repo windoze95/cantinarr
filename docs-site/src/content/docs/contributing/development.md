@@ -66,7 +66,7 @@ Provider credentials and personal overrides are configured through Cantinarr's s
 
 ## Documentation site
 
-Use Node 22.12 or newer and Python 3.9 or newer. From `docs-site/`:
+Use Node 22.23.4 or newer and Python 3.9 or newer. From `docs-site/`:
 
 ```sh
 npm ci

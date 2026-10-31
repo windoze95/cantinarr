@@ -190,6 +190,9 @@ func NewRouter(
 
 		// Rate limiter for public auth endpoints: 10 requests per minute per IP
 		authLimiter := auth.NewRateLimiter(10, 1*time.Minute)
+		// Token refresh has its own budget so login attempts cannot starve
+		// established sessions behind the same reverse proxy.
+		refreshLimiter := auth.NewRateLimiter(30, time.Minute)
 		plexPollLimiter := auth.NewRateLimiter(120, time.Minute)
 		// Keep authenticated ChatGPT/xAI device-flow churn from consuming the
 		// public password/passkey budget for everyone behind the same household
@@ -210,7 +213,7 @@ func NewRouter(
 			r.With(authLimiter.Middleware).Post("/oidc/exchange", authHandler.OIDCExchange)
 			r.With(authLimiter.Middleware).Post("/setup", authHandler.HandleSetup)
 			r.With(authLimiter.Middleware).Post("/login", authHandler.Login)
-			r.Post("/refresh", authHandler.Refresh)
+			r.With(refreshLimiter.Middleware).Post("/refresh", authHandler.Refresh)
 			r.With(authLimiter.Middleware).Post("/connect", authHandler.HandleRedeemConnectToken)
 
 			// Passkey login (public, rate-limited)
@@ -790,6 +793,9 @@ func NewRouter(
 	// MCP endpoint (authenticated, separate CORS for external MCP clients)
 	mcpHandler := mcpserver.NewMCPHandler(toolServer)
 	r.Route("/mcp", func(r chi.Router) {
+		// The MCP transport reads the complete JSON request into memory.
+		// Bound that read before authentication and preserve long responses.
+		r.Use(publicRequestBounds)
 		r.Use(requireValidMCPOrigin(cfg))
 		r.Use(cors.Handler(cors.Options{
 			AllowedMethods: []string{"GET", "POST", "DELETE", "OPTIONS"},

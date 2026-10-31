@@ -4,7 +4,7 @@ The public help site at **https://docs.cantinarr.com**. Astro and Starlight prov
 
 ## Work locally
 
-Use Node 22.12 or newer and Python 3.9 or newer. Run from this directory:
+Use Node 22.23.4 or newer and Python 3.9 or newer. Run from this directory:
 
 ```sh
 npm ci

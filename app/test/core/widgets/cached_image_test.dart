@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -8,9 +9,33 @@ import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/widgets/cached_image.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  // Public native artwork exercises flutter_cache_manager. Give its file
+  // store a real temporary directory in the widget-test process.
+  const pathProvider = MethodChannel('plugins.flutter.io/path_provider');
+  late Directory cacheDirectory;
+  setUpAll(() async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    cacheDirectory = await Directory.systemTemp.createTemp('cantinarr-image-test-');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(pathProvider, (call) async {
+      if (call.method == 'getTemporaryDirectory' ||
+          call.method == 'getApplicationSupportDirectory') {
+        return cacheDirectory.path;
+      }
+      return null;
+    });
+  });
+  tearDownAll(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(pathProvider, null);
+    await cacheDirectory.delete(recursive: true);
+  });
+
   test('web visible and prefetched artwork use the standard provider with headers', () {
     const source = (url: 'https://cantina.example/art.jpg',
         headers: {'Authorization': 'Bearer test'});
@@ -46,8 +71,6 @@ void main() {
     expect(await first.obtainKey(ImageConfiguration.empty),
         isNot(await second.obtainKey(ImageConfiguration.empty)),
         reason: 'a grant change unknown to the app must still reach the server');
-    expect(cachedImageProvider((url: source.url, headers: null), isWeb: false),
-        isA<CachedNetworkImageProvider>());
     expect(() => cachedImageProvider(source, isWeb: false), throwsStateError);
   });
 
@@ -357,19 +380,23 @@ void main() {
   });
 
   group('CachedImage render method', () {
-    testWidgets('native headered artwork retains its cached transport',
+    testWidgets('native headered artwork uses a fresh network provider',
         (tester) async {
       await tester.pumpWidget(
-        const MaterialApp(
-          home: CachedImage(
-            url: 'https://cantina.example/api/instances/x/api/v1/MediaCover/1.jpg',
-            headers: {'Authorization': 'Bearer tok'},
+        ProviderScope(
+          overrides: [authProvider.overrideWith(_ImageAuth.new)],
+          child: const MaterialApp(
+            home: CachedImage(
+              url: 'https://cantina.example/api/instances/x/api/v1/MediaCover/1.jpg',
+              headers: {'Authorization': 'Bearer tok'},
+            ),
           ),
         ),
       );
+      await tester.pump();
       final provider = tester.widget<Image>(find.byType(Image)).image
-          as CachedNetworkImageProvider;
-      expect(provider.imageRenderMethodForWeb, ImageRenderMethodForWeb.HttpGet);
+          as FreshNetworkImage;
+      expect(provider.networkImage.headers, {'Authorization': 'Bearer tok'});
       // Let the (failing, test-environment) fetch resolve into the error
       // fallback so nothing is pending when the test ends.
       await tester.pump(const Duration(seconds: 1));
@@ -390,6 +417,18 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
     });
   });
+}
+
+class _ImageAuth extends AuthNotifier {
+  @override
+  Future<AuthState> build() async => const AuthState(
+        user: UserProfile(id: 1, username: 'requester', role: 'user'),
+        connection: BackendConnection(
+          serverUrl: 'https://cantina.example',
+          accessToken: 'tok',
+          refreshToken: 'refresh',
+        ),
+      );
 }
 
 class _NetworkFixture extends ImageProvider<NetworkImage> implements NetworkImage {

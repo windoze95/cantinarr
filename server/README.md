@@ -939,11 +939,13 @@ WebSocket events:
 - `media_availability_changed` -- payload-free inventory/access invalidation; clients refetch their own authorized availability.
 
 - `config_changed` — payload-free invalidation after Discover visibility or instance/access changes; every session re-fetches `/api/config`.
-- `download_progress` -- `{ tmdb_id, media_type, progress, status }`
-- `request_status_changed` -- `{ tmdb_id, media_type, status }` (queue polling **and** arr webhooks; status here is `available`, `partially_available`, `requested`, or `unavailable` -- note the longer spelling vs the REST `partial`)
-- `downloads_queue` -- full download-client queue snapshot `{ instance_id, paused, speed_bps, items }`, sent on change
-- `arr_queue_changed` -- `{ instance_id, service_type }` invalidation ping; clients refetch via REST
+- `download_progress` -- admin only, `{ tmdb_id, media_type, progress, status, instance_id }`
+- `request_status_changed` -- queue polling and arr webhooks. Requesters assigned to the instance receive a payload-free refetch hint; admins receive `{ tmdb_id, media_type, status, instance_id }`. Status is `available`, `partially_available`, `requested`, or `unavailable` (REST uses `partial` for the second value).
+- `downloads_queue` -- admin only, full download-client queue snapshot `{ instance_id, paused, speed_bps, items }`, sent on change
+- `arr_queue_changed` -- `{ instance_id, service_type }` invalidation ping for admins and requesters currently assigned to that instance; clients refetch via REST
 - targeted events fanned out per user/admin: `request_pending`, `request_decision`, `request_quota_changed` (user ID only; caller and admins refetch allowance state), `issue_created`, `issue_updated`, `agent_action_pending`, `agent_action_decided`, `agent_autoapproval_paused`, `remediation_autodispatch_disabled`, `plex_access_request`, `media_server_access`, `issue_question`, `issue_fix_confirm`, `issue_closed`, `profile_change_pending`, `profile_change_decided` (WS-only, no push — drains the other admins' approval badges after a decision; both proposal events carry the authoritative `pending_count`)
+
+The hub rechecks each socket's current device and role before delivery, and current instance grants for scoped events. Revoked devices are disconnected; role or grant changes take effect without reconnecting. Inbound WebSocket application messages are ignored and capped at 1 KiB.
 
 ## Architecture
 
@@ -1197,7 +1199,7 @@ Admin media-account responses include `pending` alongside `verified`; `pending` 
 
 ### MCP server endpoint
 
-Cantinarr exposes its tools as a [Model Context Protocol](https://modelcontextprotocol.io/) server at `/mcp` (Streamable HTTP, session tracked via `Mcp-Session-Id`). External clients (Claude Desktop, Claude Code, Codex, ...) discover auth from the well-known metadata, register dynamically, and log in through a browser page -- with a Cantinarr password or a passkey. This browser login grants an external client access **to Cantinarr**; it is unrelated to the AI Access device-code flows that grant Cantinarr outbound OpenAI OAuth access to a personal or admin-shared ChatGPT account. Connect-link-only users can create their first passkey from the MCP login flow; a password is what authorizes MCP on plain-HTTP deployments where WebAuthn is unavailable. Initialization reports the running Cantinarr build version, advertises only the implemented tool/resource/prompt behavior, and tells clients where to load the operating guide.
+Cantinarr exposes its tools as a [Model Context Protocol](https://modelcontextprotocol.io/) server at `/mcp` (Streamable HTTP, session tracked via `Mcp-Session-Id`). External clients (Claude Desktop, Claude Code, Codex, ...) discover auth from the well-known metadata, register dynamically, and log in through a browser page -- with a Cantinarr password or a passkey. This browser login grants an external client access **to Cantinarr**; it is unrelated to the AI Access device-code flows that grant Cantinarr outbound OpenAI OAuth access to a personal or admin-shared ChatGPT account. Connect-link-only users can create their first passkey from the MCP login flow; a password is what authorizes MCP on plain-HTTP deployments where WebAuthn is unavailable. Initialization reports the running Cantinarr build version, advertises only the implemented tool/resource/prompt behavior, and tells clients where to load the operating guide. MCP sessions expire after 15 minutes without activity; active streaming listeners receive five-minute heartbeats. The server admits up to 256 concurrent sessions and streaming listeners, at most 16 of each per user and two listeners per session, and returns 429 with `Retry-After` when full. A session ID is usable only with its owner's authenticated account. A streaming listener closes after 15 minutes so a reconnect checks current authorization; clients should reconnect with their existing session ID.
 
 Access tokens are short-lived and audience-bound to `/mcp`. Refresh tokens are persisted, rotate on use, have a one-year sliding lifetime, and are tied to a Cantinarr device record -- revoking the device revokes the MCP client. Registered clients and token state live in the database, so they survive restarts and upgrades.
 
