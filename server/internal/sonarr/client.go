@@ -25,6 +25,28 @@ import (
 // rather than diagnose one.
 var ErrCustomFormatsNotFound = errors.New("sonarr: the custom format endpoint returned 404")
 
+const maxJSONResponseBytes int64 = 32 << 20
+
+var errResponseTooLarge = errors.New("sonarr response exceeds 32 MiB")
+
+// decodeResponse bounds decoded arr data even when the upstream response is
+// chunked or decompressed by the transport and has no Content-Length.
+func decodeResponse(resp *http.Response, out any) error {
+	return decodeBoundedResponse(resp, out, maxJSONResponseBytes)
+}
+
+func decodeBoundedResponse(resp *http.Response, out any, maxBytes int64) error {
+	if resp.ContentLength > maxBytes {
+		return errResponseTooLarge
+	}
+	limited := &io.LimitedReader{R: resp.Body, N: maxBytes + 1}
+	err := json.NewDecoder(limited).Decode(out)
+	if limited.N == 0 {
+		return errResponseTooLarge
+	}
+	return err
+}
+
 type Client struct {
 	baseURL    string
 	apiKey     string
@@ -67,15 +89,17 @@ func (g mutationGuard) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 type Series struct {
-	ID         int           `json:"id"`
-	Title      string        `json:"title"`
-	TvdbID     int           `json:"tvdbId"`
-	TmdbID     int           `json:"tmdbId"`
-	Year       int           `json:"year"`
-	Overview   string        `json:"overview,omitempty"`
-	FirstAired string        `json:"firstAired,omitempty"`
-	ImdbID     string        `json:"imdbId,omitempty"`
-	Images     []SeriesImage `json:"images,omitempty"`
+	ID            int           `json:"id"`
+	Title         string        `json:"title"`
+	TvdbID        int           `json:"tvdbId"`
+	TmdbID        int           `json:"tmdbId"`
+	Certification string        `json:"certification"`
+	Genres        []string      `json:"genres"`
+	Year          int           `json:"year"`
+	Overview      string        `json:"overview,omitempty"`
+	FirstAired    string        `json:"firstAired,omitempty"`
+	ImdbID        string        `json:"imdbId,omitempty"`
+	Images        []SeriesImage `json:"images,omitempty"`
 	// Sonarr clears addOptions only after its initial refresh and post-add
 	// monitoring have finished. Episode-only corrections wait for that fence.
 	AddOptions json.RawMessage `json:"addOptions"`
@@ -220,7 +244,7 @@ func (c *Client) doWith(client *http.Client, method, path string, body, out any)
 		return fmt.Errorf("sonarr %s %s returned status %d", method, requestPath, resp.StatusCode)
 	}
 	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		if err := decodeResponse(resp, out); err != nil {
 			return fmt.Errorf("decode response: %w", err)
 		}
 	}
@@ -294,7 +318,7 @@ func (c *Client) GetSeriesContext(ctx context.Context, id int) (*Series, error) 
 	defer resp.Body.Close()
 
 	var series Series
-	if err := json.NewDecoder(resp.Body).Decode(&series); err != nil {
+	if err := decodeResponse(resp, &series); err != nil {
 		return nil, fmt.Errorf("decode sonarr series: %w", err)
 	}
 	return &series, nil
@@ -322,7 +346,7 @@ func (c *Client) GetQualityProfiles() ([]QualityProfile, error) {
 	defer resp.Body.Close()
 
 	var profiles []QualityProfile
-	if err := json.NewDecoder(resp.Body).Decode(&profiles); err != nil {
+	if err := decodeResponse(resp, &profiles); err != nil {
 		return nil, fmt.Errorf("decode quality profiles: %w", err)
 	}
 	return profiles, nil
@@ -346,7 +370,7 @@ func (c *Client) GetQualityProfilesRawContext(ctx context.Context) ([]json.RawMe
 		return nil, fmt.Errorf("sonarr GET /api/v3/qualityprofile returned status %d", resp.StatusCode)
 	}
 	var profiles []json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&profiles); err != nil {
+	if err := decodeResponse(resp, &profiles); err != nil {
 		return nil, fmt.Errorf("decode quality profiles: %w", err)
 	}
 	return profiles, nil
@@ -376,7 +400,7 @@ func (c *Client) GetLanguagesRawContext(ctx context.Context) ([]json.RawMessage,
 		return nil, fmt.Errorf("sonarr GET /api/v3/language returned status %d", resp.StatusCode)
 	}
 	var languages []json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&languages); err != nil {
+	if err := decodeResponse(resp, &languages); err != nil {
 		return nil, fmt.Errorf("decode sonarr languages: %w", err)
 	}
 	return languages, nil
@@ -403,7 +427,7 @@ func (c *Client) GetCustomFormatsRawContext(ctx context.Context) ([]json.RawMess
 		return nil, fmt.Errorf("sonarr GET /api/v3/customformat returned status %d", resp.StatusCode)
 	}
 	var formats []json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&formats); err != nil {
+	if err := decodeResponse(resp, &formats); err != nil {
 		return nil, fmt.Errorf("decode custom formats: %w", err)
 	}
 	return formats, nil
@@ -440,7 +464,7 @@ func (c *Client) GetRootFolders() ([]RootFolder, error) {
 	defer resp.Body.Close()
 
 	var folders []RootFolder
-	if err := json.NewDecoder(resp.Body).Decode(&folders); err != nil {
+	if err := decodeResponse(resp, &folders); err != nil {
 		return nil, fmt.Errorf("decode root folders: %w", err)
 	}
 	return folders, nil
@@ -1201,7 +1225,7 @@ func (c *Client) GetAllEpisodesContext(ctx context.Context, seriesID int) ([]Epi
 		return nil, fmt.Errorf("sonarr episodes: status %d", resp.StatusCode)
 	}
 	var episodes []Episode
-	if err = json.NewDecoder(resp.Body).Decode(&episodes); err != nil {
+	if err = decodeResponse(resp, &episodes); err != nil {
 		return nil, fmt.Errorf("decode sonarr episodes: %w", err)
 	}
 	return episodes, nil

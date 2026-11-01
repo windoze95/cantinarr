@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-A kids account adds a content policy to an ordinary user. Cantinarr enforces that policy on the server, including discovery, search, details, requests, relevant library responses, AI discovery tools, and title handoffs.
+A kids account adds a content policy to an ordinary user. Cantinarr enforces that policy on the server, including discovery, search, details, requests, relevant library responses, media file downloads, AI discovery tools, and title handoffs.
 
 ## Configure an account
 

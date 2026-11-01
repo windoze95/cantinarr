@@ -107,6 +107,10 @@ jobs:
           PREVIEW_READY: ${{ vars.MOBILE_PREVIEW_READY }}
         run: test "$PREVIEW_READY" = 'true'
 
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
       - name: Calculate build number
         id: build_number
         env:
@@ -117,7 +121,7 @@ jobs:
           VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           cd ios
-          gem install fastlane
+          gem install fastlane --version 2.241.2 --no-document
           APP_VERSION=$VERSION fastlane next_build_number
 
       - name: Setup Xcode 26
@@ -298,7 +302,8 @@ jobs:
           fetch-depth: 1
 
       - name: Install dependencies
-        run: pip install --quiet "pyjwt[crypto]>=2.8"
+        run: |
+          pip install --quiet --only-binary=:all: "pyjwt[crypto]==2.15.1" "cryptography==50.0.2"
 
       - name: Recheck public beta ownership
         id: publish

@@ -49,6 +49,13 @@ uses `buildkitd-config-inline`. Both are configured in `.github/workflows/docker
 
 ## Release procedure
 
+Release workflows install Fastlane 2.241.2 with Ruby 3.3. CI and Play build checks
+install Minitest 6.0.6 for their lane tests. TestFlight distribution installs
+PyJWT 2.15.1 and cryptography 50.0.2 from binary wheels for App Store Connect
+token signing. These are direct package pins; transitive dependencies are still
+resolved at run time, not fully locked. Update the pins with the release-tooling
+tests and verify the publishing workflows before shipping.
+
 ### Server-only patch while a phone build awaits review
 
 Keep the submitted phone version/build, original stable tag, and archived candidate receipts

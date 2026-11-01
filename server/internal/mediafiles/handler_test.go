@@ -19,6 +19,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mediapath"
 )
@@ -30,6 +31,7 @@ type fakeInstanceStore struct {
 	accessErr   error
 	accessCalls []accessCall
 	roles       map[int64]string
+	children    map[int64]bool
 	deleted     map[int64]bool
 	userErr     error
 }
@@ -78,13 +80,17 @@ func (s *fakeInstanceStore) GetUser(userID int64) (*auth.User, error) {
 			role = auth.RoleAdmin
 		}
 	}
-	return &auth.User{ID: userID, Role: role}, nil
+	return &auth.User{ID: userID, Role: role, Child: s.children[userID]}, nil
 }
 
 type fakeMetadataResolver struct {
-	paths map[int]string
-	err   error
-	calls []resolveCall
+	paths      map[int]string
+	parents    map[int]int
+	titles     map[int]titleMetadata
+	err        error
+	titleErr   error
+	calls      []resolveCall
+	titleCalls []int
 }
 
 type resolveCall struct {
@@ -98,7 +104,28 @@ func (r *fakeMetadataResolver) Resolve(instanceID, serviceType string, fileID in
 	if r.err != nil {
 		return fileMetadata{}, r.err
 	}
-	return fileMetadata{Path: r.paths[fileID]}, nil
+	return fileMetadata{Path: r.paths[fileID], ParentID: r.parents[fileID]}, nil
+}
+
+func (r *fakeMetadataResolver) ResolveTitle(_ context.Context, _, _ string, parentID int) (titleMetadata, error) {
+	r.titleCalls = append(r.titleCalls, parentID)
+	if r.titleErr != nil {
+		return titleMetadata{}, r.titleErr
+	}
+	return r.titles[parentID], nil
+}
+
+type fakeTitlePolicy struct {
+	policy *contentpolicy.Policy
+	err    error
+}
+
+func (p *fakeTitlePolicy) PolicyFor(int64, string) (*contentpolicy.Policy, error) {
+	return p.policy, p.err
+}
+
+func (p *fakeTitlePolicy) EvaluatorFor(ctx context.Context, policy *contentpolicy.Policy) (*contentpolicy.Evaluator, error) {
+	return contentpolicy.New(nil, nil, nil).EvaluatorFor(ctx, policy)
 }
 
 func TestHandlerDownloadSupportsReusableHeadAndRange(t *testing.T) {
@@ -186,6 +213,105 @@ func TestHandlerDownloadSupportsReusableHeadAndRange(t *testing.T) {
 	}
 	if len(store.accessCalls) != 5 {
 		t.Fatalf("access checks = %d, want issue plus every HEAD/GET", len(store.accessCalls))
+	}
+}
+
+func TestKidsAccountDownloadChecksLiveParentAtTicketAndDelivery(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		serviceType string
+		allowed     string
+		blocked     string
+	}{
+		{name: "movie", serviceType: "radarr", allowed: "G", blocked: "R"},
+		{name: "series", serviceType: "sonarr", allowed: "TV-Y", blocked: "TV-MA"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			mediaPath := filepath.Join(root, "hidden.mp4")
+			if err := os.WriteFile(mediaPath, []byte("restricted-media-bytes"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			store := &fakeInstanceStore{
+				instances: map[string]*instance.Instance{
+					"video": {ID: "video", ServiceType: test.serviceType},
+				},
+				allowed:  true,
+				children: map[int64]bool{42: true},
+			}
+			resolver := &fakeMetadataResolver{
+				paths:   map[int]string{7: mediaPath},
+				parents: map[int]int{7: 19},
+				titles:  map[int]titleMetadata{19: {ID: 19, Certification: test.allowed}},
+			}
+			h := newTestHandler(t, store, resolver, []string{root})
+			policy := &fakeTitlePolicy{policy: &contentpolicy.Policy{
+				MaxMovieRating: "PG", MaxTVRating: "TV-PG", RatingRegion: "US", BlockUnrated: true,
+			}}
+			h.policy = policy
+			claims := &auth.Claims{UserID: 42, Role: auth.RoleUser}
+			body := `{"instance_id":"video","file_id":7}`
+
+			issued, ticket := issueTicket(t, h, claims, body)
+			if issued.Code != http.StatusCreated {
+				t.Fatalf("allowed ticket = %d %s", issued.Code, issued.Body.String())
+			}
+			resolver.titles[19] = titleMetadata{ID: 19, Certification: test.blocked}
+			blocked := downloadRequest(h, http.MethodGet, ticket.URL, "")
+			if blocked.Code != http.StatusNotFound || strings.Contains(blocked.Body.String(), "restricted-media-bytes") {
+				t.Fatalf("blocked bytes = %d %s", blocked.Code, blocked.Body.String())
+			}
+			blockedTicket, _ := issueTicket(t, h, claims, body)
+			if blockedTicket.Code != http.StatusNotFound {
+				t.Fatalf("blocked ticket = %d %s", blockedTicket.Code, blockedTicket.Body.String())
+			}
+			if test.serviceType == "radarr" {
+				resolver.titles[19] = titleMetadata{ID: 19, Certification: test.allowed, Genres: []string{"Horror"}}
+				policy.policy.BlockedMovieGenres = []int{27}
+				blockedGenre, _ := issueTicket(t, h, claims, body)
+				if blockedGenre.Code != http.StatusNotFound {
+					t.Fatalf("blocked genre ticket = %d %s", blockedGenre.Code, blockedGenre.Body.String())
+				}
+				policy.policy.BlockedMovieGenres = nil
+			}
+
+			resolver.titleErr = errors.New("rating parent unavailable")
+			unreadableTicket, _ := issueTicket(t, h, claims, body)
+			if unreadableTicket.Code != http.StatusServiceUnavailable {
+				t.Fatalf("unreadable parent ticket = %d %s", unreadableTicket.Code, unreadableTicket.Body.String())
+			}
+			unreadableDownload := downloadRequest(h, http.MethodGet, ticket.URL, "")
+			if unreadableDownload.Code != http.StatusServiceUnavailable || strings.Contains(unreadableDownload.Body.String(), "restricted-media-bytes") {
+				t.Fatalf("unreadable parent download = %d %s", unreadableDownload.Code, unreadableDownload.Body.String())
+			}
+			resolver.titleErr = nil
+			policy.policy.RatingRegion = "ZZ"
+			unrankable, _ := issueTicket(t, h, claims, body)
+			if unrankable.Code != http.StatusServiceUnavailable {
+				t.Fatalf("unrankable policy ticket = %d %s", unrankable.Code, unrankable.Body.String())
+			}
+			policy.policy.RatingRegion = "US"
+			policy.policy = nil
+			missingPolicy, _ := issueTicket(t, h, claims, body)
+			if missingPolicy.Code != http.StatusServiceUnavailable {
+				t.Fatalf("missing child policy ticket = %d %s", missingPolicy.Code, missingPolicy.Body.String())
+			}
+			policy.policy = &contentpolicy.Policy{
+				MaxMovieRating: "PG", MaxTVRating: "TV-PG", RatingRegion: "US", BlockUnrated: true,
+			}
+			resolver.titles[19] = titleMetadata{ID: 19, Certification: test.allowed}
+			allowed := downloadRequest(h, http.MethodGet, ticket.URL, "")
+			if allowed.Code != http.StatusOK || allowed.Body.String() != "restricted-media-bytes" {
+				t.Fatalf("allowed bytes = %d %s", allowed.Code, allowed.Body.String())
+			}
+			wantCalls := 7
+			if test.serviceType == "radarr" {
+				wantCalls++
+			}
+			if len(resolver.titleCalls) != wantCalls {
+				t.Fatalf("parent title checks = %d, want %d", len(resolver.titleCalls), wantCalls)
+			}
+		})
 	}
 }
 
@@ -747,6 +873,7 @@ func newTestHandler(t *testing.T, store *fakeInstanceStore, resolver metadataRes
 	if err != nil {
 		t.Fatalf("newHandler() error = %v", err)
 	}
+	h.policy = &fakeTitlePolicy{}
 	t.Cleanup(func() {
 		if err := h.Close(); err != nil {
 			t.Errorf("Close() error = %v", err)

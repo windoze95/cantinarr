@@ -125,7 +125,7 @@ ImageSource? musicArtworkSource(
 ImageSource? musicArtworkSourceFor(
     BackendConnection? connection, MusicAlbum album, String? instanceId) {
   if (album.artwork == null || album.artwork!.isEmpty) return null;
-  if (connection == null) return null;
+  if (connection == null || connection.accessToken.isEmpty) return null;
   final base = connection.serverUrl.replaceFirst(RegExp(r'/$'), '');
   final path =
       '/api/discover/music/artwork/${Uri.encodeComponent(album.foreignId)}';

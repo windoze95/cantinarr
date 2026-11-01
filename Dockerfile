@@ -62,7 +62,7 @@ RUN set -eux; \
     install -m 0644 /tmp/CODEX-NOTICE /codex-license/NOTICE
 
 # Stage 2: Build Go binary
-FROM golang:1.25-alpine AS go-builder
+FROM golang:1.26.10-alpine AS go-builder
 WORKDIR /build
 COPY server/go.mod server/go.sum ./
 RUN go mod download

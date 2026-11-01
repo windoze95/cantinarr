@@ -125,6 +125,30 @@ func TestRegisterPushDisabledStoresLocallyAndIsNoop(t *testing.T) {
 	}
 }
 
+func TestRegisterRejectsOversizedBodyAndFields(t *testing.T) {
+	h := NewHandler(nil, nil, nil)
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"body", `{"device_id":"dev-1","apns_token":"` + strings.Repeat("x", maxRegisterTokenBodyBytes) + `"}`, http.StatusRequestEntityTooLarge},
+		{"device_id", `{"device_id":"` + strings.Repeat("x", maxPushDeviceIDBytes+1) + `","apns_token":"tok"}`, http.StatusBadRequest},
+		{"token", `{"device_id":"dev-1","apns_token":"` + strings.Repeat("x", maxPushTokenBytes+1) + `"}`, http.StatusBadRequest},
+		{"platform", `{"device_id":"dev-1","apns_token":"tok","platform":"` + strings.Repeat("x", maxPushPlatformBytes+1) + `"}`, http.StatusBadRequest},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			req := withUser(httptest.NewRequest(http.MethodPost, "/api/devices/push-token", strings.NewReader(tc.body)), 7)
+			h.Register(rr, req)
+			if rr.Code != tc.want {
+				t.Fatalf("status = %d, want %d; body=%s", rr.Code, tc.want, rr.Body.String())
+			}
+		})
+	}
+}
+
 func TestTestPushSendsToCaller(t *testing.T) {
 	database, err := dbOpen(t)
 	if err != nil {

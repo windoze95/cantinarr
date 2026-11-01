@@ -2,6 +2,7 @@ package sonarr
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -35,6 +36,32 @@ func TestGetEpisodeFileUsesExactAuthenticatedEndpoint(t *testing.T) {
 	}
 	if file.ID != 91 || file.SeriesID != 4 || file.SeasonNumber != 2 || file.Path != "/library/Season 02/Episode.mkv" || file.RelativePath != "Season 02/Episode.mkv" || file.Size != 654321 {
 		t.Fatalf("file = %#v", file)
+	}
+}
+
+func TestDecodeResponseBoundsKnownAndChunkedBodies(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		body          string
+		contentLength int64
+		wantTooLarge  bool
+	}{
+		{"valid", `{"id":91}`, int64(len(`{"id":91}`)), false},
+		{"declared size", `{"id":91}`, 65, true},
+		{"chunked oversized value", `{"title":"` + strings.Repeat("x", 64) + `"}`, -1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &http.Response{Body: io.NopCloser(strings.NewReader(tc.body)), ContentLength: tc.contentLength}
+			defer resp.Body.Close()
+			var series Series
+			err := decodeBoundedResponse(resp, &series, 64)
+			if errors.Is(err, errResponseTooLarge) != tc.wantTooLarge {
+				t.Fatalf("decode error = %v, want too large = %t", err, tc.wantTooLarge)
+			}
+			if !tc.wantTooLarge && (err != nil || series.ID != 91) {
+				t.Fatalf("decode = (%+v, %v), want series 91", series, err)
+			}
+		})
 	}
 }
 

@@ -4,6 +4,7 @@
 package mediafiles
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mediapath"
 )
@@ -56,10 +58,23 @@ type currentUserStore interface {
 
 type metadataResolver interface {
 	Resolve(instanceID, serviceType string, fileID int) (fileMetadata, error)
+	ResolveTitle(ctx context.Context, instanceID, serviceType string, parentID int) (titleMetadata, error)
 }
 
 type fileMetadata struct {
-	Path string
+	Path     string
+	ParentID int
+}
+
+type titleMetadata struct {
+	ID            int
+	Certification string
+	Genres        []string
+}
+
+type titlePolicy interface {
+	PolicyFor(userID int64, role string) (*contentpolicy.Policy, error)
+	EvaluatorFor(ctx context.Context, policy *contentpolicy.Policy) (*contentpolicy.Evaluator, error)
 }
 
 type registryMetadataResolver struct {
@@ -77,7 +92,7 @@ func (r registryMetadataResolver) Resolve(instanceID, serviceType string, fileID
 		if err != nil {
 			return fileMetadata{}, err
 		}
-		return fileMetadata{Path: file.Path}, nil
+		return fileMetadata{Path: file.Path, ParentID: file.MovieID}, nil
 	case "sonarr":
 		client, _, err := r.registry.GetFreshSonarrClient(instanceID)
 		if err != nil {
@@ -87,7 +102,7 @@ func (r registryMetadataResolver) Resolve(instanceID, serviceType string, fileID
 		if err != nil {
 			return fileMetadata{}, err
 		}
-		return fileMetadata{Path: file.Path}, nil
+		return fileMetadata{Path: file.Path, ParentID: file.SeriesID}, nil
 	case "chaptarr":
 		client, _, err := r.registry.GetFreshChaptarrClient(instanceID)
 		if err != nil {
@@ -113,6 +128,33 @@ func (r registryMetadataResolver) Resolve(instanceID, serviceType string, fileID
 	}
 }
 
+func (r registryMetadataResolver) ResolveTitle(ctx context.Context, instanceID, serviceType string, parentID int) (titleMetadata, error) {
+	switch serviceType {
+	case "radarr":
+		client, _, err := r.registry.GetFreshRadarrClient(instanceID)
+		if err != nil {
+			return titleMetadata{}, err
+		}
+		movie, err := client.GetMovieContext(ctx, parentID)
+		if err != nil {
+			return titleMetadata{}, err
+		}
+		return titleMetadata{ID: movie.ID, Certification: movie.Certification, Genres: movie.Genres}, nil
+	case "sonarr":
+		client, _, err := r.registry.GetFreshSonarrClient(instanceID)
+		if err != nil {
+			return titleMetadata{}, err
+		}
+		series, err := client.GetSeriesContext(ctx, parentID)
+		if err != nil {
+			return titleMetadata{}, err
+		}
+		return titleMetadata{ID: series.ID, Certification: series.Certification, Genres: series.Genres}, nil
+	default:
+		return titleMetadata{}, errMediaFileUnavailable
+	}
+}
+
 type mediaRoot struct {
 	path string
 	root *os.Root
@@ -133,6 +175,7 @@ type Handler struct {
 	store    instanceAccessStore
 	users    currentUserStore
 	resolver metadataResolver
+	policy   titlePolicy
 	roots    []mediaRoot
 
 	mu                sync.Mutex
@@ -143,6 +186,10 @@ type Handler struct {
 	maxTickets        int
 	maxTicketsPerUser int
 }
+
+// SetContentPolicy wires the same live kids-account decision used by the
+// Radarr/Sonarr proxy. It must be set before serving media-file requests.
+func (h *Handler) SetContentPolicy(svc *contentpolicy.Service) { h.policy = svc }
 
 // NewHandler opens each configured root once for the process lifetime. Empty
 // roots are valid and leave media downloads disabled.
@@ -259,7 +306,7 @@ func (h *Handler) IssueTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	inst, userID, ok := h.resolveAuthorizedInstance(w, r, request.InstanceID)
+	inst, user, ok := h.resolveAuthorizedInstance(w, r, request.InstanceID)
 	if !ok {
 		return
 	}
@@ -267,6 +314,15 @@ func (h *Handler) IssueTicket(w http.ResponseWriter, r *http.Request) {
 	metadata, err := h.resolver.Resolve(inst.ID, inst.ServiceType, request.FileID)
 	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, "media file unavailable")
+		return
+	}
+	allowed, err := h.authorizeTitle(r.Context(), user, inst, metadata)
+	if err != nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "could not check content access; retry shortly")
+		return
+	}
+	if !allowed {
+		writeJSONError(w, http.StatusNotFound, "media file unavailable")
 		return
 	}
 	opened, err := h.openMediaFile(inst, metadata.Path, request.FileID)
@@ -281,7 +337,7 @@ func (h *Handler) IssueTicket(w http.ResponseWriter, r *http.Request) {
 	_ = opened.file.Close()
 
 	ticket := downloadTicket{
-		userID:      userID,
+		userID:      user.ID,
 		instanceID:  inst.ID,
 		serviceType: inst.ServiceType,
 		fileID:      request.FileID,
@@ -308,54 +364,95 @@ func (h *Handler) IssueTicket(w http.ResponseWriter, r *http.Request) {
 // response itself when any link in the chain fails. An instance is returned
 // only when the caller currently holds the download permission, may use this
 // exact instance, and the instance has at least one effective mapping.
-func (h *Handler) resolveAuthorizedInstance(w http.ResponseWriter, r *http.Request, instanceID string) (*instance.Instance, int64, bool) {
+func (h *Handler) resolveAuthorizedInstance(w http.ResponseWriter, r *http.Request, instanceID string) (*instance.Instance, *auth.User, bool) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
-		return nil, 0, false
+		return nil, nil, false
 	}
 	currentUser, err := h.users.GetUser(claims.UserID)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
-		return nil, 0, false
+		return nil, nil, false
 	}
 	if err != nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "temporarily unavailable, retry shortly")
-		return nil, 0, false
+		return nil, nil, false
 	}
 	if currentUser == nil {
 		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
-		return nil, 0, false
+		return nil, nil, false
 	}
 	if !auth.HasPermission(currentUser.Role, auth.PermissionMediaDownload) {
 		writeJSONError(w, http.StatusForbidden, "permission denied")
-		return nil, 0, false
+		return nil, nil, false
 	}
 	inst, err := h.store.Get(instanceID)
 	if err != nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "temporarily unavailable, retry shortly")
-		return nil, 0, false
+		return nil, nil, false
 	}
 	if inst == nil || !supportedService(inst.ServiceType) {
 		writeJSONError(w, http.StatusNotFound, "media file unavailable")
-		return nil, 0, false
+		return nil, nil, false
 	}
 	if !auth.HasPermission(currentUser.Role, auth.PermissionInstancesManage) {
 		allowed, err := h.store.UserCanAccessInstance(claims.UserID, inst.ID, inst.ServiceType)
 		if err != nil {
 			writeJSONError(w, http.StatusServiceUnavailable, "temporarily unavailable, retry shortly")
-			return nil, 0, false
+			return nil, nil, false
 		}
 		if !allowed {
 			writeJSONError(w, http.StatusForbidden, "permission denied")
-			return nil, 0, false
+			return nil, nil, false
 		}
 	}
 	if len(h.effectiveMappings(inst)) == 0 {
 		writeJSONError(w, http.StatusNotFound, "media file unavailable")
-		return nil, 0, false
+		return nil, nil, false
 	}
-	return inst, claims.UserID, true
+	return inst, currentUser, true
+}
+
+// authorizeTitle rechecks the current policy against the file's live parent.
+// A file ID is enumerable and carries no rating of its own; resolving the
+// movie or series before both ticket issuance and byte delivery prevents a
+// kids account from bypassing a hidden title by requesting its file directly.
+func (h *Handler) authorizeTitle(ctx context.Context, user *auth.User, inst *instance.Instance, file fileMetadata) (bool, error) {
+	if (inst.ServiceType != "radarr" && inst.ServiceType != "sonarr") || user.Role == auth.RoleAdmin {
+		return true, nil
+	}
+	if h.policy == nil {
+		return false, errMediaFileUnavailable
+	}
+	policy, err := h.policy.PolicyFor(user.ID, user.Role)
+	if err != nil {
+		return false, err
+	}
+	if policy == nil {
+		if user.Child {
+			// A policy row disappeared between the live user read and this
+			// check. Do not briefly treat a known kids account as unrestricted.
+			return false, errMediaFileUnavailable
+		}
+		return true, nil
+	}
+	if file.ParentID <= 0 {
+		return false, errMediaFileUnavailable
+	}
+	title, err := h.resolver.ResolveTitle(ctx, inst.ID, inst.ServiceType, file.ParentID)
+	if err != nil || title.ID != file.ParentID {
+		return false, errMediaFileUnavailable
+	}
+	evaluator, err := h.policy.EvaluatorFor(ctx, policy)
+	if err != nil || evaluator == nil {
+		return false, errMediaFileUnavailable
+	}
+	mediaType := contentpolicy.MediaMovie
+	if inst.ServiceType == "sonarr" {
+		mediaType = contentpolicy.MediaTV
+	}
+	return evaluator.AllowsArrRecord(mediaType, title.Certification, title.Genres), nil
 }
 
 type coverageRequest struct {
@@ -499,6 +596,15 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 	metadata, err := h.resolver.Resolve(ticket.instanceID, ticket.serviceType, ticket.fileID)
 	if err != nil {
 		writeDownloadError(w, r, http.StatusBadGateway, "download unavailable")
+		return
+	}
+	allowed, err := h.authorizeTitle(r.Context(), currentUser, inst, metadata)
+	if err != nil {
+		writeDownloadError(w, r, http.StatusServiceUnavailable, "could not check content access; retry shortly")
+		return
+	}
+	if !allowed {
+		writeDownloadError(w, r, http.StatusNotFound, "download unavailable")
 		return
 	}
 	opened, err := h.openMediaFile(inst, metadata.Path, ticket.fileID)

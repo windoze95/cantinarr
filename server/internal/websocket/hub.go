@@ -124,11 +124,11 @@ type IssueOpener interface {
 
 // Client represents a connected WebSocket client.
 type Client struct {
-	hub     *Hub
-	conn    *websocket.Conn
-	userID  int64
-	isAdmin bool
-	send    chan []byte
+	hub      *Hub
+	conn     *websocket.Conn
+	userID   int64
+	deviceID string
+	send     chan outboundMessage
 }
 
 // Hub manages WebSocket clients and broadcasts events.
@@ -283,33 +283,55 @@ func (h *Hub) Run(ctx context.Context) {
 			}
 			h.mu.Unlock()
 		case msg := <-h.broadcast:
-			// Deliver under the read lock, but only collect clients whose
-			// send buffer is full — evicting them in place would mutate the
-			// client map (and close a channel) while other readers may hold
-			// the same read lock, which is exactly the concurrency RLock
-			// promises to allow.
-			var stalled []*Client
+			// Authorization is live at delivery time. A connected device can be
+			// revoked, an admin demoted, or an instance grant removed without
+			// closing and reopening its socket. Never query the DB while holding
+			// the client-map lock.
 			h.mu.RLock()
+			clients := make([]*Client, 0, len(h.clients))
 			for client := range h.clients {
-				if msg.adminOnly && !client.isAdmin {
-					continue
-				}
+				clients = append(clients, client)
+			}
+			h.mu.RUnlock()
+
+			var evict []*Client
+			for _, client := range clients {
 				if msg.userID != 0 && client.userID != msg.userID {
 					continue
 				}
-				select {
-				case client.send <- msg.data:
-				default:
-					stalled = append(stalled, client)
+				role, err := h.authService.AuthorizeInteractiveToolCall(ctx, client.userID, client.deviceID, false)
+				if err != nil {
+					evict = append(evict, client)
+					continue
 				}
+				admin := auth.HasPermission(role, auth.PermissionAdmin)
+				if msg.adminOnly && !admin {
+					continue
+				}
+				if msg.instanceID != "" && !admin {
+					if h.store == nil {
+						continue
+					}
+					allowed, err := h.store.UserHasInstanceAccess(client.userID, msg.instanceID)
+					if err != nil || !allowed {
+						continue
+					}
+				}
+				h.mu.RLock()
+				if !h.clients[client] {
+					h.mu.RUnlock()
+					continue
+				}
+				select {
+				case client.send <- msg:
+				default:
+					evict = append(evict, client)
+				}
+				h.mu.RUnlock()
 			}
-			h.mu.RUnlock()
-			if len(stalled) > 0 {
-				// Evict under the write lock. The presence check mirrors the
-				// unregister case so a client can never be double-closed no
-				// matter which path removes it first.
+			if len(evict) > 0 {
 				h.mu.Lock()
-				for _, client := range stalled {
+				for _, client := range evict {
 					if _, ok := h.clients[client]; ok {
 						delete(h.clients, client)
 						close(client.send)
@@ -324,14 +346,40 @@ func (h *Hub) Run(ctx context.Context) {
 // outboundMessage pairs a marshaled event with its audience. When userID is
 // non-zero the event is delivered only to that user's connected clients.
 type outboundMessage struct {
-	data      []byte
-	adminOnly bool
-	userID    int64
+	data       []byte
+	adminData  []byte
+	adminOnly  bool
+	userID     int64
+	instanceID string
 }
 
 // Broadcast sends an event to all connected clients.
 func (h *Hub) Broadcast(event Event) {
-	h.enqueue(event, false, 0)
+	switch event.Type {
+	case "download_progress":
+		// The progress payload identifies a title. Only admins receive it;
+		// requester clients use their authorized REST reads for progress.
+		h.enqueue(event, true, 0)
+	case "request_status_changed":
+		instanceID, _ := event.Data["instance_id"].(string)
+		if instanceID == "" {
+			h.enqueue(event, true, 0)
+			return
+		}
+		// A status event can be a useful refetch hint for assigned users,
+		// including kids, but its TMDB ID and status are title disclosures.
+		// Keep the detailed form for administrators only.
+		h.enqueueScoped(Event{Type: event.Type}, &event, instanceID)
+	case "arr_queue_changed":
+		instanceID, _ := event.Data["instance_id"].(string)
+		if instanceID == "" {
+			h.enqueue(event, true, 0)
+			return
+		}
+		h.enqueueScoped(event, nil, instanceID)
+	default:
+		h.enqueue(event, false, 0)
+	}
 }
 
 func (h *Hub) SetActivityInvalidator(invalidate func()) {
@@ -368,6 +416,14 @@ func (h *Hub) NotifyAdmins(eventType string, data map[string]interface{}) {
 }
 
 func (h *Hub) enqueue(event Event, adminOnly bool, userID int64) {
+	h.enqueueMessage(event, nil, adminOnly, userID, "")
+}
+
+func (h *Hub) enqueueScoped(event Event, adminEvent *Event, instanceID string) {
+	h.enqueueMessage(event, adminEvent, false, 0, instanceID)
+}
+
+func (h *Hub) enqueueMessage(event Event, adminEvent *Event, adminOnly bool, userID int64, instanceID string) {
 	h.activityMu.RLock()
 	invalidate := h.activityInvalidator
 	h.activityMu.RUnlock()
@@ -382,7 +438,15 @@ func (h *Hub) enqueue(event Event, adminOnly bool, userID int64) {
 		log.Printf("websocket: marshal event: %v", err)
 		return
 	}
-	h.broadcast <- outboundMessage{data: data, adminOnly: adminOnly, userID: userID}
+	var adminData []byte
+	if adminEvent != nil {
+		adminData, err = json.Marshal(adminEvent)
+		if err != nil {
+			log.Printf("websocket: marshal admin event: %v", err)
+			return
+		}
+	}
+	h.broadcast <- outboundMessage{data: data, adminData: adminData, adminOnly: adminOnly, userID: userID, instanceID: instanceID}
 }
 
 // ServeWS handles WebSocket upgrade with JWT auth via subprotocol.
@@ -423,11 +487,11 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		hub:     h,
-		conn:    conn,
-		userID:  claims.UserID,
-		isAdmin: auth.HasPermission(claims.Role, auth.PermissionAdmin),
-		send:    make(chan []byte, 256),
+		hub:      h,
+		conn:     conn,
+		userID:   claims.UserID,
+		deviceID: claims.DeviceID,
+		send:     make(chan outboundMessage, 256),
 	}
 	h.register <- client
 
@@ -440,6 +504,9 @@ func (c *Client) readPump() {
 		c.hub.unregister <- c
 		c.conn.Close()
 	}()
+	// Clients send no application messages. Cap discarded frames so a peer
+	// cannot make the server buffer an unbounded text or binary message.
+	c.conn.SetReadLimit(1024)
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -462,15 +529,45 @@ func (c *Client) writePump() {
 	for {
 		select {
 		case msg, ok := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
+				c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-			if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			// Messages may wait in the channel while an administrator is
+			// demoted or a grant/device is revoked. Recheck immediately before
+			// writing so previously queued private data cannot outlive access.
+			role, err := c.hub.authService.AuthorizeInteractiveToolCall(context.Background(), c.userID, c.deviceID, false)
+			if err != nil {
+				return
+			}
+			admin := auth.HasPermission(role, auth.PermissionAdmin)
+			if msg.adminOnly && !admin {
+				continue
+			}
+			if msg.instanceID != "" && !admin {
+				if c.hub.store == nil {
+					continue
+				}
+				allowed, err := c.hub.store.UserHasInstanceAccess(c.userID, msg.instanceID)
+				if err != nil || !allowed {
+					continue
+				}
+			}
+			data := msg.data
+			if admin && msg.adminData != nil {
+				data = msg.adminData
+			}
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 				return
 			}
 		case <-ticker.C:
+			// Revoke idle sockets too, rather than waiting for the next event
+			// to discover that their device or sign-in method was disabled.
+			if _, err := c.hub.authService.AuthorizeInteractiveToolCall(context.Background(), c.userID, c.deviceID, false); err != nil {
+				return
+			}
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -13,8 +14,9 @@ import '../logic/music_feed_provider.dart';
 
 /// Holds only the opening feeds while Discovery is mounted. No library/status
 /// calls, genre-feed fan-out, or next-page requests happen until a row opens.
-final catalogOpeningArtworkProvider =
-    Provider.autoDispose<List<ImageSource>>((ref) {
+final catalogOpeningArtworkProvider = Provider.autoDispose<List<ImageSource>>((
+  ref,
+) {
   final access = ref.watch(discoveryAccessProvider);
   final sources = <ImageSource>[];
   final music = access.activeId('lidarr');
@@ -22,11 +24,14 @@ final catalogOpeningArtworkProvider =
     ref.watch(musicGenresProvider(music));
     for (final name in ['popular', 'new-releases']) {
       final feed = ref.watch(
-          musicFeedProvider(MusicBrowseQuery(feed: name, instanceId: music)));
-      sources.addAll(feed.items
-          .take(6)
-          .map((a) => musicArtworkSourceFor(access.connection, a, music))
-          .whereType<ImageSource>());
+        musicFeedProvider(MusicBrowseQuery(feed: name, instanceId: music)),
+      );
+      sources.addAll(
+        feed.items
+            .take(6)
+            .map((a) => musicArtworkSourceFor(access.connection, a, music))
+            .whereType<ImageSource>(),
+      );
     }
   }
   return sources;
@@ -37,17 +42,31 @@ class CatalogWarmup extends ConsumerWidget {
   const CatalogWarmup({super.key, required this.child});
   @override
   Widget build(BuildContext context, WidgetRef ref) => CatalogArtworkPrefetch(
-      sources: ref.watch(catalogOpeningArtworkProvider), child: child);
+    sources: ref.watch(catalogOpeningArtworkProvider),
+    child: child,
+  );
 }
 
 /// A single account-scoped queue bounds speculative image work across rows.
-/// Visible CachedImages share its cache keys and can join in-flight loads.
-final catalogArtworkLoaderProvider = Provider<
-    Future<void> Function(
-        ImageSource source, BuildContext context)>((ref) => (source, context) =>
-    precacheImage(cachedImageProvider(source,
-        cacheScope: imageCacheScope(ref.read(authProvider).valueOrNull)),
-        context, onError: (_, __) {}));
+/// Public and web artwork can join the visible image's in-flight load.
+final catalogArtworkLoaderProvider =
+    Provider<Future<void> Function(ImageSource source, BuildContext context)>(
+      (ref) => (source, context) {
+        final auth = ref.read(authProvider).valueOrNull;
+        final current = currentSessionImageSource(source, auth);
+        if (current == null) return Future<void>.value();
+        // Native protected art always makes a live request when visible;
+        // warming it would only duplicate that read.
+        if (!kIsWeb && current.headers?.isNotEmpty == true) {
+          return Future<void>.value();
+        }
+        return precacheImage(
+          cachedImageProvider(current, cacheScope: imageCacheScope(auth)),
+          context,
+          onError: (_, __) {},
+        );
+      },
+    );
 
 final _artworkQueueProvider = Provider.autoDispose((ref) {
   ref.watch(catalogDiscoveryScopeProvider);
@@ -59,8 +78,11 @@ final _artworkQueueProvider = Provider.autoDispose((ref) {
 class CatalogArtworkPrefetch extends ConsumerWidget {
   final List<ImageSource> sources;
   final Widget child;
-  const CatalogArtworkPrefetch(
-      {super.key, required this.sources, required this.child});
+  const CatalogArtworkPrefetch({
+    super.key,
+    required this.sources,
+    required this.child,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -97,12 +119,14 @@ class _ArtworkQueue {
       final job = _pending.removeFirst();
       if (!job.context.mounted) continue;
       _active++;
-      unawaited(load(job.source, job.context)
-          .catchError((Object _) {})
-          .whenComplete(() {
-        _active--;
-        _drain();
-      }));
+      unawaited(
+        load(job.source, job.context).catchError((Object _) {}).whenComplete(
+          () {
+            _active--;
+            _drain();
+          },
+        ),
+      );
     }
   }
 

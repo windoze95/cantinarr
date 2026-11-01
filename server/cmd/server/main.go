@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/ai"
 	"github.com/windoze95/cantinarr-server/internal/api"
@@ -168,6 +169,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize media downloads: %v", err)
 	}
+	mediaFilesHandler.SetContentPolicy(contentPolicy)
 	defer func() {
 		if err := mediaFilesHandler.Close(); err != nil {
 			log.Printf("Failed to close media download roots: %v", err)
@@ -448,8 +450,21 @@ func main() {
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)
-	if err := http.ListenAndServe(addr, router); err != nil {
+	if err := newHTTPServer(addr, router).ListenAndServe(); err != nil {
 		log.Fatalf("Server failed: %v", err)
+	}
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    32 << 10,
+		// A global ReadTimeout or WriteTimeout would terminate long-lived
+		// WebSocket and MCP streams. The router bounds request-body reads
+		// without imposing a response deadline on those streams.
 	}
 }
 

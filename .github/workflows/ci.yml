@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '22.23.4'
           cache: npm
           cache-dependency-path: docs-site/package-lock.json
       - uses: actions/setup-python@v5
@@ -197,7 +197,8 @@ jobs:
           cache: false
       - name: Test store submission and promotion boundaries
         run: |
-          gem install fastlane minitest --no-document
+          gem install fastlane --version 2.241.2 --no-document
+          gem install minitest --version 6.0.6 --no-document
           ruby scripts/tests/test_appstore_release.rb
           ruby scripts/tests/test_playstore_release.rb
       - name: Validate workflow wiring

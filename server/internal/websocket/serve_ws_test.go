@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/db"
+	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 )
 
@@ -22,6 +24,7 @@ import (
 type wsTestEnv struct {
 	hub    *Hub
 	auth   *auth.Service
+	db     *sql.DB
 	server *httptest.Server
 }
 
@@ -38,7 +41,7 @@ func newWSTestEnv(t *testing.T) *wsTestEnv {
 		t.Fatalf("ensure admin: %v", err)
 	}
 
-	h := NewHub(svc, nil, nil, nil, nil, nil)
+	h := NewHub(svc, nil, instance.NewStore(database, nil), nil, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	go h.Run(ctx)
 
@@ -47,7 +50,7 @@ func newWSTestEnv(t *testing.T) *wsTestEnv {
 		server.Close()
 		cancel()
 	})
-	return &wsTestEnv{hub: h, auth: svc, server: server}
+	return &wsTestEnv{hub: h, auth: svc, db: database, server: server}
 }
 
 // adminToken logs in the bootstrap admin (user id 1) and returns its bearer token.
@@ -182,9 +185,8 @@ func TestServeWSHandshakeRejectsBadAuth(t *testing.T) {
 	}
 }
 
-// TestServeWSHandshakeRegistersAuthenticatedClients proves a valid user token
-// upgrades and registers a client bound to that user with isAdmin=false, and a
-// valid admin token registers with isAdmin=true.
+// TestServeWSHandshakeRegistersAuthenticatedClients proves valid user and
+// admin tokens upgrade and register sockets bound to their user and device.
 func TestServeWSHandshakeRegistersAuthenticatedClients(t *testing.T) {
 	env := newWSTestEnv(t)
 	alice := env.userToken(t, "alice", "hw-alice")
@@ -197,9 +199,9 @@ func TestServeWSHandshakeRegistersAuthenticatedClients(t *testing.T) {
 	env.waitForClients(t, 1)
 
 	clients := env.clientsSnapshot()
-	if clients[0].userID != alice.User.ID || clients[0].isAdmin {
-		t.Fatalf("user client = {userID:%d isAdmin:%t}, want {userID:%d isAdmin:false}",
-			clients[0].userID, clients[0].isAdmin, alice.User.ID)
+	if clients[0].userID != alice.User.ID || clients[0].deviceID != alice.DeviceID {
+		t.Fatalf("user client = {userID:%d deviceID:%q}, want {userID:%d deviceID:%q}",
+			clients[0].userID, clients[0].deviceID, alice.User.ID, alice.DeviceID)
 	}
 
 	// The upgrade must echo the static "Bearer" subprotocol from the client's
@@ -213,7 +215,11 @@ func TestServeWSHandshakeRegistersAuthenticatedClients(t *testing.T) {
 		t.Fatalf("client-side negotiated subprotocol = %q, want %q", got, "Bearer")
 	}
 
-	adminConn := env.mustDial(t, env.adminToken(t))
+	adminLogin, err := env.auth.Login("admin", "testpass123", "admin-desktop", "hw-admin")
+	if err != nil {
+		t.Fatalf("admin login: %v", err)
+	}
+	adminConn := env.mustDial(t, adminLogin.AccessToken)
 	defer adminConn.Close()
 	env.waitForClients(t, 2)
 
@@ -223,8 +229,8 @@ func TestServeWSHandshakeRegistersAuthenticatedClients(t *testing.T) {
 			adminClient = c
 		}
 	}
-	if adminClient == nil || !adminClient.isAdmin || adminClient.userID != 1 {
-		t.Fatalf("admin client = %+v, want {userID:1 isAdmin:true}", adminClient)
+	if adminClient == nil || adminClient.userID != 1 || adminClient.deviceID != adminLogin.DeviceID {
+		t.Fatalf("admin client = %+v, want bootstrap admin and device %q", adminClient, adminLogin.DeviceID)
 	}
 }
 
@@ -329,6 +335,156 @@ func TestBroadcastAdminReachesOnlyAdmins(t *testing.T) {
 	}
 }
 
+func TestGlobalLibraryEventsRespectCurrentGrantsAndChildPolicy(t *testing.T) {
+	env := newWSTestEnv(t)
+	alice := env.userToken(t, "alice", "hw-alice")
+	bob := env.userToken(t, "bob", "hw-bob")
+	child := env.userToken(t, "child", "hw-child")
+	if _, err := env.db.Exec(`INSERT INTO service_instances(id, service_type, name, url, api_key)
+		VALUES ('radarr-1', 'radarr', 'Movies', 'http://radarr.test', 'encrypted-key')`); err != nil {
+		t.Fatalf("create instance: %v", err)
+	}
+	for _, userID := range []int64{alice.User.ID, child.User.ID} {
+		if err := env.hub.store.AddUserGrant(userID, "radarr-1"); err != nil {
+			t.Fatalf("grant instance to %d: %v", userID, err)
+		}
+	}
+	if _, err := env.db.Exec(`INSERT INTO user_content_policies(user_id,max_movie_rating,max_tv_rating,rating_region)
+		VALUES (?, 'PG', 'TV-PG', 'US')`, child.User.ID); err != nil {
+		t.Fatalf("make child account: %v", err)
+	}
+
+	aliceConn := env.mustDial(t, alice.AccessToken)
+	defer aliceConn.Close()
+	bobConn := env.mustDial(t, bob.AccessToken)
+	defer bobConn.Close()
+	childConn := env.mustDial(t, child.AccessToken)
+	defer childConn.Close()
+	adminConn := env.mustDial(t, env.adminToken(t))
+	defer adminConn.Close()
+	env.waitForClients(t, 4)
+
+	status := Event{Type: "request_status_changed", Data: map[string]interface{}{
+		"tmdb_id": 999, "media_type": "movie", "status": "available", "instance_id": "radarr-1",
+	}}
+	queue := Event{Type: "arr_queue_changed", Data: map[string]interface{}{
+		"instance_id": "radarr-1", "service_type": "radarr",
+	}}
+	env.hub.Broadcast(status)
+	env.hub.Broadcast(queue)
+	env.hub.Broadcast(Event{Type: "download_progress", Data: status.Data})
+	env.hub.Broadcast(Event{Type: "fence"})
+
+	for name, conn := range map[string]*websocket.Conn{"alice": aliceConn, "child": childConn} {
+		if ev := readEvent(t, conn); ev.Type != status.Type || len(ev.Data) != 0 {
+			t.Fatalf("%s status = %+v, want payload-free refetch hint", name, ev)
+		}
+		if ev := readEvent(t, conn); ev.Type != queue.Type || ev.Data["instance_id"] != "radarr-1" {
+			t.Fatalf("%s queue ping = %+v, want granted-instance ping", name, ev)
+		}
+		if ev := readEvent(t, conn); ev.Type != "fence" {
+			t.Fatalf("%s third event = %+v, want fence (progress leaked)", name, ev)
+		}
+	}
+	if ev := readEvent(t, bobConn); ev.Type != "fence" {
+		t.Fatalf("ungranted user first event = %+v, want only fence", ev)
+	}
+	if ev := readEvent(t, adminConn); ev.Type != status.Type || ev.Data["tmdb_id"] != float64(999) {
+		t.Fatalf("admin status = %+v, want detailed status", ev)
+	}
+	if ev := readEvent(t, adminConn); ev.Type != queue.Type {
+		t.Fatalf("admin queue ping = %+v", ev)
+	}
+	if ev := readEvent(t, adminConn); ev.Type != "download_progress" || ev.Data["tmdb_id"] != float64(999) {
+		t.Fatalf("admin progress = %+v, want detailed progress", ev)
+	}
+	if ev := readEvent(t, adminConn); ev.Type != "fence" {
+		t.Fatalf("admin fourth event = %+v, want fence", ev)
+	}
+
+	if _, err := env.db.Exec(`DELETE FROM user_instance_grants WHERE user_id=? AND instance_id='radarr-1'`, alice.User.ID); err != nil {
+		t.Fatalf("revoke grant: %v", err)
+	}
+	env.hub.Broadcast(status)
+	env.hub.Broadcast(queue)
+	env.hub.Broadcast(Event{Type: "fence"})
+	if ev := readEvent(t, aliceConn); ev.Type != "fence" {
+		t.Fatalf("revoked user first event = %+v, want only fence", ev)
+	}
+}
+
+func TestGlobalLibraryEventWithoutInstanceIsAdminOnly(t *testing.T) {
+	env := newWSTestEnv(t)
+	user := env.userToken(t, "alice", "hw-alice")
+	userConn := env.mustDial(t, user.AccessToken)
+	defer userConn.Close()
+	adminConn := env.mustDial(t, env.adminToken(t))
+	defer adminConn.Close()
+	env.waitForClients(t, 2)
+
+	env.hub.Broadcast(Event{Type: "request_status_changed", Data: map[string]interface{}{"tmdb_id": 999}})
+	env.hub.Broadcast(Event{Type: "arr_queue_changed", Data: map[string]interface{}{"service_type": "radarr"}})
+	env.hub.Broadcast(Event{Type: "fence"})
+	if ev := readEvent(t, userConn); ev.Type != "fence" {
+		t.Fatalf("requester first event = %+v, want only fence", ev)
+	}
+	for _, eventType := range []string{"request_status_changed", "arr_queue_changed", "fence"} {
+		if ev := readEvent(t, adminConn); ev.Type != eventType {
+			t.Fatalf("admin event = %+v, want %s", ev, eventType)
+		}
+	}
+}
+
+func TestBroadcastRechecksRoleAndRevokedDevice(t *testing.T) {
+	env := newWSTestEnv(t)
+	formerAdmin := env.userToken(t, "former-admin", "hw-former-admin")
+	if _, err := env.auth.UpdateUserRole(formerAdmin.User.ID, auth.RoleAdmin); err != nil {
+		t.Fatalf("promote user: %v", err)
+	}
+	formerConn := env.mustDial(t, formerAdmin.AccessToken)
+	defer formerConn.Close()
+	adminConn := env.mustDial(t, env.adminToken(t))
+	defer adminConn.Close()
+	env.waitForClients(t, 2)
+	if _, err := env.auth.UpdateUserRole(formerAdmin.User.ID, auth.RoleUser); err != nil {
+		t.Fatalf("demote admin: %v", err)
+	}
+	env.hub.BroadcastAdmin(Event{Type: "downloads_queue", Data: map[string]interface{}{"secret": "queue"}})
+	env.hub.Broadcast(Event{Type: "fence"})
+	if ev := readEvent(t, formerConn); ev.Type != "fence" {
+		t.Fatalf("demoted admin first event = %+v, want only fence", ev)
+	}
+	if ev := readEvent(t, adminConn); ev.Type != "downloads_queue" {
+		t.Fatalf("current admin first event = %+v, want queue", ev)
+	}
+	if ev := readEvent(t, adminConn); ev.Type != "fence" {
+		t.Fatalf("current admin second event = %+v, want fence", ev)
+	}
+
+	if err := env.auth.RevokeDevice(formerAdmin.DeviceID); err != nil {
+		t.Fatalf("revoke device: %v", err)
+	}
+	env.hub.BroadcastUser(formerAdmin.User.ID, Event{Type: "request_decision", Data: map[string]interface{}{"private": true}})
+	env.waitForClients(t, 1)
+	if err := formerConn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set revoked socket read deadline: %v", err)
+	}
+	if _, data, err := formerConn.ReadMessage(); err == nil {
+		t.Fatalf("revoked socket received %q, want closure without private event", data)
+	}
+}
+
+func TestServeWSRejectsOversizedInboundMessage(t *testing.T) {
+	env := newWSTestEnv(t)
+	conn := env.mustDial(t, env.userToken(t, "alice", "hw-alice").AccessToken)
+	defer conn.Close()
+	env.waitForClients(t, 1)
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(strings.Repeat("x", 2048))); err != nil {
+		t.Fatalf("write oversized message: %v", err)
+	}
+	env.waitForClients(t, 0)
+}
+
 // TestDisconnectUnregistersClient proves closing a connection removes its
 // client from the hub, and that broadcasting afterwards neither panics (the
 // send channel is closed on unregister) nor resurrects the dead client, while
@@ -383,7 +539,7 @@ func TestBroadcastEvictsStalledClient(t *testing.T) {
 
 	// A stalled client: registered like any other, but with a tiny send
 	// buffer and no writePump draining it.
-	stalledClient := &Client{hub: env.hub, userID: alice.User.ID, send: make(chan []byte, 1)}
+	stalledClient := &Client{hub: env.hub, userID: alice.User.ID, deviceID: alice.DeviceID, send: make(chan outboundMessage, 1)}
 	env.hub.register <- stalledClient
 	env.waitForClients(t, 2)
 
@@ -421,8 +577,8 @@ func TestBroadcastEvictsStalledClient(t *testing.T) {
 		if !ok {
 			t.Fatalf("stalled client's buffered message was dropped by eviction")
 		}
-		if !strings.Contains(string(msg), "first") {
-			t.Fatalf("stalled client's buffered message = %q, want the first event", msg)
+		if !strings.Contains(string(msg.data), "first") {
+			t.Fatalf("stalled client's buffered message = %q, want the first event", msg.data)
 		}
 	default:
 		t.Fatalf("stalled client's send channel is empty, want the buffered first event")
@@ -458,12 +614,11 @@ func TestBroadcastEvictsStalledClient(t *testing.T) {
 // TestPollResultReachesSubscribedClients drives one manual tick of the radarr
 // poll body (the 30s ticker interval is a package const, so the loop itself is
 // not instantiable with a tiny interval) against an httptest Radarr and proves
-// the resulting download_progress event reaches a connected client end to end.
+// the resulting download_progress event reaches an admin client end to end.
 func TestPollResultReachesSubscribedClients(t *testing.T) {
 	env := newWSTestEnv(t)
-	alice := env.userToken(t, "alice", "hw-alice")
 
-	conn := env.mustDial(t, alice.AccessToken)
+	conn := env.mustDial(t, env.adminToken(t))
 	defer conn.Close()
 	env.waitForClients(t, 1)
 

@@ -80,7 +80,7 @@ jobs:
         run: |
           printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
           export PLAY_JSON_KEY_PATH="$RUNNER_TEMP/play-service-account.json"
-          gem install fastlane
+          gem install fastlane --version 2.241.2 --no-document
           python3 ../../scripts/release_control.py current
           fastlane listing
 
@@ -118,6 +118,6 @@ jobs:
           SOURCE_JSON: ${{ needs.source.outputs.source }}
         run: |
           VERSION=$(grep '^version:' ../pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
-          gem install fastlane
+          gem install fastlane --version 2.241.2 --no-document
           python3 ../../scripts/release_control.py current
           APP_VERSION=$VERSION fastlane metadata

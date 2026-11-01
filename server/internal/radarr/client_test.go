@@ -2,6 +2,7 @@ package radarr
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -35,6 +36,32 @@ func TestGetMovieFileUsesExactAuthenticatedEndpoint(t *testing.T) {
 	}
 	if file.ID != 73 || file.MovieID != 8 || file.Path != "/library/Movie.mkv" || file.RelativePath != "Movie.mkv" || file.Size != 123456 {
 		t.Fatalf("file = %#v", file)
+	}
+}
+
+func TestDecodeResponseBoundsKnownAndChunkedBodies(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		body          string
+		contentLength int64
+		wantTooLarge  bool
+	}{
+		{"valid", `{"id":73}`, int64(len(`{"id":73}`)), false},
+		{"declared size", `{"id":73}`, 65, true},
+		{"chunked oversized value", `{"title":"` + strings.Repeat("x", 64) + `"}`, -1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &http.Response{Body: io.NopCloser(strings.NewReader(tc.body)), ContentLength: tc.contentLength}
+			defer resp.Body.Close()
+			var movie Movie
+			err := decodeBoundedResponse(resp, &movie, 64)
+			if errors.Is(err, errResponseTooLarge) != tc.wantTooLarge {
+				t.Fatalf("decode error = %v, want too large = %t", err, tc.wantTooLarge)
+			}
+			if !tc.wantTooLarge && (err != nil || movie.ID != 73) {
+				t.Fatalf("decode = (%+v, %v), want movie 73", movie, err)
+			}
+		})
 	}
 }
 

@@ -26,6 +26,8 @@ ChaptarrImageSource? chaptarrImageSource(
   final conn = ref.read(authProvider).valueOrNull?.connection;
   final serverUrl = conn?.serverUrl;
   if (serverUrl == null || serverUrl.isEmpty) return null;
+  final token = conn?.accessToken ?? '';
+  if (token.isEmpty) return null;
 
   final base = serverUrl.endsWith('/')
       ? serverUrl.substring(0, serverUrl.length - 1)
@@ -33,7 +35,5 @@ ChaptarrImageSource? chaptarrImageSource(
   final path = rawUrl.startsWith('/') ? rawUrl : '/$rawUrl';
   final url = '$base/api/instances/$instanceId/api/v1$path';
 
-  final token = conn?.accessToken ?? '';
-  final headers = token.isEmpty ? null : {'Authorization': 'Bearer $token'};
-  return (url: url, headers: headers);
+  return (url: url, headers: {'Authorization': 'Bearer $token'});
 }

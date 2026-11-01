@@ -20,7 +20,7 @@ Operating manual for AI agents and human contributors. `CLAUDE.md` imports this 
 
 ## Verification
 
-- Documentation changes: run `npm ci` and `npm run build` from `docs-site/` with Node 22.12 or newer. The build regenerates references from this checkout and checks links, fragments, metadata, settings coverage, tool coverage, configuration names, and the no-em-dash writing rule. CI runs this on every change because server and app reference changes also affect the public site.
+- Documentation changes: run `npm ci` and `npm run build` from `docs-site/` with Node 22.23.4 or newer. The build regenerates references from this checkout and checks links, fragments, metadata, settings coverage, tool coverage, configuration names, and the no-em-dash writing rule. CI runs this on every change because server and app reference changes also affect the public site.
 - Server changes: run `go vet ./...` and `go test ./...` from `server/`.
 - App changes: run `flutter analyze --no-fatal-infos` and `flutter test` from `app/`. Golden tests live in `app/test` (committed `goldens/*.png` beside their test file); regenerate them with `flutter test --update-goldens` from `app/`.
 - The Flutter SDK version is pinned in `app/.flutter-version`. CI, Docker, and store builds read that file; use the same SDK locally and update it with the lockfile when upgrading Flutter.
