@@ -74,6 +74,13 @@ type Config struct {
 	// boundaries from which completed media may be served. Per-instance mappings
 	// may target these roots or their descendants; empty disables media delivery.
 	MediaDownloadRoots []string
+	// Remote-access security remains off unless an administrator enables it.
+	// Pointer booleans preserve the difference between an unset variable and an
+	// explicit false used to recover from an accidental lockout.
+	RequireHTTPSOutsideLocalNetwork *bool
+	TrustedProxyCIDRs               []string
+	TrustedProxyCIDRsSet            bool
+	TrustCGNATHTTP                  *bool
 }
 
 const (
@@ -113,6 +120,16 @@ func Load() (*Config, error) {
 		}
 	}
 
+	requireHTTPSOutsideLocal, err := optionalEnvBool("CANTINARR_REQUIRE_HTTPS_OUTSIDE_LOCAL_NETWORK")
+	if err != nil {
+		return nil, err
+	}
+	trustCGNATHTTP, err := optionalEnvBool("CANTINARR_TRUST_CGNAT_HTTP")
+	if err != nil {
+		return nil, err
+	}
+	trustedProxyRaw, trustedProxyCIDRsSet := os.LookupEnv("CANTINARR_TRUSTED_PROXIES")
+
 	cfg := &Config{
 		JWTSecret:         os.Getenv("CANTINARR_JWT_SECRET"),
 		DBPath:            "/config/cantinarr.db",
@@ -124,14 +141,18 @@ func Load() (*Config, error) {
 		WebAuthnExtraOrigins: splitEnvList(
 			os.Getenv("CANTINARR_WEBAUTHN_EXTRA_ORIGINS"),
 		),
-		AppleAppIDs:        splitEnvList(os.Getenv("CANTINARR_APPLE_APP_IDS")),
-		AndroidPackageName: os.Getenv("CANTINARR_ANDROID_PACKAGE_NAME"),
-		PushGatewayURL:     strings.TrimRight(os.Getenv("CANTINARR_PUSH_GATEWAY_URL"), "/"),
-		PushAPIKey:         os.Getenv("CANTINARR_PUSH_API_KEY"),
-		PushEnrollToken:    os.Getenv("CANTINARR_PUSH_ENROLL_TOKEN"),
-		CodexBin:           strings.TrimSpace(os.Getenv("CANTINARR_CODEX_BIN")),
-		CodexRuntimeDir:    strings.TrimSpace(os.Getenv("CANTINARR_CODEX_RUNTIME_DIR")),
-		MediaDownloadRoots: splitEnvList(os.Getenv("CANTINARR_MEDIA_ROOTS")),
+		AppleAppIDs:                     splitEnvList(os.Getenv("CANTINARR_APPLE_APP_IDS")),
+		AndroidPackageName:              os.Getenv("CANTINARR_ANDROID_PACKAGE_NAME"),
+		PushGatewayURL:                  strings.TrimRight(os.Getenv("CANTINARR_PUSH_GATEWAY_URL"), "/"),
+		PushAPIKey:                      os.Getenv("CANTINARR_PUSH_API_KEY"),
+		PushEnrollToken:                 os.Getenv("CANTINARR_PUSH_ENROLL_TOKEN"),
+		CodexBin:                        strings.TrimSpace(os.Getenv("CANTINARR_CODEX_BIN")),
+		CodexRuntimeDir:                 strings.TrimSpace(os.Getenv("CANTINARR_CODEX_RUNTIME_DIR")),
+		MediaDownloadRoots:              splitEnvList(os.Getenv("CANTINARR_MEDIA_ROOTS")),
+		RequireHTTPSOutsideLocalNetwork: requireHTTPSOutsideLocal,
+		TrustedProxyCIDRs:               splitEnvList(trustedProxyRaw),
+		TrustedProxyCIDRsSet:            trustedProxyCIDRsSet,
+		TrustCGNATHTTP:                  trustCGNATHTTP,
 	}
 
 	// The community relay moved from push.julian.codes to push.cantinarr.com
@@ -175,7 +196,6 @@ func Load() (*Config, error) {
 	if cfg.CodexRuntimeDir != "" && !filepath.IsAbs(cfg.CodexRuntimeDir) {
 		return nil, fmt.Errorf("invalid CANTINARR_CODEX_RUNTIME_DIR: must be an absolute path")
 	}
-	var err error
 	cfg.MediaDownloadRoots, err = normalizeMediaDownloadRoots(cfg.MediaDownloadRoots)
 	if err != nil {
 		return nil, fmt.Errorf("invalid CANTINARR_MEDIA_ROOTS: %w", err)
@@ -330,6 +350,26 @@ func envBool(value string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// optionalEnvBool parses a deployment override without collapsing unset and
+// explicit false. Invalid values fail startup instead of silently weakening a
+// security policy through a typo.
+func optionalEnvBool(name string) (*bool, error) {
+	raw, ok := os.LookupEnv(name)
+	if !ok {
+		return nil, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		value := true
+		return &value, nil
+	case "0", "false", "no", "off":
+		value := false
+		return &value, nil
+	default:
+		return nil, fmt.Errorf("invalid %s: must be true or false", name)
 	}
 }
 

@@ -38,6 +38,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
+	"github.com/windoze95/cantinarr-server/internal/remoteaccess"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/seerrcompat"
@@ -112,6 +113,15 @@ func main() {
 	// that credential moves the default row source without a restart. The
 	// cipher is for the proxy row, the one setting that carries a secret.
 	serverSettings := serversettings.NewService(database, func() bool { return creds.Trakt() != nil }, serversettings.WithCipher(cipher))
+	remoteAccess, err := remoteaccess.NewService(database, remoteaccess.EnvironmentOverrides{
+		RequireHTTPSOutsideLocalNetwork: cfg.RequireHTTPSOutsideLocalNetwork,
+		TrustedProxyCIDRs:               cfg.TrustedProxyCIDRs,
+		TrustedProxyCIDRsSet:            cfg.TrustedProxyCIDRsSet,
+		TrustCGNATAsLocal:               cfg.TrustCGNATHTTP,
+	})
+	if err != nil {
+		log.Fatalf("Failed to load remote access security: %v", err)
+	}
 
 	// Outbound proxy for internet-bound traffic, installed before anything
 	// dials out (push enrollment, the update check, the AI health monitor). A
@@ -155,7 +165,7 @@ func main() {
 	if err := authService.MigrateSetupState(); err != nil {
 		log.Fatalf("Failed to migrate setup state: %v", err)
 	}
-	authHandler := auth.NewHandler(authService)
+	authHandler := auth.NewHandler(authService, remoteAccess)
 
 	// Bridge (uses credentials registry for TMDB/Trakt clients)
 	bridge := tmdb.NewBridge(creds, database)

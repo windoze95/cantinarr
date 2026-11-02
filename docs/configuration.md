@@ -57,6 +57,16 @@ Completed-media downloads are deliberately opt-in because Radarr, Sonarr, Chapta
 
 Download controls are enabled per instance: an instance offers downloads only after an admin saves explicit path mappings for it, and every instance starts with media downloads off. Cantinarr accepts only live file IDs from a user's explicitly assigned Radarr, Sonarr, Chaptarr, or Lidarr instance, refuses files outside that instance's mappings and the global roots, and gives the app a short-lived file-scoped link so large files stream through the browser or operating system without buffering in Flutter. The feature covers the primary files indexed by the arrs, not arbitrary files, subtitles, or extras found on disk.
 
+## Remote access security
+
+**Settings > Remote access security** can require HTTPS for sign-in and API requests that arrive from outside the server's local network. Local HTTP keeps working, including existing `http://192.168.x.x:8585` app addresses. Upgrading does not enable this policy: an existing or missing setting remains fully compatible until an administrator turns it on. During first-run setup, the current app recommends it only when setup is already using HTTPS or a local address.
+
+Cantinarr treats loopback, private IPv4, IPv4 link-local, IPv6 unique-local, and IPv6 link-local peers as local. `100.64.0.0/10`, used by Tailscale and other CGNAT networks, is local only when **Treat Tailscale and CGNAT as local** is enabled. A reverse proxy must be listed under **Trusted proxy addresses** before its `X-Forwarded-Proto` and `X-Forwarded-For` headers are accepted. Add only proxy IP addresses or CIDRs you control. A request carrying forwarded headers from any other peer is not treated as local, and trusting the entire internet is rejected.
+
+When the policy is on, remote HTTP receives `426 Upgrade Required` before credentials or request bodies reach an API handler. The public auth status, health check, and embedded web UI remain available so the app can explain how to reconnect. The app also checks auth status before sending a password, session refresh token, connection token, passkey proof, or external sign-in proof over an explicit HTTP address. Use the server's HTTPS address or connect from the LAN to continue.
+
+Deployment variables below override the matching UI controls and make them read-only. For lockout recovery, set `CANTINARR_REQUIRE_HTTPS_OUTSIDE_LOCAL_NETWORK=false`, restart the server, correct the trusted proxy or address, then remove the override when ready.
+
 ## Environment variables
 
 Optional server env vars for deployment tuning:
@@ -65,6 +75,9 @@ Optional server env vars for deployment tuning:
 |---|---|---|
 | `CANTINARR_PORT` | `8585` | HTTP listen port. Kubernetes service-link values (`tcp://…`) injected by a Service named `cantinarr` are ignored in favor of the default; set a numeric value to override |
 | `CANTINARR_SERVER_NAME` | `Cantinarr` | Display name shown in clients |
+| `CANTINARR_REQUIRE_HTTPS_OUTSIDE_LOCAL_NETWORK` | unset | Optional `true`/`false` deployment override for remote access security. Unset leaves the admin UI in control; explicit `false` is the recovery path |
+| `CANTINARR_TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses or CIDRs whose forwarded client and protocol headers are accepted. Setting it, including to an empty value, makes the UI field read-only. Internet-wide CIDRs are rejected |
+| `CANTINARR_TRUST_CGNAT_HTTP` | unset | Optional `true`/`false` override for treating `100.64.0.0/10`, including most Tailscale addresses, as local HTTP |
 | `CANTINARR_ARR_CALLBACK_URL` | direct request origin | Origin the Radarr/Sonarr/Chaptarr/Lidarr containers POST webhooks back to, so it must be resolvable and reachable **from the arrs themselves** -- in same-network/cluster deployments a cluster-internal origin like `http://cantinarr:8585` is usually the right value. Set it explicitly behind a reverse proxy (forwarded headers are deliberately ignored). Formerly `CANTINARR_PUBLIC_URL`, which stays accepted forever (the new name wins when both are set); it was renamed because "public URL" suggested the user-facing address, which is the in-app **Settings > External Address** instead |
 | `CANTINARR_OAUTH_ISSUER` | request-derived origin | Canonical external HTTPS origin for inbound MCP OAuth metadata, token audience, and browser-origin checks; setting it also enables stable RFC 9207 authorization-response `iss` and permits that origin to call `/mcp`. Set it behind a reverse proxy and keep it stable (changing it makes existing audience-bound MCP tokens reconnect); do not substitute the arr-reachable `CANTINARR_ARR_CALLBACK_URL` |
 | `CANTINARR_MCP_ALLOWED_ORIGINS` | unset | Comma-separated additional browser origins allowed to call `/mcp`. If neither this nor `CANTINARR_OAUTH_ISSUER` is configured, requests that supply `Origin` are rejected; native and server-side MCP clients need no entry |

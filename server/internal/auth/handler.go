@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/remoteaccess"
 )
 
 // AccessRequestHook runs after a user shares a new or changed Plex email.
@@ -31,10 +33,20 @@ type Handler struct {
 	accessRequestHook AccessRequestHook
 	userDeleteHook    UserDeleteHook
 	externalURL       func() string
+	remoteAccess      *remoteaccess.Service
 }
 
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
+func NewHandler(service *Service, remoteAccess ...*remoteaccess.Service) *Handler {
+	h := &Handler{service: service}
+	if len(remoteAccess) > 0 {
+		h.remoteAccess = remoteAccess[0]
+	}
+	return h
+}
+
+// RemoteAccessSecurity exposes the optional policy service to the API router.
+func (h *Handler) RemoteAccessSecurity() *remoteaccess.Service {
+	return h.remoteAccess
 }
 
 // SetAccessRequestHook wires the Plex access-request side effect after
@@ -401,10 +413,21 @@ func (h *Handler) HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) AuthStatus(w http.ResponseWriter, r *http.Request) {
+	// Clients use this response as a credential-transport preflight, so a
+	// browser or intermediary must not reuse a policy result from an earlier
+	// connection or before an administrator enabled strict mode.
+	w.Header().Set("Cache-Control", "no-store")
 	resp := AuthStatusResponse{
 		NeedsSetup:        !h.service.IsSetupComplete(),
 		WebAuthnAvailable: isSecureContext(r),
 		NativePasskeys:    h.service.nativePasskeyStatusFromRequest(r),
+	}
+	if h.remoteAccess != nil {
+		status := h.remoteAccess.StatusFor(r)
+		resp.RemoteAccessSecurityAvailable = true
+		resp.ConnectionSecurity = string(status.ConnectionSecurity)
+		resp.HTTPSRequired = status.HTTPSRequired
+		resp.RequireHTTPSOutsideLocalNetwork = status.RequireHTTPSOutsideLocalNetwork
 	}
 	plex, plexErr := h.service.plexConfiguration()
 	if plexErr == nil {
@@ -442,7 +465,21 @@ func (h *Handler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.service.Setup(req.Username, req.Password, req.DeviceName, req.HardwareID)
+	var hooks []SetupTransactionHook
+	if req.RequireHTTPSOutsideLocalNetwork != nil && h.remoteAccess != nil {
+		if *req.RequireHTTPSOutsideLocalNetwork && !h.remoteAccess.CanEnableFrom(r) {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": remoteaccess.ErrWouldBlockCurrentConnection.Error(),
+			})
+			return
+		}
+		enabled := *req.RequireHTTPSOutsideLocalNetwork
+		hooks = append(hooks, func(tx *sql.Tx) error {
+			return h.remoteAccess.StoreSetupPreference(tx, enabled)
+		})
+	}
+
+	resp, err := h.service.Setup(req.Username, req.Password, req.DeviceName, req.HardwareID, hooks...)
 	if err != nil {
 		if errors.Is(err, ErrSetupAlreadyComplete) {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "setup has already been completed"})
@@ -454,6 +491,11 @@ func (h *Handler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
+	}
+	if len(hooks) > 0 {
+		if err := h.remoteAccess.Reload(); err != nil {
+			log.Printf("auth: setup committed but remote access policy reload failed: %v", err)
+		}
 	}
 
 	writeJSON(w, http.StatusCreated, resp)

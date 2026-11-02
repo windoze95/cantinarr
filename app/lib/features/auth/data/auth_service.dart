@@ -16,6 +16,15 @@ class SSORequired implements Exception {
   const SSORequired();
 }
 
+class HTTPSRequiredException implements Exception {
+  final String connectionSecurity;
+
+  const HTTPSRequiredException([this.connectionSecurity = 'remote_http']);
+
+  @override
+  String toString() => 'HTTPS is required for this connection.';
+}
+
 class AuthService {
   Future<Map<String, dynamic>> externalSignInRequest(String server, String path,
           {String method = 'GET',
@@ -44,7 +53,7 @@ class AuthService {
     }
   }
 
-  Dio _createDio(String serverUrl) {
+  Dio _createDio(String serverUrl, {bool preflightCredentials = true}) {
     final dio = Dio(BaseOptions(
       baseUrl: serverUrl,
       connectTimeout: AppConfig.requestTimeout,
@@ -55,14 +64,46 @@ class AuthService {
     if (adapter != null) {
       dio.httpClientAdapter = adapter;
     }
+    if (preflightCredentials &&
+        Uri.tryParse(serverUrl)?.scheme.toLowerCase() == 'http') {
+      dio.interceptors.add(InterceptorsWrapper(onRequest:
+          (options, handler) async {
+        if (options.path == '/api/auth/status') {
+          handler.next(options);
+          return;
+        }
+        try {
+          final status = await getServerStatus(serverUrl);
+          if (status.httpsRequired) {
+            handler.reject(DioException(
+              requestOptions: options,
+              error: HTTPSRequiredException(status.connectionSecurity),
+              type: DioExceptionType.cancel,
+            ));
+            return;
+          }
+        } on HTTPSRequiredException {
+          rethrow;
+        } catch (_) {
+          // Preserve compatibility when an older or temporarily unavailable
+          // status endpoint cannot answer. The protected request retains its
+          // pre-feature behavior and will report its own result.
+        }
+        handler.next(options);
+      }));
+    }
     return dio;
   }
 
   /// Check server status (needs setup, webauthn available).
   Future<ServerStatus> getServerStatus(String serverUrl) async {
-    final dio = _createDio(serverUrl);
-    final resp = await dio.get('/api/auth/status');
-    return ServerStatus.fromJson(resp.data as Map<String, dynamic>);
+    final dio = _createDio(serverUrl, preflightCredentials: false);
+    try {
+      final resp = await dio.get('/api/auth/status');
+      return ServerStatus.fromJson(resp.data as Map<String, dynamic>);
+    } finally {
+      dio.close();
+    }
   }
 
   /// Create admin account during first-run setup.
@@ -71,14 +112,18 @@ class AuthService {
     String username,
     String password,
     String deviceName,
-    String hardwareId,
-  ) async {
+    String hardwareId, {
+    bool? requireHTTPSOutsideLocalNetwork,
+  }) async {
     final dio = _createDio(serverUrl);
     final resp = await dio.post('/api/auth/setup', data: {
       'username': username,
       'password': password,
       'device_name': deviceName,
       if (hardwareId.isNotEmpty) 'hardware_id': hardwareId,
+      if (requireHTTPSOutsideLocalNetwork != null)
+        'require_https_outside_local_network':
+            requireHTTPSOutsideLocalNetwork,
     });
     return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
   }
