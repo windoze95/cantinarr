@@ -135,6 +135,23 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       return const AuthState();
     }
 
+    // Do not optimistically enter an existing session when the server says
+    // this explicit HTTP route is no longer permitted. Tokens stay stored so
+    // the user can reconnect with the HTTPS address without losing access.
+    if (Uri.tryParse(serverUrl)?.scheme.toLowerCase() == 'http') {
+      try {
+        final status = await _authService.getServerStatus(serverUrl);
+        if (status.httpsRequired) {
+          return const AuthState(
+            error: 'HTTPS is required for this connection.',
+          );
+        }
+      } catch (_) {
+        // Preserve the existing offline restore behavior when status cannot
+        // be checked. Background validation will retry without clearing data.
+      }
+    }
+
     // Storage is readable: opportunistically upgrade item protection classes
     // (one-time, marker-guarded) and heal the primary token from its backup.
     unawaited(_storage.hardenAuthKeys());
@@ -514,14 +531,21 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   }
 
   /// Create admin account during first-run setup.
-  Future<void> setup(String serverUrl, String username, String password) async {
+  Future<void> setup(
+    String serverUrl,
+    String username,
+    String password, {
+    bool? requireHTTPSOutsideLocalNetwork,
+  }) async {
     state = const AsyncData(AuthState(isLoading: true));
 
     try {
       final normalizedUrl = normalizeServerUrl(serverUrl);
       final identity = await ref.read(deviceIdentityProvider).resolve();
       final authResp = await _authService.setup(normalizedUrl, username,
-          password, identity.displayName, identity.hardwareId);
+          password, identity.displayName, identity.hardwareId,
+          requireHTTPSOutsideLocalNetwork:
+              requireHTTPSOutsideLocalNetwork);
       final config =
           await _authService.fetchConfig(normalizedUrl, authResp.accessToken);
 
@@ -1514,6 +1538,9 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
 
   String _parseError(Object e) {
     debugPrint('Auth error: $e');
+    if (_isHTTPSRequiredError(e)) {
+      return 'HTTPS is required for this connection.';
+    }
     if (e is DioException) {
       final statusCode = e.response?.statusCode;
       if (statusCode == 401) return 'Invalid username or password';
@@ -1561,6 +1588,9 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
 
   String _parsePasskeyLoginError(Object e) {
     debugPrint('Passkey login error: $e');
+    if (_isHTTPSRequiredError(e)) {
+      return 'HTTPS is required for this connection.';
+    }
     if (e is DioException) {
       if (e.response?.statusCode == 429) {
         return 'Too many attempts. Please wait a moment and try again.';
@@ -1589,9 +1619,20 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
 
   String _parseSetupError(Object e) {
     debugPrint('Setup error: $e');
+    if (_isHTTPSRequiredError(e)) {
+      return 'HTTPS is required for this connection.';
+    }
     if (e is DioException) {
       final statusCode = e.response?.statusCode;
-      if (statusCode == 409) return 'Setup has already been completed';
+      if (statusCode == 409) {
+        final data = e.response?.data;
+        if (data is Map<String, dynamic> &&
+            data['error'] is String &&
+            (data['error'] as String).contains('connection would be blocked')) {
+          return 'HTTPS is required for this connection.';
+        }
+        return 'Setup has already been completed';
+      }
       if (statusCode == 429) {
         return 'Too many attempts. Please wait a moment and try again.';
       }
@@ -1617,6 +1658,9 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   }
 
   String _parseConnectError(Object e) {
+    if (_isHTTPSRequiredError(e)) {
+      return 'HTTPS is required for this connection.';
+    }
     if (e is DioException) {
       final data = e.response?.data;
       if (data is Map<String, dynamic>) {
@@ -1631,6 +1675,13 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     return 'Connection failed. The link may be invalid or expired.';
   }
 }
+
+bool _isHTTPSRequiredError(Object error) =>
+    error is HTTPSRequiredException ||
+    (error is DioException && error.error is HTTPSRequiredException) ||
+    (error is DioException &&
+        error.response?.data is Map &&
+        (error.response!.data as Map)['error'] == 'https_required');
 
 /// The auth service used by [AuthNotifier]. Exposed as a provider so tests can
 /// inject a fake (subclass [AuthService]) without hitting the network.

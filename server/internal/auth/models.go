@@ -157,10 +157,11 @@ type DeviceInfo struct {
 }
 
 type SetupRequest struct {
-	Username   string `json:"username"`
-	Password   string `json:"password"`
-	DeviceName string `json:"device_name"`
-	HardwareID string `json:"hardware_id"`
+	Username                        string `json:"username"`
+	Password                        string `json:"password"`
+	DeviceName                      string `json:"device_name"`
+	HardwareID                      string `json:"hardware_id"`
+	RequireHTTPSOutsideLocalNetwork *bool  `json:"require_https_outside_local_network,omitempty"`
 }
 
 // SetPasswordRequest sets or replaces the authenticated user's password.
@@ -175,15 +176,19 @@ type SetPlexEmailRequest struct {
 }
 
 type AuthStatusResponse struct {
-	PlexAvailable     bool                        `json:"plex_available,omitempty"`
-	SSOAvailable      bool                        `json:"sso_available,omitempty"`
-	SSOProvider       string                      `json:"sso_provider,omitempty"`
-	SSOOnly           bool                        `json:"sso_only,omitempty"`
-	SSOOrigin         string                      `json:"sso_origin,omitempty"`
-	SSOError          string                      `json:"sso_error,omitempty"`
-	NeedsSetup        bool                        `json:"needs_setup"`
-	WebAuthnAvailable bool                        `json:"webauthn_available"`
-	NativePasskeys    NativePasskeyStatusResponse `json:"native_passkeys"`
+	PlexAvailable                   bool                        `json:"plex_available,omitempty"`
+	SSOAvailable                    bool                        `json:"sso_available,omitempty"`
+	SSOProvider                     string                      `json:"sso_provider,omitempty"`
+	SSOOnly                         bool                        `json:"sso_only,omitempty"`
+	SSOOrigin                       string                      `json:"sso_origin,omitempty"`
+	SSOError                        string                      `json:"sso_error,omitempty"`
+	NeedsSetup                      bool                        `json:"needs_setup"`
+	WebAuthnAvailable               bool                        `json:"webauthn_available"`
+	NativePasskeys                  NativePasskeyStatusResponse `json:"native_passkeys"`
+	RemoteAccessSecurityAvailable   bool                        `json:"remote_access_security_available,omitempty"`
+	ConnectionSecurity              string                      `json:"connection_security,omitempty"`
+	HTTPSRequired                   bool                        `json:"https_required,omitempty"`
+	RequireHTTPSOutsideLocalNetwork bool                        `json:"require_https_outside_local_network,omitempty"`
 }
 
 type NativePasskeyStatusResponse struct {

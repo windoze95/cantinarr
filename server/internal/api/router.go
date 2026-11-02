@@ -121,6 +121,10 @@ func NewRouter(
 	// direct caller rotate the address used by the public auth rate limit.
 	r.Use(safeRequestLogger)
 	r.Use(middleware.Recoverer)
+	remoteAccess := authHandler.RemoteAccessSecurity()
+	if remoteAccess != nil {
+		r.Use(remoteAccess.Middleware)
+	}
 	r.Use(requestBodyBounds(serverRequestMaxBytes, serverRequestReadWindow))
 
 	oauthHandler := auth.NewOAuthHandler(authService, cfg.OAuthIssuer)
@@ -254,6 +258,10 @@ func NewRouter(
 		// Admin routes
 		r.Route("/admin", func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
+			if remoteAccess != nil {
+				r.With(auth.RequirePermission(auth.PermissionAdmin)).Get("/remote-access-security", remoteAccess.GetSettings)
+				r.With(auth.RequirePermission(auth.PermissionAdmin)).Put("/remote-access-security", remoteAccess.UpdateSettings)
+			}
 			r.With(auth.RequirePermission(auth.PermissionAdmin)).Get("/push-notifications", pushHandler.ServerPolicy)
 			r.With(auth.RequirePermission(auth.PermissionAdmin)).Put("/push-notifications", pushHandler.ServerPolicy)
 			discordHandler := discordNotifications.Handler

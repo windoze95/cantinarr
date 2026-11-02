@@ -4,6 +4,8 @@ Test upgrade with sign-in retained, browsing, requests, passkeys, connect links,
 
 For server sign-in, enter a bare hostname with an unavailable or invalid HTTPS endpoint. It should stay on the address screen and never switch to HTTP. A LAN server without TLS should connect when you explicitly enter its `http://` address. After switching accounts or changing a book/music library assignment, check that previously viewed protected artwork does not appear for the new access context.
 
+Remote access security: upgrade and confirm HTTP behavior is unchanged until an admin opts in. Enable it from LAN HTTP or HTTPS. Confirm LAN HTTP still signs in, remote HTTP shows HTTPS required without sending credentials, trusted proxies work, spoofed forwarded headers do not, and Tailscale/CGNAT stays separate. Confirm a self-locking save is refused. New local setup should offer and select the switch; older servers keep the old flow.
+
 Report issues with your device, iOS version, and server version.
 
 On 1.1.0, test Plex/Jellyfin/Emby scanning, household Library access only, in-library copy and missing-episode requests, and season following. Scanning or associating a library must not start a download.

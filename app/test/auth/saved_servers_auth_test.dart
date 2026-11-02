@@ -196,7 +196,8 @@ class _Auth extends PlexAuthFake {
 
   @override
   Future<AuthResponse> setup(String serverUrl, String username, String password,
-          String deviceName, String hardwareId) async =>
+          String deviceName, String hardwareId,
+          {bool? requireHTTPSOutsideLocalNetwork}) async =>
       _response;
 
   @override

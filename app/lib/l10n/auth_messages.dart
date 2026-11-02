@@ -25,6 +25,8 @@ String localizeAuthMessage(BuildContext context, String message) {
       context.l10n.authErrorPasskeyLogin,
     'Setup has already been completed' => context.l10n.authErrorSetupCompleted,
     'Setup failed. Please try again.' => context.l10n.authErrorSetupFailed,
+    'HTTPS is required for this connection.' =>
+      context.l10n.authHTTPSRequired,
     'Connection failed. The link may be invalid or expired.' =>
       context.l10n.authErrorConnectionLink,
     'Not authenticated' => context.l10n.authErrorNotAuthenticated,

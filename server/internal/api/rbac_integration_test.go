@@ -38,6 +38,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
+	"github.com/windoze95/cantinarr-server/internal/remoteaccess"
 	requestsvc "github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/seerrcompat"
@@ -98,6 +99,7 @@ func TestRouterRBACMatrixWithAdminAndRequesterTokens(t *testing.T) {
 		{http.MethodGet, "/api/admin/plex-auth/candidates"},
 		{http.MethodGet, "/api/admin/users/1/plex"},
 		{http.MethodGet, "/api/admin/seerr-api"},
+		{http.MethodGet, "/api/admin/remote-access-security"},
 	}
 	for _, route := range adminRoutes {
 		recorder := serveRBACRequest(harness.router, route.method, route.path, harness.adminToken)
@@ -444,7 +446,11 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 	}
 	registry := credentials.NewRegistry(database, cipher)
 	authService := auth.NewService(database, "rbac-integration-jwt-secret")
-	authHandler := auth.NewHandler(authService)
+	remoteAccess, err := remoteaccess.NewService(database, remoteaccess.EnvironmentOverrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authHandler := auth.NewHandler(authService, remoteAccess)
 	admin, err := authService.Setup("admin", "correct-horse-battery-staple", "Admin Test", "admin-hardware")
 	if err != nil {
 		t.Fatal(err)

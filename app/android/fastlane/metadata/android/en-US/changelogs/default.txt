@@ -6,5 +6,5 @@ Media-server availability and household access.
 Missing episodes, season follows and extra copies.
 Only my requests alerts.
 Improved Back swipes and discovery status.
-Sign-in keeps HTTPS unless HTTP is explicit.
+HTTPS stays default; remote protection keeps LAN HTTP.
 Protected artwork respects current access.

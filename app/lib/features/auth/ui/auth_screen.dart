@@ -750,6 +750,15 @@ class _SetupViewState extends ConsumerState<_SetupView> {
   final _confirmPasswordController = TextEditingController();
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
+  late bool _requireHTTPSOutsideLocalNetwork;
+
+  @override
+  void initState() {
+    super.initState();
+    _requireHTTPSOutsideLocalNetwork =
+        widget.serverStatus.remoteAccessSecurityAvailable &&
+            widget.serverStatus.isSecureOrLocalConnection;
+  }
 
   @override
   void dispose() {
@@ -780,7 +789,15 @@ class _SetupViewState extends ConsumerState<_SetupView> {
       return;
     }
 
-    ref.read(authProvider.notifier).setup(widget.serverUrl, username, password);
+    ref.read(authProvider.notifier).setup(
+          widget.serverUrl,
+          username,
+          password,
+          requireHTTPSOutsideLocalNetwork:
+              widget.serverStatus.remoteAccessSecurityAvailable
+                  ? _requireHTTPSOutsideLocalNetwork
+                  : null,
+        );
   }
 
   @override
@@ -788,6 +805,7 @@ class _SetupViewState extends ConsumerState<_SetupView> {
     final authState = ref.watch(authProvider);
     final isLoading = authState.valueOrNull?.isLoading ?? false;
     final error = authState.valueOrNull?.error;
+    final blocked = widget.serverStatus.httpsRequired;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -818,8 +836,17 @@ class _SetupViewState extends ConsumerState<_SetupView> {
         ),
         const SizedBox(height: 24),
 
+        if (blocked) ...[
+          const _HTTPTransportNotice(blocked: true),
+          const SizedBox(height: 16),
+        ] else if (widget.serverStatus.isUnsafePlainHTTPConnection) ...[
+          const _HTTPTransportNotice(blocked: false),
+          const SizedBox(height: 16),
+        ],
+
         TextField(
           controller: _usernameController,
+          enabled: !blocked,
           decoration: InputDecoration(
             labelText: context.l10n.authUsername,
             prefixIcon: Icon(Icons.person_outline),
@@ -831,6 +858,7 @@ class _SetupViewState extends ConsumerState<_SetupView> {
 
         TextField(
           controller: _passwordController,
+          enabled: !blocked,
           decoration: InputDecoration(
             labelText: context.l10n.authPassword,
             prefixIcon: const Icon(Icons.lock_outline),
@@ -848,6 +876,7 @@ class _SetupViewState extends ConsumerState<_SetupView> {
 
         TextField(
           controller: _confirmPasswordController,
+          enabled: !blocked,
           decoration: InputDecoration(
             labelText: context.l10n.authConfirmPassword,
             prefixIcon: const Icon(Icons.lock_outline),
@@ -862,6 +891,29 @@ class _SetupViewState extends ConsumerState<_SetupView> {
           textInputAction: TextInputAction.done,
           onSubmitted: (_) => _setup(),
         ),
+
+        if (widget.serverStatus.remoteAccessSecurityAvailable) ...[
+          const SizedBox(height: 12),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text(
+              context.l10n.authRequireHTTPSOutsideLocalNetwork,
+            ),
+            subtitle: Text(
+              widget.serverStatus.isSecureOrLocalConnection
+                  ? context.l10n.authRequireHTTPSOutsideLocalNetworkHelp
+                  : context.l10n.authRequireHTTPSUnavailableHere,
+            ),
+            value: _requireHTTPSOutsideLocalNetwork,
+            onChanged: isLoading ||
+                    blocked ||
+                    !widget.serverStatus.isSecureOrLocalConnection
+                ? null
+                : (value) => setState(
+                      () => _requireHTTPSOutsideLocalNetwork = value,
+                    ),
+          ),
+        ],
 
         if (error != null) ...[
           const SizedBox(height: 12),
@@ -878,7 +930,7 @@ class _SetupViewState extends ConsumerState<_SetupView> {
           width: double.infinity,
           height: 50,
           child: ElevatedButton(
-            onPressed: isLoading ? null : _setup,
+            onPressed: isLoading || blocked ? null : _setup,
             child: isLoading
                 ? const SizedBox(
                     width: 22,
@@ -959,6 +1011,7 @@ class _LoginViewState extends ConsumerState<_LoginView> {
     final authState = ref.watch(authProvider);
     final isLoading = authState.valueOrNull?.isLoading ?? false;
     final error = authState.valueOrNull?.error;
+    final blocked = widget.serverStatus?.httpsRequired == true;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -969,11 +1022,20 @@ class _LoginViewState extends ConsumerState<_LoginView> {
         ),
         const SizedBox(height: 24),
 
+        if (blocked) ...[
+          const _HTTPTransportNotice(blocked: true),
+          const SizedBox(height: 16),
+        ] else if (
+            widget.serverStatus?.isUnsafePlainHTTPConnection == true) ...[
+          const _HTTPTransportNotice(blocked: false),
+          const SizedBox(height: 16),
+        ],
+
         if (widget.serverStatus?.ssoAvailable == true) ...[
           SizedBox(
             width: double.infinity,
             child: FilledButton.icon(
-              onPressed: isLoading
+              onPressed: isLoading || blocked
                   ? null
                   : () async {
                       try {
@@ -1002,7 +1064,7 @@ class _LoginViewState extends ConsumerState<_LoginView> {
           SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                onPressed: isLoading
+                onPressed: isLoading || blocked
                     ? null
                     : () => context.go(Uri(
                             path: '/plex/continue',
@@ -1026,7 +1088,7 @@ class _LoginViewState extends ConsumerState<_LoginView> {
             width: double.infinity,
             height: 50,
             child: OutlinedButton.icon(
-              onPressed: isLoading ? null : _loginWithPasskey,
+              onPressed: isLoading || blocked ? null : _loginWithPasskey,
               icon: const Icon(Icons.fingerprint, size: 22),
               label: Text(context.l10n.authSignInPasskeyTitle),
               style: OutlinedButton.styleFrom(
@@ -1059,6 +1121,7 @@ class _LoginViewState extends ConsumerState<_LoginView> {
 
         TextField(
           controller: _usernameController,
+          enabled: !blocked,
           decoration: InputDecoration(
             labelText: context.l10n.authUsername,
             prefixIcon: Icon(Icons.person_outline),
@@ -1070,6 +1133,7 @@ class _LoginViewState extends ConsumerState<_LoginView> {
 
         TextField(
           controller: _passwordController,
+          enabled: !blocked,
           decoration: InputDecoration(
             labelText: context.l10n.authPassword,
             prefixIcon: const Icon(Icons.lock_outline),
@@ -1100,7 +1164,7 @@ class _LoginViewState extends ConsumerState<_LoginView> {
           width: double.infinity,
           height: 50,
           child: ElevatedButton(
-            onPressed: isLoading ? null : _login,
+            onPressed: isLoading || blocked ? null : _login,
             child: isLoading
                 ? const SizedBox(
                     width: 22,
@@ -1132,4 +1196,42 @@ class _LoginViewState extends ConsumerState<_LoginView> {
       ],
     );
   }
+}
+
+class _HTTPTransportNotice extends StatelessWidget {
+  final bool blocked;
+
+  const _HTTPTransportNotice({required this.blocked});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: (blocked ? AppTheme.error : AppTheme.warning)
+              .withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: (blocked ? AppTheme.error : AppTheme.warning)
+                .withValues(alpha: 0.45),
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              blocked ? Icons.lock_outline : Icons.warning_amber_rounded,
+              color: blocked ? AppTheme.error : AppTheme.warning,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                blocked
+                    ? context.l10n.authHTTPSRequired
+                    : context.l10n.authRemoteHTTPWarning,
+              ),
+            ),
+          ],
+        ),
+      );
 }
