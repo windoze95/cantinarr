@@ -239,6 +239,7 @@
   "commonRetry": "Retry",
   "commonTryAgain": "Try Again",
   "commonGetApp": "Get the Cantinarr app",
+  "commonAppStore": "Download on the App Store",
   "commonTestflight": "Join the beta on TestFlight",
   "commonGooglePlay": "Download on Google Play",
   "commonAlsoDeleteFiles": "Also delete files from disk",

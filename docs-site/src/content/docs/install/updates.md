@@ -50,7 +50,9 @@ For native Linux installations, stop the service, replace the server and bundled
 
 ## Update the phone app
 
-Update Android from [Google Play](https://play.google.com/store/apps/details?id=codes.julian.cantinarr); beta enrollment is not required. Use TestFlight on iPhone and iPad while iOS is in App Store review. A TestFlight build can still be processing or waiting for distribution before it appears on your device.
+Update iPhone and iPad from the [App Store](https://apps.apple.com/app/id6744379934) and Android from [Google Play](https://play.google.com/store/apps/details?id=codes.julian.cantinarr). Beta enrollment is not required.
+
+If you deliberately joined the iOS beta, use TestFlight for beta updates. A beta build can still be processing or waiting for distribution before it appears on your device.
 
 Version compatibility notices are advisory. They tell you when one side is older than the other side supports. Update the indicated component and check again. The app-wide update banner is not the server's update mechanism.
 
@@ -62,6 +64,6 @@ If a problem starts after upgrading, record both versions and the symptom. Resto
 
 ## Release checks
 
-`CANTINARR_DISABLE_UPDATE_CHECK=1` disables the server's periodic GitHub release check. It does not stop Docker, your app catalog, TestFlight, or Google Play from offering updates.
+`CANTINARR_DISABLE_UPDATE_CHECK=1` disables the server's periodic GitHub release check. It does not stop Docker, your app catalog, the App Store, TestFlight, or Google Play from offering updates.
 
 Maintainers can find the exact publication procedure in the [release playbook](/contributing/generated/releases/).

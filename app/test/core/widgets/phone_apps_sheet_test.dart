@@ -35,7 +35,8 @@ void main() {
     expect(find.text('iPhone'), findsOneWidget);
     expect(find.text('Android'), findsOneWidget);
     expect(find.text('Download on Google Play'), findsOneWidget);
-    expect(find.text('Join the beta on TestFlight'), findsOneWidget);
+    expect(find.text('Download on the App Store'), findsOneWidget);
+    expect(find.text('Join the beta on TestFlight'), findsNothing);
     expect(find.text('Join the beta at cantinarr.com'), findsNothing);
 
     // Dismissing without tapping a link still counts as shown.
@@ -71,6 +72,36 @@ void main() {
     await tester.pumpAndSettle();
     expect(launches, [
       'https://play.google.com/store/apps/details?id=codes.julian.cantinarr',
+    ]);
+    expect(find.text('Get the Cantinarr app'), findsNothing);
+    unawaited(maybeShowPhoneAppsPrompt(context));
+    await tester.pumpAndSettle();
+    expect(find.text('Get the Cantinarr app'), findsNothing);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets('first-request iPhone action opens production and stays dismissed',
+      (tester) async {
+    final launches = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      const MethodChannel('plugins.flutter.io/url_launcher'),
+      (call) async {
+        if (call.method == 'launch') {
+          launches.add((call.arguments as Map)['url'] as String);
+          return true;
+        }
+        return false;
+      },
+    );
+    addTearDown(() => tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+            const MethodChannel('plugins.flutter.io/url_launcher'), null));
+    final context = await pumpHost(tester);
+    unawaited(maybeShowPhoneAppsPrompt(context));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('iPhone'));
+    await tester.pumpAndSettle();
+    expect(launches, [
+      'https://apps.apple.com/app/id6744379934',
     ]);
     expect(find.text('Get the Cantinarr app'), findsNothing);
     unawaited(maybeShowPhoneAppsPrompt(context));

@@ -7,7 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../theme/app_theme.dart';
 import 'app_sheet.dart';
 
-const _iosBetaUrl = 'https://testflight.apple.com/join/bCPDwCsD';
+const _iosStoreUrl = 'https://apps.apple.com/app/id6744379934';
 const _androidStoreUrl =
     'https://play.google.com/store/apps/details?id=codes.julian.cantinarr';
 
@@ -72,8 +72,8 @@ class PhoneAppsSheet extends StatelessWidget {
           _AppLinkTile(
             icon: Icons.phone_iphone,
             title: 'iPhone',
-            subtitle: context.l10n.commonTestflight,
-            url: _iosBetaUrl,
+            subtitle: context.l10n.commonAppStore,
+            url: _iosStoreUrl,
           ),
           SizedBox(height: AppTheme.spaceSm),
           _AppLinkTile(

@@ -169,6 +169,7 @@
   "commonRetry": "Réessayer",
   "commonTryAgain": "Réessayer",
   "commonGetApp": "Installer l’application Cantinarr",
+  "commonAppStore": "Télécharger sur l’App Store",
   "commonTestflight": "Rejoindre la bêta sur TestFlight",
   "commonGooglePlay": "Télécharger sur Google Play",
   "commonAlsoDeleteFiles": "Supprimer aussi les fichiers du disque",

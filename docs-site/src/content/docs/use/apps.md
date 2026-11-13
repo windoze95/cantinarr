@@ -12,10 +12,10 @@ If someone runs Cantinarr for you, ask them for a connection link or the Cantina
 | Device | How to open Cantinarr |
 | --- | --- |
 | Browser | Open your server's address; the web app is included |
-| iPhone or iPad | Join the [public TestFlight beta](https://testflight.apple.com/join/bCPDwCsD) |
+| iPhone or iPad | Install the [iPhone and iPad app on the App Store](https://apps.apple.com/app/id6744379934) |
 | Android | Install the [Android app on Google Play](https://play.google.com/store/apps/details?id=codes.julian.cantinarr) |
 
-Android is available on Google Play without beta enrollment. iOS is in App Store review; the iPhone and iPad app remains available through TestFlight. A TestFlight upload can take time to process and reach testers. See [updates](/install/updates/) for the difference between server and app versions.
+Both phone apps are available from their public stores without beta enrollment. See [updates](/install/updates/) for the difference between server and app versions.
 
 ## Connect the phone app
 
