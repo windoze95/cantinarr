@@ -43,6 +43,41 @@ func TestLoadWebAuthnNativeConfig(t *testing.T) {
 	}
 }
 
+func TestLoadRemoteAccessEnvironmentOverrides(t *testing.T) {
+	t.Setenv("CANTINARR_REQUIRE_HTTPS_OUTSIDE_LOCAL_NETWORK", "false")
+	t.Setenv("CANTINARR_TRUSTED_PROXIES", " 172.20.0.0/16, fd12::1 ")
+	t.Setenv("CANTINARR_TRUST_CGNAT_HTTP", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.RequireHTTPSOutsideLocalNetwork == nil || *cfg.RequireHTTPSOutsideLocalNetwork {
+		t.Fatalf("RequireHTTPSOutsideLocalNetwork = %#v, want explicit false", cfg.RequireHTTPSOutsideLocalNetwork)
+	}
+	if !cfg.TrustedProxyCIDRsSet || len(cfg.TrustedProxyCIDRs) != 2 {
+		t.Fatalf("TrustedProxyCIDRs = %#v, set=%v", cfg.TrustedProxyCIDRs, cfg.TrustedProxyCIDRsSet)
+	}
+	if cfg.TrustCGNATHTTP == nil || !*cfg.TrustCGNATHTTP {
+		t.Fatalf("TrustCGNATHTTP = %#v, want true", cfg.TrustCGNATHTTP)
+	}
+}
+
+func TestLoadRemoteAccessEnvironmentOverridesAreOptionalAndStrict(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.RequireHTTPSOutsideLocalNetwork != nil || cfg.TrustedProxyCIDRsSet || cfg.TrustCGNATHTTP != nil {
+		t.Fatalf("unexpected overrides: %+v", cfg)
+	}
+
+	t.Setenv("CANTINARR_REQUIRE_HTTPS_OUTSIDE_LOCAL_NETWORK", "maybe")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "CANTINARR_REQUIRE_HTTPS_OUTSIDE_LOCAL_NETWORK") {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
 func TestLoadRejectsInvalidAndroidFingerprint(t *testing.T) {
 	t.Setenv("CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS", "not-a-fingerprint")
 

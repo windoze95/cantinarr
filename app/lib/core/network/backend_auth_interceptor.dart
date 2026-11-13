@@ -105,6 +105,24 @@ class BackendAuthInterceptor extends Interceptor {
       final serverUrl = getServerUrl();
       final refreshToken = getRefreshToken();
 
+      // A refresh token is a credential. On an explicitly configured HTTP
+      // address, ask the public status endpoint before putting it on the wire.
+      // Missing fields and status failures retain old-server behavior.
+      if (Uri.tryParse(serverUrl)?.scheme.toLowerCase() == 'http') {
+        try {
+          final status = await dio
+              .get('$serverUrl/api/auth/status')
+              .timeout(AppConfig.requestTimeout * 2);
+          final data = status.data;
+          if (data is Map && data['https_required'] == true) {
+            debugPrint('Token refresh withheld: HTTPS is required.');
+            return _settle(completer, false);
+          }
+        } catch (e) {
+          debugPrint('Token refresh preflight unavailable; using compatible behavior: $e');
+        }
+      }
+
       // The outer timeout is the last line of defense: no adapter behavior may
       // leave the shared completer unsettled, or every future 401 retry queues
       // behind it forever. A TimeoutException lands in the generic catch below

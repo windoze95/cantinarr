@@ -9,6 +9,10 @@ class ServerStatus {
   final bool needsSetup;
   final bool webAuthnAvailable;
   final NativePasskeyStatus nativePasskeys;
+  final bool remoteAccessSecurityAvailable;
+  final String connectionSecurity;
+  final bool httpsRequired;
+  final bool requireHTTPSOutsideLocalNetwork;
 
   const ServerStatus({
     required this.needsSetup,
@@ -20,6 +24,10 @@ class ServerStatus {
     this.ssoError,
     this.webAuthnAvailable = false,
     this.nativePasskeys = const NativePasskeyStatus(),
+    this.remoteAccessSecurityAvailable = false,
+    this.connectionSecurity = '',
+    this.httpsRequired = false,
+    this.requireHTTPSOutsideLocalNetwork = false,
   });
 
   factory ServerStatus.fromJson(Map<String, dynamic> json) => ServerStatus(
@@ -34,7 +42,23 @@ class ServerStatus {
         nativePasskeys: NativePasskeyStatus.fromJson(
           json['native_passkeys'] as Map<String, dynamic>?,
         ),
+        remoteAccessSecurityAvailable:
+            json['remote_access_security_available'] as bool? ?? false,
+        connectionSecurity: json['connection_security'] as String? ?? '',
+        httpsRequired: json['https_required'] as bool? ?? false,
+        requireHTTPSOutsideLocalNetwork:
+            json['require_https_outside_local_network'] as bool? ?? false,
       );
+
+  bool get isSecureOrLocalConnection =>
+      connectionSecurity == 'https' || connectionSecurity == 'local_http';
+
+  bool get isRemotePlainHTTP => connectionSecurity == 'remote_http';
+
+  bool get isUnsafePlainHTTPConnection =>
+      connectionSecurity == 'remote_http' ||
+      connectionSecurity == 'untrusted_proxy' ||
+      connectionSecurity == 'unknown_http';
 
   bool supportsPasskeyPlatform(String platformKind) {
     if (!webAuthnAvailable) return false;

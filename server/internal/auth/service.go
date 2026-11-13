@@ -133,6 +133,11 @@ type WebAuthnConfig struct {
 	AndroidCertFingerprints []string
 }
 
+// SetupTransactionHook joins first-run side settings to the account creation
+// transaction. A hook failure rolls the entire setup back, so the app never
+// receives a half-configured administrator account.
+type SetupTransactionHook func(*sql.Tx) error
+
 func NewService(db *sql.DB, jwtSecret string, webauthnConfig ...WebAuthnConfig) *Service {
 	var extraOrigins []string
 	var appleAppIDs []string
@@ -196,7 +201,7 @@ func (s *Service) IsSetupComplete() bool {
 // Setup creates the initial admin account during first-run setup.
 // Returns JWT tokens so the user is automatically logged in.
 // The entire operation is wrapped in a transaction to prevent race conditions.
-func (s *Service) Setup(username, password, deviceName, hardwareID string) (*TokenResponse, error) {
+func (s *Service) Setup(username, password, deviceName, hardwareID string, hooks ...SetupTransactionHook) (*TokenResponse, error) {
 	if s.IsSetupComplete() {
 		return nil, ErrSetupAlreadyComplete
 	}
@@ -243,6 +248,14 @@ func (s *Service) Setup(username, password, deviceName, hardwareID string) (*Tok
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create device: %w", err)
+	}
+	for _, hook := range hooks {
+		if hook == nil {
+			continue
+		}
+		if err := hook(tx); err != nil {
+			return nil, fmt.Errorf("save setup policy: %w", err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

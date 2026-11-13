@@ -93,6 +93,9 @@ Optional env vars for deployment tuning: the server loads `.env` from its proces
 |---|---|---|
 | `CANTINARR_PORT` | `8585` | HTTP listen port. Kubernetes service-link values (`tcp://…`) injected by a Service named `cantinarr` are ignored in favor of the default; set a numeric value to override |
 | `CANTINARR_SERVER_NAME` | `Cantinarr` | Display name shown in clients |
+| `CANTINARR_REQUIRE_HTTPS_OUTSIDE_LOCAL_NETWORK` | unset | Optional `true`/`false` override for the remote access policy. Unset leaves the admin UI in control; explicit `false` is the lockout-recovery path |
+| `CANTINARR_TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses or CIDRs whose `X-Forwarded-Proto` and `X-Forwarded-For` values may classify a request. Setting it makes the UI field read-only; internet-wide CIDRs are rejected |
+| `CANTINARR_TRUST_CGNAT_HTTP` | unset | Optional `true`/`false` override for treating `100.64.0.0/10`, including most Tailscale addresses, as local HTTP |
 | `CANTINARR_ARR_CALLBACK_URL` | direct request origin | Origin the Radarr/Sonarr/Chaptarr/Lidarr containers POST webhooks back to, so it must be resolvable and reachable from the arrs themselves -- in same-network/cluster deployments a cluster-internal origin like `http://cantinarr:8585` is usually the right value. Set it explicitly behind a reverse proxy because forwarded host/protocol headers are deliberately ignored. Formerly `CANTINARR_PUBLIC_URL`, which stays accepted forever; the new name wins when both are set. The user-facing origin is a different setting (the in-app External Address) |
 | `CANTINARR_OAUTH_ISSUER` | request-derived origin | Canonical external HTTPS origin for inbound MCP OAuth metadata, token audience, and browser-origin checks; setting it also enables stable RFC 9207 authorization-response `iss` and permits that origin to call `/mcp`. Set it behind a reverse proxy and keep it stable (changing it makes existing audience-bound MCP tokens reconnect); it is intentionally separate from the arr-reachable `CANTINARR_ARR_CALLBACK_URL` |
 | `CANTINARR_MCP_ALLOWED_ORIGINS` | unset | Comma-separated additional browser origins allowed to call `/mcp`. If neither this nor `CANTINARR_OAUTH_ISSUER` is configured, requests that supply `Origin` are rejected; native and server-side clients omit `Origin` and need no entry |
@@ -121,6 +124,12 @@ OpenAI OAuth source deployments use Codex app-server and are supported only on L
 The database lives at `/config/cantinarr.db` (SQLite, WAL mode). Keep the `/config` volume -- it holds the DB and the auto-generated encryption key, and encrypted secrets are unrecoverable without that key.
 
 Native app passkeys require a public HTTPS domain associated with the app: Apple devices verify the AASA file, Android credential providers verify `assetlinks.json`. Browser passkey setup remains available when native association isn't possible.
+
+### Remote access policy
+
+The admin UI at **Settings > Remote access security** can require HTTPS outside the local network while preserving direct LAN HTTP. It is off when absent, so an upgrade never changes request acceptance until an administrator opts in. Local classification includes loopback, private and link-local IPv4, and unique-local or link-local IPv6. CGNAT and Tailscale addresses require the separate opt-in. Forwarded headers are accepted only from configured trusted proxy CIDRs and the client chain is evaluated from the trusted edge inward.
+
+Strict mode rejects remote HTTP API, OAuth, MCP, passkey, and well-known requests with `426` before handlers read their bodies. `GET /api/auth/status`, `GET /api/health`, and the embedded Flutter application remain reachable for recovery guidance. The server refuses a UI save or first-run choice that would block the connection making that change. Environment overrides are applied without replacing stored values, so temporarily setting `CANTINARR_REQUIRE_HTTPS_OUTSIDE_LOCAL_NETWORK=false` provides a reversible recovery path.
 
 ## API Reference
 
@@ -196,6 +205,8 @@ POST   /api/admin/connect-token            # mint a connect link for a user; res
                                            # link used the external address or the app's own (origin_source)
 GET    /api/admin/external-address         # the origin connect links and passkey setup links are built from
 PUT    /api/admin/external-address         # set it ({ external_url }, http(s) only, empty clears)
+GET    /api/admin/remote-access-security   # effective HTTPS/LAN policy, env-managed fields, current connection classification
+PUT    /api/admin/remote-access-security   # save policy, trusted proxy CIDRs, optional CGNAT/Tailscale trust; refuses self-lockout
 GET    /api/admin/devices                  # all connected devices
 DELETE /api/admin/devices/{deviceID}       # revoke a device (kills its sessions + MCP tokens)
 GET    /api/admin/users

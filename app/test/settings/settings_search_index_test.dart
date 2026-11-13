@@ -27,6 +27,7 @@ const _routableSettingsPaths = {
   '/settings/ai',
   '/settings/listening-apps',
   '/settings/request-allowance',
+  '/settings/remote-access-security',
   '/settings/video-apps',
   '/settings/apple-tvs',
   '/settings/chatgpt',

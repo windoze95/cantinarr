@@ -384,6 +384,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     _showExternalAddressDialog(context, externalAddress ?? ''),
               ),
               _SettingsTile(
+                icon: Icons.security_outlined,
+                title: context.l10n.settingsRemoteAccessSecurity,
+                subtitle:
+                    context.l10n.settingsRemoteAccessSecurityTileDescription,
+                onTap: () =>
+                    context.push('/settings/remote-access-security'),
+              ),
+              _SettingsTile(
                 icon: Icons.vpn_lock_outlined,
                 title: context.l10n.settingsOutboundProxy,
                 subtitle: (outboundProxy?.url.isNotEmpty ?? false)

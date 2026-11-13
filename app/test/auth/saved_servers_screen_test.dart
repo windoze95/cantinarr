@@ -384,6 +384,84 @@ void main() {
         _remote.url);
   });
 
+  testWidgets('local first-run setup recommends remote HTTPS protection',
+      (tester) async {
+    final auth = _ScreenAuth()
+      ..serverStatus = const ServerStatus(
+        needsSetup: true,
+        remoteAccessSecurityAvailable: true,
+        connectionSecurity: 'local_http',
+      );
+    await showAuth(tester, auth);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), _remote.url);
+    await tap(tester, 'Connect');
+
+    final toggle = tester.widget<SwitchListTile>(
+      find.widgetWithText(
+        SwitchListTile,
+        'Require HTTPS outside my local network',
+      ),
+    );
+    expect(toggle.value, isTrue);
+    expect(toggle.onChanged, isNotNull);
+  });
+
+  testWidgets('remote HTTP setup cannot select a self-locking policy',
+      (tester) async {
+    final auth = _ScreenAuth()
+      ..serverStatus = const ServerStatus(
+        needsSetup: true,
+        remoteAccessSecurityAvailable: true,
+        connectionSecurity: 'remote_http',
+      );
+    await showAuth(tester, auth);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), _remote.url);
+    await tap(tester, 'Connect');
+
+    expect(find.textContaining('Passwords and tokens are not encrypted'),
+        findsOneWidget);
+    final toggle = tester.widget<SwitchListTile>(
+      find.widgetWithText(
+        SwitchListTile,
+        'Require HTTPS outside my local network',
+      ),
+    );
+    expect(toggle.value, isFalse);
+    expect(toggle.onChanged, isNull);
+  });
+
+  testWidgets('strict remote HTTP disables login credentials', (tester) async {
+    final auth = _ScreenAuth()
+      ..serverStatus = const ServerStatus(
+        needsSetup: false,
+        remoteAccessSecurityAvailable: true,
+        connectionSecurity: 'remote_http',
+        httpsRequired: true,
+        requireHTTPSOutsideLocalNetwork: true,
+      );
+    await showAuth(tester, auth);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), _remote.url);
+    await tap(tester, 'Connect');
+
+    expect(find.textContaining('This server requires HTTPS'), findsOneWidget);
+    expect(
+      tester.widget<TextField>(find.widgetWithText(TextField, 'Password')).enabled,
+      isFalse,
+    );
+    expect(
+      tester.widget<ElevatedButton>(
+        find.ancestor(
+          of: find.text('Sign In'),
+          matching: find.byType(ElevatedButton),
+        ),
+      ).onPressed,
+      isNull,
+    );
+  });
+
   testWidgets('supported saved server offers passkey sign-in on entry',
       (tester) async {
     final auth = _ScreenAuth()..serverStatus = _passkeyStatus;
