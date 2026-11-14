@@ -37,7 +37,12 @@ func (n *Notifier) contentRecipients(ctx context.Context, event contentnotify.Im
 		if err != nil {
 			continue
 		}
-		if prefs.RequesterOnly {
+		// A Chaptarr import is a completion notice, not a library broadcast:
+		// only users with a verified matching request should be told that a
+		// book is ready. Keep this invariant independent of the optional
+		// requester-only preference used by movie/TV notifications.
+		requesterScopedBook := event.MediaType == "book"
+		if prefs.RequesterOnly || requesterScopedBook {
 			if event.MediaType == "tv" {
 				ids := n.unmutedEpisodes(user, event, category)
 				if len(ids) == 0 {
