@@ -5498,7 +5498,7 @@
   "notificationServerSettingsHelp": "Choose which push notifications this server may send.",
   "notificationMyNotifications": "My notifications",
   "notificationOnlyMyRequests": "Only my requests",
-  "notificationOnlyMyRequestsHelp": "Limit movie, TV episode, book, and music availability alerts on my devices to my requests. Discord notifications keep their own settings.",
+  "notificationOnlyMyRequestsHelp": "Limit movie, TV episode, and music availability alerts on my devices to my requests. Book-ready alerts are always limited to my requests and shared-book subscriptions. Discord notifications keep their own settings.",
   "notificationAdminAlerts": "Administrator alerts",
   "notificationSendTest": "Send test notification",
   "notificationStatus": "Status",
