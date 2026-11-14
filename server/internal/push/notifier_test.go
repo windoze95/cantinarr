@@ -8,10 +8,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/contentnotify"
 	"github.com/windoze95/cantinarr-server/internal/db"
 )
 
@@ -922,10 +924,9 @@ func TestNotifyNewMovieScopesToLibraryAndAlertsSiblings(t *testing.T) {
 	}
 }
 
-// A book import alerts the users who can actually open it: opted-in holders
-// of that instance's grant plus admins — never a sibling instance's users —
-// and the payload carries the book deep-link identity the app already routes.
-func TestNotifyNewBookScopesRecipientsAndCarriesBookIdentity(t *testing.T) {
+// A book completion alerts only users with a verified matching request, even
+// when they have not enabled requester-only for other media categories.
+func TestNotifyNewBookScopesRecipientsToMatchingRequestAndCarriesBookIdentity(t *testing.T) {
 	database, err := dbOpen(t)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -941,6 +942,14 @@ func TestNotifyNewBookScopesRecipientsAndCarriesBookIdentity(t *testing.T) {
 	mgr, cap := newNotifierTestGateway(t, database)
 	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
+	n.SetRequestMatcher(requestMatcherFunc(func(_ context.Context, _ contentnotify.Import, candidates []int64) ([]int64, error) {
+		// Alice requested the book; the admin did not. Both have access to the
+		// library, but access alone must not cause a completion push.
+		if slices.Contains(candidates, int64(2)) {
+			return []int64{2}, nil
+		}
+		return nil, nil
+	}))
 
 	n.NotifyNewBook("Ahsoka (Star Wars)", "29749107", "books-a", "ebook")
 
@@ -950,8 +959,8 @@ func TestNotifyNewBookScopesRecipientsAndCarriesBookIdentity(t *testing.T) {
 	for _, id := range ids {
 		got[id] = true
 	}
-	if len(ids) != 2 || !got["1"] || !got["2"] {
-		t.Errorf("new_book recipients = %v, want admin(1) and alice(2)", ids)
+	if len(ids) != 1 || !got["2"] {
+		t.Errorf("new_book recipients = %v, want requester alice(2) only", ids)
 	}
 	notif, _ := body["notification"].(map[string]any)
 	if notif["title"] != "New book available" {
@@ -990,6 +999,12 @@ func TestNotifyNewBookAudiobookCopyAndNoUngrantedRecipients(t *testing.T) {
 	mgr, cap := newNotifierTestGateway(t, database)
 	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
+	n.SetRequestMatcher(requestMatcherFunc(func(_ context.Context, _ contentnotify.Import, candidates []int64) ([]int64, error) {
+		if slices.Contains(candidates, int64(2)) {
+			return []int64{2}, nil
+		}
+		return nil, nil
+	}))
 
 	n.NotifyNewBook("Ahsoka (Star Wars)", "29749107", "books-a", "audiobook")
 
@@ -1004,18 +1019,22 @@ func TestNotifyNewBookAudiobookCopyAndNoUngrantedRecipients(t *testing.T) {
 	}
 }
 
-func TestNotifyNewBookNoEligibleRecipientsIsNoop(t *testing.T) {
+func TestNotifyNewBookWithoutMatchingRequestIsNoop(t *testing.T) {
 	database, err := dbOpen(t)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	// dave is opted in by default but holds no chaptarr grant, so a book
-	// import has no eligible audience and nothing is sent.
-	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (5, 'dave', '', 'user')")
+	// Alice can open this library and has notifications enabled, but did not
+	// request this title. Library membership must not widen the audience.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (2, 'chaptarr', 'books-a')")
 
 	mgr, cap := newNotifierTestGateway(t, database)
 	grantPinnedPushFixtures(t, database)
 	n := NewNotifier(database, mgr, nil)
+	n.SetRequestMatcher(requestMatcherFunc(func(_ context.Context, _ contentnotify.Import, _ []int64) ([]int64, error) {
+		return nil, nil
+	}))
 
 	n.NotifyNewBook("Ahsoka (Star Wars)", "29749107", "books-a", "ebook")
 
