@@ -307,6 +307,11 @@ func (s *Service) dispatchFormat(ctx context.Context, id int64, format string) {
 		switch {
 		case errors.As(err, &bookConfigErr):
 			s.finishDelivery(id, format, token, "attention", "book_configuration", err)
+		case errors.Is(err, ErrBookAddUnconfirmed):
+			// Chaptarr can accept an async author refresh before it has a real
+			// record for the selected work. Keep the request alive; a retry will
+			// observe the pending import or monitor the record once it appears.
+			s.finishDelivery(id, format, token, "retry", "book_add_unconfirmed", err)
 		case errors.Is(err, chaptarr.ErrAuthorPendingImport):
 			s.finishDelivery(id, format, token, "waiting_library", "author_import", nil)
 		case errors.Is(err, chaptarr.ErrEditionsNotHydrated):
