@@ -43,6 +43,11 @@ var (
 	ErrArrInstanceForbidden      = errors.New("that library is not available to you")
 	ErrArrInstanceInvalid        = errors.New("unknown library for this media type")
 	ErrBookFormatUnresolved      = errors.New("book format is unsupported or ambiguous")
+	// ErrBookAddUnconfirmed means Chaptarr acknowledged an add request but did
+	// not return a persisted library record. Async author refreshes can return a
+	// successful response before the selected work exists; that is not a fulfilled
+	// request and must be retried instead of reported as requested.
+	ErrBookAddUnconfirmed = errors.New("chaptarr did not confirm a persisted book record")
 	// ErrBookMetadataUnresolved means no Chaptarr metadata record could be found
 	// for the requested foreignBookId, so there is nothing to add a book from.
 	// It is the one add failure that says nothing about the requester, the
@@ -2214,6 +2219,9 @@ func (s *Service) addChaptarrBookRecord(client *chaptarr.Client, match *chaptarr
 	book, err := client.AddBook(addReq)
 	if err != nil {
 		return nil, err
+	}
+	if book == nil || book.ID <= 0 {
+		return nil, ErrBookAddUnconfirmed
 	}
 	// A book added under an author created by this same request comes back
 	// unmonitored (Chaptarr's async author refresh hasn't applied monitoring),

@@ -52,6 +52,48 @@ func TestBookRequestTrimsAndRejectsBlankForeignID(t *testing.T) {
 	}
 }
 
+func TestChaptarrBookAddDoesNotAcceptAsyncPlaceholderWithoutRecordID(t *testing.T) {
+	var addCalls atomic.Int32
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/book" {
+			http.Error(w, "unexpected route", http.StatusNotFound)
+			return
+		}
+		addCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		// Chaptarr can acknowledge an async author import before the selected
+		// work has a persisted library ID. Treating this as success loses the
+		// request: the later metadata refresh creates the work unmonitored.
+		_, _ = w.Write([]byte(`{"id":0,"title":"Forget You Saw Her","foreignBookId":"gr:234125620","monitored":true}`))
+	}))
+	defer chaptarrServer.Close()
+
+	svc, _ := newBookTestService(t)
+	book, err := svc.addChaptarrBookRecord(
+		chaptarr.NewClient(chaptarrServer.URL, "test-key"),
+		&chaptarr.LookupResult{
+			Title:           "Forget You Saw Her",
+			ForeignBookID:   "gr:234125620",
+			AuthorName:      "Noelle W. Ihli",
+			ForeignAuthorID: "gr:21646097",
+		},
+		bookAddConfig{
+			ebookQualityProfileID: 1, ebookMetadataProfileID: 1,
+			ebookRootFolderPath: "/books",
+		},
+		"Forget You Saw Her", "forget-you-saw-her", BookFormatEbook,
+	)
+	if !errors.Is(err, ErrBookAddUnconfirmed) {
+		t.Fatalf("add error = %v, want ErrBookAddUnconfirmed", err)
+	}
+	if book != nil {
+		t.Fatalf("book = %#v, want no unpersisted placeholder", book)
+	}
+	if got := addCalls.Load(); got != 1 {
+		t.Fatalf("Chaptarr add calls = %d, want 1", got)
+	}
+}
+
 func TestBookRequestRequiresTitleOnlyForNewCanonicalBook(t *testing.T) {
 	t.Run("new book", func(t *testing.T) {
 		lookupCalls := 0
