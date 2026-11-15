@@ -122,6 +122,9 @@ type Service struct {
 	// sweepMu serializes drift sweeps so a slow pass cannot overlap the next
 	// tick and reconcile the same user twice at once.
 	sweepMu sync.Mutex
+	// separationMu serializes the multi-library ABS tag migration independently
+	// of account-map synchronization (which uses mu).
+	separationMu sync.Mutex
 	// background runs the invite passes that must not hold a request open.
 	// Tests replace it with a synchronous runner.
 	background func(func())
@@ -703,6 +706,15 @@ func (s *Service) CreateAccount(ctx context.Context, userID int64, instanceID, p
 			return CreatedAccount{}, err
 		}
 		return CreatedAccount{}, ErrNotAvailable
+	}
+	if err = s.syncManagedABSUserTagPolicy(ctx, inst, provider, userID, remote.ID); err != nil {
+		// A newly-created ABS account starts with broad visibility. If the
+		// per-user policy cannot be confirmed, keep the account disabled until
+		// account maintenance can safely apply it.
+		if disableErr := provider.SetDisabled(ctx, remote.ID, true); disableErr == nil {
+			_ = s.setDisabledAt(userID, instanceID, true)
+		}
+		return CreatedAccount{}, fmt.Errorf("%w: could not apply private Audiobookshelf access", ErrUpstream)
 	}
 	return CreatedAccount{ManageAccess: true, Username: remote.Name, PublicAddress: inst.MediaServerConfig.PublicAddress}, nil
 }
@@ -1627,6 +1639,10 @@ func (s *Service) reconcileAccountLocked(ctx context.Context, userID int64, inst
 		return
 	}
 	if !wantDisabled {
+		if err := s.syncManagedABSUserTagPolicy(ctx, inst, provider, userID, row.RemoteUserID); err != nil {
+			s.logger.Warn("mediaaccess: ABS tag access change pending", "err", err, "user_id", userID, "instance_id", instanceID)
+			return
+		}
 		if err := s.syncLibrariesLocked(ctx, inst, row, provider); err != nil {
 			s.logger.Warn("mediaaccess: library change pending", "err", err, "user_id", userID, "instance_id", instanceID)
 			return

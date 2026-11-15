@@ -31,6 +31,66 @@ const requesterTagJobsSQL = `CREATE TABLE IF NOT EXISTS request_tag_jobs (
 );
 CREATE INDEX IF NOT EXISTS request_tag_jobs_due ON request_tag_jobs(state, next_attempt_at);`
 
+// ABS library access is changed only after a complete, reviewed inventory
+// preview. The run retains its full desired plan; item receipts make apply
+// idempotent and resumable if the server or ABS becomes unavailable midway.
+// Jobs are independent of Chaptarr's author-tag queue and scope the delivered
+// book to each actual requester and managed Audiobookshelf instance.
+const absLibrarySeparationSQL = `CREATE TABLE IF NOT EXISTS abs_library_separation_runs (
+    instance_id TEXT NOT NULL REFERENCES service_instances(id) ON DELETE CASCADE,
+    library_id TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'previewed'
+        CHECK(state IN ('previewed','applying','ready','enabled','error')),
+    inventory_count INTEGER NOT NULL DEFAULT 0 CHECK(inventory_count >= 0),
+    shared_count INTEGER NOT NULL DEFAULT 0 CHECK(shared_count >= 0),
+    requested_count INTEGER NOT NULL DEFAULT 0 CHECK(requested_count >= 0),
+    unresolved_count INTEGER NOT NULL DEFAULT 0 CHECK(unresolved_count >= 0),
+    plan_hash TEXT NOT NULL DEFAULT '',
+    plan_json TEXT NOT NULL DEFAULT '[]',
+    last_error TEXT NOT NULL DEFAULT '',
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(instance_id, library_id)
+);
+
+CREATE TABLE IF NOT EXISTS abs_library_separation_items (
+    instance_id TEXT NOT NULL,
+    library_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    classification TEXT NOT NULL CHECK(classification IN ('shared','requested','unresolved')),
+    requester_user_ids TEXT NOT NULL DEFAULT '[]',
+    state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','applied','failed')),
+    last_error TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(instance_id, library_id, item_id),
+    FOREIGN KEY(instance_id, library_id)
+        REFERENCES abs_library_separation_runs(instance_id, library_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS abs_library_separation_items_pending
+    ON abs_library_separation_items(instance_id, library_id, state, item_id);
+
+CREATE TABLE IF NOT EXISTS abs_library_separation_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER NOT NULL REFERENCES request_log(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    format TEXT NOT NULL CHECK(format IN ('ebook','audiobook')),
+    instance_id TEXT NOT NULL REFERENCES service_instances(id) ON DELETE CASCADE,
+    state TEXT NOT NULL DEFAULT 'waiting'
+        CHECK(state IN ('waiting','processing','retrying','applied','cancelled')),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+    lease_until INTEGER NOT NULL DEFAULT 0,
+    lease_token TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    tag_label TEXT NOT NULL DEFAULT '',
+    applied_at DATETIME,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(request_id, user_id, format, instance_id)
+);
+CREATE INDEX IF NOT EXISTS abs_library_separation_jobs_due
+    ON abs_library_separation_jobs(state, next_attempt_at);`
+
 const initSQL = `
 -- Allowances start unlimited, with no historical charge backfill. Accounting
 -- is independent of mutable request owners, subscriptions and library state.
@@ -1039,7 +1099,7 @@ CREATE INDEX IF NOT EXISTS idx_profile_change_proposals_status
     ON profile_change_proposals(status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_profile_change_proposals_one_pending
     ON profile_change_proposals(service_type, instance_id, profile_id) WHERE status = 'pending';
-` + mediaAvailabilitySQL + mediaFollowSQL
+` + mediaAvailabilitySQL + mediaFollowSQL + absLibrarySeparationSQL
 
 type schemaMigration struct {
 	alter    string

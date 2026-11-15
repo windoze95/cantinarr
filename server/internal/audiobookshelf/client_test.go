@@ -10,7 +10,9 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/mediaserver"
 )
@@ -105,6 +107,149 @@ func TestCreateAccountAppliesRestrictionsAndReconciles(t *testing.T) {
 	}
 	if err := c.DeleteUser(ctx, remote.ID); err == nil || deleted {
 		t.Fatal("administrator deleted")
+	}
+}
+
+func TestSetItemTagPreservesExistingTagsAndVerifiesChanges(t *testing.T) {
+	item := map[string]any{"id": "item-1", "media": map[string]any{"tags": []any{"genre", "curated"}}}
+	var writes int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/items/item-1":
+			sendJSON(w, item)
+		case "PATCH /api/items/item-1/media":
+			var body map[string][]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(body["tags"], []string{"genre", "curated", "cantinarr-private-user-7"}) && writes == 0 {
+				t.Fatalf("initial write did not preserve existing tags: %v", body["tags"])
+			}
+			item["media"].(map[string]any)["tags"] = stringsToAny(body["tags"])
+			writes++
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	c := NewClient(server.URL, "sentinel")
+	if err := c.SetItemTag(context.Background(), "item-1", "cantinarr-private-user-7", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetItemTag(context.Background(), "item-1", "cantinarr-private-user-7", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := item["media"].(map[string]any)["tags"]; !reflect.DeepEqual(got, []any{"genre", "curated"}) {
+		t.Fatalf("remove did not preserve unrelated tags: %v", got)
+	}
+}
+
+func stringsToAny(values []string) []any {
+	out := make([]any, len(values))
+	for i, value := range values {
+		out[i] = value
+	}
+	return out
+}
+
+func TestSetItemTagAllowlistOnlyChangesManagedUserTagPolicy(t *testing.T) {
+	u := testUser()
+	patchCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/users/user-1":
+			sendJSON(w, u)
+		case "PATCH /api/users/user-1":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			permissions := body["permissions"].(map[string]any)
+			if permissions["accessAllTags"] != false || permissions["selectedTagsNotAccessible"] != false ||
+				!reflect.DeepEqual(body["itemTagsSelected"], []any{"cantinarr-shared", "cantinarr-user-8"}) {
+				t.Fatalf("unexpected tag policy patch: %#v", body)
+			}
+			live := u["permissions"].(map[string]any)
+			live["accessAllTags"], live["selectedTagsNotAccessible"] = false, false
+			u["itemTagsSelected"] = body["itemTagsSelected"]
+			patchCount++
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	c := NewClient(server.URL, "sentinel")
+	if err := c.SetItemTagAllowlist(context.Background(), "user-1", []string{"cantinarr-shared", "cantinarr-user-8"}); err != nil {
+		t.Fatal(err)
+	}
+	if patchCount != 1 {
+		t.Fatal("tag policy was not updated")
+	}
+	u["type"] = "admin"
+	if err := c.SetItemTagAllowlist(context.Background(), "user-1", []string{}); err == nil || patchCount != 1 {
+		t.Fatalf("administrator was not protected: err=%v patches=%d", err, patchCount)
+	}
+}
+
+func TestSetItemTagSerializesConcurrentReadMergeWrites(t *testing.T) {
+	var mu sync.Mutex
+	tags := []string{"genre"}
+	reads := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/items/item-1":
+			mu.Lock()
+			reads++
+			current := append([]string{}, tags...)
+			first := reads == 1
+			mu.Unlock()
+			// Without client-side serialization both initial reads see the same
+			// stale tag set; with it the second read sees the first successful write.
+			if first {
+				time.Sleep(30 * time.Millisecond)
+			}
+			sendJSON(w, map[string]any{"id": "item-1", "media": map[string]any{"tags": current}})
+		case "PATCH /api/items/item-1/media":
+			var body map[string][]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			mu.Lock()
+			tags = append([]string{}, body["tags"]...)
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	c := NewClient(server.URL, "sentinel")
+	start := make(chan struct{})
+	errCh := make(chan error, 2)
+	for _, tag := range []string{"cantinarr-user-1", "cantinarr-user-2"} {
+		go func(tag string) {
+			<-start
+			errCh <- c.SetItemTag(context.Background(), "item-1", tag, true)
+		}(tag)
+	}
+	close(start)
+	for range 2 {
+		if err := <-errCh; err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !reflect.DeepEqual(tags, []string{"genre", "cantinarr-user-1", "cantinarr-user-2"}) &&
+		!reflect.DeepEqual(tags, []string{"genre", "cantinarr-user-2", "cantinarr-user-1"}) {
+		t.Fatalf("concurrent tag update lost a merge: %v", tags)
 	}
 }
 

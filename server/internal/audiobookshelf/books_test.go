@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -112,6 +113,82 @@ func TestFindBooksUsesExactIDsAndLivePermissions(t *testing.T) {
 				t.Fatal("private metadata exposed")
 			}
 		})
+	}
+}
+
+func TestFindBookItemIDsUsesExactAudioAndEbookMatchesAfterLiveRefetch(t *testing.T) {
+	items := []map[string]any{
+		testBook("copy-a"),
+		testBook("copy-b"),
+		testBook("ebook-only"),
+		testBook("wrong-id"),
+		testBook("no-media"),
+	}
+	items[2]["media"].(map[string]any)["tracks"] = []any{}
+	items[2]["media"].(map[string]any)["audioFiles"] = []any{}
+	items[2]["media"].(map[string]any)["ebookFile"] = map[string]any{"ebookFormat": "epub"}
+	items[3]["media"].(map[string]any)["metadata"].(map[string]any)["isbn"] = "9780000000002"
+	items[4]["media"].(map[string]any)["tracks"] = []any{}
+	var liveReads int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/libraries":
+			sendJSON(w, map[string]any{"libraries": []any{map[string]any{"id": "books", "name": "Books", "mediaType": "book"}}})
+		case "/api/libraries/books/search":
+			results := make([]any, 0, len(items))
+			for _, item := range items {
+				results = append(results, map[string]any{"libraryItem": item})
+			}
+			sendJSON(w, map[string]any{"book": results})
+		case "/api/items/copy-a", "/api/items/copy-b", "/api/items/ebook-only":
+			liveReads++
+			for _, item := range items {
+				if item["id"] == strings.TrimPrefix(r.URL.Path, "/api/items/") {
+					sendJSON(w, item)
+					return
+				}
+			}
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	found, err := NewClient(server.URL, "admin-key").FindBookItemIDs(context.Background(), mediaserver.BookQuery{Available: true, ISBNs: []string{"9780306406157"}})
+	if err != nil || !reflect.DeepEqual(found, []string{"copy-a", "copy-b", "ebook-only"}) {
+		t.Fatalf("found=%v error=%v", found, err)
+	}
+	if liveReads != 3 {
+		t.Fatalf("only %d candidates were re-fetched live, want 3", liveReads)
+	}
+}
+
+func TestFindBookItemIDsRequiresAvailableVerifiedQueryAndRejectsChangedItems(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/libraries":
+			sendJSON(w, map[string]any{"libraries": []any{map[string]any{"id": "books", "name": "Books", "mediaType": "book"}}})
+		case "/api/libraries/books/search":
+			sendJSON(w, map[string]any{"book": []any{map[string]any{"libraryItem": testBook("copy-1")}}})
+		case "/api/items/copy-1":
+			changed := testBook("copy-1")
+			changed["media"].(map[string]any)["metadata"].(map[string]any)["isbn"] = "9780000000002"
+			sendJSON(w, changed)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	c := NewClient(server.URL, "admin-key")
+	if got, err := c.FindBookItemIDs(context.Background(), mediaserver.BookQuery{ISBNs: []string{"9780306406157"}}); !errors.Is(err, mediaserver.ErrItemUnverified) || len(got) != 0 {
+		t.Fatalf("unavailable request accepted: ids=%v err=%v", got, err)
+	}
+	if got, err := c.FindBookItemIDs(context.Background(), mediaserver.BookQuery{Available: true}); !errors.Is(err, mediaserver.ErrItemUnverified) || len(got) != 0 {
+		t.Fatalf("query without identity accepted: ids=%v err=%v", got, err)
+	}
+	if got, err := c.FindBookItemIDs(context.Background(), mediaserver.BookQuery{Available: true, ISBNs: []string{"9780306406157"}}); !errors.Is(err, mediaserver.ErrItemUnverified) || len(got) != 0 {
+		t.Fatalf("stale item identity accepted: ids=%v err=%v", got, err)
 	}
 }
 

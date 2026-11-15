@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/httpx"
@@ -25,6 +26,7 @@ import (
 type Client struct {
 	baseURL, apiKey string
 	httpClient      *http.Client
+	itemTagMu       sync.Mutex
 }
 
 var (
@@ -359,6 +361,100 @@ func (c *Client) SetLibraries(ctx context.Context, id string, ids []string) erro
 	}
 	if !u.hasLibraries(ids) {
 		return errors.New("audiobookshelf did not apply library access")
+	}
+	return nil
+}
+
+// SetItemTag adds or removes one exact tag from one Audiobookshelf item while
+// preserving all tags managed elsewhere (genres, curated tags, etc.). ABS's
+// media update endpoint replaces the complete tag array, so read/merge/write
+// and verify rather than sending a partial patch.
+func (c *Client) SetItemTag(ctx context.Context, itemID, tag string, present bool) error {
+	if !validID.MatchString(itemID) || strings.TrimSpace(tag) == "" || tag != strings.TrimSpace(tag) {
+		return errors.New("audiobookshelf item tag request is invalid")
+	}
+	// ABS replaces the full tag array, so serialize read/merge/write/verify
+	// operations on this client to prevent concurrent tag jobs losing updates.
+	c.itemTagMu.Lock()
+	defer c.itemTagMu.Unlock()
+	itemPath := "/api/items/" + url.PathEscape(itemID)
+	var item struct {
+		ID    string `json:"id"`
+		Media struct {
+			Tags []string `json:"tags"`
+		} `json:"media"`
+	}
+	if err := c.do(ctx, "GET", itemPath+"?expanded=1", nil, &item); err != nil {
+		return err
+	}
+	if item.ID != itemID || item.Media.Tags == nil {
+		return errors.New("audiobookshelf item tags could not be verified")
+	}
+	tags := append([]string(nil), item.Media.Tags...)
+	hasTag := slices.Contains(tags, tag)
+	if present && !hasTag {
+		tags = append(tags, tag)
+	} else if !present && hasTag {
+		filtered := tags[:0]
+		for _, existing := range tags {
+			if existing != tag {
+				filtered = append(filtered, existing)
+			}
+		}
+		tags = filtered
+	}
+	if err := c.do(ctx, "PATCH", itemPath+"/media", map[string]any{"tags": tags}, nil); err != nil {
+		return err
+	}
+	var verified struct {
+		ID    string `json:"id"`
+		Media struct {
+			Tags []string `json:"tags"`
+		} `json:"media"`
+	}
+	if err := c.do(ctx, "GET", itemPath+"?expanded=1", nil, &verified); err != nil {
+		return err
+	}
+	if verified.ID != itemID || verified.Media.Tags == nil || slices.Contains(verified.Media.Tags, tag) != present {
+		return errors.New("audiobookshelf did not apply item tag")
+	}
+	return nil
+}
+
+// SetItemTagAllowlist limits a non-administrator user's visibility to items
+// carrying at least one selected tag. The caller must pass the complete set of
+// Cantinarr-managed tags for this user, including the shared-library tag when
+// that user should see shared items. This method never changes administrators.
+func (c *Client) SetItemTagAllowlist(ctx context.Context, id string, allowedTags []string) error {
+	u, err := c.getUser(ctx, id)
+	if err != nil {
+		return err
+	}
+	if u.remote().IsAdministrator {
+		return errors.New("audiobookshelf administrator tag access is not managed")
+	}
+	if allowedTags == nil {
+		allowedTags = []string{}
+	}
+	for _, tag := range allowedTags {
+		if strings.TrimSpace(tag) == "" || strings.TrimSpace(tag) != tag {
+			return errors.New("audiobookshelf tag allowlist is invalid")
+		}
+	}
+	permissions := map[string]bool{"accessAllTags": false, "selectedTagsNotAccessible": false}
+	if err := c.do(ctx, "PATCH", "/api/users/"+url.PathEscape(id), map[string]any{
+		"permissions":      permissions,
+		"itemTagsSelected": allowedTags,
+	}, nil); err != nil {
+		return err
+	}
+	u, err = c.getUser(ctx, id)
+	if err != nil {
+		return err
+	}
+	if u.remote().IsAdministrator || u.Permissions.AccessAllTags == nil || *u.Permissions.AccessAllTags ||
+		u.Permissions.SelectedTagsDenied == nil || *u.Permissions.SelectedTagsDenied || !slices.Equal(u.Tags, allowedTags) {
+		return errors.New("audiobookshelf did not apply tag access policy")
 	}
 	return nil
 }

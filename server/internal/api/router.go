@@ -337,6 +337,9 @@ func NewRouter(
 			// the instance grant.
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/instances/{instanceID}/media-access", mediaAccessHandler.GetLibraryAccess)
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/instances/{instanceID}/media-access", mediaAccessHandler.UpdateLibraryAccess)
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/instances/{instanceID}/library-separation", mediaAccessHandler.ABSLibrarySeparationStatus)
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Post("/instances/{instanceID}/library-separation/preview", mediaAccessHandler.PreviewABSLibrarySeparation)
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Post("/instances/{instanceID}/library-separation/apply", mediaAccessHandler.ApplyABSLibrarySeparation)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/media-servers/accounts", mediaAccessHandler.ListAccounts)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/media-servers/{instanceID}/users", mediaAccessHandler.RemoteUsers)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/media-servers/{instanceID}/import", mediaAccessHandler.Import)

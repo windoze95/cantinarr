@@ -320,6 +320,7 @@ func main() {
 	// retries the owed ones until they land; it reads only Cantinarr's tables
 	// when nothing is owed.
 	mediaAccessService.StartAccountMaintenance(ctx)
+	mediaAccessService.StartABSLibrarySeparationMaintenance(ctx)
 
 	// Watches the one database connection from outside and logs when nothing
 	// can get through. Deliberately not wired to the issue store above: a

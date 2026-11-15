@@ -72,12 +72,25 @@ func TestOpenUpgradesOldestShippedSchema(t *testing.T) {
 		t.Fatalf("re-Open upgraded database: %v", err)
 	}
 	defer database.Close()
-	var taggedInstances, tagJobs int
+	var taggedInstances, tagJobs, libraryRuns, libraryItems, libraryJobs int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM service_instances WHERE tag_requests!=0`).Scan(&taggedInstances); err != nil || taggedInstances != 0 {
 		t.Fatalf("legacy instances enabled requester tags: count=%d error=%v", taggedInstances, err)
 	}
 	if err := database.QueryRow(`SELECT COUNT(*) FROM request_tag_jobs`).Scan(&tagJobs); err != nil || tagJobs != 0 {
 		t.Fatalf("upgrade backfilled requester tag jobs: count=%d error=%v", tagJobs, err)
+	}
+	for _, check := range []struct {
+		name  string
+		table string
+		count *int
+	}{
+		{"ABS library separation runs", "abs_library_separation_runs", &libraryRuns},
+		{"ABS library separation items", "abs_library_separation_items", &libraryItems},
+		{"ABS library separation jobs", "abs_library_separation_jobs", &libraryJobs},
+	} {
+		if err := database.QueryRow(`SELECT COUNT(*) FROM ` + check.table).Scan(check.count); err != nil || *check.count != 0 {
+			t.Fatalf("upgrade created %s incorrectly: count=%d error=%v", check.name, *check.count, err)
+		}
 	}
 
 	// Users survive with their values, and the one-time backfills applied:

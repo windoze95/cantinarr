@@ -25,6 +25,7 @@ import '../../media_access/ui/listening_app_fields.dart';
 import '../../discover/data/trending_books_service.dart';
 import '../data/instance_api_service.dart';
 import '../data/audiobook_library_access.dart';
+import '../data/abs_library_separation.dart';
 import 'audiobook_user_libraries.dart';
 import '../data/hardcover_connection.dart';
 import 'hardcover_connection_dialog.dart';
@@ -244,6 +245,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   String? _mediaServerLibrariesError;
   Set<String> _selectedLibraryIds = <String>{};
   bool _mediaServerConfigDirty = false;
+  ABSSeparationStatus? _absSeparationStatus;
+  bool _absSeparationLoading = false;
+  bool _absSeparationBusy = false;
+  String? _absSeparationError;
   AvailabilityScanConfig? _availabilityScan;
   bool _availabilityScanDirty = false;
 
@@ -792,6 +797,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       // key falls back to it, so the libraries list without retyping it.
       if (_isPlex) _loadPlexServers();
       if (_isMediaServer) _loadMediaServerLibraries();
+      if (_isAbs) _loadABSSeparationStatus();
     } catch (_) {
       // Connection fields remain manually editable, but mapping data must not
       // be guessed: omitting it on Save preserves the server's current rules.
@@ -863,6 +869,224 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 (apiErrorMessage(e)).toString());
       });
     }
+  }
+
+  Future<void> _loadABSSeparationStatus() async {
+    final instanceId = widget.instanceId;
+    if (!_isAbs || instanceId == null) return;
+    setState(() {
+      _absSeparationLoading = true;
+      _absSeparationError = null;
+    });
+    try {
+      final status = await ABSLibrarySeparationService(
+        backendDio: ref.read(backendClientProvider),
+      ).status(instanceId);
+      if (!mounted || !_isAbs) return;
+      setState(() {
+        _absSeparationStatus = status;
+        _absSeparationLoading = false;
+      });
+    } catch (error) {
+      if (!mounted || !_isAbs) return;
+      setState(() {
+        _absSeparationLoading = false;
+        _absSeparationError = apiErrorMessage(error).toString();
+      });
+    }
+  }
+
+  Future<void> _previewABSSeparation() async {
+    final instanceId = widget.instanceId;
+    if (instanceId == null) return;
+    final bookLibraries = (_mediaServerLibraries ?? const <MediaServerLibrary>[])
+        .where((library) => library.collectionType.toLowerCase() == 'book')
+        .map((library) => library.id)
+        .where((id) => id.isNotEmpty)
+        .toList(growable: false);
+    if (_mediaServerLibraries == null || bookLibraries.isEmpty) {
+      setState(() => _absSeparationError =
+          context.l10n.settingsAbsSeparationNoBookLibraries);
+      return;
+    }
+    setState(() {
+      _absSeparationBusy = true;
+      _absSeparationError = null;
+    });
+    try {
+      final status = await ABSLibrarySeparationService(
+        backendDio: ref.read(backendClientProvider),
+      ).preview(instanceId, bookLibraries);
+      if (!mounted) return;
+      setState(() {
+        _absSeparationStatus = status;
+        _absSeparationBusy = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _absSeparationBusy = false;
+        _absSeparationError = apiErrorMessage(error).toString();
+      });
+    }
+  }
+
+  Future<void> _applyABSSeparation() async {
+    final instanceId = widget.instanceId;
+    final status = _absSeparationStatus;
+    if (instanceId == null || status == null || !status.canApply) return;
+    final confirmUnresolved = status.unmatchedRequestCount > 0;
+    final accepted = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: Text(context.l10n.settingsAbsSeparationApplyTitle),
+            content: Text(confirmUnresolved
+                ? context.l10n.settingsAbsSeparationApplyWithUnmatched(
+                    status.unmatchedRequestCount.toString())
+                : context.l10n.settingsAbsSeparationApplyConfirm),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: Text(context.l10n.settingsCancel),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: Text(context.l10n.settingsAbsSeparationApply),
+              ),
+            ],
+          ),
+        ) ==
+        true;
+    if (!accepted) return;
+    setState(() {
+      _absSeparationBusy = true;
+      _absSeparationError = null;
+    });
+    try {
+      final updated = await ABSLibrarySeparationService(
+        backendDio: ref.read(backendClientProvider),
+      ).apply(
+        instanceId,
+        planHash: status.planHash,
+        confirmUnresolved: confirmUnresolved,
+      );
+      if (!mounted) return;
+      setState(() {
+        _absSeparationStatus = updated;
+        _absSeparationBusy = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _absSeparationBusy = false;
+        _absSeparationError = apiErrorMessage(error).toString();
+      });
+      await _loadABSSeparationStatus();
+    }
+  }
+
+  Widget _buildABSSeparationSection() {
+    final status = _absSeparationStatus;
+    final canPreview = status == null ||
+        status.state == 'not_started' ||
+        status.state == 'previewed';
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Icon(Icons.lock_person_outlined, color: AppTheme.accent),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(context.l10n.settingsAbsSeparationTitle,
+                  style: Theme.of(context).textTheme.titleMedium),
+            ),
+            if (_absSeparationLoading || _absSeparationBusy)
+              const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: AppTheme.accent),
+              ),
+          ]),
+          const SizedBox(height: 8),
+          Text(context.l10n.settingsAbsSeparationDescription,
+              style: const TextStyle(
+                  color: AppTheme.textSecondary, fontSize: 13, height: 1.4)),
+          if (_absSeparationError != null) ...[
+            const SizedBox(height: 10),
+            Text(_absSeparationError!,
+                style: const TextStyle(color: AppTheme.error)),
+          ],
+          if (status != null) ...[
+            const SizedBox(height: 12),
+            Text(context.l10n.settingsAbsSeparationStatus(status.state),
+                style: const TextStyle(
+                    color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
+            for (final library in status.libraries)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  context.l10n.settingsAbsSeparationLibrarySummary(
+                    library.libraryId,
+                    library.inventoryCount.toString(),
+                    library.requestedCount.toString(),
+                    library.sharedCount.toString(),
+                    library.unresolvedCount.toString(),
+                  ),
+                  style: const TextStyle(
+                      color: AppTheme.textSecondary, fontSize: 12),
+                ),
+              ),
+            if (status.unmatchedRequestCount > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  context.l10n.settingsAbsSeparationUnmatched(
+                      status.unmatchedRequestCount.toString()),
+                  style: const TextStyle(color: AppTheme.warning),
+                ),
+              ),
+          ],
+          const SizedBox(height: 10),
+          Wrap(spacing: 8, runSpacing: 4, children: [
+            if (canPreview)
+              OutlinedButton.icon(
+                onPressed: _absSeparationBusy || _absSeparationLoading
+                    ? null
+                    : _previewABSSeparation,
+                icon: const Icon(Icons.fact_check_outlined),
+                label: Text(context.l10n.settingsAbsSeparationPreview),
+              )
+            else
+              TextButton.icon(
+                onPressed: _absSeparationBusy || _absSeparationLoading
+                    ? null
+                    : _loadABSSeparationStatus,
+                icon: const Icon(Icons.refresh),
+                label: Text(context.l10n.settingsAbsSeparationRefreshStatus),
+              ),
+            if (status?.canApply == true)
+              FilledButton.icon(
+                onPressed: _absSeparationBusy ? null : _applyABSSeparation,
+                icon: const Icon(Icons.lock_outline),
+                label: Text(context.l10n.settingsAbsSeparationApply),
+              ),
+            if (_absSeparationError != null)
+              TextButton(
+                onPressed: _loadABSSeparationStatus,
+                child: Text(context.l10n.settingsRetry),
+              ),
+          ]),
+        ],
+      ),
+    );
   }
 
   void _addMediaPathMapping() {
@@ -3391,6 +3615,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               ),
             const SizedBox(height: 24),
             _buildSharedLibrariesSection(),
+            if (_isAbs && widget.isEditing) ...[
+              const SizedBox(height: 16),
+              _buildABSSeparationSection(),
+            ],
             if (VideoApps.serviceTypes.contains(_serviceType) &&
                 ref.watch(authProvider).valueOrNull?.connection?.mediaLibraryAvailability == true) ...[
               const SizedBox(height: 24),

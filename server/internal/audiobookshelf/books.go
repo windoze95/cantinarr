@@ -75,7 +75,12 @@ type bookItem struct {
 		Tracks []struct {
 			Duration float64 `json:"duration"`
 		} `json:"tracks"`
-		Metadata struct {
+		AudioFiles []struct {
+			Exclude bool `json:"exclude"`
+		} `json:"audioFiles"`
+		EbookFile   *struct{} `json:"ebookFile"`
+		EbookFormat string    `json:"ebookFormat"`
+		Metadata    struct {
 			Title     string   `json:"title"`
 			ASIN      string   `json:"asin"`
 			ISBN      string   `json:"isbn"`
@@ -119,11 +124,35 @@ func (u user) canReadItem(item bookItem) bool {
 }
 
 func (item bookItem) playable() bool {
-	if !validID.MatchString(item.ID) || item.MediaType != "book" || item.Missing == nil || *item.Missing || item.Invalid == nil || *item.Invalid {
+	if !item.validBookItem() {
 		return false
 	}
 	for _, track := range item.Media.Tracks {
 		if track.Duration > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (item bookItem) validBookItem() bool {
+	return validID.MatchString(item.ID) && item.MediaType == "book" &&
+		item.Missing != nil && !*item.Missing && item.Invalid != nil && !*item.Invalid
+}
+
+// hasMediaFiles is intentionally broader than playable: library separation
+// applies to ebook-only items as well as audio books.
+func (item bookItem) hasMediaFiles() bool {
+	if item.Media.EbookFile != nil || item.Media.EbookFormat != "" {
+		return true
+	}
+	for _, track := range item.Media.Tracks {
+		if track.Duration > 0 {
+			return true
+		}
+	}
+	for _, file := range item.Media.AudioFiles {
+		if !file.Exclude {
 			return true
 		}
 	}
@@ -211,5 +240,71 @@ func (c *Client) FindBooks(ctx context.Context, remoteID string, q mediaserver.B
 		}
 		return out[i].ID < out[j].ID
 	})
+	return out, nil
+}
+
+// FindBookItemIDs resolves exact ISBN/ASIN matches across Audiobookshelf's
+// book libraries using the administrator API key. It deliberately does not
+// accept titles as identity evidence, requires a verified available source,
+// and live-refetches candidates before returning IDs for privacy tag writes.
+func (c *Client) FindBookItemIDs(ctx context.Context, q mediaserver.BookQuery) ([]string, error) {
+	ids := identifiers(q)
+	if !q.Available || len(ids.terms) == 0 {
+		return nil, mediaserver.ErrItemUnverified
+	}
+	libraries, err := c.Libraries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	found := map[string]bool{}
+	candidates := 0
+	for _, library := range libraries {
+		if library.CollectionType != "book" {
+			continue
+		}
+		for _, term := range ids.terms {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			var response struct {
+				Books []struct {
+					Item bookItem `json:"libraryItem"`
+				} `json:"book"`
+			}
+			path := "/api/libraries/" + url.PathEscape(library.ID) + "/search?" + url.Values{"q": {term}, "limit": {"100"}}.Encode()
+			if err := c.do(ctx, "GET", path, nil, &response); err != nil {
+				return nil, err
+			}
+			candidates += len(response.Books)
+			if response.Books == nil || len(response.Books) >= 100 || candidates > 1000 {
+				return nil, mediaserver.ErrItemUnverified
+			}
+			for _, match := range response.Books {
+				item := match.Item
+				if item.LibraryID != library.ID || !item.validBookItem() || !item.hasMediaFiles() || !ids.matches(item) {
+					continue
+				}
+				if found[item.ID] {
+					continue
+				}
+				var live bookItem
+				if err := c.do(ctx, "GET", "/api/items/"+url.PathEscape(item.ID)+"?expanded=1", nil, &live); err != nil {
+					return nil, err
+				}
+				if live.ID != item.ID || live.LibraryID != library.ID || !live.validBookItem() || !live.hasMediaFiles() || !ids.matches(live) {
+					return nil, mediaserver.ErrItemUnverified
+				}
+				found[item.ID] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(found))
+	for id := range found {
+		out = append(out, id)
+	}
+	slices.Sort(out)
+	if len(out) == 0 {
+		return nil, mediaserver.ErrItemUnverified
+	}
 	return out, nil
 }
