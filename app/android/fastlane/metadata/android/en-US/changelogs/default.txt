@@ -1,10 +1,11 @@
-Play Sun branding and alternate icons.
-French interface and metadata.
+Play Sun and alternate icons.
+French UI and metadata.
 Clearer imports and account links.
-Updated AI models with optional fallback.
+AI models with optional fallback.
 Media-server availability and household access.
 Missing episodes, season follows and extra copies.
 Only my requests alerts.
 Improved Back swipes and discovery status.
 Sign-in keeps HTTPS unless HTTP is explicit.
-Protected artwork respects current access.
+Artwork respects account access.
+Search again for expired Grab selections.

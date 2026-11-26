@@ -61,6 +61,8 @@ As an administrator, open an item's three-dot menu in List or Grid, or long-pres
 - **Refresh metadata** queues a provider refresh. The provider may also scan files according to its settings. **Rescan files** queues a scan scoped to this item's files.
 - **Remove…** asks for confirmation. Files stay on disk unless you select **Also delete files from disk**.
 
+If Radarr or Sonarr **Grab** says your selection is no longer available, use **Search again** and select the release from the new results. If a previous grab failed after you sent it, check the queue before grabbing it again.
+
 A queued search, refresh, or scan is not a completion message. Refresh the library after the provider finishes. If an action fails, the message identifies the failure; check that the selected instance is reachable before trying again.
 
 ## Setup checklist
