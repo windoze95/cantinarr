@@ -21,6 +21,8 @@ Operating manual for AI agents and human contributors. `CLAUDE.md` imports this 
 
 ## Verification
 
+- **Bug fixes need committed regression coverage.** Add or extend an automated test that demonstrates the failure before the fix and passes afterward. Cover each layer whose behavior changes: Go tests for server behavior and Flutter widget or integration tests for user-visible app behavior, including error and recovery paths. If a fix changes both, cover both; running the existing suites or doing a manual smoke test is not a substitute.
+- If a case cannot be automated, record why and include the exact manual steps and observed result in the PR. Still commit automated coverage for any parts the suites can exercise.
 - Documentation changes: run `npm ci` and `npm run build` from `docs-site/` with Node 22.23.4 or newer. The build regenerates references from this checkout and checks links, fragments, metadata, settings coverage, tool coverage, configuration names, and the no-em-dash writing rule. CI runs this on every change because server and app reference changes also affect the public site.
 - Server changes: run `go vet ./...` and `go test ./...` from `server/`.
 - App changes: run `flutter analyze --no-fatal-infos` and `flutter test` from `app/`. Golden tests live in `app/test` (committed `goldens/*.png` beside their test file); regenerate them with `flutter test --update-goldens` from `app/`.
