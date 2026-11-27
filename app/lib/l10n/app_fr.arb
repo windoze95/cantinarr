@@ -2004,6 +2004,7 @@
   "adminEditSeries2": "Modifier la série",
   "adminEpisode": "Épisode {value0}",
   "adminExternalLinks": "Liens externes",
+  "adminReleaseSelectionUnavailable": "Cette sélection n’est plus disponible. Relancez la recherche et choisissez une version.",
   "adminFailedToGrabRelease": "Impossible de récupérer la version : {value0}",
   "adminFailedToLoadActivity": "Impossible de charger l’activité : {value0}",
   "adminFailedToLoadArtist": "Impossible de charger l’artiste : {value0}",

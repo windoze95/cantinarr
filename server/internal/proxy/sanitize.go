@@ -51,6 +51,7 @@ func sanitizeFailureReason(err error) string {
 		errJSONResponseSniffFailed,
 		errUnsanitizableUpgrade,
 		errContentPolicyUnfilterable,
+		errReleaseSearchTooLarge,
 	} {
 		if errors.Is(err, sentinel) {
 			return sentinel.Error()
@@ -64,15 +65,15 @@ func sanitizeFailureReason(err error) string {
 // history records can contain a downloadUrl copied from an indexer, including
 // that indexer's API key.
 func sanitizeProxyResponse(resp *http.Response) error {
-	return sanitizeProxyResponseWith(resp, nil)
+	return sanitizeProxyResponseWith(resp, proxyJSONTransforms{})
 }
 
-// sanitizeProxyResponseWith is sanitizeProxyResponse with an optional
-// transform applied to the decoded body after the credential scrub (so the
-// transform never sees a secret) and before re-encoding. A transform on a
-// body that is not JSON is a gated read the gate cannot judge, which fails
-// like any other unsanitizable response.
-func sanitizeProxyResponseWith(resp *http.Response, transform func(any) (any, error)) error {
+type proxyJSONTransforms struct {
+	protectReleaseGUIDs func(any) error        // before scrubbing changes an upstream cache key
+	filterContent       func(any) (any, error) // only ever sees the scrubbed body
+}
+
+func sanitizeProxyResponseWith(resp *http.Response, transforms proxyJSONTransforms) error {
 	sanitizeResponseHeaders(resp.Header)
 	// An arr sits behind Cantinarr's authenticated boundary; its responses are
 	// per-user and must never be stored by a shared cache. Strip upstream
@@ -82,7 +83,7 @@ func sanitizeProxyResponseWith(resp *http.Response, transform func(any) (any, er
 	enforcePrivateProxyCachePolicy(resp.Header)
 
 	if responseHasNoBody(resp) {
-		if transform != nil {
+		if transforms.filterContent != nil {
 			return errContentPolicyUnfilterable
 		}
 		return nil
@@ -92,7 +93,7 @@ func sanitizeProxyResponseWith(resp *http.Response, transform func(any) (any, er
 		return err
 	}
 	if !sanitize {
-		if transform != nil {
+		if transforms.filterContent != nil {
 			return errContentPolicyUnfilterable
 		}
 		return nil
@@ -113,7 +114,7 @@ func sanitizeProxyResponseWith(resp *http.Response, transform func(any) (any, er
 		return errJSONResponseTooLarge
 	}
 	if len(body) == 0 {
-		if transform != nil {
+		if transforms.filterContent != nil {
 			return errContentPolicyUnfilterable
 		}
 		resp.Body = http.NoBody
@@ -122,7 +123,7 @@ func sanitizeProxyResponseWith(resp *http.Response, transform func(any) (any, er
 		return nil
 	}
 
-	sanitized, err := sanitizeJSONWith(body, transform)
+	sanitized, err := sanitizeJSONWith(body, transforms)
 	if err != nil {
 		return err
 	}
@@ -407,10 +408,10 @@ func structuredJSONStart(prefix []byte) (found, jsonLike bool) {
 }
 
 func sanitizeJSON(body []byte) ([]byte, error) {
-	return sanitizeJSONWith(body, nil)
+	return sanitizeJSONWith(body, proxyJSONTransforms{})
 }
 
-func sanitizeJSONWith(body []byte, transform func(any) (any, error)) ([]byte, error) {
+func sanitizeJSONWith(body []byte, transforms proxyJSONTransforms) ([]byte, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	var value any
@@ -421,10 +422,15 @@ func sanitizeJSONWith(body []byte, transform func(any) (any, error)) ([]byte, er
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return nil, errInvalidJSONResponse
 	}
+	if transforms.protectReleaseGUIDs != nil {
+		if err := transforms.protectReleaseGUIDs(value); err != nil {
+			return nil, err
+		}
+	}
 	value = sanitizeJSONValue(value)
-	if transform != nil {
+	if transforms.filterContent != nil {
 		var err error
-		value, err = transform(value)
+		value, err = transforms.filterContent(value)
 		if err != nil {
 			return nil, err
 		}

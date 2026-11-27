@@ -1,4 +1,5 @@
 import 'package:cantinarr/l10n/l10n.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
@@ -189,9 +190,11 @@ class _SonarrReleasesScreenState extends ConsumerState<SonarrReleasesScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _isGrabbing = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content:
-              Text(context.l10n.adminFailedToGrabRelease((e).toString()))));
+      final message = e is DioException && e.response?.statusCode == 410
+          ? context.l10n.adminReleaseSelectionUnavailable
+          : context.l10n.adminFailedToGrabRelease(e.toString());
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
     }
   }
 

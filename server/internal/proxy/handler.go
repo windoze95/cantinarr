@@ -17,7 +17,8 @@ import (
 )
 
 type Handler struct {
-	store *instance.Store
+	store       *instance.Store
+	releaseRefs manualReleaseReferences
 	// contentPolicy is the kids-account service; a child's Radarr/Sonarr
 	// reads are cut to what the account may see (contentgate.go).
 	contentPolicy *contentpolicy.Service
@@ -82,8 +83,7 @@ func (h *Handler) InstanceProxy() http.HandlerFunc {
 			return
 		}
 
-		stripPrefix := "/api/instances/" + instanceID
-		h.proxyRequest(w, r, target, inst.ServiceType, inst.APIKey, stripPrefix, gate)
+		h.proxyRequest(w, r, target, inst, gate)
 	}
 }
 
@@ -93,9 +93,23 @@ func isUnsafeProxyMethod(method string) bool {
 		strings.EqualFold(method, "TRACK")
 }
 
-func (h *Handler) proxyRequest(w http.ResponseWriter, r *http.Request, target *url.URL, serviceType, apiKey, stripPrefix string, gate *arrGate) {
+func (h *Handler) proxyRequest(w http.ResponseWriter, r *http.Request, target *url.URL, inst *instance.Instance, gate *arrGate) {
+	stripPrefix := "/api/instances/" + inst.ID
+	var protectReleaseGUIDs func(any) error
+	if scope, ok := manualReleaseScopeFor(r, inst); ok {
+		switch r.Method {
+		case http.MethodGet:
+			protectReleaseGUIDs = func(value any) error { return h.releaseRefs.protectSearch(scope, value) }
+		case http.MethodPost:
+			// Only the outbound request may contain the restored indexer credential.
+			r = r.Clone(r.Context())
+			if !h.releaseRefs.prepareGrab(w, r, scope) {
+				return
+			}
+		}
+	}
 	proxy := &httputil.ReverseProxy{
-		Transport: transportForInstance(serviceType),
+		Transport: transportForInstance(inst.ServiceType),
 		Rewrite: func(proxyRequest *httputil.ProxyRequest) {
 			req := proxyRequest.Out
 			// The inbound Cantinarr session and every credential-like client header
@@ -127,7 +141,7 @@ func (h *Handler) proxyRequest(w http.ResponseWriter, r *http.Request, target *u
 			req.URL.Path = joinURLPath(target.Path, strings.TrimPrefix(req.URL.Path, stripPrefix))
 			req.URL.RawPath = ""
 			req.Host = target.Host
-			req.Header.Set("X-Api-Key", apiKey)
+			req.Header.Set("X-Api-Key", inst.APIKey)
 			// JSON responses must be inspectable before they reach a client. Ask
 			// the arr for an identity representation so a compressed body cannot
 			// bypass the response sanitizer.
@@ -138,7 +152,11 @@ func (h *Handler) proxyRequest(w http.ResponseWriter, r *http.Request, target *u
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			remapUpstreamRedirect(resp, target, stripPrefix)
-			return sanitizeProxyTransportResponseGated(resp, gate)
+			transforms := proxyJSONTransforms{filterContent: gate.transformFor(resp)}
+			if resp.StatusCode == http.StatusOK {
+				transforms.protectReleaseGUIDs = protectReleaseGUIDs
+			}
+			return sanitizeProxyTransportResponseWith(resp, transforms)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			// ModifyResponse errors are intentionally opaque: an upstream parse
@@ -243,22 +261,17 @@ func replaceWithOffOriginRedirectError(resp *http.Response) {
 // response trailers. Transport populates Response.Trailer only after Body reaches
 // EOF, so the body wrapper clears it after every read as well as at Close.
 func sanitizeProxyTransportResponse(resp *http.Response) error {
-	return sanitizeProxyTransportResponseGated(resp, nil)
+	return sanitizeProxyTransportResponseWith(resp, proxyJSONTransforms{})
 }
 
-// sanitizeProxyTransportResponseGated is sanitizeProxyTransportResponse with
-// a kids account's gate applied to the scrubbed body. A single record the
-// gate hides is answered as not found rather than as a proxy failure.
-func sanitizeProxyTransportResponseGated(resp *http.Response, gate *arrGate) error {
+// A single record the content gate hides is answered as not found rather
+// than as a proxy failure.
+func sanitizeProxyTransportResponseWith(resp *http.Response, transforms proxyJSONTransforms) error {
 	if resp.StatusCode == http.StatusSwitchingProtocols {
 		sanitizeResponseHeaders(resp.Header)
 		return errUnsanitizableUpgrade
 	}
-	var transform func(any) (any, error)
-	if gate != nil {
-		transform = gate.transformFor(resp)
-	}
-	if err := sanitizeProxyResponseWith(resp, transform); err != nil {
+	if err := sanitizeProxyResponseWith(resp, transforms); err != nil {
 		if errors.Is(err, errContentPolicyBlocked) {
 			replaceWithHiddenRecord(resp)
 			return nil

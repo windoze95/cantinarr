@@ -27,3 +27,5 @@ In Settings > Notifications > Push Notifications, test Only my requests. Movie, 
 iPhone: test completed/canceled left-edge Back swipes on direct and nested pages, list position, tabs, and resume. Drawer swipes still work. Protected editors use button Back; Keep editing retains the draft and position, and Discard exits.
 
 Discovery: check badges after sign-in refresh, titles absent from your libraries, and complete shows with an empty upcoming season. Real library failures must still show Status unknown.
+
+In Radarr and Sonarr Interactive search, grab one release and check the queue. With the updated server, an expired selection should ask you to search again.

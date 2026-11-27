@@ -4188,6 +4188,7 @@
     }
   },
   "adminExternalLinks": "External links",
+  "adminReleaseSelectionUnavailable": "This release selection is no longer available. Search again and choose a release.",
   "adminFailedToGrabRelease": "Failed to grab release: {value0}",
   "@adminFailedToGrabRelease": {
     "placeholders": {
