@@ -5,7 +5,7 @@ AI models with optional fallback.
 Media-server availability and household access.
 Missing episodes, season follows and extra copies.
 Only my requests alerts.
-Improved Back swipes and discovery status.
+Back returns directly opened titles to Discover. Improved discovery status.
 Sign-in keeps HTTPS unless HTTP is explicit.
 Artwork respects account access.
 Search again for expired Grab selections.

@@ -18,6 +18,7 @@ import 'package:cantinarr/features/dashboard/ui/dashboard_tv_tab.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_album_detail_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/features/discover/ui/browse_grid_screen.dart';
+import 'package:cantinarr/features/discover/ui/search_results_view.dart';
 import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
 import 'package:cantinarr/features/media_detail/ui/media_detail_screen.dart';
 import 'package:cantinarr/features/notifications/push_service.dart';
@@ -28,7 +29,8 @@ import 'package:cantinarr/features/sonarr/ui/sonarr_module_shell.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show MethodChannel, StandardMethodCodec, MethodCall;
+import 'package:flutter/services.dart'
+    show MethodChannel, StandardMethodCodec, MethodCall, SystemChannels;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -38,6 +40,128 @@ void main() {
   // Connection entry stays usable while saved-server history loads. Give
   // navigation tests local storage rather than waiting for a plugin timeout.
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  testWidgets('Android system Back on direct TV detail stays in the app',
+      (tester) async {
+    final calls = _recordPlatformCalls(tester);
+    Object? frameworkHandlesBack() => calls
+        .lastWhere((call) =>
+            call.method == 'SystemNavigator.setFrameworkHandlesBack')
+        .arguments;
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+    router.go('/detail/tv/225634');
+    await tester.pumpAndSettle();
+    expect(router.canPop(), isFalse);
+    expect(frameworkHandlesBack(), true,
+        reason: 'Android must send the gesture to Flutter before it starts');
+
+    showModalBottomSheet<void>(
+      context: tester.element(find.byType(MediaDetailScreen)),
+      builder: (_) => const Text('Over direct detail'),
+    );
+    await tester.pumpAndSettle();
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Over direct detail'), findsNothing);
+    expect(router.state.uri.path, '/detail/tv/225634');
+
+    await _androidBackGesture(tester, edge: 1, cancel: true);
+    expect(router.state.uri.path, '/detail/tv/225634');
+    await _androidBackGesture(tester, edge: 1);
+    expect(calls.where((call) => call.method == 'SystemNavigator.pop'), isEmpty);
+    expect(router.state.uri.path, '/dashboard/tv');
+    expect(frameworkHandlesBack(), false);
+
+    await tester.binding.handlePopRoute();
+    expect(calls.where((call) => call.method == 'SystemNavigator.pop'),
+        hasLength(1));
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+  testWidgets('Android Back clears the search overlay before leaving a root',
+      (tester) async {
+    final calls = _recordPlatformCalls(tester);
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+    final search = find.byType(TextField).first;
+    await tester.enterText(search, 'Nashville');
+    await tester.pump();
+    expect(find.byType(SearchResultsView), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(search).controller!.text, isEmpty);
+    expect(find.byType(SearchResultsView), findsNothing);
+    expect(router.state.uri.path, '/dashboard/movies');
+    expect(calls.where((call) => call.method == 'SystemNavigator.pop'), isEmpty);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+  for (final (detail, account, parent) in [
+    ('/detail/movie/550', _authedState, '/dashboard/movies'),
+    ('/detail/book/29749107?source=chaptarr', _booksState, '/dashboard/books'),
+    ('/detail/album/mb-1234', _musicState, '/dashboard/music'),
+    ('/detail/tv-library/1?instance_id=missing', _authedState, '/dashboard/tv'),
+  ]) {
+    testWidgets('Android system Back from $detail opens $parent', (tester) async {
+      final calls = _recordPlatformCalls(tester);
+      final (:router, container: _) = await _pumpRouter(tester, account);
+      router.go(detail);
+      await tester.pumpAndSettle();
+      expect(router.state.uri.toString(), detail);
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(router.state.uri.path, parent);
+      expect(calls.where((call) => call.method == 'SystemNavigator.pop'), isEmpty);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+  }
+
+  testWidgets('Android Back on a direct settings editor respects its exit guard',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+    router.go('/settings/password');
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, 'unsaved-password');
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Keep editing'));
+    await tester.pumpAndSettle();
+    expect(router.state.uri.path, '/settings/password');
+    expect(find.text('unsaved-password'), findsOneWidget);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Discard changes'));
+    await tester.pumpAndSettle();
+    expect(router.state.uri.path, '/settings');
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+  testWidgets('Android Back gives a detail dialog and pushed pages one turn each',
+      (tester) async {
+    final calls = _recordPlatformCalls(tester);
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+    router.go('/dashboard/tv');
+    await tester.pumpAndSettle();
+    router.push('/browse/tv/popular');
+    await tester.pumpAndSettle();
+    router.push('/detail/tv/225634');
+    await tester.pumpAndSettle();
+
+    showDialog<void>(
+      context: tester.element(find.byType(MediaDetailScreen)),
+      builder: (_) => const AlertDialog(title: Text('Over detail')),
+    );
+    await tester.pumpAndSettle();
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Over detail'), findsNothing);
+    expect(router.state.uri.path, '/detail/tv/225634');
+
+    await _androidBackGesture(tester, edge: 0, cancel: true);
+    expect(router.state.uri.path, '/detail/tv/225634');
+    await _androidBackGesture(tester, edge: 0);
+    expect(router.state.uri.path, '/browse/tv/popular');
+    await _androidBackGesture(tester, edge: 1);
+    expect(router.state.uri.path, '/dashboard/tv');
+    expect(calls.where((call) => call.method == 'SystemNavigator.pop'), isEmpty);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
   testWidgets('direct TV detail Back returns to TV Discover', (tester) async {
     final (:router, container: _) = await _pumpRouter(tester, _authedState);
@@ -118,6 +242,11 @@ void main() {
         // The fixture has no such grant. It must still land on that library,
         // visibly unavailable, rather than another library's detail state.
         expect(find.text('Library unavailable'), findsOneWidget);
+        expect(router.canPop(), !restoringAuth);
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(router.state.uri.path,
+            restoringAuth ? '/dashboard/tv' : '/dashboard/movies');
       });
     }
   }
@@ -711,6 +840,44 @@ void main() {
     expect(find.byType(DashboardShell), findsNothing);
     expect(find.byType(SonarrModuleShell), findsOneWidget);
   });
+}
+
+List<MethodCall> _recordPlatformCalls(WidgetTester tester) {
+  tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+  final calls = <MethodCall>[];
+  final messenger = tester.binding.defaultBinaryMessenger;
+  messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+    calls.add(call);
+    return null;
+  });
+  addTearDown(() =>
+      messenger.setMockMethodCallHandler(SystemChannels.platform, null));
+  return calls;
+}
+
+Future<void> _androidBackGesture(WidgetTester tester,
+    {required int edge, bool cancel = false}) async {
+  Future<void> send(String method, [Object? args]) async {
+    await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+      SystemChannels.backGesture.name,
+      const StandardMethodCodec().encodeMethodCall(MethodCall(method, args)),
+      (_) {},
+    );
+    await tester.pump();
+  }
+
+  await send('startBackGesture', {
+    'touchOffset': <double>[edge == 0 ? 1 : 389, 300],
+    'progress': 0.0,
+    'swipeEdge': edge,
+  });
+  await send('updateBackGestureProgress', {
+    'touchOffset': <double>[195, 300],
+    'progress': 0.5,
+    'swipeEdge': edge,
+  });
+  await send(cancel ? 'cancelBackGesture' : 'commitBackGesture');
+  await tester.pumpAndSettle();
 }
 
 const _authedState = AuthState(
