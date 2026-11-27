@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../data/sonarr_models.dart';
+import '../../logic/import_doctor.dart';
 
 /// (text, colour) pair for the availability line on a season card.
 typedef SeasonAvailability = ({String text, Color color});
@@ -32,8 +33,7 @@ const String _nbsp = ' ';
 /// together with the files on disk, add back up to the whole season, using the
 /// episode list's own vocabulary: episodes that aired and are wanted but
 /// absent are "missing", episodes still transferring are "downloading", ones
-/// that have finished and are waiting on — or stuck at — the import step are
-/// "waiting to import", and what is left is "unaired" while the season still
+/// that have finished name their import phase, and what is left is "unaired" while the season still
 /// has an air date pending ([moreToCome]) or "unmonitored" when it does not.
 ///
 /// Colour follows the library tile's grammar: green only once every episode is
@@ -43,6 +43,7 @@ SeasonAvailability seasonAvailabilityLine(SonarrStatistics? stats,
     {required bool moreToCome,
     List<SonarrQueueItem> queue = const [],
     AppLocalizations? strings}) {
+  final l10n = strings ?? lookupAppLocalizations(const Locale('en'));
   final files = stats?.episodeFileCount ?? 0;
   // Sonarr's episodeCount already counts every episode with a file; clamping
   // keeps a degenerate payload (a file count without an episodeCount) from
@@ -52,8 +53,7 @@ SeasonAvailability seasonAvailabilityLine(SonarrStatistics? stats,
   final total = math.max(stats?.totalEpisodeCount ?? 0, obtainable);
   if (total == 0) {
     return (
-      text: _phrase((strings ?? lookupAppLocalizations(const Locale('en')))
-          .admin00EpisodesAvailable),
+      text: _phrase(l10n.admin00EpisodesAvailable),
       color: AppTheme.textSecondary,
     );
   }
@@ -62,13 +62,12 @@ SeasonAvailability seasonAvailabilityLine(SonarrStatistics? stats,
   // re-grabbed, so count episodes rather than rows.
   final inFlight = <int, _InFlight>{};
   for (final item in queue) {
-    final key = item.episodeId ?? -item.id;
-    final waiting = _isWaitingToImport(item);
+    final key = item.episodeId;
+    if (key == null) continue; // A queue row alone cannot identify an episode.
+    final phase = _phaseOf(item);
     final seen = inFlight[key];
-    // A row that is still transferring outranks a stale import-pending one:
-    // that episode is moving, not parked.
-    if (seen == null || (seen.waiting && !waiting)) {
-      inFlight[key] = (aired: item.episodeHasAired, waiting: waiting);
+    if (seen == null || phase.index < seen.phase.index) {
+      inFlight[key] = (aired: item.episodeHasAired, phase: phase);
     }
   }
 
@@ -78,11 +77,16 @@ SeasonAvailability seasonAvailabilityLine(SonarrStatistics? stats,
   // because that is the state an admin can act on.
   var missing = math.max(0, obtainable - files);
   var remaining = total - obtainable;
-  var waiting = 0, downloading = 0;
-  for (final atImport in [true, false]) {
+  final counts = {for (final phase in _Phase.values) phase: 0};
+  for (final phase in [
+    _Phase.blocked,
+    _Phase.importing,
+    _Phase.pending,
+    _Phase.downloading
+  ]) {
     for (final aired in [true, false]) {
       final queued = inFlight.values
-          .where((f) => f.aired == aired && f.waiting == atImport)
+          .where((f) => f.aired == aired && f.phase == phase)
           .length;
       final taken = math.min(queued, aired ? missing : remaining);
       if (aired) {
@@ -90,58 +94,55 @@ SeasonAvailability seasonAvailabilityLine(SonarrStatistics? stats,
       } else {
         remaining -= taken;
       }
-      if (atImport) {
-        waiting += taken;
-      } else {
-        downloading += taken;
-      }
+      counts[phase] = counts[phase]! + taken;
     }
   }
 
+  final downloading = counts[_Phase.downloading]!;
+  final waiting = counts[_Phase.pending]!;
+  final importing = counts[_Phase.importing]!;
+  final blocked = counts[_Phase.blocked]!;
   final parts = [
-    if (missing > 0)
-      _phrase((strings ?? lookupAppLocalizations(const Locale('en')))
-          .adminMissing2((missing).toString())),
-    if (downloading > 0)
-      _phrase((strings ?? lookupAppLocalizations(const Locale('en')))
-          .adminDownloading2((downloading).toString())),
-    if (waiting > 0)
-      _phrase((strings ?? lookupAppLocalizations(const Locale('en')))
-          .adminWaitingToImport((waiting).toString())),
+    if (missing > 0) _phrase(l10n.adminMissing2('$missing')),
+    if (downloading > 0) _phrase(l10n.adminDownloading2('$downloading')),
+    if (waiting > 0) _phrase(l10n.adminWaitingToImport('$waiting')),
+    if (importing > 0) _phrase(l10n.sonarrImportingCount(importing)),
+    if (blocked > 0) _phrase(l10n.sonarrBlockedCount(blocked)),
     if (remaining > 0)
       _phrase(moreToCome
-          ? (strings ?? lookupAppLocalizations(const Locale('en')))
-              .adminUnaired2((remaining).toString())
-          : (strings ?? lookupAppLocalizations(const Locale('en')))
-              .adminUnmonitored3((remaining).toString())),
+          ? l10n.adminUnaired2('$remaining')
+          : l10n.adminUnmonitored3('$remaining')),
   ];
 
   return (
-    text:
-        '${_phrase((strings ?? lookupAppLocalizations(const Locale('en'))).adminEpisodesAvailable(files, obtainable))}'
-            '${parts.isEmpty ? '' : ' •$_nbsp${parts.join(', ')}'}',
+    text: '${_phrase(l10n.adminEpisodesAvailable(files, obtainable))}'
+        '${parts.isEmpty ? '' : ' •$_nbsp${parts.join(', ')}'}',
     color: files >= total
         ? AppTheme.available
         : missing > 0
             ? AppTheme.error
-            : waiting + downloading > 0 || moreToCome
-                ? AppTheme.downloading
-                : AppTheme.requested,
+            : blocked > 0
+                ? AppTheme.requested
+                : waiting + importing + downloading > 0 || moreToCome
+                    ? AppTheme.downloading
+                    : AppTheme.requested,
   );
 }
 
 /// Binds one phrase together so the line can only break between phrases.
 String _phrase(String text) => text.replaceAll(' ', _nbsp);
 
-/// One queued episode, reduced to the two facts the line needs: which hole it
-/// fills, and whether it is still transferring.
-typedef _InFlight = ({bool aired, bool waiting});
+typedef _InFlight = ({bool aired, _Phase phase});
 
-/// True once a download has finished transferring and is waiting on — or stuck
-/// at — the import step, the state the episode rows spell out as "Downloaded —
-/// waiting to import". Calling that "downloading" would point at the wrong
-/// thing when a whole season is parked in front of a broken import.
-bool _isWaitingToImport(SonarrQueueItem item) =>
-    item.trackedDownloadState == 'importPending' ||
-    item.trackedDownloadState == 'importBlocked' ||
-    item.trackedDownloadState == 'importing';
+/// Priority for competing rows on *one* episode: don't hide a blocker; an
+/// active transfer or import outranks an ordinary pending row.
+enum _Phase { blocked, importing, downloading, pending }
+
+_Phase _phaseOf(SonarrQueueItem item) {
+  if (sonarrImportBlocker(item) != null) return _Phase.blocked;
+  return switch (item.trackedDownloadState) {
+    'importing' => _Phase.importing,
+    'importPending' => _Phase.pending,
+    _ => _Phase.downloading,
+  };
+}

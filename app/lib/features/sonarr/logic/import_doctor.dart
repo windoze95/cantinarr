@@ -310,6 +310,37 @@ bool _looksHealthy({
   return true;
 }
 
+/// Evidence for the episode/season UI. A pending download can have a Doctor
+/// suggestion or a client warning without Sonarr having rejected its import.
+typedef SonarrImportBlocker = ({String? problem, String? reportedReason});
+
+SonarrImportBlocker? sonarrImportBlocker(SonarrQueueItem item) {
+  final state = item.trackedDownloadState;
+  final explicit = state == 'importBlocked';
+  final atImport = state == 'importPending' ||
+      state == 'importing' ||
+      (item.status == 'completed' && state != 'imported');
+  if (!explicit && !atImport) {
+    return null;
+  }
+  final lines = [
+    for (final group in item.statusMessageGroups) ...group.messages,
+    if (item.statusMessageGroups.isEmpty) ...item.statusMessages,
+    if (item.errorMessage != null) item.errorMessage!,
+    for (final group in item.statusMessageGroups)
+      if (group.title != item.title) group.title,
+  ];
+  for (final line in lines) {
+    final match = _matchRule(line, _messageRules);
+    if (match != null) return (problem: match.problem, reportedReason: null);
+  }
+  if (!explicit) return null;
+  return (
+    problem: null,
+    reportedReason: lines.where((line) => line.trim().isNotEmpty).firstOrNull,
+  );
+}
+
 /// Service-neutral rule engine. Classifies a queue item from its raw signals
 /// with first-match-wins rules. Mirrors the Go classifier's order:
 /// error-status → recognized errorMessage (even when status is ok) → import

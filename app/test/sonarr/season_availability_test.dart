@@ -168,14 +168,21 @@ void main() {
       expect(line.color, AppTheme.downloading);
     });
 
-    test('an import Sonarr has blocked still counts as waiting', () {
+    test(
+        'blocked, importing and pending count distinct episodes in their own phases',
+        () {
       final line = seasonAvailabilityLine(
         _stats(files: 0, obtainable: 13, total: 13),
         moreToCome: false,
-        queue: _queue(13, aired: true, state: 'importBlocked'),
+        queue: [
+          ..._queue(13, aired: true, state: 'importPending'),
+          ..._queue(2, aired: true, state: 'importing'),
+          ..._queue(1, aired: true, state: 'importBlocked'),
+        ],
       );
 
-      expect(_read(line.text), '0/13 Episodes Available • 13 waiting to import');
+      expect(_read(line.text),
+          '0/13 Episodes Available • 11 waiting to import, 1 importing, 1 blocked import');
     });
 
     test('episodes still transferring read as downloading', () {

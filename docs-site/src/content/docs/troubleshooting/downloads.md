@@ -23,7 +23,9 @@ If an administrator sees **Client controls unavailable**, the download client th
 
 ## The transfer finished, but import is blocked
 
-Open the relevant arr queue and its Import Doctor explanation. Common causes include:
+In Sonarr, open the season or episode and read its import status. **Waiting to import** means the transfer finished and import is pending. **Importing** means import is in progress. For a blocked import, an administrator can select **Review import** to open Import Doctor. If several downloads are blocked, select the release to inspect. A shared season pack appears once in season review. Rows without a client download ID remain separate and cannot offer manual or force import.
+
+Import Doctor also opens from the relevant arr queue. If Sonarr provides no reason, the app says so. Common reported causes include:
 
 | Finding | Check before taking action |
 | --- | --- |

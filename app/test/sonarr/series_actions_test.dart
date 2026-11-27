@@ -47,7 +47,7 @@ class _FakeAdapter implements HttpClientAdapter {
       if (path.endsWith('/qualityprofile')) response = _profiles;
       if (path.endsWith('/tag')) response = _tags;
       if (path.endsWith('/episode')) response = <dynamic>[];
-      if (path.endsWith('/queue')) response = {'records': <dynamic>[]};
+      if (path.endsWith('/queue/details')) response = <dynamic>[];
     }
     return ResponseBody.fromString(
       jsonEncode(response),

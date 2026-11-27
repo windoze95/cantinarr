@@ -106,6 +106,9 @@ class QueueItemCard extends StatelessWidget {
   /// showing the inline issues box (used by the Import Doctor).
   final VoidCallback? onShowIssues;
 
+  /// Episode detail can name a blocked import even without a message count.
+  final String? importBlocker;
+
   const QueueItemCard({
     super.key,
     required this.item,
@@ -113,11 +116,15 @@ class QueueItemCard extends StatelessWidget {
     this.releaseTitle,
     this.onRemove,
     this.onShowIssues,
+    this.importBlocker,
   });
 
   @override
   Widget build(BuildContext context) {
-    final statusColor = sonarrQueueStatusColor(item);
+    final statusColor =
+        importBlocker == null || item.trackedDownloadStatus == 'error'
+            ? sonarrQueueStatusColor(item)
+            : AppTheme.requested;
     final issues = <String>[
       if (item.errorMessage != null && item.errorMessage!.isNotEmpty)
         item.errorMessage!,
@@ -200,7 +207,9 @@ class QueueItemCard extends StatelessWidget {
               runSpacing: 4,
               children: [
                 StatusPill(
-                    text: sonarrQueueStatusLabel(item, strings: context.l10n),
+                    text: importBlocker == null
+                        ? sonarrQueueStatusLabel(item, strings: context.l10n)
+                        : context.l10n.adminImportBlocked,
                     color: statusColor),
                 StatusPill(
                   text: protocol.toUpperCase(),
@@ -259,7 +268,14 @@ class QueueItemCard extends StatelessWidget {
               ],
             ),
           ),
-          if (item.hasIssues && issues.isNotEmpty)
+          if (importBlocker != null) ...[
+            const SizedBox(height: 8),
+            Text(importBlocker!, style: TextStyle(color: statusColor)),
+            if (onShowIssues != null)
+              TextButton(
+                  onPressed: onShowIssues,
+                  child: Text(context.l10n.sonarrReviewImport)),
+          ] else if (item.hasIssues && issues.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 8, right: 8),
               child: onShowIssues != null

@@ -31,3 +31,5 @@ Open a title from a notification after sign-in. With no previous page, toolbar B
 Discovery: check badges after sign-in refresh, titles absent from your libraries, and complete shows with an empty upcoming season. Real library failures must still show Status unknown.
 
 In Radarr and Sonarr Interactive search, grab one release and check the queue. With the updated server, an expired selection should ask you to search again.
+
+Sonarr: compare pending, importing, and blocked episode statuses. As an admin, open Review import from a season and an episode. Check that a pack appears once in season review and a second download for the same episode opens its own Import Doctor.

@@ -8,6 +8,7 @@ import '../../../core/widgets/app_sheet.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import '../logic/import_doctor.dart';
+import 'widgets/episode_status.dart';
 
 /// The "Import Doctor": explains why a download is stuck (full transparency,
 /// including the raw Sonarr messages) and offers one-click fixes. Destructive
@@ -146,8 +147,8 @@ class _ImportDoctorSheetState extends ConsumerState<ImportDoctorSheet> {
 
   Future<void> _runManualImport({required bool force}) async {
     final downloadId = widget.item.downloadId;
-    if (downloadId == null || downloadId.isEmpty) {
-      _toast(context.l10n.adminThisDownloadHasNoClientIdYet);
+    if (downloadId == null || downloadId.trim().isEmpty) {
+      _toast(context.l10n.sonarrManualImportNeedsId);
       return;
     }
     setState(() => _busy = true);
@@ -198,7 +199,20 @@ class _ImportDoctorSheetState extends ConsumerState<ImportDoctorSheet> {
   Widget build(BuildContext context) {
     final item = widget.item;
     final diagnosis = diagnoseSonarrQueueItem(item);
-    final (icon, color) = _severityVisual(diagnosis.severity);
+    final blocker = sonarrImportBlocker(item);
+    final hasClientId = item.downloadId?.trim().isNotEmpty == true;
+    final actions = diagnosis.actions
+        .where((action) =>
+            hasClientId ||
+            (action != DoctorAction.manualImport &&
+                action != DoctorAction.forceImport))
+        .toList();
+    final missingImportAction = actions.length != diagnosis.actions.length;
+    final manualUnavailable =
+        !hasClientId && (missingImportAction || blocker != null);
+    final (icon, color) = _severityVisual(blocker != null && diagnosis.isHealthy
+        ? DoctorSeverity.warning
+        : diagnosis.severity);
 
     final rawMessages = <String>[
       if (item.errorMessage != null && item.errorMessage!.isNotEmpty)
@@ -224,7 +238,9 @@ class _ImportDoctorSheetState extends ConsumerState<ImportDoctorSheet> {
                 child: Text(
                   diagnosis.problem.isNotEmpty
                       ? localizeDoctorLabel(context, diagnosis.problem)
-                      : context.l10n.adminDownloadStatus,
+                      : blocker != null
+                          ? context.l10n.adminImportBlocked
+                          : context.l10n.adminDownloadStatus,
                   style: const TextStyle(
                       color: AppTheme.textPrimary,
                       fontSize: 18,
@@ -239,11 +255,21 @@ class _ImportDoctorSheetState extends ConsumerState<ImportDoctorSheet> {
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
               maxLines: 2,
               overflow: TextOverflow.ellipsis),
-          if (diagnosis.transparency.isNotEmpty) ...[
+          if (blocker != null &&
+              (blocker.problem != diagnosis.problem ||
+                  missingImportAction)) ...[
+            const SizedBox(height: 14),
+            Text(importBlockerText(context, blocker)),
+          ],
+          if (!missingImportAction && diagnosis.transparency.isNotEmpty) ...[
             const SizedBox(height: 14),
             Text(localizeDoctorLabel(context, diagnosis.transparency),
                 style: const TextStyle(
                     color: AppTheme.textPrimary, fontSize: 14, height: 1.4)),
+          ],
+          if (manualUnavailable) ...[
+            const SizedBox(height: 14),
+            Text(context.l10n.sonarrManualImportNeedsId),
           ],
           if (rawMessages.isNotEmpty) ...[
             const SizedBox(height: 16),
@@ -283,11 +309,11 @@ class _ImportDoctorSheetState extends ConsumerState<ImportDoctorSheet> {
               child: Center(
                   child: CircularProgressIndicator(color: AppTheme.accent)),
             )
-          else if (diagnosis.actions.isEmpty)
+          else if (actions.isEmpty && blocker == null && !manualUnavailable)
             Text(context.l10n.adminNoAutomaticFixIsNeeded,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13))
           else
-            ...diagnosis.actions.asMap().entries.map((e) => Padding(
+            ...actions.asMap().entries.map((e) => Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: _ActionButton(
                     meta: _actionMeta(e.value, strings: context.l10n),
