@@ -373,6 +373,8 @@ Selecting an already open secondary page from the sidebar or mobile drawer keeps
 
 On Android and iOS, the drawer's edge swipe is available at a navigation root. While a category, detail, or other pushed page has Back history, edge swipes leave the drawer closed so Android system Back and iOS swipe-back can return to the previous page. Canceling an iOS swipe-back leaves the current page open. On iOS, settings editors with unsaved-change protection use the Back button instead of an interactive swipe, including when the editor is unchanged; this keeps the page in place while the discard confirmation is resolved. The hamburger button still opens the drawer on pushed pages. Web and desktop retain their existing drawer gestures.
 
+On Android, Back from a title returns to the previous screen. If the title opened without a previous screen, such as after signing in from a notification, Back returns to the title's Discover tab, just like the toolbar Back button. Back at a module root with search results showing dismisses search; Back at the unobstructed root returns control to Android.
+
 | Module | Tabs | Access |
 |---|---|---|
 | `/dashboard` | Movies · TV · Releases · Books¹ · Music² | everyone |

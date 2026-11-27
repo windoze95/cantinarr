@@ -1,11 +1,12 @@
 Play Sun and alternate icons.
 French UI and metadata.
 Clearer imports and account links.
-AI models with optional fallback.
+Optional AI model fallback.
 Media-server availability and household access.
 Missing episodes, season follows and extra copies.
 Only my requests alerts.
-Improved Back swipes and discovery status.
-Sign-in keeps HTTPS unless HTTP is explicit.
+Back from a direct title opens Discover.
+Clearer discovery status.
+Sign-in defaults to HTTPS.
 Artwork respects account access.
 Search again for expired Grab selections.

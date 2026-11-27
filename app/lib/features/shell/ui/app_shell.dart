@@ -24,6 +24,7 @@ import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/search_bar.dart';
 import '../../../core/widgets/shimmer_border.dart';
+import '../../../navigation/back_destination.dart';
 import '../../ai_assistant/logic/ai_chat_provider.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
@@ -140,6 +141,31 @@ class _AppShellState extends ConsumerState<AppShell>
     }
     // Android also needs this notification to choose its native back handler.
     return false;
+  }
+
+  bool get _atModuleRoot {
+    final path = widget.currentPath;
+    if (path == '/dashboard') return true;
+    final module = _moduleTypeForPath(path);
+    return module != null &&
+        modulePagesFor(module, includeBooks: true, includeMusic: true)
+            .any((page) => page.route == path);
+  }
+
+  Future<void> _backFromDirectPage() async {
+    final router = GoRouter.of(context);
+    final configuration = router.routerDelegate.currentConfiguration;
+    // go_router selects the outer Navigator when the shell's only page has
+    // no history. Let that page's own PopScope veto Back before going up.
+    final shell = configuration.matches.last;
+    final child =
+        shell is ShellRouteMatch ? shell.navigatorKey.currentState : null;
+    if (child != null && await child.maybePop()) return;
+    if (mounted &&
+        router.routerDelegate.currentConfiguration == configuration &&
+        !router.canPop()) {
+      router.go(secondaryBackDestination(router));
+    }
   }
 
   @override
@@ -853,14 +879,22 @@ class _AppShellState extends ConsumerState<AppShell>
       ),
     );
 
+    final platform = Theme.of(context).platform;
+    final android = !kIsWeb && platform == TargetPlatform.android;
+    final mobileBack = android || (!kIsWeb && platform == TargetPlatform.iOS);
+    final hasHistory = mobileBack && _hasRouteHistory();
+    final searchVisible =
+        isAiReady || (showGlobalSearch && searchOverlayActive);
+    final handleDirectBack = android &&
+        !hasHistory &&
+        ModalRoute.canPopOf(context) != true &&
+        (searchVisible || !_atModuleRoot);
     final scaffold = Scaffold(
       key: _scaffoldKey,
       // Reserve native mobile back swipes for the pushed page instead of
       // opening the shell drawer. The hamburger and root drawer swipe remain.
-      drawerEnableOpenDragGesture: kIsWeb ||
-          (Theme.of(context).platform != TargetPlatform.android &&
-              Theme.of(context).platform != TargetPlatform.iOS) ||
-          (!_hasRouteHistory() && !_childHandlesBack),
+      drawerEnableOpenDragGesture: !mobileBack ||
+          (!hasHistory && !_childHandlesBack && !handleDirectBack),
       // A closed drawer collapses its attention group again, so reopening it
       // always lands on the same short menu rather than on however far the
       // last visit had unfolded it.
@@ -1139,8 +1173,9 @@ class _AppShellState extends ConsumerState<AppShell>
       drawer: desktop ? null : _buildDrawer(context),
     );
 
+    final Widget shell;
     if (desktop) {
-      return Row(
+      shell = Row(
         children: [
           Container(
             width: AppBreakpoints.sidebarWidth,
@@ -1162,9 +1197,26 @@ class _AppShellState extends ConsumerState<AppShell>
           Expanded(child: scaffold),
         ],
       );
+    } else {
+      shell = scaffold;
     }
 
-    return scaffold;
+    if (!android) return shell;
+    // Register on the shell's route: this also tells Android ahead of the
+    // gesture whether the framework can handle Back. A cancellation never
+    // reaches the callback. Actual page history keeps its native transition.
+    return PopScope<Object?>(
+      canPop: !handleDirectBack,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop || !handleDirectBack) return;
+        if (searchVisible) {
+          _exitAiMode();
+        } else {
+          unawaited(_backFromDirectPage());
+        }
+      },
+      child: shell,
+    );
   }
 
   Widget _buildDrawer(BuildContext context) {

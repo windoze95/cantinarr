@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../navigation/back_destination.dart';
 import '../../discover/logic/discovery_access.dart';
 import '../../discover/ui/catalog_setup_button.dart';
 import '../../../core/config/app_config.dart';
@@ -542,15 +543,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen>
                   ),
                   topPadding: topPadding,
                   disableAnimations: MediaQuery.disableAnimationsOf(context),
-                  onBack: () {
-                    if (context.canPop()) {
-                      context.pop();
-                      return;
-                    }
-                    context.go(widget.mediaType == MediaType.tv
-                        ? '/dashboard/tv'
-                        : '/dashboard/movies');
-                  },
+                  onBack: () =>
+                      backFromMediaDetail(context, widget.mediaType.name),
                 ),
               ),
 

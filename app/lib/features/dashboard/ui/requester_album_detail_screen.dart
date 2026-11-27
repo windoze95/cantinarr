@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/layout/adaptive.dart';
+import '../../../navigation/back_destination.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/library_refresh_provider.dart';
@@ -378,13 +379,8 @@ class _RequesterAlbumDetailScreenState
   }
 
   AppBar _appBar(BuildContext context) => AppBar(
-        leading: BackButton(onPressed: () {
-          if (context.canPop()) {
-            context.pop();
-            return;
-          }
-          context.go('/dashboard/music');
-        }),
+        leading:
+            BackButton(onPressed: () => backFromMediaDetail(context, 'album')),
         title: Text(context.l10n.browseAlbumDetails),
       );
 

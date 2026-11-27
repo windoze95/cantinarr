@@ -3,6 +3,7 @@ import 'package:cantinarr/l10n/l10n.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../navigation/back_destination.dart';
 
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
@@ -417,13 +418,8 @@ class _RequesterBookDetailScreenState
         : ref.watch(ownedBooksForInstanceProvider(_instanceId));
     return Scaffold(
       appBar: AppBar(
-        leading: BackButton(onPressed: () {
-          if (context.canPop()) {
-            context.pop();
-            return;
-          }
-          context.go('/dashboard/books');
-        }),
+        leading:
+            BackButton(onPressed: () => backFromMediaDetail(context, 'book')),
         title: Text(context.l10n.browseBookDetails),
       ),
       // Metadata renders immediately; ownership and request truth resolve in
