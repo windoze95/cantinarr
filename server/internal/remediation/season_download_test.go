@@ -13,6 +13,63 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 )
 
+func manualSeasonRow(ep int, fileID int64, start time.Time) map[string]any {
+	row := importPendingQueueRow(int64(ep), "manual-pack", 1, ep, fileID, start)
+	delete(row, "added")
+	row["downloadClient"] = "manual-client"
+	return row
+}
+
+func manualSeasonReceipt(ep int, fileID int64, at time.Time) map[string]any {
+	h := importReceiptHistory(int64(40+ep), "manual-pack", 1, ep, fileID, at)[0]
+	h["data"].(map[string]any)["downloadClientName"] = "manual-client"
+	return h
+}
+
+func TestManualSeasonDownloadWithoutAdded(t *testing.T) {
+	start := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	w := newScenarioWorld(t, start)
+	var rows, episodes, files, history []map[string]any
+	for ep := 1; ep <= 12; ep++ {
+		rows = append(rows, manualSeasonRow(ep, 0, start))
+		fileID := int64(100 + ep)
+		e, f := scenarioEpisode(1, ep, fileID, start)
+		episodes, files = append(episodes, e), append(files, f)
+		history = append(history, manualSeasonReceipt(ep, fileID, start.Add(14*time.Minute)))
+	}
+	w.fake.setQueue(rows)
+	w.observe()
+	id := w.soleOpenAutoIssueID()
+	w.advance(16 * time.Minute)
+	w.fake.setLibrary(episodes[:3], files[:3])
+	w.fake.setHistory(history[:3])
+	w.advance(time.Minute)
+	var credited int
+	if err := w.svc.db.QueryRow("SELECT COUNT(history_id) FROM issue_sonarr_members WHERE issue_id=?", id).Scan(&credited); err != nil || credited != 3 {
+		t.Errorf("verified %d of three exact post-observation imports: %v", credited, err)
+	}
+	w.fake.setQueue(nil)
+	w.advance(6 * time.Minute)
+	if w.issueByID(id).ClosedAt != nil {
+		t.Fatal("empty queue closed a partially imported pack")
+	}
+	w.svc = NewService(w.svc.db, w.svc.registry, nil, w.rec)
+	w.fake.setLibrary(episodes, files)
+	w.fake.setHistory(history[3:])
+	w.advance(time.Minute)
+	if w.issueByID(id).ClosedAt != nil {
+		t.Fatal("missing live history for the first three members closed the pack")
+	}
+	w.fake.setHistory(history)
+	w.advance(time.Minute)
+	if issue := w.issueByID(id); issue.ResolutionKind != ResolutionArrStateCleared || issue.ClosedAt == nil {
+		t.Fatalf("twelve exact imports did not close original issue %d: %s", id, issue.Status)
+	}
+	if err := w.svc.db.QueryRow("SELECT COUNT(history_id) FROM issue_sonarr_members WHERE issue_id=?", id).Scan(&credited); err != nil || credited != 12 {
+		t.Fatalf("final verified members=%d: %v", credited, err)
+	}
+}
+
 func TestSharedDownloadRecoveryRequiresEveryMember(t *testing.T) {
 	start := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	w := newScenarioWorld(t, start)
