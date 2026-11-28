@@ -61,14 +61,9 @@ func setupSeasonPackService(t *testing.T) *Service {
 	return NewService(database, instance.NewRegistry(store), nil, &fakeNotifier{})
 }
 
-// A season pack is one download but N per-episode incidents. The dispatch
-// preflight must partition the live queue exactly as the observation sweep
-// does; matching by the shared download id instead hands every sibling
-// episode's row to each incident, the signature can never equal the sweep's
-// per-episode signature, and an unchanged stuck import reads as "live arr
-// signature changed": every promotion bounces straight back to tracking with
-// its run aborted, so the pack loops forever and is never remediated.
-func TestPreflightKeepsPromotedSeasonPackEpisodeActionable(t *testing.T) {
+// Both reads must partition the same real Sonarr response identically: otherwise
+// an unchanged promoted download bounces back to tracking on every preflight.
+func TestPreflightKeepsPromotedSeasonDownloadActionable(t *testing.T) {
 	svc := setupSeasonPackService(t)
 	enableAutoDispatch(t, svc, 5)
 
@@ -83,8 +78,8 @@ func TestPreflightKeepsPromotedSeasonPackEpisodeActionable(t *testing.T) {
 		t.Fatal(err)
 	}
 	issues, _, _ := svc.ListIssues("", 0)
-	if len(issues) != 2 {
-		t.Fatalf("pack episodes did not scope per incident: %+v", issues)
+	if len(issues) != 1 {
+		t.Fatalf("one shared download created %d issues", len(issues))
 	}
 	for _, issue := range issues {
 		if issue.Status != IssueObserving {
@@ -130,5 +125,40 @@ func TestPreflightKeepsPromotedSeasonPackEpisodeActionable(t *testing.T) {
 		if signature != before {
 			t.Fatalf("issue %d: preflight rewrote the sweep's per-episode signature", issue.ID)
 		}
+	}
+}
+
+func TestPassiveSeasonDownloadAlertsWithoutAgentWork(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("agent=%v", enabled), func(t *testing.T) {
+			svc := setupSeasonPackService(t)
+			settings := Defaults()
+			settings.Enabled = enabled
+			if _, err := svc.SetSettings(settings); err != nil {
+				t.Fatal(err)
+			}
+			items, err := svc.fetchQueueSnapshot("sonarr", "sonarr-pack")
+			if err != nil {
+				t.Fatal(err)
+			}
+			start := time.Now().UTC().Add(-20 * time.Minute)
+			for _, elapsed := range []time.Duration{0, 11 * time.Minute, 15 * time.Minute} {
+				if err := svc.observeQueueSnapshot("sonarr", "sonarr-pack", items, start.Add(elapsed)); err != nil {
+					t.Fatal(err)
+				}
+				svc.flushIssueAlerts(start.Add(elapsed))
+			}
+			issues, _, err := svc.ListIssues("", 0)
+			if err != nil || len(issues) != 1 || issues[0].Status != IssueOpen {
+				t.Fatalf("promoted issues: %+v, %v", issues, err)
+			}
+			svc.recoverWork(&Runner{svc: svc, db: svc.db, procToken: "new-process"})
+			if got := drainJobs(svc); got != 0 {
+				t.Fatalf("passive incident scheduled %d jobs", got)
+			}
+			if events := svc.notifier.(*fakeNotifier).adminEvents; len(events) != 1 || events[0] != "issue_created" {
+				t.Fatalf("admin events: %v", events)
+			}
+		})
 	}
 }
