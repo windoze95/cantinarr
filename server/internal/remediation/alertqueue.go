@@ -33,6 +33,9 @@ type queuedIssueAlert struct {
 	title  string
 }
 
+const oweIssueAlertSQL = `INSERT INTO issue_alert_queue (issue_id, queued_at) VALUES (?, ?)
+		 ON CONFLICT(issue_id) DO NOTHING`
+
 // queueIssueAlert records that issueID has left passive tracking and owes its
 // admins a push once the hold-down lapses. Idempotent — the issue id is the
 // primary key, so re-queueing an already-pending alert cannot double-page. The
@@ -43,8 +46,7 @@ func (s *Service) queueIssueAlert(issueID int64, now time.Time) {
 		return // Nothing can deliver it; do not accumulate rows.
 	}
 	if _, err := s.db.Exec(
-		`INSERT INTO issue_alert_queue (issue_id, queued_at) VALUES (?, ?)
-		 ON CONFLICT(issue_id) DO NOTHING`, issueID, now,
+		oweIssueAlertSQL, issueID, now,
 	); err != nil {
 		log.Printf("remediation: queue issue alert %d: %v", issueID, err)
 	}
@@ -124,11 +126,16 @@ func (s *Service) flushIssueAlerts(now time.Time) {
 	// tracking were just re-armed to queued_at=now above; counting them here
 	// would hold every real page hostage to any flapping incident.
 	var forming, ceiling bool
-	if err := s.db.QueryRow(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+	if err := tx.QueryRow(
 		`SELECT EXISTS(SELECT 1 FROM issue_alert_queue q JOIN issues i ON i.id = q.issue_id
-		        WHERE i.status NOT IN (?, ?) AND q.queued_at > ?),
+		        WHERE i.closed_at IS NULL AND i.status NOT IN (?, ?) AND q.queued_at > ?),
 		        EXISTS(SELECT 1 FROM issue_alert_queue q JOIN issues i ON i.id = q.issue_id
-		        WHERE i.status NOT IN (?, ?) AND q.queued_at <= ?)`,
+		        WHERE i.closed_at IS NULL AND i.status NOT IN (?, ?) AND q.queued_at <= ?)`,
 		IssueObserving, IssueRecovering, now.Add(-issueAlertHoldDown),
 		IssueObserving, IssueRecovering, now.Add(-alertWaveMaxDelay),
 	).Scan(&forming, &ceiling); err != nil {
@@ -139,10 +146,10 @@ func (s *Service) flushIssueAlerts(now time.Time) {
 		return // The wave is still forming; deliver it whole once it goes quiet.
 	}
 
-	rows, err := s.db.Query(
+	rows, err := tx.Query(
 		`SELECT q.issue_id, i.source, i.title FROM issue_alert_queue q
 		 JOIN issues i ON i.id = q.issue_id
-		 WHERE i.status NOT IN (?, ?) ORDER BY q.issue_id`,
+		 WHERE i.closed_at IS NULL AND i.status NOT IN (?, ?) ORDER BY q.issue_id`,
 		IssueObserving, IssueRecovering,
 	)
 	if err != nil {
@@ -178,17 +185,21 @@ func (s *Service) flushIssueAlerts(now time.Time) {
 	for i, alert := range due {
 		ids[i] = alert.id
 	}
-	if _, err := s.db.Exec(
+	if _, err := tx.Exec(
 		`DELETE FROM issue_alert_queue WHERE issue_id IN (`+placeholders[:len(placeholders)-1]+`)`, ids...,
 	); err != nil {
 		log.Printf("remediation: clear delivered issue alerts: %v", err)
 		return
 	}
 	stampArgs := append([]any{now}, ids...)
-	if _, err := s.db.Exec(
+	if _, err := tx.Exec(
 		`UPDATE issues SET last_paged_at = ? WHERE id IN (`+placeholders[:len(placeholders)-1]+`)`, stampArgs...,
 	); err != nil {
 		log.Printf("remediation: stamp paged issues: %v", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		return
 	}
 
 	bySource := make(map[string][]queuedIssueAlert)

@@ -167,6 +167,9 @@ var ProposableActionKinds = []ActionKind{
 // (category, reporter) are exposed as pointers so the JSON carries null, matching
 // the Wave-1 API contract exactly.
 type Issue struct {
+	// Number of native episodes observed on this Sonarr queue incident.
+	// Internal: the existing detail string carries the bounded public summary.
+	memberCount    int
 	ID             int64      `json:"id"`
 	Source         string     `json:"source"`        // "user" | "auto"
 	Status         string     `json:"status"`        // see Issue* consts

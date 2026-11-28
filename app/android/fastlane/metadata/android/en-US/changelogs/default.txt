@@ -2,7 +2,7 @@ Play Sun and alternate icons.
 French UI and metadata.
 Account imports and links.
 AI model fallback.
-Library availability and household access.
+Library and household access.
 Missing episodes, season follows, extra copies.
 Only my requests alerts.
 Back to Discover; clearer title status.
@@ -11,3 +11,4 @@ Account-scoped artwork.
 Re-search expired Grabs.
 Verify reviewed Sonarr imports.
 Add a format for one book.
+Stuck download alerts without AI.

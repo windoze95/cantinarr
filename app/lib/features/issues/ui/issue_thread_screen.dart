@@ -562,7 +562,9 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
                           ? null
                           : () => context.push('/agent-runs/${action.runId}'),
                     ),
-                  if (issue.status.isActive) const _WorkingIndicator(),
+                  if (issue.status == IssueStatus.investigating &&
+                      (!isAdmin || _runs.any((run) => run.status == 'running')))
+                    const _WorkingIndicator(),
                   // Last in the transcript on purpose: it answers the message
                   // right above it, and the open-on-bottom scroll lands on it.
                   // Tracking states stay passive, so a fix whose replacement is
@@ -1326,7 +1328,7 @@ class _SystemNotice extends StatelessWidget {
   }
 }
 
-/// A small "working" hint shown while the issue is open/investigating.
+/// A small hint while the issue is being investigated.
 class _WorkingIndicator extends StatelessWidget {
   const _WorkingIndicator();
 

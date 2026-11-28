@@ -743,6 +743,28 @@ CREATE TABLE IF NOT EXISTS issue_observation_downloads (
     PRIMARY KEY(issue_id, download_id)
 );
 
+-- Durable members and per-attempt evidence for positively identified Sonarr downloads.
+CREATE TABLE IF NOT EXISTS issue_sonarr_members (
+    issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+    series_id INTEGER NOT NULL,
+    episode_id INTEGER NOT NULL,
+    episode_number INTEGER NOT NULL,
+    queue_id INTEGER NOT NULL,
+    download_key TEXT NOT NULL,
+    download_id TEXT NOT NULL COLLATE NOCASE,
+    client_name TEXT NOT NULL,
+    added_at DATETIME,
+    queue_file_id INTEGER,
+    signature TEXT NOT NULL,
+    problem_since DATETIME,
+    quiet_since DATETIME NOT NULL,
+    last_seen DATETIME NOT NULL,
+    history_id INTEGER,
+    imported_file_id INTEGER,
+    PRIMARY KEY(issue_id, download_key, episode_id)
+);
+CREATE INDEX IF NOT EXISTS idx_sonarr_members_download ON issue_sonarr_members(download_key,episode_id);
+
 -- Most recent successful COMPLETE queue snapshot per instance. This small,
 -- bounded cache lets a user report join an already-observed arr retry without
 -- putting a network round trip on the report request path. Failed queue reads

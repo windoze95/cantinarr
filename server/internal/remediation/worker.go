@@ -43,6 +43,10 @@ func (s *Service) enqueue(j job) {
 	if s.jobs == nil {
 		return
 	}
+	var source string
+	if err := s.db.QueryRow("SELECT source FROM issues WHERE id=? AND closed_at IS NULL", j.issueID).Scan(&source); err != nil || !s.Settings().investigates(source) {
+		return
+	}
 	select {
 	case s.jobs <- j:
 	default:
@@ -150,14 +154,14 @@ func (s *Service) recoverWork(runner *Runner) {
 		   AND issue_id IN (SELECT id FROM issues WHERE closed_at IS NULL AND status = ?)`,
 		runStatusResumePending, IssueNeedsAdmin,
 	)
-	if !s.Settings().Enabled {
-		return
-	}
-
 	// Approval/denial may have become durable immediately before a process loss.
 	// Rebuild its model-facing result first; never resume a stale "awaiting
 	// approval" placeholder and never repeat the external action.
 	s.recoverDecisionHandoffs()
+	settings := s.Settings()
+	if !settings.Enabled {
+		return
+	}
 
 	// The resume lane accepts open as well as investigating: a suspend/
 	// re-promote cycle between an approval and its resume legitimately lands
@@ -166,13 +170,16 @@ func (s *Service) recoverWork(runner *Runner) {
 	rows, err := s.db.Query(
 		`SELECT i.id, 0 FROM issues i
 		 WHERE i.closed_at IS NULL AND i.active_run_id IS NULL AND i.status IN (?, ?)
+		   AND (i.source='user' OR (i.source='auto' AND ?))
 		   AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.issue_id = i.id AND r.status = ?)
 		 UNION ALL
 		 SELECT i.id, 1 FROM issues i JOIN agent_runs r ON r.issue_id = i.id
 		 WHERE i.closed_at IS NULL AND i.active_run_id IS NULL AND i.status IN (?, ?)
-		   AND r.status = ?`,
-		IssueOpen, IssueInvestigating, runStatusResumePending,
-		IssueOpen, IssueInvestigating, runStatusResumePending,
+		   AND (i.source='user' OR (i.source='auto' AND ?))
+		   AND r.status = ? AND (r.trigger!='auto' OR ?)`,
+		IssueOpen, IssueInvestigating, settings.AutoDispatch, runStatusResumePending,
+		IssueOpen, IssueInvestigating, settings.AutoDispatch, runStatusResumePending,
+		settings.AutoDispatch,
 	)
 	if err != nil {
 		return

@@ -625,11 +625,12 @@ func (s *Service) sweepAutoApprovals(now time.Time) {
 		 FROM agent_actions a JOIN issues i ON i.id = a.issue_id
 		 WHERE a.status = ? AND i.closed_at IS NULL AND i.status = ?
 		   AND i.source IN (?, ?) AND i.problem_kind IS NOT NULL AND i.problem_kind != ''
+		   AND (i.source != 'auto' OR ?)
 		   AND EXISTS (SELECT 1 FROM agent_runs r WHERE r.id = a.run_id AND r.status = 'waiting_approval')
 		   AND EXISTS (SELECT 1 FROM agent_approval_rules ru
 		               WHERE ru.status = ? AND ru.problem_kind = i.problem_kind AND ru.action_kind = a.kind)
 		 ORDER BY a.id LIMIT 25`,
-		ActionProposed, IssueAwaitingApproval, SourceAuto, SourceUser, ApprovalRuleActive,
+		ActionProposed, IssueAwaitingApproval, SourceAuto, SourceUser, settings.AutoDispatch, ApprovalRuleActive,
 	)
 	if err != nil {
 		log.Printf("remediation: query auto-approval candidates: %v", err)

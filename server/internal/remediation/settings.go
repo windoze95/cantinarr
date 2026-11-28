@@ -1,6 +1,7 @@
 package remediation
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -60,7 +61,7 @@ const (
 // credential after an admin changes the global profile.
 type Settings struct {
 	Enabled                  bool   `json:"enabled"`                    // master switch — ships OFF
-	AutoDispatch             bool   `json:"auto_dispatch"`              // poller may open auto issues — ships OFF
+	AutoDispatch             bool   `json:"auto_dispatch"`              // investigate detected issues — ships OFF
 	AllowReporting           bool   `json:"allow_reporting"`            // user-visible "Report a problem" affordance
 	MarkResolvedAsRead       bool   `json:"mark_resolved_as_read"`      // mark an issue read when it resolves (default ON)
 	Mode                     string `json:"mode"`                       // investigate_only | supervised
@@ -224,13 +225,49 @@ func (g *Settings) normalize() {
 // built-in defaults for any missing field (read exactly like
 // request.GetGlobalSettings).
 func (s *Service) Settings() Settings {
+	return readSettings(s.db)
+}
+
+func readSettings(q actionScopeQuerier) Settings {
 	g := Defaults()
 	var v string
-	if err := s.db.QueryRow("SELECT value FROM settings WHERE key = ?", remediationSettingsKey).Scan(&v); err == nil && v != "" {
+	if err := q.QueryRow("SELECT value FROM settings WHERE key = ?", remediationSettingsKey).Scan(&v); err == nil && v != "" {
 		_ = json.Unmarshal([]byte(v), &g)
 	}
 	g.normalize()
 	return g
+}
+
+func (g Settings) investigates(source string) bool {
+	return g.Enabled && (source == SourceUser || (source == SourceAuto && g.AutoDispatch))
+}
+
+type investigationPermit struct {
+	source string
+	cancel context.CancelFunc
+}
+
+// Register before provider resolution. Revoking a permit cancels even a call
+// to the resolver that hasn't created its run row yet. Re-enabling cannot
+// make a response from the revoked generation current again.
+func (s *Service) investigationContext(parent context.Context, source string) (context.Context, func(), bool) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+	if !s.Settings().investigates(source) {
+		return nil, nil, false
+	}
+	ctx, cancel := context.WithCancel(parent)
+	p := &investigationPermit{source: source, cancel: cancel}
+	if s.activeInvestigations == nil {
+		s.activeInvestigations = make(map[*investigationPermit]struct{})
+	}
+	s.activeInvestigations[p] = struct{}{}
+	return ctx, func() {
+		cancel()
+		s.policyMu.Lock()
+		delete(s.activeInvestigations, p)
+		s.policyMu.Unlock()
+	}, true
 }
 
 // SettingsDecided reports whether an admin has ever SAVED remediation
@@ -244,14 +281,52 @@ func (s *Service) SettingsDecided() bool {
 // SetSettings persists the global remediation settings (written exactly like
 // request.SetGlobalSettings) and returns the normalized value that was stored.
 func (s *Service) SetSettings(g Settings) (Settings, error) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	wasOff := !s.Settings().AutoDispatch
 	g.normalize()
 	data, err := json.Marshal(g)
 	if err != nil {
 		return Settings{}, fmt.Errorf("encode remediation settings: %w", err)
 	}
-	if _, err := s.db.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", remediationSettingsKey, string(data)); err != nil {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Settings{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", remediationSettingsKey, string(data)); err != nil {
 		return Settings{}, fmt.Errorf("save remediation settings: %w", err)
+	}
+	// Only live claims lose ownership. Fully parked proposals, human decisions,
+	// transcripts and uncertain remote outcomes retain their original gates.
+	if !g.Enabled || !g.AutoDispatch {
+		if _, err := tx.Exec(`UPDATE agent_runs SET status='aborted',stop_reason='investigation_disabled',
+			finished_at=CURRENT_TIMESTAMP WHERE status='running' AND (?=0 OR trigger='auto'
+			OR issue_id IN (SELECT id FROM issues WHERE source='auto'))`, g.Enabled); err != nil {
+			return Settings{}, err
+		}
+		if _, err := tx.Exec(`UPDATE agent_actions SET status='superseded',result_text='Investigation disabled before review.'
+			WHERE status='proposed' AND run_id IN (SELECT id FROM agent_runs WHERE stop_reason='investigation_disabled')`); err != nil {
+			return Settings{}, err
+		}
+		if _, err := tx.Exec(`UPDATE issues SET status='open',active_run_id=NULL,updated_at=CURRENT_TIMESTAMP
+			WHERE closed_at IS NULL AND active_run_id IN (SELECT id FROM agent_runs WHERE stop_reason='investigation_disabled')`); err != nil {
+			return Settings{}, err
+		}
+		if _, err := tx.Exec(`UPDATE issues SET status='open',updated_at=CURRENT_TIMESTAMP
+			WHERE status='investigating' AND active_run_id IS NULL AND closed_at IS NULL
+			AND EXISTS (SELECT 1 FROM agent_runs r WHERE r.issue_id=issues.id AND r.status='resume_pending'
+			AND (?=0 OR issues.source='auto' OR r.trigger='auto'))`, g.Enabled); err != nil {
+			return Settings{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Settings{}, err
+	}
+	for p := range s.activeInvestigations {
+		if !g.investigates(p.source) {
+			p.cancel()
+		}
 	}
 	// Re-enabling auto-dispatch is what closes the breaker's durable notice —
 	// the admin acted on exactly what it asked for.

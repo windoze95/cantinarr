@@ -16,7 +16,7 @@ import (
 // setupSeasonPackService serves a Sonarr instance whose queue holds one season
 // pack: two episodes of the same series stuck at importPending under a single
 // shared download id. Series/episode endpoints report neither episode has a
-// file, so baselines capture and neither incident can prove recovery.
+// file, so neither member can prove recovery.
 func setupSeasonPackService(t *testing.T) *Service {
 	t.Helper()
 	queueRecord := func(queueID, episodeID, episodeNumber int) string {
@@ -123,7 +123,7 @@ func TestPreflightKeepsPromotedSeasonDownloadActionable(t *testing.T) {
 			t.Fatal(err)
 		}
 		if signature != before {
-			t.Fatalf("issue %d: preflight rewrote the sweep's per-episode signature", issue.ID)
+			t.Fatalf("issue %d: preflight rewrote the sweep's download signature", issue.ID)
 		}
 	}
 }

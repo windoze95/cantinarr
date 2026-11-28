@@ -159,7 +159,7 @@ func newTestRunner(t *testing.T, host toolHost, script *scriptedTurn) (*Runner, 
 	svc := NewService(database, nil, nil, &fakeNotifier{})
 	// Enable the feature and pin a tiny step budget by default; individual tests
 	// override bounds as needed.
-	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, DailyRunCap: 50}); err != nil {
+	if _, err := svc.SetSettings(Settings{Enabled: true, AutoDispatch: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, DailyRunCap: 50}); err != nil {
 		t.Fatalf("set settings: %v", err)
 	}
 

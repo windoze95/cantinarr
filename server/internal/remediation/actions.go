@@ -384,6 +384,9 @@ func (s *Service) validateActionScope(issueID int64, kind ActionKind, canonical 
 }
 
 func validateActionScopeWith(q actionScopeQuerier, issueID int64, kind ActionKind, canonical json.RawMessage) error {
+	if err := checkDownloadActionScope(q, issueID); err != nil {
+		return err
+	}
 	var (
 		mediaType string
 		tmdbID    int

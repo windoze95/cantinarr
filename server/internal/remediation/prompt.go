@@ -86,7 +86,9 @@ func buildSystemPrompt(issue *Issue, attempts []remediationAttempt) string {
 	if issue.ArrQueueID > 0 {
 		fmt.Fprintf(&sb, "authoritative_queue_id: %d\n", issue.ArrQueueID)
 	}
-	if issue.MediaType == "tv" {
+	if issue.memberCount > 1 {
+		fmt.Fprintf(&sb, "scope: one download affecting %d known episodes in season %d. Describe the blocker using scoped queue reads. Post the diagnosis and finish. Do not propose a fix or conclude the issue; the observer verifies each import.\n", issue.memberCount, issue.SeasonNumber)
+	} else if issue.MediaType == "tv" {
 		fmt.Fprintf(&sb, "scope: season %d, episode %d (episode 0 means whole season/series; season 0 + positive episode is an exact special)\n", issue.SeasonNumber, issue.EpisodeNumber)
 	}
 	sb.WriteString(priorAttemptsBlock(attempts))

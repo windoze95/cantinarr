@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
@@ -71,6 +72,9 @@ type issueContext struct {
 // the action failed); a benign "not configured / not found" outcome is returned
 // as resultText with a nil error.
 func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, params json.RawMessage, proposedAt time.Time, beforeQueueMutation ...func(string) error) (resultText string, err error) {
+	if err := checkDownloadActionScope(e.db, issueID); err != nil {
+		return "", beforeMutation(err)
+	}
 	ic, err := e.loadIssueContext(issueID)
 	if err != nil {
 		return "", beforeMutation(err)
@@ -107,6 +111,11 @@ func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, 
 		// the raw GUID from this fresh scoped search for the immediate dispatch;
 		// never persist or return that capability.
 		p.GUID = liveGUID
+		if p.MediaType == "tv" && p.QueueIDToReplace > 0 && ic.episodeNumber > 0 {
+			if err := e.verifyReviewedDownload(sc, ic, p.QueueIDToReplace); err != nil {
+				return "", beforeMutation(err)
+			}
+		}
 		return mcp.GrabReleaseHelper(rc, sc, cc, lc, p.MediaType, p.GUID, p.IndexerID, p.QueueIDToReplace)
 
 	case ActionRemediateQueue:
@@ -128,6 +137,11 @@ func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, 
 			}
 			if err := e.validateSonarrMediaIdentity(p.QueueID, ic, *item, sc); err != nil {
 				return err
+			}
+			if ic.episodeNumber > 0 {
+				if err := e.verifyReviewedDownload(sc, ic, p.QueueID); err != nil {
+					return err
+				}
 			}
 			for _, guard := range beforeQueueMutation {
 				if err := guard(action); err != nil {
@@ -402,6 +416,42 @@ func (e *Executor) validateQueueItem(mediaType string, queueID int, ic issueCont
 	default:
 		return fmt.Errorf("media_type must be \"movie\", \"tv\", \"book\", or \"music\"")
 	}
+}
+
+// Failed-download handling acts on the grab, not the row selected in the
+// proposal. An exact file import uses its own candidate filter and doesn't
+// need this broader check.
+func (e *Executor) verifyReviewedDownload(client *sonarr.Client, ic issueContext, queueID int) error {
+	items, err := client.GetQueueDetailed()
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.ID != queueID {
+			continue
+		}
+		if err := validateDownloadIdentity(queueID, ic.downloadID, item.DownloadID); err != nil {
+			return err
+		}
+		if err := e.validateSonarrMediaIdentity(queueID, ic, item, client); err != nil {
+			return err
+		}
+		for _, sibling := range items {
+			if strings.EqualFold(sibling.DownloadID, item.DownloadID) && (sibling.SeriesID != item.SeriesID || sibling.EpisodeID != item.EpisodeID) {
+				return fmt.Errorf("download affects episodes outside the reviewed episode scope")
+			}
+		}
+		eps, err := client.DownloadEpisodes(item.DownloadID)
+		if err != nil {
+			return err
+		}
+		if len(eps) != 1 || eps[0].SeriesID != item.SeriesID || eps[0].ID != item.EpisodeID ||
+			eps[0].SeasonNumber != ic.seasonNumber || eps[0].EpisodeNumber != ic.episodeNumber {
+			return fmt.Errorf("grab history does not verify the reviewed single episode")
+		}
+		return nil
+	}
+	return fmt.Errorf("reviewed queue item is no longer present")
 }
 
 func validateDownloadIdentity(queueID int, expected, actual string) error {

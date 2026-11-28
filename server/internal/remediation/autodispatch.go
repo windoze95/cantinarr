@@ -16,12 +16,8 @@ import (
 // the blob and keeps settings.go untouched.
 const autoGiveupStreakKey = "remediation_auto_giveup_streak"
 
-// AutoDispatcher is the IssueOpener the websocket hub calls when its poller finds
-// a stuck/blocked download. It is the gate + glue between the read-only poll path
-// and the remediation Service: it re-checks the live toggles per call (so an
-// admin flipping Enabled/AutoDispatch takes effect without a restart), opens a
-// deduped issue, and — on a genuinely new issue — enqueues the read-only Runner
-// OFF the poll goroutine so the 30s loop never blocks on the agent.
+// AutoDispatcher delivers queue observations to the remediation service off
+// the poll goroutine. Tracking and promotion do not require an agent.
 //
 // It is a thin wrapper around *Service (not the Service itself) so the hub's
 // optional-interface contract is explicit: main.go passes a non-nil
@@ -52,12 +48,15 @@ func (a *AutoDispatcher) ObserveQueueSnapshot(serviceType, instanceID string, it
 	if a == nil || a.svc == nil {
 		return
 	}
-	copyItems := append([]arr.QueueObservation(nil), items...)
-	now := time.Now().UTC()
-	if a.now != nil {
-		now = a.now().UTC()
+	a.ObserveQueueRead(serviceType, instanceID, items, a.now().UTC(), nil)
+}
+
+func (a *AutoDispatcher) ObserveQueueRead(serviceType, instanceID string, items []arr.QueueObservation, started time.Time, failure error) {
+	if a == nil || a.svc == nil {
+		return
 	}
-	job := queueSnapshotJob{serviceType: serviceType, instanceID: instanceID, items: copyItems, observedAt: now}
+	copyItems := append([]arr.QueueObservation(nil), items...)
+	job := queueSnapshotJob{serviceType: serviceType, instanceID: instanceID, items: copyItems, observedAt: started, failure: failure}
 	a.enqueueSnapshotJob(job)
 }
 

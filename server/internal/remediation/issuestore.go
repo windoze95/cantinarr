@@ -24,13 +24,13 @@ const (
 var ErrIssueCompletionConflict = errors.New("issue completion conflict")
 
 // breakerNoticeStillOffError refuses a human close of the circuit breaker's
-// notice while automatic problem detection is still off. It is an
+// notice while automatic investigation is still off. It is an
 // ErrIssueCompletionConflict for the handler (HTTP 409) but reads as the remedy
 // in the admin's own screen, because the app shows this text verbatim.
 type breakerNoticeStillOffError struct{}
 
 func (breakerNoticeStillOffError) Error() string {
-	return "Automatic problem detection is still off. Turn auto-dispatch back on under Settings > AI Remediation; that closes this notice."
+	return "Automatic investigation is still off. Turn auto-dispatch back on under Settings > AI Remediation; that closes this notice."
 }
 
 func (breakerNoticeStillOffError) Is(target error) bool { return target == ErrIssueCompletionConflict }
@@ -123,6 +123,7 @@ func (s *Service) concludeIssueCAS(ctx context.Context, issueID int64, status, r
 }
 
 type issueClosureOptions struct {
+	verifiedMembers  bool // produced only under the queue observer's membership lock
 	expectedStatus   string
 	expectedRunID    int64
 	ageModifier      string
@@ -215,6 +216,11 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 		return false, fmt.Errorf("begin conclude issue: %w", err)
 	}
 	defer tx.Rollback()
+	if resolutionKind == ResolutionAgentConcluded {
+		if err := checkDownloadActionScope(tx, issueID); err != nil {
+			return false, err
+		}
+	}
 	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionRemovedNoReplacement || resolutionKind == ResolutionRemovedWaitingForAir || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionAdminCompleted || resolutionKind == ResolutionReporterConfirmed {
 		var executing int
 		if err := tx.QueryRowContext(ctx,
@@ -231,6 +237,15 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 		}
 	}
 	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionRemovedNoReplacement || resolutionKind == ResolutionRemovedWaitingForAir {
+		if !opts.verifiedMembers {
+			var grouped bool
+			if err := tx.QueryRow(`SELECT COUNT(DISTINCT episode_id)>1 FROM issue_sonarr_members WHERE issue_id=?`, issueID).Scan(&grouped); err != nil {
+				return false, err
+			}
+			if grouped {
+				return false, nil
+			}
+		}
 		var unknown int
 		if err := tx.QueryRowContext(ctx,
 			"SELECT COUNT(*) FROM agent_actions WHERE issue_id = ? AND status = ?",
@@ -430,7 +445,8 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 	// transition: resolved resets the give-up streak, a non-resolved close bumps
 	// it (and may disarm auto-dispatch). Manual admin closure is excluded because
 	// it is neither an autonomous success nor an agent give-up.
-	if resolutionKind != ResolutionAdminDismissed && resolutionKind != ResolutionAdminCompleted {
+	if resolutionKind != ResolutionAdminDismissed && resolutionKind != ResolutionAdminCompleted &&
+		!(opts.expectedRunID == 0 && resolutionKind == ResolutionArrStateCleared) {
 		s.noteAutoTerminal(issueID, status)
 	}
 	for _, ruleID := range pausedRules {
@@ -712,23 +728,27 @@ func (s *Service) ProposeAction(ctx context.Context, issueID int64, kindStr stri
 	if err := validateActionScopeWith(tx, issueID, kind, canonical); err != nil {
 		return 0, false, err
 	}
-
 	// Bind the proposal to the exact live run that owns this issue. The scope
 	// validation and insert share this transaction, so a concurrent close/park
 	// cannot leave a new proposal attached to a closed or unowned issue.
 	var runID int64
+	var source, trigger string
 	expectedRunID := mcp.AgentRunOwnership(ctx)
 	if err := tx.QueryRowContext(ctx,
-		`SELECT i.active_run_id FROM issues i JOIN agent_runs r ON r.id = i.active_run_id
+		`SELECT i.active_run_id,i.source,r.trigger FROM issues i JOIN agent_runs r ON r.id = i.active_run_id
 		 WHERE i.id = ? AND i.status = ? AND i.closed_at IS NULL
 		   AND i.active_run_id IS NOT NULL AND r.status = ?
 		   AND (? = 0 OR i.active_run_id = ?)`,
 		issueID, IssueInvestigating, runStatusRunning, expectedRunID, expectedRunID,
-	).Scan(&runID); err != nil {
+	).Scan(&runID, &source, &trigger); err != nil {
 		if err == sql.ErrNoRows {
 			return 0, false, fmt.Errorf("issue has no active investigation gate")
 		}
 		return 0, false, fmt.Errorf("load proposal run: %w", err)
+	}
+	settings := readSettings(tx)
+	if !settings.investigates(source) || trigger == "auto" && !settings.AutoDispatch || settings.Mode != ModeSupervised {
+		return 0, false, errors.New("proposals are disabled for this investigation")
 	}
 	fp := fingerprint(issueID, runID, toolUseID, kind, canonical)
 

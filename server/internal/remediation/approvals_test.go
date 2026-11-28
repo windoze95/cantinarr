@@ -360,7 +360,7 @@ func TestClaimResumeConsumesOneExactHandoff(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, claimed, err := r.claimResume(issueID)
+			_, claimed, err := r.claimResume(context.Background(), issueID)
 			if err != nil {
 				t.Errorf("claimResume: %v", err)
 			}
@@ -1080,7 +1080,7 @@ func newProposeCycleRunner(t *testing.T) (*Runner, *Service, *fakeExecutor, int6
 	svc := NewService(database, nil, nil, &fakeNotifier{})
 	fx := &fakeExecutor{out: "Release sent to the download client."}
 	svc.executor = fx
-	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, DailyRunCap: 50}); err != nil {
+	if _, err := svc.SetSettings(Settings{Enabled: true, AutoDispatch: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, DailyRunCap: 50}); err != nil {
 		t.Fatalf("set settings: %v", err)
 	}
 	if _, err := database.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (?, 'admin', '', 'admin')", testAdminID); err != nil {

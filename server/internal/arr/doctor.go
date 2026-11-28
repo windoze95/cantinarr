@@ -72,14 +72,17 @@ func (s QueueSignal) nobodyAskedForIt() bool {
 // TMDB/TVDB ids; books carry no TMDB identity and use the Chaptarr author/book
 // record ids instead.
 type QueueMediaContext struct {
-	QueueID       int
-	Title         string
-	TmdbID        int
-	TvdbID        int
-	SeasonNumber  int
-	EpisodeNumber int
-	AuthorID      int
-	BookID        int
+	SeriesID       int // verified Sonarr native identity
+	EpisodeID      int
+	DownloadClient string
+	QueueID        int
+	Title          string
+	TmdbID         int
+	TvdbID         int
+	SeasonNumber   int
+	EpisodeNumber  int
+	AuthorID       int
+	BookID         int
 }
 
 // QueueObservation is one complete, service-neutral queue observation. Queue

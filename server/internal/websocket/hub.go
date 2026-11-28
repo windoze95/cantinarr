@@ -114,12 +114,10 @@ type ContentNotifier interface {
 // including healthy items and empty snapshots, without interpreting whether an
 // in-flight retry has had enough time to recover.
 type IssueOpener interface {
-	// ObserveQueueSnapshot is called exactly once for each successful detailed
-	// queue read. serviceType is "radarr" or "sonarr". items is the full queue,
-	// including healthy entries, and is empty when the successful read found no
-	// entries. Failed reads do not call this method. Implementations must not block
-	// the poll goroutine.
-	ObserveQueueSnapshot(serviceType, instanceID string, items []arr.QueueObservation)
+	// A successful read includes every row, including healthy entries. An empty
+	// success and a failed read are distinct. Order by request start so a slow
+	// response cannot supersede newer evidence. Do not block the poll goroutine.
+	ObserveQueueRead(serviceType, instanceID string, items []arr.QueueObservation, started time.Time, failure error)
 }
 
 // Client represents a connected WebSocket client.
@@ -1164,14 +1162,6 @@ func (h *Hub) noteArrQueueComposition(instanceID, serviceType string, tuples []s
 	})
 }
 
-// autoDispatchEnabled reports whether the auto-dispatch path is wired at all.
-// When the opener is nil the poll path skips the extra detailed-queue fetch and
-// the diagnosis entirely, so a server without the remediation feature pays
-// nothing. The opener itself still re-checks the live Enabled/AutoDispatch
-// toggles per call (so flipping them takes effect without a restart); this is
-// only the cheap "is it even wired" short-circuit.
-func (h *Hub) autoDispatchEnabled() bool { return h.opener != nil }
-
 // dispatchDetailedItems runs the Import Doctor over every item in one
 // successful detailed queue snapshot and forwards the complete observation to
 // the remediation observer exactly once. Healthy entries and entries without a
@@ -1179,7 +1169,7 @@ func (h *Hub) autoDispatchEnabled() bool { return h.opener != nil }
 // still working, and temporal issue policy belongs to the observer rather than
 // this transport layer. An empty successful snapshot is forwarded as an empty
 // (non-nil) slice. Fetch failures return before this function is called.
-func (h *Hub) dispatchDetailedItems(serviceType, instanceID string, items []arr.QueueObservation) {
+func (h *Hub) dispatchDetailedItems(serviceType, instanceID string, items []arr.QueueObservation, started time.Time) {
 	if h.opener == nil {
 		return
 	}
@@ -1189,7 +1179,7 @@ func (h *Hub) dispatchDetailedItems(serviceType, instanceID string, items []arr.
 	for i := range observations {
 		observations[i].Diagnosis = arr.Diagnose(observations[i].Signal)
 	}
-	h.opener.ObserveQueueSnapshot(serviceType, instanceID, observations)
+	h.opener.ObserveQueueRead(serviceType, instanceID, observations, started, nil)
 }
 
 // radarrQueueSignal projects a Radarr detailed queue item into the neutral
@@ -1226,37 +1216,7 @@ func radarrQueueSignal(item radarr.DetailedQueueItem) arr.QueueObservation {
 // sonarrQueueSignal projects a Sonarr detailed queue item into the neutral
 // classifier signal plus its stable download id. It mirrors mcp.sonarrSignal.
 func sonarrQueueSignal(item sonarr.DetailedQueueItem) arr.QueueObservation {
-	messages := make([]arr.StatusMessage, 0, len(item.StatusMessages))
-	for _, m := range item.StatusMessages {
-		messages = append(messages, arr.StatusMessage{Title: m.Title, Messages: m.Messages})
-	}
-	media := arr.QueueMediaContext{QueueID: item.ID, Title: item.Title}
-	if item.Series != nil {
-		media.Title = item.Series.Title
-		media.TmdbID = item.Series.TmdbID
-		media.TvdbID = item.Series.TvdbID
-	}
-	if item.Episode != nil {
-		media.SeasonNumber = item.Episode.SeasonNumber
-		media.EpisodeNumber = item.Episode.EpisodeNumber
-	}
-	return arr.QueueObservation{
-		DownloadID:       item.DownloadID,
-		AddedAt:          item.Added,
-		FileIDAtSnapshot: item.FileIDAtSnapshot(),
-		Media:            media,
-		Signal: arr.QueueSignal{
-			Status:                item.Status,
-			EpisodeAirsAt:         item.AirTimeAtSnapshot(),
-			TrackedDownloadStatus: item.TrackedDownloadStatus,
-			TrackedDownloadState:  item.TrackedDownloadState,
-			ErrorMessage:          item.ErrorMessage,
-			StatusMessages:        messages,
-			Protocol:              item.Protocol,
-			Size:                  item.Size,
-			SizeLeft:              item.Sizeleft,
-		},
-	}
+	return item.QueueObservation()
 }
 
 // autoDispatchRadarr fetches the detailed queue (the lightweight GetQueue used
@@ -1266,36 +1226,29 @@ func sonarrQueueSignal(item sonarr.DetailedQueueItem) arr.QueueObservation {
 // queue. The progress poll above already ran off the lightweight queue, so a
 // detailed fetch failure never affects download_progress events.
 func (h *Hub) autoDispatchRadarr(instanceID string, client *radarr.Client) {
-	if !h.autoDispatchEnabled() {
+	observeDetailed(h, "radarr", instanceID, client.GetQueueDetailed, radarrQueueSignal)
+}
+
+func observeDetailed[T any](h *Hub, serviceType, instanceID string, read func() ([]T, error), project func(T) arr.QueueObservation) {
+	if h.opener == nil {
 		return
 	}
-	items, err := client.GetQueueDetailed()
+	started := time.Now().UTC()
+	items, err := read()
 	if err != nil {
-		log.Printf("websocket: auto-dispatch radarr detailed queue (%s): %v", instanceID, err)
+		h.opener.ObserveQueueRead(serviceType, instanceID, nil, started, err)
 		return
 	}
 	observations := make([]arr.QueueObservation, 0, len(items))
 	for _, item := range items {
-		observations = append(observations, radarrQueueSignal(item))
+		observations = append(observations, project(item))
 	}
-	h.dispatchDetailedItems("radarr", instanceID, observations)
+	h.dispatchDetailedItems(serviceType, instanceID, observations, started)
 }
 
 // autoDispatchSonarr is the Sonarr analogue of autoDispatchRadarr.
 func (h *Hub) autoDispatchSonarr(instanceID string, client *sonarr.Client) {
-	if !h.autoDispatchEnabled() {
-		return
-	}
-	items, err := client.GetQueueDetailed()
-	if err != nil {
-		log.Printf("websocket: auto-dispatch sonarr detailed queue (%s): %v", instanceID, err)
-		return
-	}
-	observations := make([]arr.QueueObservation, 0, len(items))
-	for _, item := range items {
-		observations = append(observations, sonarrQueueSignal(item))
-	}
-	h.dispatchDetailedItems("sonarr", instanceID, observations)
+	observeDetailed(h, "sonarr", instanceID, client.GetQueueDetailed, sonarrQueueSignal)
 }
 
 // chaptarrQueueSignal projects a Chaptarr detailed queue item into the neutral
@@ -1340,38 +1293,14 @@ func chaptarrQueueSignal(item chaptarr.DetailedQueueItem) arr.QueueObservation {
 // autoDispatchChaptarr is the Chaptarr analogue of autoDispatchRadarr: books
 // enter remediation observation through the same complete-snapshot channel.
 func (h *Hub) autoDispatchChaptarr(instanceID string, client *chaptarr.Client) {
-	if !h.autoDispatchEnabled() {
-		return
-	}
-	items, err := client.GetQueueDetailed()
-	if err != nil {
-		log.Printf("websocket: auto-dispatch chaptarr detailed queue (%s): %v", instanceID, err)
-		return
-	}
-	observations := make([]arr.QueueObservation, 0, len(items))
-	for _, item := range items {
-		observations = append(observations, chaptarrQueueSignal(item))
-	}
-	h.dispatchDetailedItems("chaptarr", instanceID, observations)
+	observeDetailed(h, "chaptarr", instanceID, client.GetQueueDetailed, chaptarrQueueSignal)
 }
 
 // autoDispatchLidarr is autoDispatchChaptarr's music sibling: it feeds
 // complete diagnosed queue snapshots to remediation, whose music support
 // arrived with the issue-parity wave.
 func (h *Hub) autoDispatchLidarr(instanceID string, client *lidarr.Client) {
-	if !h.autoDispatchEnabled() {
-		return
-	}
-	items, err := client.GetQueueDetailed()
-	if err != nil {
-		log.Printf("websocket: auto-dispatch lidarr detailed queue (%s): %v", instanceID, err)
-		return
-	}
-	observations := make([]arr.QueueObservation, 0, len(items))
-	for _, item := range items {
-		observations = append(observations, lidarrQueueSignal(item))
-	}
-	h.dispatchDetailedItems("lidarr", instanceID, observations)
+	observeDetailed(h, "lidarr", instanceID, client.GetQueueDetailed, lidarrQueueSignal)
 }
 
 // lidarrQueueSignal is chaptarrQueueSignal's music sibling: the artist and
@@ -1491,6 +1420,7 @@ func (h *Hub) pollLidarrInstance(instanceID string, client *lidarr.Client) {
 	queue, err := client.GetQueue()
 	if err != nil {
 		log.Printf("websocket: poll lidarr queue (%s): %v", instanceID, err)
+		h.autoDispatchLidarr(instanceID, client)
 		return
 	}
 
@@ -1573,6 +1503,7 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 	queue, err := client.GetQueue()
 	if err != nil {
 		log.Printf("websocket: poll radarr queue (%s): %v", instanceID, err)
+		h.autoDispatchRadarr(instanceID, client)
 		return
 	}
 
@@ -1674,6 +1605,7 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 	queue, err := client.GetQueue()
 	if err != nil {
 		log.Printf("websocket: poll sonarr queue (%s): %v", instanceID, err)
+		h.autoDispatchSonarr(instanceID, client)
 		return
 	}
 
@@ -1803,6 +1735,7 @@ func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 	queue, err := client.GetQueue()
 	if err != nil {
 		log.Printf("websocket: poll chaptarr queue (%s): %v", instanceID, err)
+		h.autoDispatchChaptarr(instanceID, client)
 		return
 	}
 

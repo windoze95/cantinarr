@@ -1,8 +1,10 @@
 After upgrade, check sign-in, browsing, requests, downloads, passkeys, connect links, and push on 1.0.1 and 1.1.0 servers. Admins: check Request Defaults profiles and OpenAI OAuth models.
 
-For server sign-in, enter a bare hostname with an unavailable or invalid HTTPS endpoint. It should stay on the address screen and never switch to HTTP. A LAN server without TLS should connect when you explicitly enter its `http://` address. After switching accounts or changing a book/music library assignment, check that previously viewed protected artwork does not appear for the new access context.
+Sign in with a bare hostname and broken HTTPS. Stay on the address screen; never fall back to HTTP. For a LAN server without TLS, enter its `http://` address. Switch accounts or book/music assignments and check that protected artwork from the previous session stays hidden.
 
 Report issues with your device, iOS version, and server version.
+
+With AI off, one stuck Sonarr season download should open one issue and respect your Problem reports push preference.
 
 On 1.1.0, test Plex/Jellyfin/Emby scanning, household Library access only, in-library copy and missing-episode requests, and season following. Scanning or associating a library must not start a download.
 
@@ -14,7 +16,7 @@ User onboarding now has labeled Import users and Invite user actions, explicit a
 
 French: check device language and Settings > Account > App language. Test Metadata language options independently. Compare titles, summaries, posters, Trakt, library, Releases, Downloads, and My reports with providers. Switch with a title open, then restart and sign out. Missing translations should retain source text; requests should target the same title. Older servers should explain the update requirement and keep the preference.
 
-Confirm English and French in app and iOS language settings, with saved choices retained after upgrade. Regional variants should survive restart.
+Check English and French in app and iOS settings. Choices should survive upgrade, and regional variants should survive restart.
 
 In Settings > Account > App icon, try Play Sign, Play Dome, Original, and Play Sun. Check dark/tinted appearance, restart, upgrade, push taps, and auth links with an alternate icon.
 

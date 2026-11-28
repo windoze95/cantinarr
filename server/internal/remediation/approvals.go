@@ -58,6 +58,19 @@ func (s *Service) ApproveAction(adminID, actionID int64, override *json.RawMessa
 // proposal stays visible for a human who can see the history, and the rule stands
 // down — a track record with an ineffective fix in it is not a clean one.
 func (s *Service) autoApproveAction(ruleID, actionID int64) (*AgentAction, error) {
+	var source string
+	if err := s.db.QueryRow(`SELECT CASE WHEN r.trigger='auto' THEN 'auto' ELSE i.source END FROM agent_actions a
+		JOIN agent_runs r ON r.id=a.run_id JOIN issues i ON i.id=a.issue_id WHERE a.id=?`, actionID).Scan(&source); err != nil {
+		return nil, err
+	}
+	permit, release, permitted := s.investigationContext(context.Background(), source)
+	if !permitted {
+		return nil, ErrActionDecisionConflict
+	}
+	defer release()
+	if !s.rulePermitted(ruleID, actionID) {
+		return nil, ErrActionDecisionConflict
+	}
 	repeat, err := s.autoApprovalWouldRepeatFailedRemedy(actionID)
 	if err != nil {
 		return nil, err
@@ -76,7 +89,20 @@ func (s *Service) autoApproveAction(ruleID, actionID int64) (*AgentAction, error
 		}
 		return nil, errRemedyAlreadyApplied
 	}
-	return s.approveAction(approvalActor{ruleID: ruleID}, actionID)
+	return s.approveAction(approvalActor{ruleID: ruleID, permit: permit}, actionID)
+}
+
+func (s *Service) rulePermitted(ruleID, actionID int64) bool {
+	var source, trigger, ruleFacet, actionKind, params string
+	err := s.db.QueryRow(`SELECT i.source,r.trigger,ru.action_facet,a.kind,a.params FROM agent_actions a
+		JOIN issues i ON i.id=a.issue_id JOIN agent_runs r ON r.id=a.run_id
+		JOIN agent_approval_rules ru ON ru.problem_kind=i.problem_kind AND ru.action_kind=a.kind
+		WHERE a.id=? AND ru.id=? AND ru.status='active' AND i.closed_at IS NULL`, actionID, ruleID).
+		Scan(&source, &trigger, &ruleFacet, &actionKind, &params)
+	facet, ok := actionAutoFacet(ActionKind(actionKind), json.RawMessage(params))
+	settings := s.Settings()
+	return err == nil && ok && facet == ruleFacet && settings.Mode == ModeSupervised &&
+		settings.investigates(source) && (trigger != "auto" || settings.AutoDispatch)
 }
 
 // approvalActor identifies who claims a proposed action: a human admin
@@ -84,6 +110,7 @@ func (s *Service) autoApproveAction(ruleID, actionID int64) (*AgentAction, error
 // (ruleID > 0, never an override). Exactly one is set; the CAS below records
 // the other column as NULL so attribution is always unambiguous.
 type approvalActor struct {
+	permit   context.Context // canceled when a setting revokes this rule invocation
 	adminID  int64
 	ruleID   int64
 	override *json.RawMessage
@@ -159,6 +186,13 @@ func (s *Service) approveAction(actor approvalActor, actionID int64) (*AgentActi
 
 	// Atomically persist the exact approved params and claim the execution.
 	// The original proposal params remain immutable for audit.
+	if actor.auto() {
+		s.policyMu.Lock()
+		if actor.permit.Err() != nil || !s.rulePermitted(actor.ruleID, actionID) {
+			s.policyMu.Unlock()
+			return nil, ErrActionDecisionConflict
+		}
+	}
 	cas, err := s.db.Exec(
 		`UPDATE agent_actions
 		 SET approved_params = ?, status = ?, decided_by = ?, auto_rule_id = ?, decided_at = CURRENT_TIMESTAMP
@@ -171,6 +205,9 @@ func (s *Service) approveAction(actor approvalActor, actionID int64) (*AgentActi
 		string(paramsToRun), ActionExecuting, sqlNullInt64(actor.adminID), sqlNullInt64(actor.ruleID),
 		actionID, ActionProposed, IssueAwaitingApproval,
 	)
+	if actor.auto() {
+		s.policyMu.Unlock()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("claim action for execution: %w", err)
 	}
@@ -185,7 +222,6 @@ func (s *Service) approveAction(actor approvalActor, actionID int64) (*AgentActi
 		// usage counter is best-effort and never affects matching.
 		rid := actor.ruleID
 		act.AutoRuleID = &rid
-		s.noteRuleApproved(actor.ruleID)
 	}
 
 	// Close the only local TOCTOU gap: recovery may have started after the first
@@ -223,6 +259,23 @@ func (s *Service) approveAction(actor approvalActor, actionID int64) (*AgentActi
 	// sweeper may pin the issue to while the arr call is in flight.
 	targetDownloadID := s.issueDownloadIdentity(act.IssueID)
 
+	// Order the final rule dispatch with settings saves. A disable during the
+	// read-only preflight releases the unused claim back to human review. Once
+	// admitted the remote action must finish and its outcome must be recorded.
+	if actor.auto() {
+		s.policyMu.Lock()
+		if actor.permit.Err() != nil || !s.rulePermitted(actor.ruleID, actionID) {
+			_, err := s.db.Exec(`UPDATE agent_actions SET status='proposed',approved_params=NULL,
+				decided_at=NULL,auto_rule_id=NULL WHERE id=? AND status='executing' AND auto_rule_id=?`, actionID, actor.ruleID)
+			s.policyMu.Unlock()
+			if err != nil {
+				return nil, err
+			}
+			return nil, ErrActionDecisionConflict
+		}
+		s.noteRuleApproved(actor.ruleID)
+	}
+
 	// Replay the approved action against the arr. This is the ONLY mutation path.
 	resultText, execErr := s.executor.Execute(context.Background(), act.IssueID, ActionKind(act.Kind), paramsToRun, act.CreatedAt, func(action string) error {
 		// The shared helper calls this after its final live date check and
@@ -248,6 +301,9 @@ func (s *Service) approveAction(actor approvalActor, actionID int64) (*AgentActi
 		paramsToRun = effective
 		return nil
 	})
+	if actor.auto() {
+		s.policyMu.Unlock()
+	}
 	resultText = secrets.RedactText(resultText)
 
 	// The resume transcript must attribute the decision truthfully: the model
@@ -742,11 +798,20 @@ func stageResumeResultTx(tx *sql.Tx, issueID, runID int64, expectedIssueStatus, 
 		return false, fmt.Errorf("encode resume transcript: %w", err)
 	}
 
+	var source, trigger string
+	if err := tx.QueryRow(`SELECT i.source,r.trigger FROM issues i JOIN agent_runs r ON i.id=r.issue_id WHERE i.id=? AND r.id=?`, issueID, runID).Scan(&source, &trigger); err != nil {
+		return false, err
+	}
+	status := IssueInvestigating
+	settings := readSettings(tx)
+	if !settings.investigates(source) || trigger == "auto" && !settings.AutoDispatch {
+		status = IssueOpen
+	}
 	issueRes, err := tx.Exec(
 		`UPDATE issues SET status = ?, read = CASE WHEN ? THEN 0 ELSE read END,
 		 active_run_id = NULL, updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ? AND status = ? AND closed_at IS NULL AND active_run_id IS NULL`,
-		IssueInvestigating, markUnread, issueID, expectedIssueStatus,
+		status, markUnread, issueID, expectedIssueStatus,
 	)
 	if err != nil {
 		return false, err
