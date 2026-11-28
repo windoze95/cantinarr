@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/ai"
+	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 )
 
@@ -43,7 +45,12 @@ func TestManualSeasonDownloadWithoutAdded(t *testing.T) {
 	w.advance(16 * time.Minute)
 	w.fake.setLibrary(episodes[:3], files[:3])
 	w.fake.setHistory(history[:3])
-	w.advance(time.Minute)
+	// A later queue signature must not overwrite the original file witness.
+	for _, row := range rows {
+		row["size"] = 1001
+	}
+	w.fake.setQueue(rows)
+	w.advance(6 * time.Minute)
 	var credited int
 	if err := w.svc.db.QueryRow("SELECT COUNT(history_id) FROM issue_sonarr_members WHERE issue_id=?", id).Scan(&credited); err != nil || credited != 3 {
 		t.Errorf("verified %d of three exact post-observation imports: %v", credited, err)
@@ -61,12 +68,161 @@ func TestManualSeasonDownloadWithoutAdded(t *testing.T) {
 		t.Fatal("missing live history for the first three members closed the pack")
 	}
 	w.fake.setHistory(history)
+	w.fake.setHistoryStatus(503)
+	w.advance(time.Minute)
+	if w.issueByID(id).ClosedAt != nil {
+		t.Fatal("unreadable import history closed the pack")
+	}
+	w.fake.setHistoryStatus(0)
 	w.advance(time.Minute)
 	if issue := w.issueByID(id); issue.ResolutionKind != ResolutionArrStateCleared || issue.ClosedAt == nil {
 		t.Fatalf("twelve exact imports did not close original issue %d: %s", id, issue.Status)
 	}
 	if err := w.svc.db.QueryRow("SELECT COUNT(history_id) FROM issue_sonarr_members WHERE issue_id=?", id).Scan(&credited); err != nil || credited != 12 {
 		t.Fatalf("final verified members=%d: %v", credited, err)
+	}
+}
+
+func TestManualSeasonUpgradeKeepsMemberSpecificBoundary(t *testing.T) {
+	start := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	w := newScenarioWorld(t, start)
+	a, b := manualSeasonRow(1, 10, start), manualSeasonRow(2, 0, start)
+	w.fake.setQueue([]map[string]any{a})
+	w.observe()
+	id := w.soleOpenAutoIssueID()
+	w.advance(5 * time.Minute)
+	w.fake.setQueue([]map[string]any{a, b})
+	w.advance(12 * time.Minute)
+	w.fake.setQueue(nil)
+	w.advance(time.Minute)
+	// Reopen a copy of the database with the PR's previous member schema.
+	// The per-download first sighting predates B, and last_seen on BOTH
+	// members is later than the import. Neither dates B's baseline.
+	if _, err := w.svc.db.Exec("ALTER TABLE issue_sonarr_members DROP COLUMN baseline_observed_at"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "previous.db")
+	if _, err := w.svc.db.Exec("VACUUM INTO ?", path); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	w.svc = NewService(upgraded, w.svc.registry, nil, w.rec)
+	e1, f1 := scenarioEpisode(1, 1, 101, start)
+	e2, f2 := scenarioEpisode(1, 2, 102, start)
+	w.fake.setLibrary([]map[string]any{e1, e2}, []map[string]any{f1, f2})
+	h1 := manualSeasonReceipt(1, 101, start.Add(time.Minute))
+	w.fake.setHistory([]map[string]any{h1, manualSeasonReceipt(2, 102, start.Add(time.Minute))})
+	w.advance(6 * time.Minute)
+	var count int
+	if err := upgraded.QueryRow("SELECT COUNT(history_id) FROM issue_sonarr_members WHERE issue_id=?", id).Scan(&count); err != nil || count != 1 || w.issueByID(id).ClosedAt != nil {
+		t.Fatalf("upgraded late sibling credited a pre-observation receipt, or lost the first member's proof: %d, %v", count, err)
+	}
+	w.fake.setHistory([]map[string]any{h1, manualSeasonReceipt(2, 102, start.Add(7*time.Minute))})
+	w.advance(time.Minute)
+	if w.issueByID(id).ResolutionKind != ResolutionArrStateCleared {
+		t.Fatal("fresh receipt after the late member's baseline did not close the upgraded issue")
+	}
+}
+
+func TestManualSeasonRejectsUnprovenReceipts(t *testing.T) {
+	start := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	w := newScenarioWorld(t, start)
+	// The fourth member's baseline does not become readable until a later poll.
+	rows := []map[string]any{manualSeasonRow(1, 0, start), manualSeasonRow(2, 102, start), manualSeasonRow(3, 0, start), manualSeasonRow(4, 0, start)}
+	for _, i := range []int{2, 3} {
+		delete(rows[i]["episode"].(map[string]any), "episodeFileId")
+	}
+	w.fake.setQueue(rows)
+	w.observe()
+	id := w.soleOpenAutoIssueID()
+	w.advance(3 * time.Minute)
+	rows[3] = manualSeasonRow(4, 0, start)
+	w.fake.setQueue(rows)
+	w.advance(time.Minute)
+	var episodes, files, history []map[string]any
+	for ep := 1; ep <= 4; ep++ {
+		fileID := int64(100 + ep)
+		e, f := scenarioEpisode(1, ep, fileID, start)
+		episodes, files = append(episodes, e), append(files, f)
+		if ep != 1 {
+			history = append(history, manualSeasonReceipt(ep, fileID, start.Add(time.Minute)))
+		}
+	}
+	w.fake.setLibrary(episodes, files)
+	w.fake.setQueue(nil)
+	for _, change := range []func(map[string]any){
+		func(h map[string]any) { delete(h, "date") },
+		func(h map[string]any) { h["date"] = start },
+		func(h map[string]any) { h["date"] = start.Add(-time.Second) },
+		func(h map[string]any) { h["downloadId"] = "previous" },
+		func(h map[string]any) { h["episodeId"] = 99 },
+		func(h map[string]any) { h["seriesId"] = 99 },
+		func(h map[string]any) { h["episode"].(map[string]any)["seasonNumber"] = 0 },
+		func(h map[string]any) { h["data"].(map[string]any)["fileId"] = "987" },
+		func(h map[string]any) { h["data"].(map[string]any)["downloadClientName"] = "other" },
+		func(h map[string]any) { delete(h["data"].(map[string]any), "downloadClientName") },
+	} {
+		h := manualSeasonReceipt(1, 101, start.Add(time.Minute))
+		change(h)
+		history = append(history, h)
+	}
+	w.fake.setHistory(history)
+	w.advance(16 * time.Minute)
+	var count int
+	if err := w.svc.db.QueryRow("SELECT COUNT(history_id) FROM issue_sonarr_members WHERE issue_id=?", id).Scan(&count); err != nil || count != 0 || w.issueByID(id).ClosedAt != nil {
+		t.Fatalf("unknown/unchanged baseline or inexact receipt credited: %d, %v", count, err)
+	}
+}
+
+func TestManualSeasonRejectsCompetingAttemptEvenWithNamedClient(t *testing.T) {
+	start := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	w := newScenarioWorld(t, start)
+	var rows, episodes, files, history []map[string]any
+	for ep := 1; ep <= 2; ep++ {
+		row := manualSeasonRow(ep, 0, start)
+		other := manualSeasonRow(ep, 0, start)
+		other["id"], other["downloadClient"] = ep+10, "other"
+		rows = append(rows, row, other)
+		fileID := int64(100 + ep)
+		e, f := scenarioEpisode(1, ep, fileID, start)
+		episodes, files = append(episodes, e), append(files, f)
+		history = append(history, manualSeasonReceipt(ep, fileID, start.Add(3*time.Minute)))
+	}
+	w.fake.setQueue(rows)
+	w.observe()
+	w.fake.setLibrary(episodes, files)
+	w.fake.setHistory(history)
+	w.advance(16 * time.Minute)
+	var verified int
+	if err := w.svc.db.QueryRow("SELECT COUNT(history_id) FROM issue_sonarr_members").Scan(&verified); err != nil || verified != 0 || countRows(t, w.svc, "issues") != 2 {
+		t.Fatalf("shared hash fallback verified %d members: %v", verified, err)
+	}
+}
+
+func TestUndatedSeasonCannotBorrowReceiptAcrossQueueReappearance(t *testing.T) {
+	start := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	w := newScenarioWorld(t, start)
+	rows := []map[string]any{manualSeasonRow(1, 0, start), manualSeasonRow(2, 0, start)}
+	w.fake.setQueue(rows)
+	w.observe()
+	id := w.soleOpenAutoIssueID()
+	w.advance(12 * time.Minute)
+	w.fake.setQueue(rows[:1])
+	w.advance(time.Minute)
+	w.fake.setQueue(rows)
+	w.advance(6 * time.Minute)
+	e1, f1 := scenarioEpisode(1, 1, 101, start)
+	e2, f2 := scenarioEpisode(1, 2, 102, start)
+	w.fake.setLibrary([]map[string]any{e1, e2}, []map[string]any{f1, f2})
+	w.fake.setHistory([]map[string]any{manualSeasonReceipt(1, 101, start.Add(time.Minute)), manualSeasonReceipt(2, 102, start.Add(time.Minute))})
+	w.fake.setQueue(nil)
+	w.advance(6 * time.Minute)
+	if w.issueByID(id).ClosedAt != nil {
+		t.Fatal("undated row reused after departure borrowed the earlier attempt's receipt")
 	}
 }
 

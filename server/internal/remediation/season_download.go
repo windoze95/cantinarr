@@ -272,15 +272,26 @@ func recordSeasonMembers(tx *sql.Tx, id int64, g observationGroup, now time.Time
 		if !recoveryObservation(item) && groupWarrantsAutoIncident(observationGroup{items: []arr.QueueObservation{item}}, now) {
 			since = now
 		}
+		var baselineAt *time.Time
+		if item.AddedAt == nil && item.FileIDAtSnapshot != nil {
+			baselineAt = &now
+		}
+		// Without Added, a changed queue id or a return after a complete read
+		// missed this member can be hash reuse. Keep the member, but retire
+		// its earlier baseline as an import witness.
 		_, err := tx.Exec(`INSERT INTO issue_sonarr_members
-			(issue_id,series_id,episode_id,episode_number,queue_id,download_key,download_id,client_name,added_at,queue_file_id,signature,problem_since,quiet_since,last_seen)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(issue_id,download_key,episode_id) DO UPDATE SET
+			(issue_id,series_id,episode_id,episode_number,queue_id,download_key,download_id,client_name,added_at,queue_file_id,baseline_observed_at,signature,problem_since,quiet_since,last_seen)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(issue_id,download_key,episode_id) DO UPDATE SET
 			queue_id=excluded.queue_id, signature=excluded.signature,last_seen=excluded.last_seen,
+			baseline_observed_at=CASE WHEN added_at IS NULL AND (queue_id!=excluded.queue_id OR EXISTS (
+				SELECT 1 FROM issue_observations o WHERE o.issue_id=issue_sonarr_members.issue_id
+				AND (o.state='settling' OR o.last_seen_at>issue_sonarr_members.last_seen))) THEN NULL
+				WHEN queue_file_id IS NULL THEN excluded.baseline_observed_at ELSE baseline_observed_at END,
 			queue_file_id=COALESCE(queue_file_id,excluded.queue_file_id),
 			quiet_since=CASE WHEN signature=excluded.signature THEN quiet_since ELSE excluded.quiet_since END,
 			problem_since=CASE WHEN excluded.problem_since IS NULL THEN NULL ELSE COALESCE(problem_since,excluded.problem_since) END`,
 			id, item.Media.SeriesID, item.Media.EpisodeID, item.Media.EpisodeNumber, item.Media.QueueID, g.downloadKey, item.DownloadID, secrets.RedactText(item.Media.DownloadClient), item.AddedAt,
-			item.FileIDAtSnapshot, observationSignature([]arr.QueueObservation{item}), since, now, now)
+			item.FileIDAtSnapshot, baselineAt, observationSignature([]arr.QueueObservation{item}), since, now, now)
 		if err != nil {
 			return err
 		}
@@ -293,7 +304,7 @@ func recordSeasonMembers(tx *sql.Tx, id int64, g observationGroup, now time.Time
 // import receipt for this exact episode, hash, attempt and current file. One
 // receipt for a multi-episode file still attests only to its named episode.
 func (s *Service) seasonRecovery(issue *Issue) (arrRecoveryProbe, error) {
-	rows, err := s.db.Query(`SELECT series_id,episode_id,episode_number,download_key,download_id,client_name,added_at,queue_file_id,history_id,imported_file_id,
+	rows, err := s.db.Query(`SELECT series_id,episode_id,episode_number,download_key,download_id,client_name,added_at,baseline_observed_at,queue_file_id,history_id,imported_file_id,
 		EXISTS(SELECT 1 FROM issue_sonarr_members other JOIN issues i ON other.issue_id=i.id
 			WHERE i.instance_id=? AND other.episode_id=m.episode_id AND other.download_id=m.download_id AND other.download_key!=m.download_key)
 		FROM issue_sonarr_members m WHERE issue_id=? AND download_key=(
@@ -304,14 +315,14 @@ func (s *Service) seasonRecovery(issue *Issue) (arrRecoveryProbe, error) {
 	type member struct {
 		key, downloadID, clientName string
 		series, id, number          int
-		added                       sql.NullTime
+		added, baselineAt           sql.NullTime
 		queueFile, history, file    sql.NullInt64
 		reusedHash                  bool
 	}
 	var members []member
 	for rows.Next() {
 		var m member
-		if err := rows.Scan(&m.series, &m.id, &m.number, &m.key, &m.downloadID, &m.clientName, &m.added, &m.queueFile, &m.history, &m.file, &m.reusedHash); err != nil {
+		if err := rows.Scan(&m.series, &m.id, &m.number, &m.key, &m.downloadID, &m.clientName, &m.added, &m.baselineAt, &m.queueFile, &m.history, &m.file, &m.reusedHash); err != nil {
 			rows.Close()
 			return arrRecoveryProbe{}, err
 		}
@@ -343,11 +354,18 @@ func (s *Service) seasonRecovery(issue *Issue) (arrRecoveryProbe, error) {
 		if ep.SeriesID != m.series || ep.SeasonNumber != issue.SeasonNumber || ep.EpisodeNumber != m.number || !ep.HasFile || ep.EpisodeFileID <= 0 {
 			continue
 		}
-		if !m.reusedHash && m.history.Int64 > 0 && m.file.Int64 == int64(ep.EpisodeFileID) {
+		if m.added.Valid && !m.reusedHash && m.history.Int64 > 0 && m.file.Int64 == int64(ep.EpisodeFileID) {
 			proven++
 			continue
 		}
-		if !m.added.Valid || !m.queueFile.Valid {
+		if !m.queueFile.Valid {
+			continue
+		}
+		// A manually queued transfer can have no Sonarr Added time. Only a
+		// changed, known file baseline and a later exact import can date it.
+		// Recheck these receipts live, including ones credited on earlier polls.
+		if !m.added.Valid && (!m.baselineAt.Valid || m.baselineAt.Time.IsZero() || m.queueFile.Int64 < 0 ||
+			m.queueFile.Int64 == int64(ep.EpisodeFileID) || strings.TrimSpace(m.clientName) == "" || m.reusedHash) {
 			continue
 		}
 		history, err := client.GetImportHistory(m.id, m.downloadID, 20)
@@ -355,22 +373,29 @@ func (s *Service) seasonRecovery(issue *Issue) (arrRecoveryProbe, error) {
 			return arrRecoveryProbe{}, err
 		}
 		for _, h := range history {
+			clientName := h.Data["downloadClientName"]
+			if !m.added.Valid && (!h.Date.After(m.baselineAt.Time) || clientName != m.clientName ||
+				h.Episode == nil || h.Episode.SeriesID != m.series) {
+				continue
+			}
 			file, ok := historyFileID(h.Data)
 			if !ok || file != int64(ep.EpisodeFileID) || h.ID <= 0 || h.SeriesID != m.series || h.EpisodeID != m.id ||
-				!strings.EqualFold(h.EventType, "downloadFolderImported") || !strings.EqualFold(h.DownloadID, m.downloadID) || h.Date.Before(m.added.Time) ||
-				(m.clientName != "" && h.Data["downloadClientName"] != "" && secrets.RedactText(h.Data["downloadClientName"]) != m.clientName) ||
+				!strings.EqualFold(h.EventType, "downloadFolderImported") || !strings.EqualFold(h.DownloadID, m.downloadID) || (m.added.Valid && h.Date.Before(m.added.Time)) ||
+				(m.clientName != "" && clientName != "" && secrets.RedactText(clientName) != m.clientName) ||
 				(h.Series != nil && h.Series.ID != m.series) || (h.Episode != nil && (h.Episode.ID != m.id || h.Episode.SeriesID != 0 && h.Episode.SeriesID != m.series || h.Episode.EpisodeNumber != m.number || h.Episode.SeasonNumber != issue.SeasonNumber)) {
 				continue
 			}
 			// A reused hash is not an attempt identifier. If another observed
 			// attempt could own this receipt, do not credit either one. An older
 			// attempt can still be active on another client when a newer one starts.
-			result, err := s.db.Exec(`UPDATE issue_sonarr_members SET history_id=?,imported_file_id=? WHERE issue_id=? AND episode_id=? AND download_key=?
+			result, err := s.db.Exec(`UPDATE issue_sonarr_members AS member SET history_id=?,imported_file_id=? WHERE issue_id=? AND episode_id=? AND download_key=?
 				AND NOT EXISTS (SELECT 1 FROM issue_sonarr_members other JOIN issues i ON i.id=other.issue_id
-				WHERE i.instance_id=? AND other.episode_id=? AND other.download_id=? AND other.download_key!=?
-				AND (other.added_at IS NULL OR (other.added_at<=? AND (other.added_at>=? OR other.last_seen>=?)))
-				AND (?='' OR other.client_name='' OR other.client_name=?))`, h.ID, file, issue.ID, m.id, m.key,
-				issue.InstanceID, m.id, m.downloadID, m.key, h.Date, m.added.Time, m.added.Time, secrets.RedactText(h.Data["downloadClientName"]), secrets.RedactText(h.Data["downloadClientName"]))
+				WHERE i.instance_id=? AND other.download_id=member.download_id AND (
+				    (member.added_at IS NULL AND (other.download_key!=member.download_key OR other.issue_id!=member.issue_id))
+				    OR (member.added_at IS NOT NULL AND other.download_key!=member.download_key AND other.episode_id=member.episode_id
+				        AND (other.added_at IS NULL OR (other.added_at<=? AND (other.added_at>=member.added_at OR other.last_seen>=member.added_at)))
+				        AND (?='' OR other.client_name='' OR other.client_name=?))))`, h.ID, file, issue.ID, m.id, m.key,
+				issue.InstanceID, h.Date, secrets.RedactText(clientName), secrets.RedactText(clientName))
 			if err != nil {
 				return arrRecoveryProbe{}, err
 			}
