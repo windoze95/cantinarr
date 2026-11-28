@@ -10,10 +10,15 @@ import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/action_sheet.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../navigation/ambient_page_route.dart';
+import '../../auth/logic/auth_provider.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import '../logic/episode_selection.dart';
+import '../logic/reviewed_import.dart';
+import '../logic/season_queue.dart';
 import 'episode_detail_sheet.dart';
+import 'import_doctor_sheet.dart';
+import 'reviewed_import_dialog.dart';
 import 'sonarr_releases_screen.dart';
 import 'sonarr_series_detail_screen.dart' show seasonLabel;
 import 'widgets/episode_status.dart';
@@ -47,7 +52,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   late final SonarrApiService _service;
   late SonarrSeries _series;
   List<SonarrEpisode> _episodes = [];
-  Map<int, SonarrQueueItem> _queueByEpisode = {};
+  SeasonQueue _queue = const SeasonQueue();
   bool _isLoading = true;
   String? _error;
   bool _selecting = false;
@@ -82,7 +87,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
           seasonNumber: widget.seasonNumber,
           includeEpisodeFile: true,
         ),
-        _service.getQueueDetailed(),
+        _service.getSeriesQueue(_series.id),
       ).wait;
       if (!mounted) return;
       episodes.sort((a, b) => b.seasonNumber != a.seasonNumber
@@ -91,10 +96,8 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
       setState(() {
         _series = series;
         _episodes = episodes;
-        _queueByEpisode = {
-          for (final q in queue)
-            if (q.episodeId != null) q.episodeId!: q,
-        };
+        _queue = SeasonQueue.forView(
+            queue, episodes, series.id, widget.seasonNumber);
         // Drop selected ids that no longer exist after a refresh.
         final ids = {for (final e in episodes) e.id};
         _selectedIds.retainAll(ids);
@@ -382,13 +385,80 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
         instanceId: widget.instanceId,
         series: _series,
         episode: episode,
-        queueItem: _queueByEpisode[episode.id],
+        queueItems: _queue.byEpisode[episode.id] ?? const [],
         onAutomaticSearch: () => _automaticEpisodeSearch(episode),
         onInteractiveSearch: () => _interactiveEpisodeSearch(episode),
       ),
     );
     // The episode sheet returns true after an Import Doctor fix.
     if (changed == true && mounted) _load();
+  }
+
+  Future<void> _review(List<BlockedDownload> downloads) async {
+    if (ref.read(authProvider).valueOrNull?.user?.isAdmin != true) return;
+    final queue = _queue;
+    final List<BlockedDownload>? selected;
+    if (downloads.length == 1) {
+      selected = downloads;
+    } else {
+      final labels = {
+        for (final episode in _episodes)
+          for (final row
+              in queue.byEpisode[episode.id] ?? const <SonarrQueueItem>[])
+            row: episode.seasonEpisodeLabel,
+      };
+      selected = await showAppSheet<List<BlockedDownload>>(
+        context,
+        builder: (ctx) => AppSheet(
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(ctx.l10n.sonarrReviewImport,
+                style: Theme.of(ctx).textTheme.titleLarge),
+            TextButton.icon(
+                icon: const Icon(Icons.checklist),
+                onPressed: () => Navigator.pop(ctx, downloads),
+                label: Text(ctx.l10n.sonarrReviewFiles)),
+            for (final download in downloads)
+              ListTile(
+                title:
+                    Text('${download.target.title} · #${download.target.id}'),
+                subtitle: Text([
+                  ...{
+                    for (final q in download.members)
+                      if (labels[q] != null) labels[q]!
+                  },
+                  importBlockerText(ctx, download.blocker),
+                ].join(' · ')),
+                onTap: () => Navigator.of(ctx).pop([download]),
+              ),
+          ]),
+        ),
+      );
+    }
+    if (selected == null ||
+        !mounted ||
+        _queue != queue ||
+        ref.read(authProvider).valueOrNull?.user?.isAdmin != true) {
+      return;
+    }
+    if (selected.length > 1) {
+      final changed = await showReviewedImport(context,
+          instanceId: widget.instanceId,
+          service: _service,
+          targets: [for (final d in selected) ImportTarget(d.members)]);
+      if (mounted && changed == true) await _load();
+      return;
+    }
+    final download = selected.single;
+    await showAppSheet<void>(context,
+        builder: (_) => ImportDoctorSheet(
+              instanceId: widget.instanceId,
+              item: download.target,
+              members: download.members,
+              onChanged: () {
+                if (mounted) _load();
+              },
+            ));
   }
 
   @override
@@ -448,14 +518,32 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   }
 
   Widget _buildBody() {
+    final isAdmin = ref.watch(authProvider).valueOrNull?.user?.isAdmin == true;
+    final results = isAdmin
+        ? ref
+            .watch(importRecoveryProvider(widget.instanceId))
+            .attempts
+            .where((a) =>
+                a.target.item.seriesId == _series.id &&
+                (_allSeasons ||
+                    a.target.rows.any((r) =>
+                        r.seasonNumber == widget.seasonNumber ||
+                        _episodes.any((e) => e.id == r.episodeId))))
+            .toList()
+        : <ImportAttempt>[];
     if (_isLoading && _episodes.isEmpty) {
       return const Center(
           child: CircularProgressIndicator(color: AppTheme.accent));
     }
-    if (_error != null && _episodes.isEmpty) {
-      return FullScreenError(message: _error!, onRetry: _load);
+    if (_error != null) {
+      return Center(
+          child: SingleChildScrollView(
+              child: FullScreenError(message: _error!, onRetry: _load)));
     }
-    if (_episodes.isEmpty) {
+    final downloads = _queue.blockedDownloads;
+    if (_episodes.isEmpty &&
+        results.isEmpty &&
+        (downloads.isEmpty || !isAdmin)) {
       return Center(
         child: Text(context.l10n.adminNoEpisodes,
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
@@ -464,6 +552,38 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
 
     // In All Seasons mode a header row precedes each season's episodes.
     final rows = <Object>[];
+    if (!_selecting && results.isNotEmpty) {
+      rows.add(ListTile(
+          leading: const Icon(Icons.fact_check_outlined),
+          title: Text(context.l10n.sonarrResults),
+          onTap: () async {
+            await showReviewedImport(context,
+                instanceId: widget.instanceId,
+                service: _service,
+                results: results);
+            if (mounted) await _load();
+          }));
+    }
+    if (!_selecting && isAdmin && downloads.isNotEmpty) {
+      final episodeIds = {
+        for (final download in downloads)
+          for (final q in download.members) q.episodeId
+      };
+      rows.add(ListTile(
+        leading:
+            const Icon(Icons.warning_amber_rounded, color: AppTheme.requested),
+        title: Text(context.l10n.sonarrReviewImport),
+        subtitle: Text([
+          context.l10n.sonarrBlockedDownloads(downloads.length),
+          if (episodeIds.every((id) => id != null && id > 0))
+            context.l10n.sonarrAffectedEpisodes(episodeIds.length),
+          if (downloads.length == 1)
+            importBlockerText(context, downloads.single.blocker),
+        ].join(' · ')),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => _review(downloads),
+      ));
+    }
     int? lastSeason;
     for (final e in _episodes) {
       if (_allSeasons && e.seasonNumber != lastSeason) {
@@ -485,12 +605,14 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
                 : const Divider(color: AppTheme.border, height: 1),
         itemBuilder: (context, index) {
           final row = rows[index];
+          if (row is Widget) return row;
           if (row is int) return _SeasonHeader(seasonNumber: row);
           final episode = row as SonarrEpisode;
           return _EpisodeTile(
             episode: episode,
             seriesMonitored: _series.monitored,
-            queueItem: _queueByEpisode[episode.id],
+            items: _queue.byEpisode[episode.id] ?? const [],
+            onReview: isAdmin && !_selecting ? _review : null,
             selecting: _selecting,
             selected: _selectedIds.contains(episode.id),
             onTap: _selecting
@@ -541,7 +663,8 @@ class _SeasonHeader extends StatelessWidget {
 class _EpisodeTile extends StatelessWidget {
   final SonarrEpisode episode;
   final bool seriesMonitored;
-  final SonarrQueueItem? queueItem;
+  final List<SonarrQueueItem> items;
+  final ValueChanged<List<BlockedDownload>>? onReview;
   final bool selecting;
   final bool selected;
   final VoidCallback onTap;
@@ -551,7 +674,8 @@ class _EpisodeTile extends StatelessWidget {
   const _EpisodeTile({
     required this.episode,
     required this.seriesMonitored,
-    required this.queueItem,
+    required this.items,
+    required this.onReview,
     required this.selecting,
     required this.selected,
     required this.onTap,
@@ -568,7 +692,13 @@ class _EpisodeTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final status = episodeStatusLine(episode, queueItem, strings: context.l10n);
+    final downloads = groupBlockedDownloads(items);
+    final statusRows = downloads.isEmpty
+        ? [items.firstOrNull]
+        : [for (final download in downloads) download.target];
+    final statuses = [
+      for (final row in statusRows) episodeStatusLine(context, episode, row)
+    ];
     return InkWell(
       onTap: onTap,
       onLongPress: onLongPress,
@@ -629,15 +759,18 @@ class _EpisodeTile extends StatelessWidget {
                         style: const TextStyle(
                             color: AppTheme.textSecondary, fontSize: 12)),
                     const SizedBox(height: 4),
-                    Text(
-                      status.text,
-                      style: TextStyle(
-                          color: status.color,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                    for (final status in statuses)
+                      Text(
+                        status.text,
+                        style: TextStyle(
+                            color: status.color,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500),
+                      ),
+                    if (downloads.isNotEmpty && onReview != null)
+                      TextButton(
+                          onPressed: () => onReview!(downloads),
+                          child: Text(context.l10n.sonarrReviewImport)),
                   ],
                 ),
               ),

@@ -393,15 +393,97 @@ class SonarrApiService {
 
   /// Imports the given candidate files. [importMode] must be lowercase
   /// (`move`/`copy`/`auto`); `copy` preserves seeding for torrents.
-  Future<void> executeManualImport(
+  Future<int?> executeManualImport(
     List<Map<String, dynamic>> files, {
-    String importMode = 'move',
+    required String importMode,
   }) async {
-    await _dio.post('$_basePath/command', data: {
+    final response = await _dio.post('$_basePath/command', data: {
       'name': 'ManualImport',
       'importMode': importMode,
       'files': files,
     });
+    final id = response.data is Map ? response.data['id'] : null;
+    return id is int && id > 0 ? id : null;
+  }
+
+  Future<String?> getImportCommandStatus(int id) async {
+    try {
+      final response = await _dio.get('$_basePath/command/$id');
+      final command = response.data as Map;
+      if (command['id'] != id) throw const FormatException('Command ID');
+      return command['status'] as String?;
+    } on DioException catch (e) {
+      // Older or expired commands may not have a readable status. History
+      // and the actual episode files are still authoritative.
+      if (e.response?.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  /// The normal episode browser tolerates absent optional fields. Recovery
+  /// needs a definite pre/post file identity for every selected episode.
+  Future<Map<int, SonarrEpisode>> getImportEpisodes(
+      int seriesId, Set<int> episodeIds) async {
+    final found = <int, SonarrEpisode>{};
+    final resp = await _dio.get('$_basePath/episode', queryParameters: {
+      'seriesId': seriesId,
+      'includeEpisodeFile': true,
+    });
+    for (final row in (resp.data as List).cast<Map<String, dynamic>>()) {
+      if (!episodeIds.contains(row['id'])) continue;
+      final episode = SonarrEpisode.fromJson(row);
+      if (row['hasFile'] is! bool ||
+          row['episodeFileId'] is! int ||
+          episode.seriesId != seriesId ||
+          found.containsKey(episode.id) ||
+          episode.hasFile != (episode.episodeFileId > 0) ||
+          (episode.episodeFile?.id ?? 0) != episode.episodeFileId) {
+        throw const FormatException('Inconsistent episode file');
+      }
+      found[episode.id] = episode;
+    }
+    if (found.length != episodeIds.length) {
+      throw const FormatException('Missing episode');
+    }
+    return found;
+  }
+
+  /// Read every page, including for the pre-command baseline. An incomplete
+  /// baseline could make an old import look new.
+  Future<List<SonarrHistoryRecord>> getDownloadImports(
+      String downloadId) async {
+    final records = <int, SonarrHistoryRecord>{};
+    int? total;
+    for (var page = 1;; page++) {
+      final response = await _dio.get('$_basePath/history', queryParameters: {
+        'downloadId': downloadId,
+        'eventType': SonarrHistoryRecord.importedEventTypeId,
+        'page': page,
+        'pageSize': 100,
+        'sortKey': 'date',
+        'sortDirection': 'descending',
+      });
+      final body = response.data as Map<String, dynamic>;
+      if (body['records'] is! List || body['totalRecords'] is! int) {
+        throw const FormatException('Incomplete history');
+      }
+      final result = SonarrHistoryPage.fromJson(body);
+      total ??= result.totalRecords;
+      for (final row in result.records) {
+        if (row.id <= 0 ||
+            records.containsKey(row.id) ||
+            row.downloadId != downloadId ||
+            row.eventType != SonarrHistoryRecord.importedEventType) {
+          throw const FormatException('Inconsistent history page');
+        }
+        records[row.id] = row;
+      }
+      if (total != result.totalRecords || records.length > total) {
+        throw const FormatException('History changed during pagination');
+      }
+      if (records.length == total) return records.values.toList();
+      if (result.records.isEmpty) throw const FormatException('Missing page');
+    }
   }
 
   /// Nudges Sonarr to run its completed-download import pass now (clears items

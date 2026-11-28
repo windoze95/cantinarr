@@ -11,7 +11,9 @@ import '../../issues/ui/report_problem_sheet.dart';
 import '../../media_download/ui/media_download_button.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
+import '../logic/import_doctor.dart';
 import 'import_doctor_sheet.dart';
+import 'widgets/episode_status.dart';
 import 'widgets/queue_item_card.dart';
 
 /// Bottom sheet for a single episode: status, overview, the active download (if
@@ -20,7 +22,7 @@ class EpisodeDetailSheet extends ConsumerStatefulWidget {
   final String instanceId;
   final SonarrSeries series;
   final SonarrEpisode episode;
-  final SonarrQueueItem? queueItem;
+  final List<SonarrQueueItem> queueItems;
   final VoidCallback onAutomaticSearch;
   final VoidCallback onInteractiveSearch;
 
@@ -29,7 +31,7 @@ class EpisodeDetailSheet extends ConsumerStatefulWidget {
     required this.instanceId,
     required this.series,
     required this.episode,
-    required this.queueItem,
+    required this.queueItems,
     required this.onAutomaticSearch,
     required this.onInteractiveSearch,
   });
@@ -70,12 +72,13 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
     }
   }
 
-  void _openDoctor() {
+  void _openDoctor(SonarrQueueItem item) {
+    if (ref.read(authProvider).valueOrNull?.user?.isAdmin != true) return;
     showAppSheet<void>(
       context,
       builder: (_) => ImportDoctorSheet(
         instanceId: widget.instanceId,
-        item: widget.queueItem!,
+        item: item,
         // The Doctor closes itself; close this episode sheet too (returning
         // true) so the season list refreshes with the result.
         onChanged: () {
@@ -86,7 +89,13 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
   }
 
   ({String label, Color color}) get _shortStatus {
-    final q = widget.queueItem;
+    if (widget.queueItems.any((q) => sonarrImportBlocker(q) != null)) {
+      return (
+        label: context.l10n.adminImportBlocked,
+        color: AppTheme.requested
+      );
+    }
+    final q = widget.queueItems.firstOrNull;
     if (q != null) {
       return (
         label: sonarrQueueStatusLabel(q, strings: context.l10n),
@@ -110,7 +119,8 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
   Widget build(BuildContext context) {
     final e = widget.episode;
     final status = _shortStatus;
-    final connection = ref.watch(authProvider).valueOrNull?.connection;
+    final auth = ref.watch(authProvider).valueOrNull;
+    final connection = auth?.connection;
     final downloadsEnabled =
         connection?.mediaDownloadsEnabledFor(widget.instanceId) ?? false;
     final airDate = e.airDateUtc?.toLocal() ??
@@ -164,16 +174,9 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
               ),
             ),
           ],
-          if (widget.queueItem != null) ...[
+          for (final item in widget.queueItems) ...[
             const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: QueueItemCard(
-                item: widget.queueItem!,
-                primaryTitle: widget.queueItem!.title,
-                onShowIssues: widget.queueItem!.hasIssues ? _openDoctor : null,
-              ),
-            ),
+            _downloadCard(item, isAdmin: auth?.user?.isAdmin == true),
           ],
           const SizedBox(height: 16),
           Text(context.l10n.adminHistory,
@@ -246,6 +249,22 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
             ),
           ],
         ],
+      ),
+    );
+  }
+
+  Widget _downloadCard(SonarrQueueItem item, {required bool isAdmin}) {
+    final blocker = sonarrImportBlocker(item);
+    return SizedBox(
+      width: double.infinity,
+      child: QueueItemCard(
+        item: item,
+        primaryTitle: item.title,
+        importBlocker:
+            blocker == null ? null : importBlockerText(context, blocker),
+        onShowIssues: isAdmin && (blocker != null || item.hasIssues)
+            ? () => _openDoctor(item)
+            : null,
       ),
     );
   }

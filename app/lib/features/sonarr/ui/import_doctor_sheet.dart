@@ -5,9 +5,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
+import '../../auth/logic/auth_provider.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import '../logic/import_doctor.dart';
+import '../logic/reviewed_import.dart';
+import 'reviewed_import_dialog.dart';
+import 'widgets/episode_status.dart';
 
 /// The "Import Doctor": explains why a download is stuck (full transparency,
 /// including the raw Sonarr messages) and offers one-click fixes. Destructive
@@ -15,6 +19,7 @@ import '../logic/import_doctor.dart';
 class ImportDoctorSheet extends ConsumerStatefulWidget {
   final String instanceId;
   final SonarrQueueItem item;
+  final List<SonarrQueueItem>? members;
 
   /// Called after a fix is applied so the caller can refresh.
   final VoidCallback onChanged;
@@ -23,6 +28,7 @@ class ImportDoctorSheet extends ConsumerStatefulWidget {
     super.key,
     required this.instanceId,
     required this.item,
+    this.members,
     required this.onChanged,
   });
 
@@ -91,6 +97,9 @@ class _ImportDoctorSheetState extends ConsumerState<ImportDoctorSheet> {
   }
 
   Future<void> _onAction(DoctorAction action) async {
+    if (_busy || ref.read(authProvider).valueOrNull?.user?.isAdmin != true) {
+      return;
+    }
     final translations = context.l10n;
     final item = widget.item;
     switch (action) {
@@ -145,60 +154,48 @@ class _ImportDoctorSheetState extends ConsumerState<ImportDoctorSheet> {
   }
 
   Future<void> _runManualImport({required bool force}) async {
-    final downloadId = widget.item.downloadId;
-    if (downloadId == null || downloadId.isEmpty) {
-      _toast(context.l10n.adminThisDownloadHasNoClientIdYet);
-      return;
-    }
-    setState(() => _busy = true);
-    List<SonarrManualImportCandidate> candidates;
-    try {
-      candidates = await _service.getManualImportCandidates(downloadId);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _busy = false);
-      _toast(context.l10n.adminCouldNotFetchFiles((e).toString()));
-      return;
-    }
+    // The modal owns progress; keep a synchronous double-tap guard here
+    // without animating a second progress indicator behind it.
+    _busy = true;
+    final changed = await showReviewedImport(context,
+        instanceId: widget.instanceId,
+        service: _service,
+        targets: [
+          ImportTarget(widget.members ?? [widget.item])
+        ],
+        force: force);
     if (!mounted) return;
     setState(() => _busy = false);
-    if (candidates.isEmpty) {
-      _toast(context.l10n.adminNoImportableFilesFoundInTheDownload);
-      return;
+    if (changed == true) {
+      Navigator.of(context).pop();
+      widget.onChanged();
     }
-
-    final importable = candidates
-        .where((c) => c.isMapped && (force || !c.hasPermanentRejection))
-        .toList();
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => _CandidatesDialog(
-        candidates: candidates,
-        importableCount: importable.length,
-        force: force,
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-
-    if (importable.isEmpty) {
-      _toast(force
-          ? context.l10n.adminNoneOfTheFilesAreMatchedTo4
-          : context.l10n.adminNoFilesQualifyUseForceImportTo);
-      return;
-    }
-
-    final files = importable.map((c) => c.toImportFile()).toList();
-    final mode = widget.item.protocol == 'torrent' ? 'copy' : 'move';
-    await _run(() => _service.executeManualImport(files, importMode: mode),
-        context.l10n.adminImportingFileS((files.length).toString()));
   }
 
   @override
   Widget build(BuildContext context) {
+    if (ref.watch(authProvider).valueOrNull?.user?.isAdmin != true) {
+      return AppSheet(child: Text(context.l10n.settingsAdminOnly));
+    }
     final item = widget.item;
     final diagnosis = diagnoseSonarrQueueItem(item);
-    final (icon, color) = _severityVisual(diagnosis.severity);
+    final blocker = sonarrImportBlocker(item);
+    final hasClientId = item.downloadId?.trim().isNotEmpty == true;
+    final suggested = diagnosis.isHealthy && blocker != null
+        ? [DoctorAction.manualImport]
+        : diagnosis.actions;
+    final actions = suggested
+        .where((action) =>
+            hasClientId ||
+            (action != DoctorAction.manualImport &&
+                action != DoctorAction.forceImport))
+        .toList();
+    final missingImportAction = actions.length != suggested.length;
+    final manualUnavailable =
+        !hasClientId && (missingImportAction || blocker != null);
+    final (icon, color) = _severityVisual(blocker != null && diagnosis.isHealthy
+        ? DoctorSeverity.warning
+        : diagnosis.severity);
 
     final rawMessages = <String>[
       if (item.errorMessage != null && item.errorMessage!.isNotEmpty)
@@ -224,7 +221,9 @@ class _ImportDoctorSheetState extends ConsumerState<ImportDoctorSheet> {
                 child: Text(
                   diagnosis.problem.isNotEmpty
                       ? localizeDoctorLabel(context, diagnosis.problem)
-                      : context.l10n.adminDownloadStatus,
+                      : blocker != null
+                          ? context.l10n.adminImportBlocked
+                          : context.l10n.adminDownloadStatus,
                   style: const TextStyle(
                       color: AppTheme.textPrimary,
                       fontSize: 18,
@@ -239,11 +238,21 @@ class _ImportDoctorSheetState extends ConsumerState<ImportDoctorSheet> {
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
               maxLines: 2,
               overflow: TextOverflow.ellipsis),
-          if (diagnosis.transparency.isNotEmpty) ...[
+          if (blocker != null &&
+              (blocker.problem != diagnosis.problem ||
+                  missingImportAction)) ...[
+            const SizedBox(height: 14),
+            Text(importBlockerText(context, blocker)),
+          ],
+          if (!missingImportAction && diagnosis.transparency.isNotEmpty) ...[
             const SizedBox(height: 14),
             Text(localizeDoctorLabel(context, diagnosis.transparency),
                 style: const TextStyle(
                     color: AppTheme.textPrimary, fontSize: 14, height: 1.4)),
+          ],
+          if (manualUnavailable) ...[
+            const SizedBox(height: 14),
+            Text(context.l10n.sonarrManualImportNeedsId),
           ],
           if (rawMessages.isNotEmpty) ...[
             const SizedBox(height: 16),
@@ -283,11 +292,11 @@ class _ImportDoctorSheetState extends ConsumerState<ImportDoctorSheet> {
               child: Center(
                   child: CircularProgressIndicator(color: AppTheme.accent)),
             )
-          else if (diagnosis.actions.isEmpty)
+          else if (actions.isEmpty && blocker == null && !manualUnavailable)
             Text(context.l10n.adminNoAutomaticFixIsNeeded,
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13))
           else
-            ...diagnosis.actions.asMap().entries.map((e) => Padding(
+            ...actions.asMap().entries.map((e) => Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: _ActionButton(
                     meta: _actionMeta(e.value, strings: context.l10n),
@@ -393,122 +402,6 @@ class _ActionButton extends StatelessWidget {
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ),
       ),
-    );
-  }
-}
-
-/// Shows the importable files (with mappings + rejections) before importing —
-/// full transparency about exactly what will land.
-class _CandidatesDialog extends StatelessWidget {
-  final List<SonarrManualImportCandidate> candidates;
-  final int importableCount;
-  final bool force;
-
-  const _CandidatesDialog({
-    required this.candidates,
-    required this.importableCount,
-    required this.force,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: AppTheme.surface,
-      title: Text(force
-          ? context.l10n.adminForceImport
-          : context.l10n.adminManualImport),
-      content: SizedBox(
-        width: double.maxFinite,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              importableCount == 0
-                  ? context.l10n.adminNoneOfTheseFilesCanBeImported
-                  : context.l10n.adminWillImportOfFileS(
-                      (importableCount).toString(),
-                      (candidates.length).toString()),
-              style:
-                  const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-            ),
-            const SizedBox(height: 10),
-            Flexible(
-              child: ListView(
-                shrinkWrap: true,
-                children: candidates.map((c) {
-                  final willImport =
-                      c.isMapped && (force || !c.hasPermanentRejection);
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(
-                              willImport
-                                  ? Icons.check_circle
-                                  : Icons.remove_circle_outline,
-                              size: 15,
-                              color: willImport
-                                  ? AppTheme.available
-                                  : AppTheme.textSecondary,
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(c.name,
-                                  style: const TextStyle(
-                                      color: AppTheme.textPrimary,
-                                      fontSize: 12),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis),
-                            ),
-                          ],
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.only(left: 21, top: 2),
-                          child: Text(
-                            [
-                              c.sizeFormatted,
-                              if (c.episodeLabels.isNotEmpty)
-                                c.episodeLabels.join(', ')
-                              else
-                                context.l10n.adminNoEpisodeMatch,
-                            ].join(' • '),
-                            style: const TextStyle(
-                                color: AppTheme.textSecondary, fontSize: 11),
-                          ),
-                        ),
-                        if (c.rejections.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(left: 21, top: 2),
-                            child: Text(
-                              c.rejections.map((r) => r.reason).join('; '),
-                              style: const TextStyle(
-                                  color: AppTheme.requested, fontSize: 11),
-                            ),
-                          ),
-                      ],
-                    ),
-                  );
-                }).toList(),
-              ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(context.l10n.adminCancel)),
-        TextButton(
-          onPressed:
-              importableCount == 0 ? null : () => Navigator.pop(context, true),
-          child: Text(
-              force ? context.l10n.adminForceImport : context.l10n.adminImport),
-        ),
-      ],
     );
   }
 }

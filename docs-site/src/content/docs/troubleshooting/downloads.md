@@ -23,7 +23,9 @@ If an administrator sees **Client controls unavailable**, the download client th
 
 ## The transfer finished, but import is blocked
 
-Open the relevant arr queue and its Import Doctor explanation. Common causes include:
+In Sonarr, open the season or episode and read its import status. **Waiting to import** means the transfer finished and import is pending. **Importing** means import is in progress. For a blocked import, an administrator can select **Review import** to open Import Doctor. If several downloads are blocked, select the release to inspect. A shared season pack appears once in season review. Rows without a client download ID remain separate and cannot offer manual or force import.
+
+Import Doctor also opens from the relevant arr queue. If Sonarr provides no reason, the app says so. Common reported causes include:
 
 | Finding | Check before taking action |
 | --- | --- |
@@ -38,6 +40,12 @@ Open the relevant arr queue and its Import Doctor explanation. Common causes inc
 These are the library manager's paths and permissions. Cantinarr's optional media-download path mappings solve a different problem and do not repair Radarr or Sonarr's own imports.
 
 ## Manual import
+
+In Sonarr, open **Review import**. Select a download and **Manual import**, or choose **Review files** in the season’s download list. Check the file path and episode numbers, then select the files to import. If two downloads target the same episode, choose one source. Torrents are copied so they can continue seeding; Usenet files are moved.
+
+An archive must be extracted into a location Sonarr can read before you can select its video files. **Hand off to client** does not extract or import a file. Rejected and unmatched files are excluded from ordinary import. Where Import Doctor offers **Force import**, review one mapped file and confirm the override separately.
+
+**Import results** shows how many episodes were verified for each selected file. Sonarr can import some files before a command fails. A verified import requires new import history for the selected source and a matching new episode file in the library. If verification times out or a read fails, select **Check results again**. This checks the same submission without importing twice. During the same app session you can reopen **Import results** from the season even after the queue entry disappears.
 
 Review candidates and their rejection reasons before forcing an import. Check the exact episode or track mapping, file size, and expected format. Forcing the wrong file can create an “available” title that still contains incorrect content.
 
