@@ -466,6 +466,10 @@ void main() {
       expect(author['qualityProfileId'], 31);
       expect(author['metadataProfileId'], 41);
       expect(author['rootFolderPath'], '/library/authors/marcus');
+      expect(author['addOptions'], {
+        'monitor': 'specificBook',
+        'searchForMissingBooks': false,
+      });
       expect(
         adapter.requests.where((request) =>
             request.path.endsWith('/qualityprofile') ||

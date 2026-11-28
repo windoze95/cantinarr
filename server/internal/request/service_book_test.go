@@ -979,8 +979,12 @@ func TestBookRequestBothFormatAddsEbookAndAudiobookRecords(t *testing.T) {
 	}
 	for format, body := range byFormat {
 		author := body["author"].(map[string]any)
-		if author["ebookMonitorFuture"] != true || author["audiobookMonitorFuture"] != true {
-			t.Fatalf("%s author future-monitor gates = %#v, want both requested formats enabled", format, author)
+		options := author["addOptions"].(map[string]any)
+		if options["monitor"] != "specificBook" || options["searchForMissingBooks"] != false {
+			t.Errorf("%s author addOptions = %v, want only the requested work and no author search", format, options)
+		}
+		if author["ebookMonitorFuture"] != false || author["audiobookMonitorFuture"] != false {
+			t.Errorf("%s author future monitoring = %#v, want no subscription to future books", format, author)
 		}
 	}
 }
@@ -1570,6 +1574,13 @@ func TestBookRequestMonitorsAndSearchesNewAuthorBook(t *testing.T) {
 			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
 			// New-author add: Chaptarr returns the book unmonitored.
+			var add chaptarr.AddBookRequest
+			if err := json.NewDecoder(r.Body).Decode(&add); err != nil {
+				t.Error(err)
+			}
+			if add.Author.AddOptions.Monitor != "specificBook" || add.Author.AddOptions.SearchForMissingBooks || !add.AddOptions.SearchForNewBook {
+				t.Errorf("expected book-only monitoring and search, got author %+v, book %+v", add.Author.AddOptions, add.AddOptions)
+			}
 			_, _ = w.Write([]byte(`{"id":44,"title":"Ahsoka (Star Wars)","foreignBookId":"29749107","monitored":false}`))
 		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/book/monitor":
 			var body map[string]any
