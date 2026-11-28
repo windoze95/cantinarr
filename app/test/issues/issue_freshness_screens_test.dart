@@ -705,6 +705,20 @@ void main() {
     expect(tester.widget<Switch>(toggle).value, isFalse);
   });
 
+  testWidgets('a promoted open issue does not claim an agent is working',
+      (tester) async {
+    final service = _FakeIssuesService(
+      thread: IssueThread.fromJson({
+        'issue': {..._issueJson(status: 'open'), 'source': 'auto'},
+        'thread': const [],
+      }),
+    );
+    await _pumpScreen(tester,
+        service: service, screen: const IssueThreadScreen(issueId: 5));
+    await _resumeApp(tester);
+    expect(find.text('Working on it…'), findsNothing);
+  });
+
   testWidgets('tracking thread is passive while arr recovery is in flight',
       (tester) async {
     final service = _FakeIssuesService(
