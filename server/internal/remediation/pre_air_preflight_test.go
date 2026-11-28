@@ -24,7 +24,7 @@ import (
 func preAirRunner(t *testing.T, svc *Service, script *scriptedTurn) *Runner {
 	t.Helper()
 	if _, err := svc.SetSettings(Settings{
-		Enabled: true, Mode: ModeSupervised,
+		Enabled: true, AutoDispatch: true, Mode: ModeSupervised,
 		MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, DailyRunCap: 50,
 	}); err != nil {
 		t.Fatalf("set settings: %v", err)

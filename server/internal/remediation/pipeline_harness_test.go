@@ -141,6 +141,7 @@ func TestPipelineStalledUpgradeFullLoop(t *testing.T) {
 	// for half an hour is past the stalled dwell, so the incident is born on
 	// first sighting exactly as this pipeline expects.
 	h.fake.setQueue([]map[string]any{stalledUpgradeQueueRow(41, "TORRENTABC123", base.Add(-30*time.Minute))})
+	h.fake.setHistory([]map[string]any{{"id": 1, "seriesId": 28, "episodeId": 28203, "eventType": "grabbed", "downloadId": "TORRENTABC123"}})
 
 	// Intake twice through the production path: first sighting starts the quiet
 	// observation; the second, past the min/quiet windows, promotes it.
@@ -449,6 +450,7 @@ func runStalledUpgradeToProposal(t *testing.T, h *pipelineHarness, queueID int, 
 	// windows and let the next snapshot promote it.
 	now := time.Now().UTC()
 	h.fake.setQueue([]map[string]any{stalledUpgradeQueueRow(queueID, downloadID, now.Add(-30*time.Minute))})
+	h.fake.setHistory([]map[string]any{{"id": queueID, "seriesId": 28, "episodeId": 28203, "eventType": "grabbed", "downloadId": downloadID}})
 	h.observe(t, now)
 	if err := h.svc.db.QueryRow(
 		"SELECT id FROM issues WHERE closed_at IS NULL AND source = ? ORDER BY id DESC LIMIT 1", SourceAuto,
@@ -766,6 +768,7 @@ func TestPipelineUserReportSelfServiceLoop(t *testing.T) {
 		t.Helper()
 		now := time.Now().UTC()
 		h.fake.setQueue([]map[string]any{stalledUpgradeQueueRowFor(queueID, downloadID, episode, now.Add(-30*time.Minute))})
+		h.fake.setHistory([]map[string]any{{"id": queueID, "seriesId": 28, "episodeId": 28200 + episode, "eventType": "grabbed", "downloadId": downloadID}})
 		h.observe(t, now)
 		resp, err := h.svc.CreateUserIssue(2, &CreateIssueRequest{
 			InstanceID: preAirSonarrID, MediaType: "tv", TmdbID: 615, TvdbID: 73871,

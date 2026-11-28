@@ -252,7 +252,7 @@ func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 		if err != nil || len(users) == 0 {
 			return
 		}
-		n.send(client, users, "Automatic problem detection switched off",
+		n.send(client, users, "Automatic investigation paused",
 			"Repeated unfinished investigations tripped the safety breaker — open Settings to review and re-enable",
 			passthrough(EventAutoDispatchDisabled, data))
 	case CategoryPlexAccessRequest:

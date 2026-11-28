@@ -20,7 +20,9 @@ String localizeSetupLabel(BuildContext context, String label) =>
       'Books (Chaptarr)' => context.l10n.setupBooks,
       'Music (Lidarr)' => context.l10n.setupMusic,
       'AI assistant' => context.l10n.setupAi,
-      'Automatic problem detection' => context.l10n.setupProblemDetection,
+      'Automatic problem detection' ||
+      'Automatic investigation' =>
+        context.l10n.setupProblemDetection,
       'Connect Radarr so movie requests have somewhere to go.' =>
         context.l10n.setupMoviesDescription,
       'Connect Sonarr so TV requests have somewhere to go.' =>
@@ -53,7 +55,8 @@ String localizeSetupLabel(BuildContext context, String label) =>
         context.l10n.setupMusicDescription,
       'Conversational discovery, requests, and server management. Configure a shared provider; users may override it with their own credentials.' =>
         context.l10n.setupAiDescription,
-      'Decide whether Cantinarr should detect and investigate stuck downloads on its own. On or off — deciding is the step.' =>
+      'Decide whether Cantinarr should detect and investigate stuck downloads on its own. On or off — deciding is the step.' ||
+      'Persistent queue problems alert administrators. Choose whether AI should also investigate them.' =>
         context.l10n.setupProblemDetectionDescription,
       'Remediation is ON but no shared AI provider is configured — detected problems wait instead of being investigated. Add a provider under Providers & Credentials.' =>
         context.l10n.setupProblemDetectionWarning,

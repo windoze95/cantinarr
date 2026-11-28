@@ -14,7 +14,11 @@ Open **Settings > AI Remediation** to review its operating limits before enablin
 - **Investigate only** gathers evidence and explains findings.
 - **Prepare a fix** allows the supervised workflow to prepare a proposed action for review.
 
-Enabling the agent and enabling **Auto-dispatch on detected problems** are separate choices. Problem reporting is also a separate setting. Set them to match how much automatic investigation you want.
+Persistent queue problems appear in **Issues** and can notify administrators even with no AI provider or with both switches off. Check **Problem reports** in your notification preferences if the issue appears but you did not get a push.
+
+Enable both the agent and **Auto-dispatch on detected problems** to investigate those issues. Enabling them also makes still-open problems eligible after a fresh check. Turning off auto-dispatch stops new investigations, follow-ups, proposals and standing approvals for detected problems. It does not disable explicit user reports, prevent you from deciding a previously reviewed exact fix, or change Import Doctor.
+
+Episodes blocked on one identified Sonarr season download share an issue. Different downloads stay separate. Its investigation is read-only. Cantinarr verifies the import against each affected episode and its current file before resolving the issue. If only some files imported, open **Import Doctor** to review the remaining files.
 
 ## Control time and usage
 

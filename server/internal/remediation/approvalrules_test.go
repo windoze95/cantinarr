@@ -38,7 +38,7 @@ func autoApprovalFixture(t *testing.T) (*Service, *fakeExecutor, *fakeNotifier, 
 	); err != nil {
 		t.Fatalf("seed target instance: %v", err)
 	}
-	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, DailyRunCap: 50}); err != nil {
+	if _, err := svc.SetSettings(Settings{Enabled: true, AutoDispatch: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, DailyRunCap: 50}); err != nil {
 		t.Fatalf("set settings: %v", err)
 	}
 

@@ -20,6 +20,7 @@ import (
 type fakeOpener struct {
 	mu        sync.Mutex
 	snapshots []snapshotCall
+	failures  []time.Time
 }
 
 type snapshotCall struct {
@@ -28,9 +29,13 @@ type snapshotCall struct {
 	items       []arr.QueueObservation
 }
 
-func (f *fakeOpener) ObserveQueueSnapshot(serviceType, instanceID string, items []arr.QueueObservation) {
+func (f *fakeOpener) ObserveQueueRead(serviceType, instanceID string, items []arr.QueueObservation, started time.Time, failure error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if failure != nil {
+		f.failures = append(f.failures, started)
+		return
+	}
 	copyItems := append([]arr.QueueObservation(nil), items...)
 	if items != nil && copyItems == nil {
 		copyItems = make([]arr.QueueObservation, 0)
@@ -80,7 +85,7 @@ func TestDispatchDetailedItemsForwardsFullSnapshot(t *testing.T) {
 		},
 		stuckItem(""),
 	}
-	h.dispatchDetailedItems("sonarr", "sonarr-1", items)
+	h.dispatchDetailedItems("sonarr", "sonarr-1", items, time.Now())
 
 	calls := opener.calls()
 	if len(calls) != 1 {
@@ -122,7 +127,7 @@ func TestDispatchDetailedItemsForwardsEmptySnapshot(t *testing.T) {
 	opener := &fakeOpener{}
 	h := newTestHub(opener)
 
-	h.dispatchDetailedItems("radarr", "radarr-1", nil)
+	h.dispatchDetailedItems("radarr", "radarr-1", nil, time.Now())
 	calls := opener.calls()
 	if len(calls) != 1 {
 		t.Fatalf("snapshot calls = %d, want 1", len(calls))
@@ -134,14 +139,16 @@ func TestDispatchDetailedItemsForwardsEmptySnapshot(t *testing.T) {
 
 func TestDispatchDetailedItemsNilObserverNoPanic(t *testing.T) {
 	h := newTestHub(nil)
-	h.dispatchDetailedItems("radarr", "radarr-1", []arr.QueueObservation{stuckItem("download")})
+	h.dispatchDetailedItems("radarr", "radarr-1", []arr.QueueObservation{stuckItem("download")}, time.Now())
 }
 
 // TestAutoDispatchFailedReadDeliversNothing verifies that a failed detailed
 // queue request cannot be mistaken for a successful empty queue and therefore
 // cannot trigger lifecycle decisions in the observer.
-func TestAutoDispatchFailedReadDeliversNothing(t *testing.T) {
+func TestFailedReadForwardsFailureWithRequestStart(t *testing.T) {
+	request := make(chan time.Time, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		request <- time.Now()
 		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
@@ -152,6 +159,10 @@ func TestAutoDispatchFailedReadDeliversNothing(t *testing.T) {
 
 	if calls := opener.calls(); len(calls) != 0 {
 		t.Fatalf("failed queue read delivered %d snapshot(s), want none", len(calls))
+	}
+	requested := <-request
+	if len(opener.failures) != 1 || opener.failures[0].IsZero() || opener.failures[0].After(requested) {
+		t.Fatalf("failure starts %v, request %s", opener.failures, requested)
 	}
 }
 

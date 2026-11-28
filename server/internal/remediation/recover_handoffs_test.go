@@ -92,7 +92,7 @@ func TestRecoverWorkTerminalizesStrandedHandoffs(t *testing.T) {
 
 func TestRecoverWorkResumesHandoffFromOpenIssue(t *testing.T) {
 	svc, _, _ := setupTestService(t)
-	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised}); err != nil {
+	if _, err := svc.SetSettings(Settings{Enabled: true, AutoDispatch: true, Mode: ModeSupervised}); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
 	runner := &Runner{db: svc.db, svc: svc, procToken: "live-proc"}

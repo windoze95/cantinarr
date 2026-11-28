@@ -118,7 +118,7 @@ func (s *Service) RecordRemediationProviderHealth(available bool) error {
 
 const (
 	autoDispatchBreakerDedupeKey = "system:remediation-breaker"
-	autoDispatchBreakerTitle     = "Automatic problem detection switched itself off"
+	autoDispatchBreakerTitle     = "Automatic investigation paused"
 )
 
 // RecordAutoDispatchBreaker mirrors the provider sink for the circuit breaker:
@@ -147,7 +147,7 @@ func (s *Service) RecordAutoDispatchBreaker(tripped bool, streak, threshold int)
 		if err != nil {
 			return fmt.Errorf("find breaker issue: %w", err)
 		}
-		resolution := "Auto-dispatch was re-enabled; automatic problem detection is running again."
+		resolution := "Auto-dispatch was re-enabled; detected issues are eligible for investigation again."
 		if _, err := tx.Exec(`
 			UPDATE issues SET status = ?, read = 0, resolution = ?, resolution_kind = ?,
 				updated_at = CURRENT_TIMESTAMP, closed_at = CURRENT_TIMESTAMP
@@ -167,8 +167,8 @@ func (s *Service) RecordAutoDispatchBreaker(tripped bool, streak, threshold int)
 		return nil
 	}
 
-	detail := fmt.Sprintf("After %d consecutive investigations ended without a resolution (threshold %d), Cantinarr switched automatic problem detection off so it would stop opening issues it cannot finish.", streak, threshold)
-	resolution := "Review the recent needs-admin issues for the underlying cause, then re-enable auto-dispatch under Settings > AI Remediation. Re-enabling closes this notice; it cannot be closed by hand while automatic problem detection is off."
+	detail := fmt.Sprintf("After %d consecutive investigations ended without a resolution (threshold %d), Cantinarr paused automatic investigation. Queue monitoring and alerts continue.", streak, threshold)
+	resolution := "Review the recent needs-admin issues, then re-enable auto-dispatch under Settings > AI Remediation to close this notice."
 	if errsql := err; errors.Is(errsql, sql.ErrNoRows) {
 		result, insertErr := tx.Exec(`
 			INSERT INTO issues

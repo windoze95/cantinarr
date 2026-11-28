@@ -3,6 +3,7 @@ package sonarr
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -418,6 +419,64 @@ func TestGetImportHistoryRejectsTruncatedResult(t *testing.T) {
 	t.Cleanup(server.Close)
 	if _, err := NewClient(server.URL, "key").GetImportHistory(99, "id", 20); err == nil {
 		t.Fatal("accepted incomplete filtered history")
+	}
+}
+
+func TestImportProofRejectsShortPageContainingAReceipt(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"totalRecords":2,"records":[{"id":7,"episodeId":99,"downloadId":"attempt"}]}`)
+	}))
+	defer server.Close()
+	if _, err := NewClient(server.URL, "key").GetImportHistory(99, "attempt", 20); err == nil {
+		t.Fatal("accepted an incomplete page as import evidence")
+	}
+}
+
+func TestMissingLiveSeasonIsNotAnExactSpecial(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `[{"id":11,"seriesId":2,"episodeNumber":1,"episodeFileId":9,"hasFile":true}]`)
+	}))
+	defer server.Close()
+	eps, err := NewClient(server.URL, "key").GetEpisodes(2, 0)
+	if err == nil && len(eps) == 1 && eps[0].SeasonNumber == 0 {
+		t.Fatal("incomplete episode accepted as a season-zero witness")
+	}
+}
+
+func TestQueueProjectionRequiresMatchingNativeEpisodeAndSeries(t *testing.T) {
+	item := DetailedQueueItem{ID: 9, SeriesID: 17, EpisodeID: 23, DownloadID: "same", DownloadClient: "client", Series: &SeriesContext{ID: 17},
+		Episode: &EpisodeContext{ID: 23, SeriesID: 17, SeasonNumber: 0, EpisodeNumber: 1}}
+	if got := item.QueueObservation().Media; got.SeriesID != 17 || got.EpisodeID != 23 || got.SeasonNumber != 0 || got.DownloadClient != "client" {
+		t.Fatalf("lost native Specials identity: %+v", got)
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*DetailedQueueItem)
+	}{
+		{"no episode", func(i *DetailedQueueItem) { i.Episode = nil }},
+		{"no episode id", func(i *DetailedQueueItem) { i.EpisodeID = 0 }},
+		{"wrong episode", func(i *DetailedQueueItem) { i.EpisodeID = 24 }},
+		{"wrong series", func(i *DetailedQueueItem) { i.SeriesID = 18 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			other := item
+			tc.change(&other)
+			if got := other.QueueObservation().Media; got.EpisodeID != 0 || got.SeriesID != 0 {
+				t.Fatalf("ambiguous native episode admitted: %+v", got)
+			}
+		})
+	}
+}
+
+func TestDetailedQueueDistinguishesMissingFromEmpty(t *testing.T) {
+	for _, body := range []string{`{}`, `{"totalRecords":0}`, `{"records":[]}`, `{"totalRecords":0,"records":null}`} {
+		t.Run(body, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, body) }))
+			defer server.Close()
+			if _, err := NewClient(server.URL, "key").GetQueueDetailed(); err == nil {
+				t.Fatal("malformed page accepted as a complete empty queue")
+			}
+		})
 	}
 }
 

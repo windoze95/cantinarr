@@ -607,6 +607,43 @@ type EpisodeContext struct {
 	AirDateUtc    *time.Time `json:"airDateUtc,omitempty"`
 }
 
+// Season zero is specials; missing season metadata must not identify a pack
+// of specials. This lean type is used only for embedded provider evidence.
+func (e *EpisodeContext) UnmarshalJSON(data []byte) error {
+	type episode EpisodeContext
+	value := episode{SeasonNumber: -1}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*e = EpisodeContext(value)
+	return nil
+}
+
+// QueueObservation is shared by the poller and synchronous recovery preflight.
+func (item DetailedQueueItem) QueueObservation() arrcommon.QueueObservation {
+	media := arrcommon.QueueMediaContext{QueueID: item.ID, Title: item.Title}
+	if item.Series != nil {
+		media.Title, media.TmdbID, media.TvdbID = item.Series.Title, item.Series.TmdbID, item.Series.TvdbID
+	}
+	if ep := item.Episode; ep != nil {
+		media.SeasonNumber, media.EpisodeNumber = ep.SeasonNumber, ep.EpisodeNumber
+		if item.SeriesID > 0 && item.Series != nil && item.Series.ID == item.SeriesID &&
+			ep.SeriesID == item.SeriesID && ep.ID > 0 && ep.ID == item.EpisodeID && ep.SeasonNumber >= 0 && ep.EpisodeNumber > 0 {
+			media.SeriesID, media.EpisodeID = item.SeriesID, item.EpisodeID
+			media.DownloadClient = item.DownloadClient
+		}
+	}
+	var messages []arrcommon.StatusMessage
+	for _, m := range item.StatusMessages {
+		messages = append(messages, arrcommon.StatusMessage{Title: m.Title, Messages: m.Messages})
+	}
+	signal := arrcommon.QueueSignal{Status: item.Status, TrackedDownloadStatus: item.TrackedDownloadStatus,
+		TrackedDownloadState: item.TrackedDownloadState, ErrorMessage: item.ErrorMessage, StatusMessages: messages,
+		Size: item.Size, SizeLeft: item.Sizeleft, Protocol: item.Protocol, MediaFileID: item.FileIDAtSnapshot(), EpisodeAirsAt: item.AirTimeAtSnapshot()}
+	return arrcommon.QueueObservation{DownloadID: item.DownloadID, Media: media, Signal: signal, Diagnosis: arrcommon.Diagnose(signal),
+		FileIDAtSnapshot: signal.MediaFileID, AddedAt: item.Added}
+}
+
 type DetailedQueueItem struct {
 	ID                    int        `json:"id"`
 	SeriesID              int        `json:"seriesId"`
@@ -671,7 +708,7 @@ const queueMaxRecords = 1000
 // series/episode context. A server that clamps/truncates it fails closed.
 func (c *Client) GetQueueDetailed() ([]DetailedQueueItem, error) {
 	var resp struct {
-		TotalRecords int                 `json:"totalRecords"`
+		TotalRecords *int                `json:"totalRecords"`
 		Records      []DetailedQueueItem `json:"records"`
 	}
 	// includeUnknownSeriesItems: without it Sonarr silently drops queue rows it
@@ -681,11 +718,11 @@ func (c *Client) GetQueueDetailed() ([]DetailedQueueItem, error) {
 	if err := c.do("GET", path, nil, &resp); err != nil {
 		return nil, fmt.Errorf("sonarr queue: %w", err)
 	}
-	if resp.TotalRecords < 0 || resp.TotalRecords > queueMaxRecords {
-		return nil, fmt.Errorf("sonarr queue snapshot incomplete: invalid or oversized total %d (safety cap %d)", resp.TotalRecords, queueMaxRecords)
+	if resp.TotalRecords == nil || resp.Records == nil {
+		return nil, fmt.Errorf("sonarr queue snapshot incomplete: missing count or records")
 	}
-	if len(resp.Records) != resp.TotalRecords {
-		return nil, fmt.Errorf("sonarr queue snapshot incomplete: received %d of %d records in bounded page", len(resp.Records), resp.TotalRecords)
+	if *resp.TotalRecords < 0 || *resp.TotalRecords > queueMaxRecords || len(resp.Records) != *resp.TotalRecords {
+		return nil, fmt.Errorf("sonarr queue snapshot incomplete: received %d of %d records in bounded page", len(resp.Records), *resp.TotalRecords)
 	}
 	seenIDs := make(map[int]struct{})
 	for _, item := range resp.Records {
@@ -776,7 +813,7 @@ func (c *Client) GetSeriesHistory(seriesID, seasonNumber, pageSize int) ([]Histo
 
 func (c *Client) GetImportHistory(episodeID int, downloadID string, pageSize int) ([]HistoryRecord, error) {
 	var resp struct {
-		TotalRecords int             `json:"totalRecords"`
+		TotalRecords *int            `json:"totalRecords"`
 		Records      []HistoryRecord `json:"records"`
 	}
 	path := fmt.Sprintf("/api/v3/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&includeSeries=true&includeEpisode=true&eventType=3&episodeId=%d&downloadId=%s",
@@ -784,8 +821,8 @@ func (c *Client) GetImportHistory(episodeID int, downloadID string, pageSize int
 	if err := c.do("GET", path, nil, &resp); err != nil {
 		return nil, fmt.Errorf("sonarr import history: %w", err)
 	}
-	if resp.TotalRecords > pageSize {
-		return nil, fmt.Errorf("sonarr import history incomplete: %d records exceeds bound %d", resp.TotalRecords, pageSize)
+	if resp.TotalRecords == nil || resp.Records == nil || *resp.TotalRecords > pageSize || *resp.TotalRecords != len(resp.Records) {
+		return nil, fmt.Errorf("sonarr import history incomplete: expected a complete bounded page")
 	}
 	return resp.Records, nil
 }
@@ -1094,6 +1131,17 @@ type Episode struct {
 	HasFile       bool       `json:"hasFile"`
 	EpisodeFileID int        `json:"episodeFileId"`
 	Monitored     bool       `json:"monitored"`
+}
+
+// As with embedded queue episodes, JSON omission is not the Specials season.
+func (e *Episode) UnmarshalJSON(data []byte) error {
+	type episode Episode
+	value := episode{SeasonNumber: -1}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*e = Episode(value)
+	return nil
 }
 
 // EpisodeFile is Sonarr's metadata for one completed episode file on disk.

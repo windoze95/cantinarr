@@ -743,6 +743,29 @@ CREATE TABLE IF NOT EXISTS issue_observation_downloads (
     PRIMARY KEY(issue_id, download_id)
 );
 
+-- Durable members and per-attempt evidence for positively identified Sonarr downloads.
+CREATE TABLE IF NOT EXISTS issue_sonarr_members (
+    issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+    series_id INTEGER NOT NULL,
+    episode_id INTEGER NOT NULL,
+    episode_number INTEGER NOT NULL,
+    queue_id INTEGER NOT NULL,
+    download_key TEXT NOT NULL,
+    download_id TEXT NOT NULL COLLATE NOCASE,
+    client_name TEXT NOT NULL,
+    added_at DATETIME,
+    queue_file_id INTEGER,
+    baseline_observed_at DATETIME, -- witness for an undated attempt; NULL if unknown or ambiguous
+    signature TEXT NOT NULL,
+    problem_since DATETIME,
+    quiet_since DATETIME NOT NULL,
+    last_seen DATETIME NOT NULL,
+    history_id INTEGER,
+    imported_file_id INTEGER,
+    PRIMARY KEY(issue_id, download_key, episode_id)
+);
+CREATE INDEX IF NOT EXISTS idx_sonarr_members_download ON issue_sonarr_members(download_key,episode_id);
+
 -- Most recent successful COMPLETE queue snapshot per instance. This small,
 -- bounded cache lets a user report join an already-observed arr retry without
 -- putting a network round trip on the report request path. Failed queue reads
@@ -1198,6 +1221,16 @@ func Open(dbPath string) (*sql.DB, error) {
 		{alter: "ALTER TABLE agent_actions ADD COLUMN target_download_id TEXT"},
 		{alter: "ALTER TABLE issue_observation_downloads ADD COLUMN arr_added_at DATETIME"},
 		{alter: "ALTER TABLE issue_observation_downloads ADD COLUMN queue_file_id INTEGER CHECK (queue_file_id >= 0)"},
+		// On older members the file id participates in the signature. A known
+		// baseline had therefore been seen by the start of the current signature,
+		// even if we cannot recover the exact time it was first seen. Do not
+		// backfill through evidence of departure and reappearance.
+		{alter: "ALTER TABLE issue_sonarr_members ADD COLUMN baseline_observed_at DATETIME",
+			backfill: []string{`UPDATE issue_sonarr_members SET baseline_observed_at=quiet_since
+				WHERE added_at IS NULL AND queue_file_id>=0 AND signature!=''
+				AND (problem_since IS NULL OR problem_since<=quiet_since)
+				AND NOT EXISTS (SELECT 1 FROM issue_observation_attempts a WHERE a.issue_id=issue_sonarr_members.issue_id
+					AND a.state='settling' AND a.created_at<issue_sonarr_members.last_seen)`}},
 		// The numeric Chaptarr record id a fulfilled book-format request created
 		// or monitored. Metadata refreshes can re-key a record's foreignBookId
 		// away from the id the request was logged under; the record id is the

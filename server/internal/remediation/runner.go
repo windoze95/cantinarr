@@ -212,6 +212,11 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 	).Scan(&staged); err == nil && staged > 0 {
 		return r.Resume(ctx, issueID)
 	}
+	ctx, release, permitted := r.svc.investigationContext(ctx, issue.Source)
+	if !permitted {
+		return nil
+	}
+	defer release()
 	if recovering, preflightErr := r.svc.preflightArrRecovery(issueID); preflightErr != nil {
 		if _, parkErr := r.svc.moveIssueToObservationNeedsAdmin(issue, observationNeedsCloserLook, time.Now().UTC()); parkErr != nil {
 			return fmt.Errorf("park issue %d after arr recovery preflight failed: %v (preflight: %w)", issueID, parkErr, preflightErr)
@@ -222,6 +227,9 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 	}
 
 	turn, model, err := r.resolveTurn(ctx, settings)
+	if ctx.Err() != nil {
+		return nil
+	}
 	if err != nil {
 		if errors.Is(err, ai.ErrSharedAIUnavailable) {
 			// A standing configuration gap, not a failed investigation: leave the
@@ -240,7 +248,7 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 	_ = r.svc.RecordRemediationProviderHealth(true)
 
 	// CAS-claim the issue and create the run row.
-	runID, claimed, err := r.claim(issue, model)
+	runID, claimed, err := r.claim(ctx, issue, model)
 	if err != nil {
 		return fmt.Errorf("claim issue %d: %w", issueID, err)
 	}
@@ -255,6 +263,10 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 	}
 
 	// Bound active wall-clock with a context timeout.
+	issue, err = r.svc.GetIssue(issueID)
+	if err != nil {
+		return r.abortClaimForRecoveryPreflight(issueID, runID, err)
+	}
 	wall := time.Duration(settings.MaxWallClockSecs) * time.Second
 	activeStarted := time.Now()
 	defer r.finishActiveWindow(runID, activeStarted)
@@ -298,6 +310,9 @@ func (r *Runner) runOwnsIssue(runID, issueID int64) bool {
 // from the shared profile; only a provider-bound tested model may override its
 // model designation.
 func (r *Runner) resolveTurn(ctx context.Context, settings Settings) (ai.TurnRunner, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
 	if r.turns == nil {
 		return nil, "", fmt.Errorf("shared AI resolver is unavailable")
 	}
@@ -346,6 +361,22 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 	if issue.Status == IssueObserving || issue.Status == IssueRecovering {
 		return nil
 	}
+	var trigger string
+	if err := r.db.QueryRow(`SELECT trigger FROM agent_runs WHERE issue_id=? AND status=? ORDER BY id DESC LIMIT 1`, issueID, runStatusResumePending).Scan(&trigger); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	source := issue.Source
+	if trigger == "auto" {
+		source = SourceAuto
+	}
+	ctx, release, permitted := r.svc.investigationContext(ctx, source)
+	if !permitted {
+		return nil
+	}
+	defer release()
 	if recovering, preflightErr := r.svc.preflightArrRecovery(issueID); preflightErr != nil {
 		if _, parkErr := r.svc.moveIssueToObservationNeedsAdmin(issue, observationNeedsCloserLook, time.Now().UTC()); parkErr != nil {
 			return fmt.Errorf("park issue %d resume after arr recovery preflight failed: %v (preflight: %w)", issueID, parkErr, preflightErr)
@@ -361,6 +392,9 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 	// missing configuration. The staged decision stays exactly where it is;
 	// recoverWork re-enqueues it once a provider exists.
 	if _, _, err := r.resolveTurn(ctx, settings); err != nil && errors.Is(err, ai.ErrSharedAIUnavailable) {
+		if ctx.Err() != nil {
+			return nil
+		}
 		_ = r.svc.RecordRemediationProviderHealth(false)
 		return nil
 	}
@@ -368,7 +402,7 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 	// Claim and load the exact durable handoff in one transaction. No worker can
 	// preload generation A, lose the race, then later claim generation B while
 	// continuing with A's transcript or budgets.
-	resume, claimed, err := r.claimResume(issueID)
+	resume, claimed, err := r.claimResume(ctx, issueID)
 	if err != nil {
 		return fmt.Errorf("reclaim issue %d: %w", issueID, err)
 	}
@@ -384,6 +418,9 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 	}
 
 	turn, model, err := r.resolveTurn(ctx, settings)
+	if ctx.Err() != nil {
+		return nil
+	}
 	if err != nil {
 		return r.giveUp(ctx, issueID, runID, model, stopModelError,
 			"I couldn't continue after the decision because the AI provider isn't configured. Flagging for an admin.")
@@ -398,6 +435,10 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 	}
 
 	remainingSeconds := settings.MaxWallClockSecs - resume.activeSeconds
+	issue, err = r.svc.GetIssue(issueID)
+	if err != nil {
+		return r.abortClaimForRecoveryPreflight(issueID, runID, err)
+	}
 	if remainingSeconds <= 0 {
 		return r.giveUp(context.Background(), issueID, runID, model, stopTimeout,
 			giveUpMessage(issue, true))
@@ -516,8 +557,15 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 		attempts = nil
 	}
 	system := buildSystemPrompt(issue, attempts)
-	tools := r.toolServer.ToolsByName(readToolAllowList)
+	reads := readToolAllowList
+	if issue.memberCount > 1 {
+		reads = []string{"get_queue", "diagnose_queue"}
+	}
+	tools := r.toolServer.ToolsByName(reads)
 	for _, tool := range mcp.AgentTools() {
+		if issue.memberCount > 1 && tool.Name != mcp.ToolPostIssueMessage {
+			continue
+		}
 		if settings.Mode == ModeInvestigateOnly && tool.Name == mcp.ToolProposeAction {
 			continue
 		}
@@ -525,6 +573,9 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 	}
 
 	for {
+		if !r.runOwnsIssue(st.runID, issue.ID) {
+			return nil
+		}
 		// Re-scrub the complete history before every provider call. This repairs
 		// legacy parked transcripts too and is the final boundary preventing a
 		// credential echoed by a model/tool from reaching the next hosted turn.
@@ -559,6 +610,9 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 			History:   st.history,
 			MaxTokens: settings.MaxTurnTokens,
 		})
+		if !r.runOwnsIssue(st.runID, issue.ID) {
+			return nil
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return r.giveUp(context.Background(), issue.ID, st.runID, model, stopTimeout,
@@ -567,13 +621,6 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 			return r.giveUp(context.Background(), issue.ID, st.runID, model, stopModelError,
 				giveUpMessage(issue, st.postedAnyMsg))
 		}
-		// A queue snapshot can move the issue back to recovery while the provider
-		// is thinking. Discard that stale response before it can write a message,
-		// proposal, audit ping, or state transition.
-		if !r.runOwnsIssue(st.runID, issue.ID) {
-			return nil
-		}
-
 		if res.ModelFallback != nil && model != res.ModelFallback.ReplacementModel {
 			fallback := res.ModelFallback
 			model = fallback.ReplacementModel
@@ -752,7 +799,7 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 
 		st.history = append(st.history, ai.TranscriptMessage{Role: ai.RoleUser, Content: resultBlocks})
 		r.persistTranscript(st.runID, st.history)
-		r.db.Exec("UPDATE agent_runs SET step_count = ? WHERE id = ?", st.stepCount, st.runID)
+		r.db.Exec("UPDATE agent_runs SET step_count = ? WHERE id = ? AND status='running'", st.stepCount, st.runID)
 
 		if escalated {
 			// A read failure here only costs the better wording, never the
@@ -1199,6 +1246,19 @@ type dispatchControl struct {
 // For ANY other name (every mutating tool) it returns a benign refusal and NEVER
 // calls ExecuteTool.
 func (r *Runner) dispatchTool(ctx context.Context, issue *Issue, runID int64, tu ai.TranscriptBlock) (out string, isErr bool, ctrl dispatchControl) {
+	if issue.memberCount > 1 {
+		switch tu.Name {
+		case "get_queue", "diagnose_queue":
+			text, err := r.svc.describeSeasonQueue(issue, tu.Name == "diagnose_queue")
+			if err != nil {
+				return "Could not read the current queue for this attempt: " + secrets.RedactText(err.Error()), true, ctrl
+			}
+			return text, false, ctrl
+		case mcp.ToolPostIssueMessage:
+		default:
+			return "This shared download supports diagnosis only. The observer verifies every affected episode before resolving it.", true, ctrl
+		}
+	}
 	switch {
 	case mcp.IsAgentTool(tu.Name):
 		if tu.Name == mcp.ToolProposeAction && r.svc.Settings().Mode != ModeSupervised {
@@ -1558,22 +1618,27 @@ type resumeState struct {
 
 // claimResume atomically loads and consumes one durable resume_pending handoff,
 // binding the issue claim to that exact run and transcript generation.
-func (r *Runner) claimResume(issueID int64) (resumeState, bool, error) {
-	tx, err := r.db.Begin()
+func (r *Runner) claimResume(ctx context.Context, issueID int64) (resumeState, bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return resumeState{}, false, err
 	}
 	defer tx.Rollback()
 	var state resumeState
+	var source, trigger string
 	if err := tx.QueryRow(
-		`SELECT id, step_count, active_seconds, transcript_json
-		 FROM agent_runs WHERE issue_id = ? AND status = ? ORDER BY id DESC LIMIT 1`,
+		`SELECT r.id, r.step_count, r.active_seconds, r.transcript_json, i.source, r.trigger
+		 FROM agent_runs r JOIN issues i ON i.id=r.issue_id WHERE r.issue_id = ? AND r.status = ? ORDER BY r.id DESC LIMIT 1`,
 		issueID, runStatusResumePending,
-	).Scan(&state.runID, &state.stepCount, &state.activeSeconds, &state.transcriptJSON); err != nil {
+	).Scan(&state.runID, &state.stepCount, &state.activeSeconds, &state.transcriptJSON, &source, &trigger); err != nil {
 		if err == sql.ErrNoRows {
 			return resumeState{}, false, nil
 		}
 		return resumeState{}, false, err
+	}
+	settings := readSettings(tx)
+	if !settings.investigates(source) || (trigger == "auto" && !settings.AutoDispatch) {
+		return resumeState{}, false, nil
 	}
 	// `open` is accepted beside `investigating` on purpose: a fix's own
 	// success empties the queue, the preflight suspends the issue for the
@@ -1612,16 +1677,19 @@ func (r *Runner) claimResume(issueID int64) (resumeState, bool, error) {
 // claim CAS-claims the issue (status->investigating, active_run_id set only when
 // currently NULL) and creates the agent_runs row. Returns claimed=false when
 // another worker already holds the claim.
-func (r *Runner) claim(issue *Issue, model string) (runID int64, claimed bool, err error) {
+func (r *Runner) claim(ctx context.Context, issue *Issue, model string) (runID int64, claimed bool, err error) {
 	trigger := "user_report"
 	if issue.Source == SourceAuto {
 		trigger = "auto"
 	}
-	tx, err := r.db.Begin()
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, false, err
 	}
 	defer tx.Rollback()
+	if !readSettings(tx).investigates(issue.Source) {
+		return 0, false, nil
+	}
 	res, err := tx.Exec(
 		"INSERT INTO agent_runs (issue_id, trigger, status, model, proc_generation) VALUES (?, ?, ?, ?, ?)",
 		issue.ID, trigger, runStatusRunning, model, r.procToken,
@@ -1639,8 +1707,9 @@ func (r *Runner) claim(issue *Issue, model string) (runID int64, claimed bool, e
 		// status change — so it flips to unread. (Resume's re-claim deliberately
 		// does NOT touch read: it may be reached from an admin approve/deny.)
 		`UPDATE issues SET status = ?, read = 0, active_run_id = ?, updated_at = CURRENT_TIMESTAMP
-		 WHERE id = ? AND status IN (?, ?) AND active_run_id IS NULL AND closed_at IS NULL`,
-		IssueInvestigating, runID, issue.ID, IssueOpen, IssueInvestigating,
+		 WHERE id = ? AND status IN (?, ?) AND active_run_id IS NULL AND closed_at IS NULL AND source = ?
+		 AND NOT EXISTS (SELECT 1 FROM agent_runs WHERE issue_id=issues.id AND status='resume_pending')`,
+		IssueInvestigating, runID, issue.ID, IssueOpen, IssueInvestigating, issue.Source,
 	)
 	if err != nil {
 		return 0, false, fmt.Errorf("cas claim: %w", err)
@@ -1691,7 +1760,7 @@ func (r *Runner) bumpRunUsage(runID int64, u ai.Usage, stepCount int) {
 			cache_creation_tokens = cache_creation_tokens + ?,
 			cache_read_tokens = cache_read_tokens + ?,
 			step_count = ?
-		 WHERE id = ?`,
+		 WHERE id = ? AND status='running'`,
 		u.InputTokens, u.OutputTokens, u.CacheCreationTokens, u.CacheReadTokens, stepCount, runID,
 	)
 }
@@ -1702,13 +1771,14 @@ func (r *Runner) persistStep(runID, issueID int64, seq int, kind, toolName, tool
 	text = secrets.RedactText(text)
 	r.db.Exec(
 		`INSERT INTO agent_steps (run_id, issue_id, seq, kind, tool_name, tool_use_id, tool_input, tool_output, text, is_error)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		 WHERE EXISTS (SELECT 1 FROM agent_runs WHERE id=? AND issue_id=? AND status!='aborted')`,
 		runID, issueID, seq, kind,
 		nullIfEmpty(toolName), nullIfEmpty(toolUseID),
 		nullIfEmpty(truncate(toolInput, stepTruncateBytes)),
 		nullIfEmpty(truncate(textForOutput(kind, text), stepTruncateBytes)),
 		nullIfEmpty(text2(kind, text)),
-		boolToInt(isErr),
+		boolToInt(isErr), runID, issueID,
 	)
 }
 
@@ -1719,7 +1789,7 @@ func (r *Runner) persistTranscript(runID int64, history ai.Transcript) {
 	if err != nil {
 		return
 	}
-	r.db.Exec("UPDATE agent_runs SET transcript_json = ? WHERE id = ?", string(data), runID)
+	r.db.Exec("UPDATE agent_runs SET transcript_json = ? WHERE id = ? AND status='running'", string(data), runID)
 }
 
 // --- terminal helpers ---

@@ -73,7 +73,7 @@ func remediationDescription(f setupFacts) string {
 	if f.RemediationEnabled && !f.AI {
 		return "Remediation is ON but no shared AI provider is configured — detected problems wait instead of being investigated. Add a provider under Providers & Credentials."
 	}
-	return "Decide whether Cantinarr should detect and investigate stuck downloads on its own. On or off — deciding is the step."
+	return "Persistent queue problems alert administrators. Choose whether AI should also investigate them."
 }
 
 // discoveryDescription explains the discovery-rows step in terms of what is
@@ -186,7 +186,7 @@ func buildSetupItems(f setupFacts) []setupItem {
 		},
 		{
 			Key:         "remediation",
-			Title:       "Automatic problem detection",
+			Title:       "Automatic investigation",
 			Description: remediationDescription(f),
 			Configured:  f.RemediationDecided,
 		},

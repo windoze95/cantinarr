@@ -110,8 +110,11 @@ type observationRecord struct {
 }
 
 type observationGroup struct {
-	scopeKey string
-	items    []arr.QueueObservation
+	scopeKey    string
+	downloadKey string
+	pack        bool
+	parallel    bool
+	items       []arr.QueueObservation
 }
 
 type queueSnapshotJob struct {
@@ -251,6 +254,14 @@ func recoveryObservation(item arr.QueueObservation) bool {
 }
 
 func groupIsRecovery(group observationGroup, currentDownloadID string) bool {
+	if group.pack {
+		for _, item := range group.items {
+			if seasonMemberBlocked(item) {
+				return false
+			}
+		}
+		return true
+	}
 	for _, item := range group.items {
 		if recoveryObservation(item) {
 			return true
@@ -299,6 +310,17 @@ func groupWarrantsAutoIncident(group observationGroup, now time.Time) bool {
 func selectObservation(group observationGroup, currentDownloadID string) arr.QueueObservation {
 	if len(group.items) == 0 {
 		return arr.QueueObservation{}
+	}
+	if group.pack {
+		selected := group.items[0]
+		for _, item := range group.items {
+			if seasonMemberBlocked(item) {
+				selected = item
+				break
+			}
+		}
+		selected.Media.QueueID, selected.Media.EpisodeNumber = 0, 0
+		return selected
 	}
 	for _, item := range group.items {
 		if currentDownloadID != "" && item.DownloadID != "" && item.DownloadID != currentDownloadID {
@@ -378,10 +400,16 @@ func (s *Service) observeQueueSnapshot(serviceType, instanceID string, items []a
 		return err
 	}
 
-	groups := groupQueueObservations(serviceType, instanceID, items)
 	records, err := s.loadObservationRecords(serviceType, instanceID, now)
 	if err != nil {
 		return err
+	}
+	groups := groupQueueObservations(serviceType, instanceID, items)
+	if serviceType == "sonarr" {
+		groups, err = s.routeSonarrDownloads(instanceID, items, records)
+		if err != nil {
+			return err
+		}
 	}
 	if err := s.attachUnobservedUserIssues(serviceType, instanceID, groups, now); err != nil {
 		return err
@@ -398,30 +426,28 @@ func (s *Service) observeQueueSnapshot(serviceType, instanceID string, items []a
 	}
 
 	settings := s.Settings()
-	if settings.Enabled && settings.AutoDispatch {
-		for key, group := range groups {
-			hasMatchingRecord := len(byScope[key]) != 0
-			if !hasMatchingRecord {
-				for _, record := range records {
-					for _, item := range group.items {
-						if record.issue.Source == SourceUser && mediaScopeMatches(issueMediaContext(record.issue), item.Media, record.issue.MediaType) {
-							hasMatchingRecord = true
-							break
-						}
+	for key, group := range groups {
+		hasMatchingRecord := len(byScope[key]) != 0
+		if !hasMatchingRecord {
+			for _, record := range records {
+				for _, item := range group.items {
+					if record.issue.Source == SourceUser && group.reportMatches(record.issue, item) {
+						hasMatchingRecord = true
+						break
 					}
 				}
 			}
-			if hasMatchingRecord || !groupWarrantsAutoIncident(group, now) {
-				continue
-			}
-			record, createErr := s.createAutoObservation(serviceType, instanceID, group, now)
-			if createErr != nil {
-				return createErr
-			}
-			if record != nil {
-				records = append(records, record)
-				byScope[key] = append(byScope[key], record)
-			}
+		}
+		if hasMatchingRecord || !groupWarrantsAutoIncident(group, now) {
+			continue
+		}
+		record, createErr := s.createAutoObservation(serviceType, instanceID, group, now)
+		if createErr != nil {
+			return createErr
+		}
+		if record != nil {
+			records = append(records, record)
+			byScope[key] = append(byScope[key], record)
 		}
 	}
 
@@ -435,11 +461,10 @@ func (s *Service) observeQueueSnapshot(serviceType, instanceID string, items []a
 		if !matched && record.issue.Source == SourceUser {
 			for _, candidate := range groups {
 				for _, item := range candidate.items {
-					if mediaScopeMatches(issueMediaContext(record.issue), item.Media, record.issue.MediaType) {
+					if candidate.reportMatches(record.issue, item) {
 						group.scopeKey = record.scopeKey
-						group.items = append(group.items, candidate.items...)
+						group.items = append(group.items, item)
 						matched = true
-						break
 					}
 				}
 			}
@@ -485,7 +510,7 @@ func (s *Service) attachUnobservedUserIssues(serviceType, instanceID string, gro
 		var matched []arr.QueueObservation
 		for _, group := range groups {
 			for _, item := range group.items {
-				if mediaScopeMatches(issueMediaContext(issue), item.Media, issue.MediaType) {
+				if group.reportMatches(issue, item) {
 					matched = append(matched, item)
 				}
 			}
@@ -517,6 +542,7 @@ func (s *Service) storeQueueSnapshot(serviceType, instanceID string, items []arr
 				TmdbID: item.Media.TmdbID, TvdbID: item.Media.TvdbID,
 				SeasonNumber: item.Media.SeasonNumber, EpisodeNumber: item.Media.EpisodeNumber,
 				AuthorID: item.Media.AuthorID, BookID: item.Media.BookID,
+				SeriesID: item.Media.SeriesID, EpisodeID: item.Media.EpisodeID, DownloadClient: secrets.RedactText(item.Media.DownloadClient),
 			},
 			Signal: arr.QueueSignal{
 				Status: item.Signal.Status, TrackedDownloadStatus: item.Signal.TrackedDownloadStatus,
@@ -828,7 +854,29 @@ func (s *Service) createAutoObservation(serviceType, instanceID string, group ob
 	}
 	// problem_kind is stored unredacted: doctor labels are server-authored code
 	// constants, and standing approval rules key on the exact bytes.
-	res, err := s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	prior, handled, err := previousSeasonObservation(tx, group, now)
+	if err != nil || handled && prior == 0 {
+		return nil, err
+	}
+	if prior != 0 {
+		if err := recordSeasonMembers(tx, prior, group, now); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		issue, err := s.GetIssue(prior)
+		if err != nil {
+			return nil, err
+		}
+		return &observationRecord{issue: issue, serviceType: serviceType, scopeKey: group.scopeKey, firstSeen: now, lastActivity: now}, nil
+	}
+	res, err := tx.Exec(
 		`INSERT INTO issues
 		 (source, status, media_type, tmdb_id, tvdb_id, title, season_number,
 		  episode_number, author_id, book_id, instance_id, download_id, arr_queue_id, detail,
@@ -852,7 +900,7 @@ func (s *Service) createAutoObservation(serviceType, instanceID string, group ob
 		return nil, err
 	}
 	signature := observationSignature(group.items)
-	if _, err := s.db.Exec(
+	if _, err := tx.Exec(
 		`INSERT INTO issue_observations
 		 (issue_id, service_type, scope_key, state, signature, first_seen_at,
 		  problem_since_at, last_seen_at, last_activity_at, updated_at)
@@ -861,6 +909,12 @@ func (s *Service) createAutoObservation(serviceType, instanceID string, group ob
 		now, problemSince, now, now, now,
 	); err != nil {
 		return nil, fmt.Errorf("create issue observation: %w", err)
+	}
+	if err := recordSeasonMembers(tx, id, group, now); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	if err := s.recordObservationDownloads(id, group.items, now); err != nil {
 		return nil, err
@@ -880,6 +934,24 @@ func (s *Service) createAutoObservation(serviceType, instanceID string, group ob
 }
 
 func (s *Service) applyMatchingObservation(record *observationRecord, group observationGroup, now time.Time, settings Settings) error {
+	oldCount := record.issue.memberCount
+	if group.downloadKey != "" {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err := recordSeasonMembers(tx, record.issue.ID, group, now); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(`SELECT COUNT(DISTINCT episode_id) FROM issue_sonarr_members WHERE issue_id=?`, record.issue.ID).Scan(&record.issue.memberCount); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		group.pack = record.issue.memberCount > 1
+	}
 	if err := s.recordObservationDownloads(record.issue.ID, group.items, now); err != nil {
 		return err
 	}
@@ -888,6 +960,9 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 	// user complaints are not auto-closed, but stale mutations must still stop.
 	_ = s.captureObservationBaseline(record.issue)
 	item := selectObservation(group, record.issue.DownloadID)
+	if group.pack {
+		item.Diagnosis.Transparency = fmt.Sprintf("Season %d download affecting %d episodes. %s", item.Media.SeasonNumber, record.issue.memberCount, seasonMemberDetail(item))
+	}
 	signature := observationSignature(group.items)
 	recovering := groupIsRecovery(group, record.issue.DownloadID)
 	// D2: a user report attached to a DIAGNOSED queue row earns the same
@@ -908,6 +983,14 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 		state = observationStateRecovering
 	}
 	changed := signature != record.signature || state != record.state
+	memberReady := false
+	if group.pack {
+		var err error
+		memberReady, err = s.blockedMemberReady(record.issue.ID, now, settings)
+		if err != nil {
+			return err
+		}
+	}
 	auditTransition := state != record.state || item.DownloadID != record.issue.DownloadID || item.Media.QueueID != record.issue.ArrQueueID
 	lastActivity := record.lastActivity
 	if changed || lastActivity.IsZero() {
@@ -961,7 +1044,7 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 	// Any fresh same-scope transition invalidates a diagnosis, not only a row we
 	// classify as recovery. Reclaim visible/running work until the new signature
 	// survives the configured quiet window.
-	if changed && record.issue.Status != IssueObserving && record.issue.Status != IssueRecovering {
+	if changed && (!memberReady || oldCount != record.issue.memberCount) && record.issue.Status != IssueObserving && record.issue.Status != IssueRecovering {
 		_, err := s.suspendIssueForRecovery(record.issue.ID, item, now)
 		return err
 	}
@@ -970,7 +1053,7 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 			now.Sub(lastActivity) >= time.Duration(settings.ObservationQuietMinutes)*time.Minute
 		// An unchanged recovery signature that was already promoted remains
 		// actionable. Do not re-run expensive library/history proof every poll.
-		if record.promotedAt.Valid && record.state == observationStateRecovering && signature == record.signature &&
+		if !group.pack && record.promotedAt.Valid && record.state == observationStateRecovering && signature == record.signature &&
 			record.issue.Status != IssueObserving && record.issue.Status != IssueRecovering {
 			return nil
 		}
@@ -983,7 +1066,7 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 				if bookReceiptCannotProveLiveRow(record.issue, group) {
 					return s.promoteObservedIssue(record.issue.ID, now)
 				}
-				return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid, probe.resolutionKind)
+				return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid, probe)
 			}
 			if probe.needsAdmin {
 				return s.promoteObservationNeedsAdmin(record.issue.ID, now, probe.reason)
@@ -1004,7 +1087,7 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 			return err
 		}
 	}
-	if problemSince.Valid && now.Sub(problemSince.Time) >= time.Duration(settings.ObservationMinMinutes)*time.Minute &&
+	if memberReady || !group.pack && problemSince.Valid && now.Sub(problemSince.Time) >= time.Duration(settings.ObservationMinMinutes)*time.Minute &&
 		now.Sub(lastActivity) >= time.Duration(settings.ObservationQuietMinutes)*time.Minute {
 		probe, guardErr := s.exactRecoveryGuard(record.issue)
 		if guardErr != nil {
@@ -1014,7 +1097,7 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 			if bookReceiptCannotProveLiveRow(record.issue, group) {
 				return s.promoteObservedIssue(record.issue.ID, now)
 			}
-			return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid, probe.resolutionKind)
+			return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid, probe)
 		}
 		if probe.needsAdmin {
 			return s.promoteObservationNeedsAdmin(record.issue.ID, now, probe.reason)
@@ -1035,6 +1118,11 @@ func bookReceiptCannotProveLiveRow(issue *Issue, group observationGroup) bool {
 }
 
 func (s *Service) applyAbsentObservation(record *observationRecord, now time.Time, settings Settings) error {
+	if record.issue.memberCount > 1 && record.state != observationStateSettling {
+		if _, err := s.db.Exec(`UPDATE issue_sonarr_members SET problem_since=NULL WHERE issue_id=?`, record.issue.ID); err != nil {
+			return err
+		}
+	}
 	// A promoted incident that already completed its absence settle must not
 	// restart settling on every subsequent empty snapshot. Keep it actionable,
 	// while continuing to enforce exact library/import evidence so a late arr
@@ -1046,7 +1134,7 @@ func (s *Service) applyAbsentObservation(record *observationRecord, now time.Tim
 			return moveErr
 		}
 		if probe.completed {
-			return s.closeObservedRecovery(record.issue.ID, true, probe.resolutionKind)
+			return s.closeObservedRecovery(record.issue.ID, true, probe)
 		}
 		if probe.needsAdmin {
 			_, err = s.moveIssueToObservationNeedsAdmin(record.issue, probe.reason, now)
@@ -1083,7 +1171,7 @@ func (s *Service) applyAbsentObservation(record *observationRecord, now time.Tim
 		return nil
 	}
 	if probe.completed {
-		return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid, probe.resolutionKind)
+		return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid, probe)
 	}
 	if probe.needsAdmin {
 		return s.promoteObservationNeedsAdmin(record.issue.ID, now, probe.reason)
@@ -1093,7 +1181,12 @@ func (s *Service) applyAbsentObservation(record *observationRecord, now time.Tim
 
 func (s *Service) promoteObservationNeedsAdmin(issueID int64, now time.Time, reason string) error {
 	cutoff := now.Add(-time.Duration(s.Settings().ObservationMinMinutes) * time.Minute)
-	res, err := s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(
 		`UPDATE issues SET status=?,read=0,active_run_id=NULL,resolution=?,
 		 resolution_kind='',updated_at=?
 		 WHERE id=? AND closed_at IS NULL AND status IN (?,?)
@@ -1106,16 +1199,18 @@ func (s *Service) promoteObservationNeedsAdmin(issueID int64, now time.Time, rea
 	if n, _ := res.RowsAffected(); n != 1 {
 		return nil
 	}
-	_, _ = s.db.Exec(
+	if _, err = tx.Exec(
 		"UPDATE issue_observations SET promoted_at=COALESCE(promoted_at,?),updated_at=? WHERE issue_id=?",
 		now, now, issueID,
-	)
-	var status string
-	var closed sql.NullTime
-	if err := s.db.QueryRow("SELECT status,closed_at FROM issues WHERE id=?", issueID).Scan(&status, &closed); err == nil && !closed.Valid && status == IssueNeedsAdmin {
-		s.queueIssueAlert(issueID, now)
+	); err != nil {
+		return err
 	}
-	return nil
+	if s.notifier != nil {
+		if _, err = tx.Exec(oweIssueAlertSQL, issueID, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Service) promoteObservedIssue(issueID int64, now time.Time) error {
@@ -1160,16 +1255,15 @@ func (s *Service) promoteObservedIssue(issueID int64, now time.Time) error {
 	); err != nil {
 		return err
 	}
+	if !promoted.Valid && s.notifier != nil {
+		if _, err = tx.Exec(oweIssueAlertSQL, issueID, now); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	if !promoted.Valid {
-		var current string
-		var closed sql.NullTime
-		if err := s.db.QueryRow("SELECT status,closed_at FROM issues WHERE id=?", issueID).Scan(&current, &closed); err == nil && !closed.Valid && current == IssueOpen {
-			s.queueIssueAlert(issueID, now)
-		}
-	} else {
+	if promoted.Valid {
 		s.pingIssueUpdated(issueID)
 	}
 	if s.Settings().Enabled {
@@ -1257,7 +1351,8 @@ func (s *Service) suspendIssueForRecovery(issueID int64, item arr.QueueObservati
 	return true, nil
 }
 
-func (s *Service) closeObservedRecovery(issueID int64, wasPromoted bool, kind string) error {
+func (s *Service) closeObservedRecovery(issueID int64, wasPromoted bool, proof arrRecoveryProbe) error {
+	kind := proof.resolutionKind
 	// The kind names which terminal the probe proved; the narration must match
 	// it. An empty kind is the ordinary recovery: the media arrived.
 	if kind == "" {
@@ -1276,7 +1371,7 @@ func (s *Service) closeObservedRecovery(issueID int64, wasPromoted bool, kind st
 	}
 	transitioned, err := s.concludeIssueAggregate(context.Background(), issueID, IssueResolved,
 		resolution,
-		kind, issueClosureOptions{silentNotifications: !wasPromoted})
+		kind, issueClosureOptions{silentNotifications: !wasPromoted, verifiedMembers: proof.verifiedMembers})
 	// Silent means no alert/push, not no cache invalidation. `issue_updated` is a
 	// websocket-only refresh signal in the push notifier, so the Tracking list and
 	// an open thread learn that a never-promoted incident quietly resolved.
@@ -1429,7 +1524,7 @@ func (s *Service) exactIssueHasFile(issue *Issue) (hasFile, known bool, err erro
 }
 
 func (s *Service) captureObservationBaseline(issue *Issue) error {
-	if issue == nil {
+	if issue == nil || issue.memberCount > 1 {
 		return nil
 	}
 	var captured int
@@ -1863,9 +1958,32 @@ func (s *Service) recentQueueObservationForUser(instanceID, mediaType string, me
 		return observationGroup{}, false
 	}
 	var matched []arr.QueueObservation
+	var nativeAttempt string
+	downloadRows := make(map[string]int)
 	for _, item := range items {
+		key := ""
+		if mediaType == "tv" {
+			key = sonarrDownloadKey(instanceID, item)
+			downloadRows[key]++
+		}
 		if mediaScopeMatches(media, item.Media, mediaType) {
+			if key != "" {
+				if media.EpisodeNumber <= 0 || nativeAttempt != "" {
+					return observationGroup{}, false
+				}
+				nativeAttempt = key
+			}
 			matched = append(matched, item)
+		}
+	}
+	if nativeAttempt != "" {
+		if downloadRows[nativeAttempt] != 1 {
+			return observationGroup{}, false
+		}
+		var grouped bool
+		err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM issue_sonarr_members WHERE download_key=? GROUP BY issue_id HAVING COUNT(DISTINCT episode_id)>1)`, nativeAttempt).Scan(&grouped)
+		if err != nil || grouped {
+			return observationGroup{}, false
 		}
 	}
 	if len(matched) == 0 {
@@ -2093,11 +2211,12 @@ func (s *Service) fetchQueueSnapshot(serviceType, instanceID string) ([]arr.Queu
 }
 
 type arrRecoveryProbe struct {
-	active     bool
-	completed  bool
-	needsAdmin bool
-	reason     string
-	item       arr.QueueObservation
+	verifiedMembers bool
+	active          bool
+	completed       bool
+	needsAdmin      bool
+	reason          string
+	item            arr.QueueObservation
 	// resolutionKind names WHICH terminal a completed probe proved, so the
 	// close can narrate it honestly. Empty means the ordinary recovery
 	// (arr_state_cleared: the media arrived).
@@ -2112,6 +2231,9 @@ type arrRecoveryProbe struct {
 // window because it may never have had a matching queue row. Auto incidents are
 // born from a queue row, so a missing baseline is an unsafe state.
 func (s *Service) exactRecoveryGuard(issue *Issue) (arrRecoveryProbe, error) {
+	if issue.Source == SourceAuto && issue.memberCount > 1 {
+		return s.seasonRecovery(issue)
+	}
 	var captured int
 	if err := s.db.QueryRow(
 		"SELECT baseline_captured_at IS NOT NULL FROM issue_observations WHERE issue_id=?",
@@ -2245,12 +2367,7 @@ func (s *Service) probeArrRecovery(issue *Issue) (arrRecoveryProbe, error) {
 	}
 	// Partition the snapshot exactly as the observation sweep does and pick this
 	// incident's rows by its stored scope key. The preflight and the sweeper must
-	// agree on which queue rows constitute the incident: a season pack is one
-	// download but N per-episode incidents, so matching by shared download id
-	// would hand every sibling episode's row to this one issue. Its signature
-	// could then never equal the sweep's per-episode signature, every unchanged
-	// row read as "live arr signature changed", and each promotion bounced
-	// straight back to tracking with the dispatched run aborted.
+	// agree on membership, including the per-episode scopes of legacy issues.
 	var scopeKey string
 	if err := s.db.QueryRow(
 		"SELECT scope_key FROM issue_observations WHERE issue_id=?", issue.ID,
@@ -2258,15 +2375,63 @@ func (s *Service) probeArrRecovery(issue *Issue) (arrRecoveryProbe, error) {
 		return arrRecoveryProbe{}, err
 	}
 	groups := groupQueueObservations(serviceType, issue.InstanceID, items)
+	if serviceType == "sonarr" {
+		records, err := s.loadObservationRecords(serviceType, issue.InstanceID, now)
+		if err != nil {
+			return arrRecoveryProbe{}, err
+		}
+		groups, err = s.routeSonarrDownloads(issue.InstanceID, items, records)
+		if err != nil {
+			return arrRecoveryProbe{}, err
+		}
+		// A preflight may be the only successful read containing a late sibling.
+		// Reconcile it now, under the same lock as the poller, before another
+		// reader can act on a stale singleton or close a thinner pack.
+		group := groups[scopeKey]
+		for _, record := range records {
+			if record.issue.ID != issue.ID || !group.pack || record.manualReview {
+				continue
+			}
+			settings := s.Settings()
+			if record.signature != observationSignature(group.items) || record.issue.memberCount < 2 || record.state == observationStateSettling {
+				count := record.issue.memberCount
+				if err := s.applyMatchingObservation(record, group, now, settings); err != nil || count != record.issue.memberCount {
+					return arrRecoveryProbe{active: true}, err
+				}
+			}
+			issue.memberCount = record.issue.memberCount
+			if record.promotedAt.Valid && !groupIsRecovery(group, issue.DownloadID) {
+				ready, err := s.blockedMemberReady(issue.ID, now, settings)
+				return arrRecoveryProbe{active: !ready}, err
+			}
+			break
+		}
+	}
 	var matched []arr.QueueObservation
+	// Only the observer closes a grouped issue, under its membership lock.
+	// A preflight cannot carry an all-imported result across that lock: a
+	// subsequent snapshot might have identified a further affected episode.
+	if issue.memberCount > 1 {
+		group := groups[scopeKey]
+		if len(group.items) == 0 {
+			settled, err := s.queueAbsenceSettled(issue.ID, now)
+			return arrRecoveryProbe{active: !settled, needsAdmin: settled, reason: observationNeedsCloserLook}, err
+		}
+		active, err := s.matchingGroupStillActive(issue, group, now)
+		return arrRecoveryProbe{active: active}, err
+	}
 	if group, ok := groups[scopeKey]; ok {
 		matched = group.items
+		// A newly discovered sibling must pass through durable membership and
+		// invalidate any earlier single-episode investigation before use.
+		if group.pack && issue.memberCount < 2 {
+			return arrRecoveryProbe{active: true}, nil
+		}
 	} else if issue.Source == SourceUser {
 		for _, candidate := range groups {
 			for _, item := range candidate.items {
-				if mediaScopeMatches(issueMediaContext(issue), item.Media, issue.MediaType) {
-					matched = append(matched, candidate.items...)
-					break
+				if candidate.reportMatches(issue, item) {
+					matched = append(matched, item)
 				}
 			}
 		}
@@ -2307,7 +2472,7 @@ func (s *Service) probeArrRecovery(issue *Issue) (arrRecoveryProbe, error) {
 	if err != nil || guard.needsAdmin {
 		return guard, err
 	}
-	group := observationGroup{items: matched}
+	group := observationGroup{items: matched, pack: issue.memberCount > 1}
 	if guard.completed {
 		if !bookReceiptCannotProveLiveRow(issue, group) {
 			return guard, nil
@@ -2405,7 +2570,7 @@ func (s *Service) preflightArrRecovery(issueID int64) (bool, error) {
 	}
 	var promoted int
 	_ = s.db.QueryRow("SELECT promoted_at IS NOT NULL FROM issue_observations WHERE issue_id=?", issue.ID).Scan(&promoted)
-	return true, s.closeObservedRecovery(issue.ID, promoted != 0, probe.resolutionKind)
+	return true, s.closeObservedRecovery(issue.ID, promoted != 0, probe)
 }
 
 func (s *Service) moveIssueToObservationNeedsAdmin(issue *Issue, reason string, now time.Time) (bool, error) {
@@ -2511,7 +2676,7 @@ func (s *Service) cancelExecutingForRecovery(act *AgentAction, probe arrRecovery
 	}
 	s.notifyActionsChanged(act.IssueID, ActionSuperseded)
 	if probe.completed {
-		return s.closeObservedRecovery(act.IssueID, true, probe.resolutionKind)
+		return s.closeObservedRecovery(act.IssueID, true, probe)
 	}
 	return nil
 }
@@ -2678,25 +2843,5 @@ func lidarrObservation(item lidarr.DetailedQueueItem) arr.QueueObservation {
 }
 
 func sonarrObservation(item sonarr.DetailedQueueItem) arr.QueueObservation {
-	messages := make([]arr.StatusMessage, 0, len(item.StatusMessages))
-	for _, message := range item.StatusMessages {
-		messages = append(messages, arr.StatusMessage{Title: message.Title, Messages: message.Messages})
-	}
-	media := arr.QueueMediaContext{QueueID: item.ID, Title: item.Title}
-	if item.Series != nil {
-		media.Title = item.Series.Title
-		media.TmdbID = item.Series.TmdbID
-		media.TvdbID = item.Series.TvdbID
-	}
-	if item.Episode != nil {
-		media.SeasonNumber = item.Episode.SeasonNumber
-		media.EpisodeNumber = item.Episode.EpisodeNumber
-	}
-	signal := arr.QueueSignal{
-		Status: item.Status, TrackedDownloadStatus: item.TrackedDownloadStatus,
-		TrackedDownloadState: item.TrackedDownloadState, ErrorMessage: item.ErrorMessage,
-		StatusMessages: messages, Protocol: item.Protocol, Size: item.Size, SizeLeft: item.Sizeleft,
-		MediaFileID: item.FileIDAtSnapshot(), EpisodeAirsAt: item.AirTimeAtSnapshot(),
-	}
-	return arr.QueueObservation{DownloadID: item.DownloadID, AddedAt: item.Added, FileIDAtSnapshot: item.FileIDAtSnapshot(), Media: media, Signal: signal, Diagnosis: arr.Diagnose(signal)}
+	return item.QueueObservation()
 }

@@ -58,6 +58,10 @@ type Service struct {
 	// after a newer one.
 	observationMu sync.Mutex
 
+	// Orders settings changes with admission of a provider call or rule dispatch.
+	policyMu             sync.Mutex
+	activeInvestigations map[*investigationPermit]struct{}
+
 	// preAirSweep remembers how far the fallback pre-air pass has read each
 	// instance's history, so a quiet instance costs one arr call per pass.
 	preAirSweep preAirSweepState
@@ -387,12 +391,14 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 	var adoptedID int64
 	var adoptedStatus string
 	adoptErr := tx.QueryRow(
-		`SELECT id,status FROM issues
+		`SELECT MIN(id),status FROM issues
 		 WHERE source=? AND instance_id=? AND media_type=? AND closed_at IS NULL
 		   AND status IN (?,?)
 		   AND ((? > 0 AND tmdb_id=?) OR (? > 0 AND tvdb_id=?) OR (? > 0 AND book_id=?))
 		   AND season_number=? AND episode_number=?
-		 ORDER BY id LIMIT 1`,
+		   AND NOT EXISTS (SELECT 1 FROM issue_sonarr_members m WHERE m.issue_id=issues.id
+		                   GROUP BY m.issue_id HAVING COUNT(DISTINCT episode_id)>1)
+		 HAVING COUNT(*)=1`,
 		SourceAuto, instanceID, req.MediaType, IssueObserving, IssueRecovering,
 		tmdbID, tmdbID, tvdbID, tvdbID, bookID, bookID, season, episode,
 	).Scan(&adoptedID, &adoptedStatus)
@@ -647,6 +653,9 @@ func (s *Service) GetIssue(issueID int64) (*Issue, error) {
 		issueID,
 	)
 	iss, err := scanIssue(row)
+	if err == nil && iss.Source == SourceAuto && iss.MediaType == "tv" {
+		err = s.db.QueryRow(`SELECT COUNT(DISTINCT episode_id) FROM issue_sonarr_members WHERE issue_id=?`, issueID).Scan(&iss.memberCount)
+	}
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("issue not found")
 	}
