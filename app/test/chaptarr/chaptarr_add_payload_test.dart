@@ -26,7 +26,10 @@ void main() {
       expect(author['foreignAuthorId'], 'hc:240647');
       expect(author['qualityProfileId'], 1);
       expect(author['rootFolderPath'], '/media-server/media/audiobooks');
-      expect(author['addOptions'], {'monitor': 'all', 'searchForMissingBooks': false});
+      expect(author['addOptions'], {
+        'monitor': 'specificBook',
+        'searchForMissingBooks': false,
+      });
       expect(body['addOptions'], {'searchForNewBook': true});
     });
 

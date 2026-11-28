@@ -227,7 +227,6 @@ func (s *Service) dispatchFormat(ctx context.Context, id int64, format string) {
 		s.finishDelivery(id, format, token, "attention", "access_unavailable", nil)
 		return
 	}
-	r.requestedBookFormats = r.bookFormat
 	r.bookFormat = format
 	// A lost POST response can hide an accepted native author import. Check it
 	// before replaying an add; Chaptarr owns that retry loop once accepted.

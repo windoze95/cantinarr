@@ -308,7 +308,7 @@ func TestApproveNewAudiobookUsesChaptarr0720PerFormatConfiguration(t *testing.T)
 		"ebookRootFolderPath":        "/library/ebooks",
 		"audiobookRootFolderPath":    "/library/audiobooks",
 		"ebookMonitorFuture":         false,
-		"audiobookMonitorFuture":     true,
+		"audiobookMonitorFuture":     false,
 	})
 }
 

@@ -1,13 +1,13 @@
 Play Sun and alternate icons.
 French UI and metadata.
 Account imports and links.
-Optional AI model fallback.
-Media-server availability and household access.
-Missing episodes, season follows and extra copies.
+AI model fallback.
+Library availability and household access.
+Missing episodes, season follows, extra copies.
 Only my requests alerts.
-Back to Discover from direct titles.
-Clearer discovery status.
+Back to Discover; clearer title status.
 Sign-in defaults to HTTPS.
-Artwork respects account access.
+Account-scoped artwork.
 Re-search expired Grabs.
 Verify reviewed Sonarr imports.
+Add a format for one book.

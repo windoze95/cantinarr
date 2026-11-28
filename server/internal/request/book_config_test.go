@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -30,6 +31,9 @@ func TestExistingBookRequestConfiguresOnlyMissingFormat(t *testing.T) {
 					"id": 7, "authorName": "Author", "foreignAuthorId": "hc:200",
 					opposite + "QualityProfileId": 90, opposite + "MetadataProfileId": 91,
 					opposite + "RootFolderPath": "/custom/owned", opposite + "MonitorFuture": true,
+					opposite + "Monitored":       false,
+					"syncMonitoredAcrossFormats": true,
+					"tags":                       []int{4, 9},
 					format + "MetadataProfileId": 20,
 				}
 				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -47,9 +51,14 @@ func TestExistingBookRequestConfiguresOnlyMissingFormat(t *testing.T) {
 						// has Chaptarr's positive-ID "None" metadata profile.
 						_ = json.NewEncoder(w).Encode(author)
 					case "PUT /api/v1/author/7":
-						if err := json.NewDecoder(r.Body).Decode(&author); err != nil {
+						var update map[string]any
+						if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
 							t.Error(err)
 						}
+						if update[opposite+"Monitored"] != false || update["syncMonitoredAcrossFormats"] != true || !reflect.DeepEqual(update["tags"], []any{float64(4), float64(9)}) {
+							t.Errorf("lost existing author settings: %v", update)
+						}
+						author = update
 						w.WriteHeader(http.StatusAccepted)
 					case "GET /api/v1/qualityprofile":
 						fmt.Fprint(w, chaptarrQualityProfiles0720)
@@ -72,6 +81,16 @@ func TestExistingBookRequestConfiguresOnlyMissingFormat(t *testing.T) {
 						monitored = body.BookIDs
 						fmt.Fprint(w, `[]`)
 					case "POST /api/v1/command":
+						var command struct {
+							Name    string `json:"name"`
+							BookIDs []int  `json:"bookIds"`
+						}
+						if err := json.NewDecoder(r.Body).Decode(&command); err != nil {
+							t.Error(err)
+						}
+						if command.Name != "BookSearch" || len(command.BookIDs) != 1 || command.BookIDs[0] != 11 {
+							t.Errorf("unexpected search: %+v", command)
+						}
 						fmt.Fprint(w, `{}`)
 					default:
 						t.Errorf("unexpected provider call: %s %s", r.Method, r.URL.Path)

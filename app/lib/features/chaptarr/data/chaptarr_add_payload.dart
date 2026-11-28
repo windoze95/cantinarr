@@ -34,7 +34,7 @@ Map<String, dynamic> chaptarrAddFormatBody({
       'metadataProfileId': metadataProfileId,
       'rootFolderPath': rootFolderPath,
       'monitored': true,
-      'addOptions': {'monitor': 'all', 'searchForMissingBooks': false},
+      'addOptions': {'monitor': 'specificBook', 'searchForMissingBooks': false},
     },
     'addOptions': {'searchForNewBook': true},
   };

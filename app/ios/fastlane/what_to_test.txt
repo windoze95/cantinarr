@@ -1,6 +1,4 @@
-Browse and request movies, TV, books, and music. Follow downloads and availability alerts. Admins manage libraries, requests, users, and services.
-
-Test upgrade with sign-in retained, browsing, requests, passkeys, connect links, and push. Try 1.0.1 and 1.1.0 servers. Admins: check Request Defaults profiles and OpenAI OAuth models.
+After upgrade, check sign-in, browsing, requests, downloads, passkeys, connect links, and push on 1.0.1 and 1.1.0 servers. Admins: check Request Defaults profiles and OpenAI OAuth models.
 
 For server sign-in, enter a bare hostname with an unavailable or invalid HTTPS endpoint. It should stay on the address screen and never switch to HTTP. A LAN server without TLS should connect when you explicitly enter its `http://` address. After switching accounts or changing a book/music library assignment, check that previously viewed protected artwork does not appear for the new access context.
 
@@ -33,3 +31,5 @@ Discovery: check badges after sign-in refresh, titles absent from your libraries
 In Radarr and Sonarr Interactive search, grab one release and check the queue. With the updated server, an expired selection should ask you to search again.
 
 Sonarr: compare pending, importing, and blocked episodes. In Review import, select files from a test pack and a second download. Check copy/move modes, competing episodes, and partial results. Check results again should verify the same submission. Force import should confirm one file.
+
+Books: request both formats by a new author, or add a missing format from an author page. Only the selected title should start tracking after the scan.

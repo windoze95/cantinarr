@@ -933,7 +933,6 @@ type resolvedRequest struct {
 	tvdbID                int
 	foreignID             string // Chaptarr foreignBookId (book requests)
 	bookFormat            string
-	requestedBookFormats  string
 	searchTerm            string // the requester's own search text (book requests)
 	parkReason            string // why a pending row is server-owned (see bookParkReasonAuthorImport)
 	addFailure            string // the add that already ran and failed (see bookAddFailureMetadataUnresolved)
@@ -1749,11 +1748,6 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	config.includeRequestedFormats(r.bookFormat)
-	if r.requestedBookFormats != "" {
-		config.includeRequestedFormats(r.requestedBookFormats)
-	}
-
 	title = strings.TrimSpace(match.Title)
 	if title == "" {
 		title = r.title
@@ -1888,16 +1882,6 @@ func (c bookAddConfig) complete() bool {
 		c.audiobookMetadataProfileID > 0 &&
 		strings.TrimSpace(c.ebookRootFolderPath) != "" &&
 		strings.TrimSpace(c.audiobookRootFolderPath) != ""
-}
-
-func (c *bookAddConfig) includeRequestedFormats(bookFormat string) {
-	for _, format := range expandBookFormat(bookFormat) {
-		if format == BookFormatEbook {
-			c.ebookMonitorFuture = true
-		} else if format == BookFormatAudiobook {
-			c.audiobookMonitorFuture = true
-		}
-	}
 }
 
 func bookConfigFromAuthor(author *chaptarr.Author) (bookAddConfig, bool) {
@@ -2191,11 +2175,9 @@ func (s *Service) addChaptarrBookRecord(client *chaptarr.Client, match *chaptarr
 	addReq.Author.EbookMonitorFuture = config.ebookMonitorFuture
 	addReq.Author.AudiobookMonitorFuture = config.audiobookMonitorFuture
 	addReq.Author.Monitored = true
-	addReq.Author.AddOptions.Monitor = "all"
-	if config.authorID != 0 {
-		// Adding one format must not start following the author's other books.
-		addReq.Author.AddOptions.Monitor = "specificBook"
-	}
+	// Chaptarr may resolve an existing author by provider ID on any format POST.
+	// The request selects one work even when it also triggers the author's first scan.
+	addReq.Author.AddOptions.Monitor = "specificBook"
 	addReq.AddOptions.SearchForNewBook = true
 
 	// Round-trip the lookup's editions verbatim, marking them monitored so

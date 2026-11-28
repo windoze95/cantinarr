@@ -123,7 +123,9 @@ A format tap saves the native request and immediately acknowledges it. The durab
 
 The format panel offers a separate retry for each failed format and **Cancel request** for remaining work. Admins can manage saved work under **Settings > Pending requests > Saved requests**. Delivery waits do not increase the approval badge. Shared requests retain each subscriber's requested formats; cancelling a subscription preserves others, and cancelling remaining work never removes delivered files.
 
-Owning an ebook does not prevent requesting its audiobook, or the reverse. When the author is already in Chaptarr, Cantinarr keeps their existing settings and fills missing settings for the requested format from the library's unambiguous profiles and default folder. A **None** metadata profile is replaced for that format. Cantinarr verifies the saved settings, adds the format, and monitors that book without enabling the author's other books or future releases. Approval requirements still apply before any changes.
+Requesting a book by a new author lets Chaptarr import the author's catalog. Cantinarr requests monitoring and a search for the selected title in the requested formats, without subscribing to the author's other books or future releases. Adding a missing format from the author page also selects just that title.
+
+Owning an ebook does not prevent requesting its audiobook, or the reverse. When the author is already in Chaptarr, Cantinarr keeps their existing settings and fills missing settings for the requested format from the library's unambiguous profiles and default folder. A **None** metadata profile is replaced for that format. Cantinarr verifies the saved settings before adding the format. Approval requirements still apply before any changes.
 
 If Cantinarr cannot choose a profile or folder, **Needs attention** names the missing setting and format. An administrator can set it in the author's Chaptarr settings, then select **Try again** on the saved request. The saved request panel shows the actual delivery message, including when automatic retries have stopped.
 
