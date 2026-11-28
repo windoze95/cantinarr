@@ -32,4 +32,4 @@ Discovery: check badges after sign-in refresh, titles absent from your libraries
 
 In Radarr and Sonarr Interactive search, grab one release and check the queue. With the updated server, an expired selection should ask you to search again.
 
-Sonarr: compare pending, importing, and blocked episode statuses. As an admin, open Review import from a season and an episode. Check that a pack appears once in season review and a second download for the same episode opens its own Import Doctor.
+Sonarr: compare pending, importing, and blocked episodes. In Review import, select files from a test pack and a second download. Check copy/move modes, competing episodes, and partial results. Check results again should verify the same submission. Force import should confirm one file.

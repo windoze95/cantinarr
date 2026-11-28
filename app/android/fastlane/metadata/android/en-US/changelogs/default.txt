@@ -10,4 +10,4 @@ Clearer discovery status.
 Sign-in defaults to HTTPS.
 Artwork respects account access.
 Re-search expired Grabs.
-Review Sonarr import blockers.
+Verify reviewed Sonarr imports.

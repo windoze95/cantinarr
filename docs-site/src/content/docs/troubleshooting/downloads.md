@@ -41,6 +41,12 @@ These are the library manager's paths and permissions. Cantinarr's optional medi
 
 ## Manual import
 
+In Sonarr, open **Review import**. Select a download and **Manual import**, or choose **Review files** in the season’s download list. Check the file path and episode numbers, then select the files to import. If two downloads target the same episode, choose one source. Torrents are copied so they can continue seeding; Usenet files are moved.
+
+An archive must be extracted into a location Sonarr can read before you can select its video files. **Hand off to client** does not extract or import a file. Rejected and unmatched files are excluded from ordinary import. Where Import Doctor offers **Force import**, review one mapped file and confirm the override separately.
+
+**Import results** shows how many episodes were verified for each selected file. Sonarr can import some files before a command fails. A verified import requires new import history for the selected source and a matching new episode file in the library. If verification times out or a read fails, select **Check results again**. This checks the same submission without importing twice. During the same app session you can reopen **Import results** from the season even after the queue entry disappears.
+
 Review candidates and their rejection reasons before forcing an import. Check the exact episode or track mapping, file size, and expected format. Forcing the wrong file can create an “available” title that still contains incorrect content.
 
 Use the narrowest supported action and verify the imported file afterward. A successful action response is only the first check.

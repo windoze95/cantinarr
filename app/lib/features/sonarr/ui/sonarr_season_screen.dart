@@ -14,9 +14,11 @@ import '../../auth/logic/auth_provider.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import '../logic/episode_selection.dart';
+import '../logic/reviewed_import.dart';
 import '../logic/season_queue.dart';
 import 'episode_detail_sheet.dart';
 import 'import_doctor_sheet.dart';
+import 'reviewed_import_dialog.dart';
 import 'sonarr_releases_screen.dart';
 import 'sonarr_series_detail_screen.dart' show seasonLabel;
 import 'widgets/episode_status.dart';
@@ -395,9 +397,9 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   Future<void> _review(List<BlockedDownload> downloads) async {
     if (ref.read(authProvider).valueOrNull?.user?.isAdmin != true) return;
     final queue = _queue;
-    final SonarrQueueItem? item;
+    final List<BlockedDownload>? selected;
     if (downloads.length == 1) {
-      item = downloads.single.target;
+      selected = downloads;
     } else {
       final labels = {
         for (final episode in _episodes)
@@ -405,13 +407,17 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
               in queue.byEpisode[episode.id] ?? const <SonarrQueueItem>[])
             row: episode.seasonEpisodeLabel,
       };
-      item = await showAppSheet<SonarrQueueItem>(
+      selected = await showAppSheet<List<BlockedDownload>>(
         context,
         builder: (ctx) => AppSheet(
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(ctx.l10n.sonarrReviewImport,
                 style: Theme.of(ctx).textTheme.titleLarge),
+            TextButton.icon(
+                icon: const Icon(Icons.checklist),
+                onPressed: () => Navigator.pop(ctx, downloads),
+                label: Text(ctx.l10n.sonarrReviewFiles)),
             for (final download in downloads)
               ListTile(
                 title:
@@ -423,23 +429,32 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
                   },
                   importBlockerText(ctx, download.blocker),
                 ].join(' · ')),
-                onTap: () => Navigator.of(ctx).pop(download.target),
+                onTap: () => Navigator.of(ctx).pop([download]),
               ),
           ]),
         ),
       );
     }
-    if (item == null ||
+    if (selected == null ||
         !mounted ||
         _queue != queue ||
         ref.read(authProvider).valueOrNull?.user?.isAdmin != true) {
       return;
     }
-    final target = item;
+    if (selected.length > 1) {
+      final changed = await showReviewedImport(context,
+          instanceId: widget.instanceId,
+          service: _service,
+          targets: [for (final d in selected) ImportTarget(d.members)]);
+      if (mounted && changed == true) await _load();
+      return;
+    }
+    final download = selected.single;
     await showAppSheet<void>(context,
         builder: (_) => ImportDoctorSheet(
               instanceId: widget.instanceId,
-              item: target,
+              item: download.target,
+              members: download.members,
               onChanged: () {
                 if (mounted) _load();
               },
@@ -504,6 +519,18 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
 
   Widget _buildBody() {
     final isAdmin = ref.watch(authProvider).valueOrNull?.user?.isAdmin == true;
+    final results = isAdmin
+        ? ref
+            .watch(importRecoveryProvider(widget.instanceId))
+            .attempts
+            .where((a) =>
+                a.target.item.seriesId == _series.id &&
+                (_allSeasons ||
+                    a.target.rows.any((r) =>
+                        r.seasonNumber == widget.seasonNumber ||
+                        _episodes.any((e) => e.id == r.episodeId))))
+            .toList()
+        : <ImportAttempt>[];
     if (_isLoading && _episodes.isEmpty) {
       return const Center(
           child: CircularProgressIndicator(color: AppTheme.accent));
@@ -514,7 +541,9 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
               child: FullScreenError(message: _error!, onRetry: _load)));
     }
     final downloads = _queue.blockedDownloads;
-    if (_episodes.isEmpty && (downloads.isEmpty || !isAdmin)) {
+    if (_episodes.isEmpty &&
+        results.isEmpty &&
+        (downloads.isEmpty || !isAdmin)) {
       return Center(
         child: Text(context.l10n.adminNoEpisodes,
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
@@ -523,6 +552,18 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
 
     // In All Seasons mode a header row precedes each season's episodes.
     final rows = <Object>[];
+    if (!_selecting && results.isNotEmpty) {
+      rows.add(ListTile(
+          leading: const Icon(Icons.fact_check_outlined),
+          title: Text(context.l10n.sonarrResults),
+          onTap: () async {
+            await showReviewedImport(context,
+                instanceId: widget.instanceId,
+                service: _service,
+                results: results);
+            if (mounted) await _load();
+          }));
+    }
     if (!_selecting && isAdmin && downloads.isNotEmpty) {
       final episodeIds = {
         for (final download in downloads)

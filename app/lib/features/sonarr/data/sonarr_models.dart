@@ -877,6 +877,8 @@ class SonarrManualImportCandidate {
   final int? indexerFlags;
   final String? releaseType;
   final List<SonarrImportRejection> rejections;
+  final bool existingFile;
+  final bool reviewedRejections;
 
   const SonarrManualImportCandidate({
     required this.id,
@@ -895,6 +897,8 @@ class SonarrManualImportCandidate {
     this.indexerFlags,
     this.releaseType,
     this.rejections = const [],
+    this.existingFile = false,
+    this.reviewedRejections = true,
   });
 
   factory SonarrManualImportCandidate.fromJson(Map<String, dynamic> json) {
@@ -904,7 +908,11 @@ class SonarrManualImportCandidate {
     for (final e in episodes) {
       final map = e as Map<String, dynamic>;
       final id = map['id'] as int?;
-      if (id != null) ids.add(id);
+      // Keep incomplete or inconsistent mappings ineligible, rather than
+      // silently importing the valid subset of a multi-episode file.
+      final series = json['series']?['id'];
+      ids.add(
+          map['seriesId'] != null && map['seriesId'] != series ? 0 : id ?? 0);
       final s = map['seasonNumber'] as int?;
       final n = map['episodeNumber'] as int?;
       if (s != null && n != null) {
@@ -930,14 +938,14 @@ class SonarrManualImportCandidate {
       downloadId: json['downloadId'] as String?,
       indexerFlags: json['indexerFlags'] as int?,
       releaseType: json['releaseType'] as String?,
+      existingFile: (json['episodeFileId'] as int? ?? 0) > 0,
+      reviewedRejections: json['rejections'] is List,
       rejections: ((json['rejections'] as List<dynamic>?) ?? [])
           .map((r) => SonarrImportRejection.fromJson(r as Map<String, dynamic>))
           .toList(),
     );
   }
 
-  bool get hasPermanentRejection => rejections.any((r) => r.isPermanent);
-  bool get isMapped => episodeIds.isNotEmpty;
   String get sizeFormatted => _formatBytes(size);
 
   /// The file entry for the ManualImport command, with quality/languages sent

@@ -28,6 +28,12 @@ class _FakeAdapter implements HttpClientAdapter {
   final List<Map<String, dynamic>> episodes;
   final List<Map<String, dynamic>> queue;
   final queueReads = <Uri>[];
+  final candidates = <Map<String, dynamic>>[];
+  final history = <Map<String, dynamic>>[];
+  final historyReads = <Uri>[];
+  final commandStatuses = <int, String>{};
+  bool losePostResponse = false;
+  bool historyFails = false;
   bool queueFails = false;
   bool seriesMonitored;
   final List<({String method, String path, dynamic body})> requests = [];
@@ -64,6 +70,38 @@ class _FakeAdapter implements HttpClientAdapter {
       response = queue;
     }
     if (path.endsWith('/history/series')) response = [];
+    if (path.endsWith('/manualimport')) {
+      response = candidates
+          .where(
+              (f) => f['downloadId'] == options.queryParameters['downloadId'])
+          .toList();
+    }
+    if (path.endsWith('/history')) {
+      historyReads.add(options.uri);
+      if (historyFails) return ResponseBody.fromString('Unavailable', 503);
+      final rows = history
+          .where(
+              (r) => r['downloadId'] == options.queryParameters['downloadId'])
+          .toList();
+      final page = options.queryParameters['page'] as int;
+      final size = options.queryParameters['pageSize'] as int;
+      response = {
+        'totalRecords': rows.length,
+        'records': rows.skip((page - 1) * size).take(size).toList()
+      };
+    }
+    if (path.endsWith('/command') && body?['name'] == 'ManualImport') {
+      final id = commandStatuses.length + 1;
+      commandStatuses[id] = 'queued';
+      if (losePostResponse) {
+        return ResponseBody.fromString('Lost response', 502);
+      }
+      response = {'id': id, 'status': 'queued'};
+    }
+    if (path.contains('/command/')) {
+      final id = int.parse(path.split('/').last);
+      response = {'id': id, 'status': commandStatuses[id]};
+    }
     if (path.endsWith('/series/7')) {
       response = {
         'id': 7,
@@ -105,6 +143,12 @@ Map<String, dynamic> _episodeJson({
       'hasFile': hasFile,
       // Downloaded episodes carry their file id (used by delete-file flows).
       'episodeFileId': hasFile ? id * 10 : 0,
+      if (hasFile)
+        'episodeFile': {
+          'id': id * 10,
+          'seriesId': 7,
+          'path': '/library/${id * 10}.mkv'
+        },
       'monitored': monitored,
       'airDateUtc': DateTime.now()
           .toUtc()
@@ -203,6 +247,57 @@ Map<String, dynamic> _queueRow(
 Finder _button(String label) => find.ancestor(
     of: find.text(label), matching: find.bySubtype<OutlinedButton>());
 
+Finder _importButton() => find.widgetWithText(TextButton, 'Import');
+
+Map<String, dynamic> _video(String download, String name, List<int> episodes) =>
+    {
+      'id': 50 + episodes.first,
+      'name': name,
+      'path': '/incoming/$download/$name',
+      'downloadId': download,
+      'size': 1024,
+      'series': {'id': 7},
+      'episodes': [
+        for (final id in episodes)
+          {
+            'id': id,
+            'seriesId': 7,
+            'seasonNumber': 1,
+            'episodeNumber': id - 100
+          }
+      ],
+      'quality': {
+        'quality': {'id': 1}
+      },
+      'languages': [
+        {'id': 1}
+      ],
+      'rejections': [],
+    };
+
+Map<String, dynamic> _importEvent(
+        int id, Map<String, dynamic> video, int episode, int fileId) =>
+    {
+      'id': id,
+      'downloadId': video['downloadId'],
+      'seriesId': 7,
+      'episodeId': episode,
+      'eventType': 'downloadFolderImported',
+      'data': {
+        'droppedPath': video['path'],
+        'importedPath': '/library/$fileId.mkv',
+        'fileId': '$fileId'
+      },
+    };
+
+void _installFile(Map<String, dynamic> episode, int id) {
+  episode.addAll({
+    'hasFile': true,
+    'episodeFileId': id,
+    'episodeFile': {'id': id, 'seriesId': 7, 'path': '/library/$id.mkv'}
+  });
+}
+
 void main() {
   group('undownloadedEpisodeIds', () {
     test(
@@ -260,6 +355,227 @@ void main() {
           findsOneWidget);
       expect(find.text('No automatic fix is needed.'), findsNothing);
       expect(adapter.requests.every((r) => r.method == 'GET'), isTrue);
+    });
+
+    testWidgets('manual import requires an explicit file selection',
+        (tester) async {
+      final adapter =
+          await _pumpSeasonScreen(tester, episodes: episodes, queue: [
+        _queueRow(13, 101, 'pack', message: 'Found archive file')
+          ..['protocol'] = 'torrent',
+      ]);
+      adapter.candidates.add({
+        'id': 50,
+        'path': '/incoming/pack/one.mkv',
+        'downloadId': 'pack',
+        'size': 1024,
+        'series': {'id': 7},
+        'episodes': [episodes.first],
+        'quality': {
+          'quality': {'id': 1}
+        },
+        'rejections': [],
+      });
+      await tester.tap(find.text('Review import').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Manual import'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextButton>(_importButton()).onPressed, isNull);
+      expect(find.byType(CheckboxListTile), findsOneWidget);
+      expect(commands(adapter), isEmpty);
+    });
+
+    testWidgets(
+        'review a pack and a distinct download; reconcile partial and failed commands without resubmission',
+        (tester) async {
+      tester.view.physicalSize = const Size(750, 1500);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final library = episodes.map((e) => Map<String, dynamic>.of(e)).toList();
+      final queue = [
+        _queueRow(11, 101, 'A')..['protocol'] = 'torrent',
+        _queueRow(12, 102, 'A')..['protocol'] = 'torrent',
+        _queueRow(13, 103, 'B')..['protocol'] = 'usenet',
+        _queueRow(14, 102, 'C')..['protocol'] = 'torrent',
+      ];
+      final adapter =
+          await _pumpSeasonScreen(tester, episodes: library, queue: queue);
+      final first = _video('A', 'one.mkv', [101]);
+      final second = _video('A', 'two.mkv', [102]);
+      final third = _video('B', 'three.mkv', [103]);
+      final rejected = _video('A', 'sample.mkv', [101])
+        ..['rejections'] = [
+          {'type': 'temporary', 'reason': 'File is locked'}
+        ];
+      final competing = _video('C', 'alternative.mkv', [102]);
+      adapter.candidates.addAll([first, second, third, rejected, competing]);
+      // A matching event can be older than the first page.
+      adapter.history.addAll([
+        for (var i = 1; i <= 101; i++)
+          _importEvent(i, second, 102, i == 101 ? 5102 : 9000)
+      ]);
+      await tester.tap(find.text('Review import').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Review files'));
+      await tester.pumpAndSettle();
+      CheckboxListTile tile(Map<String, dynamic> f) => tester
+          .widget(find.widgetWithText(CheckboxListTile, f['path'] as String));
+      expect(tile(rejected).onChanged, isNull);
+      for (final f in [first, second, third]) {
+        await tester.tap(find.text(f['path']));
+        await tester.pump();
+      }
+      expect(tile(competing).onChanged, isNull);
+      // Two callbacks from the same built button before the next frame.
+      final confirm = tester.widget<TextButton>(_importButton()).onPressed!;
+      confirm();
+      confirm();
+      await tester.pumpAndSettle();
+      expect(
+          commands(adapter).map((c) => c.body['importMode']), ['copy', 'move']);
+      expect(
+          commands(adapter)
+              .map((c) => [for (final f in c.body['files']) f['path']]),
+          [
+            [first['path'], second['path']],
+            [third['path']]
+          ]);
+      expect(find.text('Processing in Sonarr'), findsNWidgets(2));
+      expect(find.text('Import verified'), findsNothing);
+      expect(
+          adapter.historyReads
+              .where((r) => r.queryParameters['downloadId'] == 'A')
+              .any((r) => r.queryParameters['page'] == '2'),
+          isTrue);
+      expect(
+          adapter.historyReads
+              .every((r) => r.queryParameters['eventType'] == '3'),
+          isTrue);
+
+      queue.clear();
+      adapter.commandStatuses.addAll({1: 'failed', 2: 'completed'});
+      _installFile(library[0], 5101);
+      _installFile(library[1], 5102); // Only stale matching history.
+      _installFile(library[2], 5103); // No history.
+      adapter.history.add(_importEvent(102, first, 101, 5101));
+      await tester.tap(find.text('Check results again'));
+      await tester.pumpAndSettle();
+      expect(find.text('Partially verified'), findsOneWidget);
+      expect(find.text('Sonarr reported that the command failed.'),
+          findsOneWidget);
+      expect(find.textContaining('Episodes verified: 1/1'), findsOneWidget);
+      expect(find.textContaining('Episodes verified: 0/1'), findsNWidgets(2));
+      await tester.tap(find.text('Done'));
+      await tester.pumpAndSettle();
+      expect(find.text('Review import'), findsNothing);
+      await tester.tap(find.text('Import results'));
+      await tester.pumpAndSettle();
+      adapter.historyFails = true;
+      await tester.tap(find.text('Check results again'));
+      await tester.pumpAndSettle();
+      expect(
+          find.text('Could not read the verification data.'), findsNWidgets(2));
+      expect(find.textContaining('Episodes verified: 1/1'), findsOneWidget);
+      adapter.historyFails = false;
+      adapter.history.add(_importEvent(103, third, 103, 5103));
+      await tester.tap(find.text('Check results again'));
+      await tester.pumpAndSettle();
+      expect(find.text('Import verified'), findsOneWidget);
+      expect(find.textContaining('Episodes verified: 1/1'), findsNWidgets(2));
+      expect(commands(adapter), hasLength(2));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+        'lost command response times out, then verifies the original submission on a small phone',
+        (tester) async {
+      tester.view.physicalSize = const Size(320, 650);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final episode = Map<String, dynamic>.of(episodes.first);
+      final adapter = await _pumpSeasonScreen(tester,
+          episodes: [episode],
+          queue: [_queueRow(11, 101, 'A')..['protocol'] = 'torrent']);
+      final video = _video('A', 'one.mkv', [101]);
+      adapter.candidates.add(video);
+      adapter.losePostResponse = true;
+      await tester.tap(find.text('Review import').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Manual import'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(video['path']));
+      await tester.pump();
+      await tester.tap(_importButton());
+      await tester.pumpAndSettle();
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(seconds: 2));
+        await tester.pumpAndSettle();
+      }
+      expect(find.textContaining('Verification timed out'), findsOneWidget);
+      expect(find.text('Import verified'), findsNothing);
+      // Even a fresh event and a file at the expected path are insufficient
+      // if the episode still points at its pre-submit file.
+      _installFile(episode, 1010);
+      adapter.history.add(_importEvent(1, video, 101, 1010));
+      await tester.tap(find.text('Check results again'));
+      await tester.pumpAndSettle();
+      expect(find.text('Import verified'), findsNothing);
+      _installFile(episode, 42);
+      adapter.history.add(_importEvent(2, video, 101, 42));
+      await tester.tap(find.text('Check results again'));
+      await tester.pumpAndSettle();
+      expect(find.text('Import verified'), findsOneWidget);
+      expect(commands(adapter), hasLength(1));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('force requires one matched file and a separate confirmation',
+        (tester) async {
+      final adapter =
+          await _pumpSeasonScreen(tester, episodes: episodes, queue: [
+        _queueRow(11, 101, 'A', message: 'Not an upgrade for existing file')
+          ..['protocol'] = 'torrent'
+      ]);
+      final first = _video('A', 'one.mkv', [101]);
+      final second = _video('A', 'alternative.mkv', [101]);
+      for (final f in [first, second]) {
+        f['rejections'] = [
+          {
+            'type': 'permanent',
+            'reason': 'Not an upgrade for existing episode file'
+          }
+        ];
+        adapter.candidates.add(f);
+      }
+      await tester.tap(find.text('Review import').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Force import'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(first['path']));
+      await tester.pump();
+      expect(
+          tester
+              .widget<CheckboxListTile>(
+                  find.widgetWithText(CheckboxListTile, second['path']))
+              .onChanged,
+          isNull);
+      final forceButton = find.widgetWithText(TextButton, 'Force import').last;
+      await tester.tap(forceButton);
+      await tester.pumpAndSettle();
+      expect(find.text('Override Sonarr’s decision for this file?'),
+          findsOneWidget);
+      expect(commands(adapter), isEmpty);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel').last);
+      await tester.pumpAndSettle();
+      expect(commands(adapter), isEmpty);
+      await tester.tap(forceButton);
+      await tester.pumpAndSettle();
+      await tester.tap(forceButton);
+      await tester.pumpAndSettle();
+      expect(commands(adapter).single.body['files'], hasLength(1));
+      expect(commands(adapter).single.body['files'][0]['path'], first['path']);
+      await tester.tap(find.text('Done'));
+      await tester.pumpAndSettle();
     });
 
     testWidgets(
